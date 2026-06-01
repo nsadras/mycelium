@@ -22,7 +22,7 @@ const activityCopy: Record<AssistantStatus['activity'], { label: string; detail:
   error: { label: 'Error', detail: 'Check logs' },
 };
 
-export default function Avatar({ status }: { status: AssistantStatus }) {
+export default function Avatar({ status, activeTab }: { status: AssistantStatus; activeTab?: 'chat' | 'wiki' | 'logs' }) {
   const [selectedAvatarId, setSelectedAvatarId] = useState<string>(() => {
     try {
       return localStorage.getItem('mycellium_avatar') || 'myco';
@@ -167,7 +167,7 @@ export default function Avatar({ status }: { status: AssistantStatus }) {
             title="Click me!"
           >
             <span className="relative w-full h-full flex items-center justify-center">
-              <AvatarComponent activity={clickActivity || status.activity} status={status} />
+              <AvatarComponent activity={clickActivity || (status.activity === 'idle' ? (activeTab || 'chat') : status.activity)} status={status} />
             </span>
           </div>
           

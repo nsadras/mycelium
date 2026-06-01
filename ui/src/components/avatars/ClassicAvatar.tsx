@@ -1,7 +1,13 @@
-import { BrainCircuit, Loader2, Moon, Radio, Sparkles, Waves } from 'lucide-react';
+import { Book, BrainCircuit, FileText, Loader2, Moon, Radio, Sparkles, Waves } from 'lucide-react';
 import type { AvatarProps } from './index';
 
 export default function ClassicAvatar({ activity }: AvatarProps) {
+  if (activity === 'wiki') {
+    return <Book size={28} className="text-emerald-400 opacity-90 animate-pulse" />;
+  }
+  if (activity === 'logs') {
+    return <FileText size={28} className="text-emerald-400 opacity-90 animate-pulse" />;
+  }
   if (activity === 'dreaming') {
     return <Moon size={28} className="text-white animate-pulse" />;
   }

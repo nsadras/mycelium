@@ -104,7 +104,7 @@ export default function Sidebar({
         <h1 className="text-xl font-bold text-white tracking-tight">Mycelium</h1>
       </div>
 
-      <Avatar status={assistantStatus} />
+      <Avatar status={assistantStatus} activeTab={activeTab} />
 
       <nav className="flex-1 px-4 space-y-1">
         {tabs.map((tab) => (

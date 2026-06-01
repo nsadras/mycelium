@@ -8,6 +8,8 @@ export default function MycoAvatar({ activity }: AvatarProps) {
   else if (activity === 'dreaming') mascotClass = "animate-sleep";
   else if (activity === 'clicked-left') mascotClass = "animate-click-squish-left";
   else if (activity === 'clicked-right') mascotClass = "animate-click-squish-right";
+  else if (activity === 'wiki') mascotClass = "animate-slow-bob";
+  else if (activity === 'logs') mascotClass = "animate-scan";
 
   return (
     <svg
@@ -177,6 +179,15 @@ export default function MycoAvatar({ activity }: AvatarProps) {
           animation: click-squish-right 0.8s cubic-bezier(0.25, 0.8, 0.25, 1);
           transform-origin: 80px 130px;
         }
+
+        @keyframes scan {
+          0% { transform: rotate(-5deg) translateY(0px); }
+          100% { transform: rotate(5deg) translateY(-2px); }
+        }
+        .animate-scan {
+          animation: scan 2.4s ease-in-out infinite alternate;
+          transform-origin: 80px 130px;
+        }
       `}</style>
 
       {/* 1. BACKGROUND EFFECT PLANES */}
@@ -241,6 +252,21 @@ export default function MycoAvatar({ activity }: AvatarProps) {
             <path d="M 64,93 Q 68.5,97 73,93" stroke="#2c3531" strokeWidth="2.5" strokeLinecap="round" fill="none" />
             <path d="M 87,93 Q 91.5,97 96,93" stroke="#2c3531" strokeWidth="2.5" strokeLinecap="round" fill="none" />
           </g>
+        ) : activity === 'wiki' ? (
+          // Focused downward-looking reading eyes
+          <g>
+            <path d="M 64,96 Q 68.5,100 73,96" stroke="#2c3531" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+            <path d="M 87,96 Q 91.5,100 96,96" stroke="#2c3531" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+          </g>
+        ) : activity === 'logs' ? (
+          // Winking left eye, magnified large round right eye peering through glass!
+          <g>
+            {/* Wink left eye */}
+            <path d="M 64,95 Q 68.5,92 73,95" stroke="#2c3531" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+            {/* Magnified right eye behind glass lens */}
+            <circle cx="91.5" cy="94.5" r="7.5" fill="#2c3531" />
+            <circle cx="93.5" cy="92.5" r="2.2" fill="#ffffff" />
+          </g>
         ) : activity === 'responding' ? (
           // Happy / smiling eyes (curved up)
           <g>
@@ -286,6 +312,12 @@ export default function MycoAvatar({ activity }: AvatarProps) {
         ) : activity === 'error' ? (
           // Sad frown
           <path d="M 77,100 Q 80,97 83,100" stroke="#2c3531" strokeWidth="1.8" strokeLinecap="round" fill="none" />
+        ) : activity === 'wiki' ? (
+          // Focused read small smile
+          <path d="M 78,98 Q 80,101 82,98" stroke="#2c3531" strokeWidth="1.8" strokeLinecap="round" fill="none" />
+        ) : activity === 'logs' ? (
+          // Happy search mouth
+          <path d="M 77,98 Q 80,102 83,98" stroke="#2c3531" strokeWidth="1.8" strokeLinecap="round" fill="none" />
         ) : (
           // Standard small smile
           <path d="M 78,98 Q 80,100 82,98" stroke="#2c3531" strokeWidth="1.8" strokeLinecap="round" fill="none" />
@@ -389,6 +421,42 @@ export default function MycoAvatar({ activity }: AvatarProps) {
               d="M 106,91 C 120,78 128,74 130,78 C 130,83 120,95 106,95 Z"
               fill="url(#bodyGrad)"
             />
+          </g>
+        ) : activity === 'wiki' ? (
+          // Wiki Reading Pose: Holding open book
+          <g>
+            {/* Open book */}
+            {/* Cover back */}
+            <path d="M 62,106 L 80,110 L 98,106 L 98,117 L 80,121 L 62,117 Z" fill="#3d5248" stroke="#faf8f2" strokeWidth="0.8" />
+            {/* Pages */}
+            <path d="M 64,105 Q 72,108 80,107 Q 88,108 96,105 L 96,115 Q 88,118 80,117 Q 72,118 64,115 Z" fill="#faf8f2" />
+            {/* Center fold */}
+            <line x1="80" y1="107" x2="80" y2="117" stroke="#cfc9af" strokeWidth="0.8" />
+            {/* Micro lines */}
+            <line x1="68" y1="108.5" x2="76" y2="110.5" stroke="#cfc9af" strokeWidth="1" strokeLinecap="round" />
+            <line x1="68" y1="112.5" x2="74" y2="114.5" stroke="#cfc9af" strokeWidth="1" strokeLinecap="round" />
+            <line x1="84" y1="110.5" x2="92" y2="108.5" stroke="#cfc9af" strokeWidth="1" strokeLinecap="round" />
+            <line x1="86" y1="114.5" x2="92" y2="112.5" stroke="#cfc9af" strokeWidth="1" strokeLinecap="round" />
+            
+            {/* Left holding arm */}
+            <path d="M 54,102 C 44,102 46,111 63,109 C 65,107 60,102 54,102 Z" fill="url(#bodyGrad)" />
+            {/* Right holding arm */}
+            <path d="M 106,102 C 116,102 114,111 97,109 C 95,107 100,102 106,102 Z" fill="url(#bodyGrad)" />
+          </g>
+        ) : activity === 'logs' ? (
+          // Logs Searching Pose: Holding magnifying glass, scanning!
+          <g>
+            {/* Relaxed left arm */}
+            <path d="M 54,96 C 38,96 34,102 34,108 C 34,115 40,116 54,112 Z" fill="url(#bodyGrad)" />
+            
+            {/* Magnifying Glass Lens overlay (slightly blue/mint transparent) */}
+            <circle cx="91.5" cy="94.5" r="11.5" fill="#10b981" fillOpacity="0.12" />
+            {/* Golden Frame */}
+            <circle cx="91.5" cy="94.5" r="11.5" fill="none" stroke="#fbbf24" strokeWidth="2.2" />
+            {/* Handle tilted down-right */}
+            <line x1="100" y1="103" x2="113" y2="116" stroke="#5c7a6b" strokeWidth="3.2" strokeLinecap="round" />
+            {/* Right holding arm */}
+            <path d="M 106,101 C 112,101 117,107 111,111 C 107,109 106,104 106,101 Z" fill="url(#bodyGrad)" />
           </g>
         ) : (
           // Default normal arm poses (chubby, overlapped)

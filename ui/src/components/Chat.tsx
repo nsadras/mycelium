@@ -8,6 +8,7 @@ import api, { type Session, type Message } from '../lib/api';
 import type { AssistantStatus } from '../lib/assistantStatus';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import PromptNavigator from './PromptNavigator';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -67,9 +68,9 @@ function ToolEvents({ events }: { events: NonNullable<Message['tool_events']> })
   );
 }
 
-const ChatMessageItem = memo(function ChatMessageItem({ m }: { m: Message }) {
+const ChatMessageItem = memo(function ChatMessageItem({ m, id }: { m: Message; id?: string }) {
   return (
-    <div className={cn("flex", m.role === 'user' ? "justify-end" : "justify-start")}>
+    <div id={id} className={cn("flex", m.role === 'user' ? "justify-end" : "justify-start")}>
       <div className={cn(
         "max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow-sm",
         m.role === 'user' 
@@ -128,6 +129,58 @@ export default function Chat({ sessions, selectedId, onSelect, onCreate, onRenam
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const [activePromptIndex, setActivePromptIndex] = useState<number | null>(null);
+
+  const userPrompts = messages
+    .map((m, index) => ({ ...m, originalIndex: index }))
+    .filter(m => m.role === 'user');
+
+  const showNav = userPrompts.length >= 5;
+
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container || !showNav) return;
+
+    const handleScroll = () => {
+      let currentActive: number | null = null;
+      let minDistance = Infinity;
+
+      userPrompts.forEach((prompt) => {
+        const el = document.getElementById(`msg-${prompt.originalIndex}`);
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          const containerRect = container.getBoundingClientRect();
+          
+          // Calculate distance from the top of the container
+          const distance = Math.abs(rect.top - containerRect.top);
+          if (distance < minDistance) {
+            minDistance = distance;
+            currentActive = prompt.originalIndex;
+          }
+        }
+      });
+
+      if (currentActive !== null) {
+        setActivePromptIndex(currentActive);
+      }
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    handleScroll();
+
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+    };
+  }, [messages, showNav]);
+
+  const handleJumpToPrompt = (msgIndex: number) => {
+    const el = document.getElementById(`msg-${msgIndex}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setActivePromptIndex(msgIndex);
+    }
+  };
 
   useEffect(() => {
     if (selectedId) {
@@ -284,15 +337,21 @@ export default function Chat({ sessions, selectedId, onSelect, onCreate, onRenam
       </div>
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col bg-white">
-        <div className="flex-1 overflow-y-auto p-6 space-y-6" ref={scrollRef}>
+      <div className="flex-1 flex flex-col bg-white relative">
+        <div 
+          className={cn(
+            "flex-1 overflow-y-auto p-6 space-y-6",
+            showNav ? "pr-14 md:pr-20" : "pr-6"
+          )} 
+          ref={scrollRef}
+        >
           {messages.length === 0 ? (
             <div className="h-full flex items-center justify-center text-slate-400">
               {selectedId ? "Start the conversation..." : "Select or create a session to start."}
             </div>
           ) : (
             messages.map((m, i) => (
-              <ChatMessageItem key={i} m={m} />
+              <ChatMessageItem key={i} m={m} id={m.role === 'user' ? `msg-${i}` : undefined} />
             ))
           )}
           {isLoading && (
@@ -305,6 +364,14 @@ export default function Chat({ sessions, selectedId, onSelect, onCreate, onRenam
             </div>
           )}
         </div>
+
+        {showNav && (
+          <PromptNavigator
+            userPrompts={userPrompts}
+            activePromptIndex={activePromptIndex}
+            onJumpToPrompt={handleJumpToPrompt}
+          />
+        )}
 
         <form onSubmit={handleSend} className="p-6 border-t border-slate-200">
           <div className="relative">

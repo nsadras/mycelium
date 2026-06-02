@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
-import { Search, Tag, Clock, ShieldCheck, ChevronRight, Book, History as HistoryIcon, Pencil, Save, X, Trash2 } from 'lucide-react';
+import { Search, Tag, Clock, ShieldCheck, ChevronRight, Book, History as HistoryIcon, Pencil, Save, X, Trash2, Brain, TrendingDown, Sparkles, Zap, Info } from 'lucide-react';
 import api, { type WikiPage } from '../lib/api';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -11,6 +11,93 @@ import { twMerge } from 'tailwind-merge';
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+const calculateDecayPoints = (page: WikiPage) => {
+  const isPinned = !!page.pinned;
+  const S = page.stability_days ?? 30.0;
+  const maxDays = Math.max(60, Math.min(180, S * 3));
+
+  // Viewport coordinates
+  const xMin = 45;
+  const xMax = 460;
+  const yMin = 15;
+  const yMax = 135;
+
+  const mapX = (t: number) => xMin + (t / maxDays) * (xMax - xMin);
+  const mapY = (r: number) => yMax - r * (yMax - yMin);
+
+  // Compute elapsed time
+  const now = new Date();
+  const createdStr = (page as any).created || page.last_reviewed || null;
+  const anchor = page.last_reviewed ? new Date(page.last_reviewed) : (createdStr ? new Date(createdStr) : now);
+  const elapsedDays = Math.max(0, (now.getTime() - anchor.getTime()) / (1000 * 60 * 60 * 24));
+
+  // Current point
+  const currentR = isPinned ? 1.0 : (page.retrievability ?? 1.0);
+  const currentX = mapX(Math.min(maxDays, elapsedDays));
+  const currentY = mapY(currentR);
+
+  // Calculate stability multipliers (review & contradiction)
+  const diff = page.difficulty ?? 0.25;
+  const imp = page.importance ?? 0.5;
+  const difficultyFactor = 1.0 - Math.max(0, Math.min(1, diff));
+  const importanceFactor = 0.5 + Math.max(0, Math.min(1, imp));
+
+  const reviewMultiplier = 1.10 + (0.20 * importanceFactor * (0.5 + difficultyFactor));
+  const s2 = Math.max(1.0, Math.min(3650.0, S * reviewMultiplier));
+  const s3 = Math.max(1.0, Math.min(3650.0, S * 0.85));
+
+  // Generate paths by sampling 30 points
+  const samplePoints = 30;
+  let baseD = '';
+  let reviewD = '';
+  let conflictD = '';
+
+  if (isPinned) {
+    baseD = `M ${xMin} ${yMin} L ${xMax} ${yMin}`;
+  } else {
+    const basePoints: string[] = [];
+    const reviewPoints: string[] = [];
+    const conflictPoints: string[] = [];
+
+    for (let i = 0; i <= samplePoints; i++) {
+      const t = (i / samplePoints) * maxDays;
+      const x = mapX(t);
+
+      // 1. Natural Decay
+      const rBase = Math.exp(-t / S);
+      basePoints.push(`${x.toFixed(1)},${mapY(rBase).toFixed(1)}`);
+
+      // 2. Reinforced (starts at R=1.0, decays with s2)
+      const rReview = Math.exp(-t / s2);
+      reviewPoints.push(`${x.toFixed(1)},${mapY(rReview).toFixed(1)}`);
+
+      // 3. Contradicted (starts at R=0.85, decays with s3)
+      const rConflict = 0.85 * Math.exp(-t / s3);
+      conflictPoints.push(`${x.toFixed(1)},${mapY(rConflict).toFixed(1)}`);
+    }
+
+    baseD = `M ` + basePoints.join(' L ');
+    reviewD = `M ` + reviewPoints.join(' L ');
+    conflictD = `M ` + conflictPoints.join(' L ');
+  }
+
+  return {
+    isPinned,
+    maxDays,
+    currentX,
+    currentY,
+    currentR,
+    elapsedDays,
+    sBase: S,
+    s2,
+    s3,
+    reviewMultiplier,
+    baseD,
+    reviewD,
+    conflictD,
+  };
+};
 
 export default function WikiExplorer() {
   const [pages, setPages] = useState<WikiPage[]>([]);
@@ -25,6 +112,7 @@ export default function WikiExplorer() {
   const [editImportance, setEditImportance] = useState('0.5');
   const [editPinned, setEditPinned] = useState(false);
   const [editContent, setEditContent] = useState('');
+  const [showDecayDashboard, setShowDecayDashboard] = useState(false);
 
   useEffect(() => {
     fetchPages();
@@ -50,6 +138,7 @@ export default function WikiExplorer() {
       const res = await api.get(`/memory/wiki/${slug}`);
       setPageData(res.data);
       setIsEditing(false);
+      setShowDecayDashboard(false);
     } catch (err) {
       console.error("Failed to fetch page", err);
     }
@@ -114,6 +203,8 @@ export default function WikiExplorer() {
     p.title.toLowerCase().includes(search.toLowerCase()) || 
     p.slug.toLowerCase().includes(search.toLowerCase())
   );
+
+  const decayData = pageData ? calculateDecayPoints(pageData) : null;
 
   return (
     <div className="flex h-full min-w-0">
@@ -340,11 +431,326 @@ export default function WikiExplorer() {
                     <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Conflicts</div>
                     <div className="mt-1 text-sm font-semibold text-slate-800">{pageData.conflict_count ?? 0}</div>
                   </div>
-                  <div>
+                <div>
                     <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Importance</div>
                     <div className="mt-1 text-sm font-semibold text-slate-800">{((pageData.importance ?? 0) * 100).toFixed(0)}%</div>
                   </div>
                 </section>
+
+                {/* Minimalist Toggle Bar */}
+                {decayData && !showDecayDashboard && (
+                  <button
+                    onClick={() => setShowDecayDashboard(true)}
+                    className="w-full mb-8 bg-slate-900/50 hover:bg-slate-900 border border-slate-800/80 rounded-xl px-5 py-3 flex items-center justify-between text-slate-300 hover:text-white transition-all group cursor-pointer shadow-md"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Brain className="text-teal-400 w-4 h-4 group-hover:animate-pulse" />
+                      <span className="text-xs font-semibold tracking-wide">
+                        View Memory Decay Curve
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-[10px] text-slate-500 group-hover:text-slate-400">
+                      <span>R = {(decayData.currentR * 100).toFixed(0)}% • S = {decayData.sBase.toFixed(1)}d</span>
+                      <ChevronRight size={14} className="transform group-hover:translate-x-0.5 transition-transform" />
+                    </div>
+                  </button>
+                )}
+
+                {/* Cognitive Memory Analytics Dashboard */}
+                {decayData && showDecayDashboard && (
+                  <section className="mb-10 bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl text-slate-100">
+                    <div 
+                      onClick={() => setShowDecayDashboard(false)}
+                      className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800 cursor-pointer group"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Brain className="text-teal-400 w-5 h-5 group-hover:scale-105 transition-transform" />
+                        <div>
+                          <h2 className="text-base font-bold text-slate-100 tracking-tight">
+                            Cognitive Memory Analytics
+                          </h2>
+                          <p className="text-[11px] text-slate-400">
+                            Natural forgetting curve projection vs. reinforced review pathways (Click header to collapse)
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 text-xs">
+                        {decayData.isPinned ? (
+                          <span className="flex items-center gap-1.5 bg-emerald-950/60 text-emerald-400 px-3 py-1 rounded-full border border-emerald-900/50 font-semibold">
+                            <Sparkles size={12} /> Pinned Immortal Memory
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">
+                            Half-life stability: <strong className="text-slate-200">{decayData.sBase.toFixed(1)}d</strong>
+                          </span>
+                        )}
+                        <ChevronRight size={14} className="transform rotate-90 text-slate-500 group-hover:translate-y-0.5 group-hover:text-slate-300 transition-transform" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+                      {/* SVG Plot Column (7 cols) */}
+                      <div className="lg:col-span-7 bg-slate-950/50 border border-slate-950 rounded-xl p-4 relative overflow-hidden">
+                        {/* Title of the chart */}
+                        <div className="flex items-center justify-between mb-3 text-[11px] text-slate-400 px-1">
+                          <span className="font-semibold flex items-center gap-1"><TrendingDown size={12} /> Retrievability (R) vs Time (t)</span>
+                          <span className="font-mono bg-slate-900 px-2 py-0.5 rounded text-[10px] text-slate-500">Plot range: 0 to {decayData.maxDays} days</span>
+                        </div>
+
+                        {/* Interactive Pure SVG Chart */}
+                        <svg viewBox="0 0 480 160" className="w-full h-auto overflow-visible select-none">
+                          {/* Grid Lines & Labels */}
+                          {[0, 0.25, 0.5, 0.75, 1.0].map((r) => {
+                            const y = 135 - r * 120;
+                            return (
+                              <g key={r} className="opacity-45">
+                                <line
+                                  x1="45"
+                                  y1={y}
+                                  x2="460"
+                                  y2={y}
+                                  className="stroke-slate-800"
+                                  strokeWidth="1"
+                                  strokeDasharray={r === 0 ? "0" : "2 2"}
+                                />
+                                <text
+                                  x="35"
+                                  y={y + 3}
+                                  className="fill-slate-500 text-[10px] font-mono text-right font-bold"
+                                  textAnchor="end"
+                                >
+                                  {Math.round(r * 100)}%
+                                </text>
+                              </g>
+                            );
+                          })}
+
+                          {/* Time Ticks */}
+                          {[0, 0.25, 0.5, 0.75, 1.0].map((ratio) => {
+                            const t = ratio * decayData.maxDays;
+                            const x = 45 + ratio * 415;
+                            return (
+                              <g key={ratio} className="opacity-45">
+                                <line
+                                  x1={x}
+                                  y1="15"
+                                  x2={x}
+                                  y2="135"
+                                  className="stroke-slate-800"
+                                  strokeWidth="1"
+                                  strokeDasharray="2 2"
+                                />
+                                <text
+                                  x={x}
+                                  y="148"
+                                  className="fill-slate-500 text-[10px] font-mono font-bold"
+                                  textAnchor="middle"
+                                >
+                                  {Math.round(t)}d
+                                </text>
+                              </g>
+                            );
+                          })}
+
+                          {/* Render Curve Paths */}
+                          {!decayData.isPinned ? (
+                            <>
+                              {/* 1. Reinforced review path (emerald green dashed) */}
+                              <path
+                                d={decayData.reviewD}
+                                fill="none"
+                                className="stroke-emerald-500/60"
+                                strokeWidth="2"
+                                strokeDasharray="5 3"
+                              />
+
+                              {/* 2. Contradicted path (rose dashed) */}
+                              <path
+                                d={decayData.conflictD}
+                                fill="none"
+                                className="stroke-rose-500/50"
+                                strokeWidth="1.5"
+                                strokeDasharray="3 3"
+                              />
+
+                              {/* 3. Base natural decay path (teal solid glow + main) */}
+                              <path
+                                d={decayData.baseD}
+                                fill="none"
+                                className="stroke-teal-500/20"
+                                strokeWidth="5"
+                              />
+                              <path
+                                d={decayData.baseD}
+                                fill="none"
+                                className="stroke-teal-400"
+                                strokeWidth="2"
+                              />
+                            </>
+                          ) : (
+                            <>
+                              {/* Pinned flat line (glowing solid green) */}
+                              <path
+                                d={decayData.baseD}
+                                fill="none"
+                                className="stroke-emerald-400/20"
+                                strokeWidth="6"
+                              />
+                              <path
+                                d={decayData.baseD}
+                                fill="none"
+                                className="stroke-emerald-400"
+                                strokeWidth="2.5"
+                              />
+                            </>
+                          )}
+
+                          {/* Pulsing Recall Dot & Outer Ring */}
+                          <g>
+                            <circle
+                              cx={decayData.currentX}
+                              cy={decayData.currentY}
+                              r="8"
+                              className={decayData.isPinned ? "fill-emerald-400/30" : "fill-teal-400/30"}
+                            >
+                              <animate attributeName="r" values="5;10;5" dur="2.4s" repeatCount="indefinite" />
+                              <animate attributeName="opacity" values="0.9;0.1;0.9" dur="2.4s" repeatCount="indefinite" />
+                            </circle>
+                            <circle
+                              cx={decayData.currentX}
+                              cy={decayData.currentY}
+                              r="4.5"
+                              className={decayData.isPinned ? "fill-emerald-400 stroke-slate-950" : "fill-teal-400 stroke-slate-950"}
+                              strokeWidth="1.5"
+                            />
+                          </g>
+                        </svg>
+
+                        {/* Custom Map Legend overlayed below chart */}
+                        <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-4 pt-3 border-t border-slate-900/60 text-[10px] font-medium justify-center text-slate-400">
+                          {decayData.isPinned ? (
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-3 h-0.5 bg-emerald-400 inline-block" />
+                              <span className="text-emerald-400">Immortal Memory (100% Locked)</span>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-1.5">
+                                <span className="w-3 h-0.5 bg-teal-400 inline-block" />
+                                <span>Natural Decay Curve</span>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="w-3 h-0.5 border-t-2 border-dashed border-emerald-500 inline-block" />
+                                <span className="text-emerald-400">Simulated Review Path (S → {decayData.s2.toFixed(1)}d)</span>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="w-3 h-0.5 border-t-2 border-dashed border-rose-500 inline-block" />
+                                <span className="text-rose-400">Simulated Conflict Path (S → {decayData.s3.toFixed(1)}d)</span>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Right Projections Panel (5 cols) */}
+                      <div className="lg:col-span-5 flex flex-col gap-3">
+                        <div className="text-xs font-semibold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                          <Info size={13} /> Cognitive Forecast
+                        </div>
+
+                        {/* Card 1: Recall Strength */}
+                        <div className="bg-slate-950/40 border border-slate-900/80 rounded-xl p-3.5 flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] text-slate-500 font-bold uppercase block tracking-wider">Recall Strength</span>
+                            <span className="text-xs text-slate-300 font-medium">
+                              Estimated R = <strong className="text-slate-100 font-mono">{(decayData.currentR * 100).toFixed(0)}%</strong>
+                            </span>
+                          </div>
+                          <div>
+                            {decayData.isPinned ? (
+                              <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider">
+                                Immortal
+                              </span>
+                            ) : decayData.currentR > 0.8 ? (
+                              <span className="bg-teal-500/10 text-teal-400 border border-teal-500/20 px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider">
+                                Excellent
+                              </span>
+                            ) : decayData.currentR > 0.5 ? (
+                              <span className="bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider">
+                                Good
+                              </span>
+                            ) : decayData.currentR > 0.15 ? (
+                              <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider">
+                                Fading
+                              </span>
+                            ) : (
+                              <span className="bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider">
+                                Archivable
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Card 2: Active Review Boost */}
+                        <div className="bg-slate-950/40 border border-slate-900/80 rounded-xl p-3.5">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Active Review Boost</span>
+                            <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-0.5">
+                              <Zap size={10} /> +{((decayData.reviewMultiplier - 1) * 100).toFixed(0)}% boost
+                            </span>
+                          </div>
+                          <div className="text-sm font-bold text-slate-200">
+                            {decayData.isPinned ? "N/A (Memory Pinned)" : `+${(decayData.s2 - decayData.sBase).toFixed(1)} days stability`}
+                          </div>
+                          <p className="text-[10px] text-slate-400 mt-1 leading-normal">
+                            {decayData.isPinned 
+                              ? "Pinned memories do not decay and bypass reinforcement calculations."
+                              : `Next active review boosts stability from ${decayData.sBase.toFixed(1)}d to ${decayData.s2.toFixed(1)}d.`
+                            }
+                          </p>
+                        </div>
+
+                        {/* Card 3: Contradiction Penalty */}
+                        <div className="bg-slate-950/40 border border-slate-900/80 rounded-xl p-3.5">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Contradiction Risk</span>
+                            <span className="text-[10px] font-bold text-rose-400">-15% recall drop</span>
+                          </div>
+                          <div className="text-sm font-bold text-slate-200">
+                            {decayData.isPinned ? "N/A (Protected)" : `-${(decayData.sBase - decayData.s3).toFixed(1)} days stability`}
+                          </div>
+                          <p className="text-[10px] text-slate-400 mt-1 leading-normal">
+                            {decayData.isPinned 
+                              ? "Pinned user profile is fully protected from logic contradictions."
+                              : `A contradictory event instantly drops recall by 15% and damages stability to ${decayData.s3.toFixed(1)}d.`
+                            }
+                          </p>
+                        </div>
+
+                        {/* Card 4: Archive Eligibility / Memory Status */}
+                        <div className="bg-slate-950/40 border border-slate-900/80 rounded-xl p-3.5 text-[10px] text-slate-400 leading-relaxed">
+                          <strong className="text-slate-300 font-bold uppercase block mb-1 tracking-wide">Archiving Status</strong>
+                          {decayData.isPinned ? (
+                            <span className="text-emerald-400 font-medium">Immortal (Pinned page)</span>
+                          ) : (pageData.importance ?? 0.0) >= 0.4 || (pageData.confidence ?? 0.0) >= 0.6 ? (
+                            <span className="text-teal-400 font-medium">
+                              Protected Memory (Imp: {((pageData.importance ?? 0)*100).toFixed(0)}% / Conf: {((pageData.confidence ?? 0)*100).toFixed(0)}%)
+                            </span>
+                          ) : (
+                            <span>
+                              Decays below 15% threshold in{" "}
+                              <strong className="text-amber-400">
+                                {Math.max(0, Math.round(Math.max(30, 1.897 * decayData.sBase) - decayData.elapsedDays))} days
+                              </strong>
+                              .
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
                 <div className="prose prose-slate prose-indigo max-w-none mb-10">
                   <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
                     {pageData.content || ''}

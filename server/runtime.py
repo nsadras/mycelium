@@ -9,7 +9,7 @@ import uuid
 import mycelium
 from mycelium.models import LogEntry
 
-SESSIONS_FILE = Path("mnemos_store/sessions_meta.json")
+SESSIONS_FILE = Path("mycelium_store/sessions_meta.json")
 DEFAULT_IDLE_MINUTES = 20
 DEFAULT_MAX_TURNS = 25
 
@@ -27,7 +27,7 @@ def iso_now() -> str:
 def get_mem() -> mycelium.Mycelium:
     global _mem
     if _mem is None:
-        _mem = mycelium.Mycelium(store_path="./mnemos_store", config_path="mnemos.toml")
+        _mem = mycelium.Mycelium(store_path="./mycelium_store", config_path="mycelium.toml")
         # The web app owns episode flushing, so don't dream after every message.
         _mem.config.dream.schedule = "manual"
     return _mem

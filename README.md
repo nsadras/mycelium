@@ -2,7 +2,7 @@
   <img src="banner.svg" alt="Mycelium Banner" width="100%" />
 </p>
 
-# Mycelium (MnemOS)
+# Mycelium
 
 Mycelium is a local, plain-text memory system for LLM agents. It stores raw experience as episodic logs, consolidates useful knowledge into a Markdown wiki, and reloads relevant wiki pages into future chats.
 
@@ -10,7 +10,7 @@ The project includes a Python memory library, a FastAPI backend, and a React web
 
 ## Core Features
 
-- **Plain-text memory store:** Wiki pages and episodic logs are Markdown files under `mnemos_store/`.
+- **Plain-text memory store:** Wiki pages and episodic logs are Markdown files under `mycelium_store/`.
 - **Multi-session chat UI:** Create, rename, resume, and continue multiple chat sessions without treating each individual message as a full session.
 - **Long-term memory retrieval:** Each chat turn routes against the wiki index and loads relevant pages into the assistant's system context.
 - **Episodic encoding:** Active chat episodes can be flushed into raw durable logs with structured LLM output.
@@ -44,7 +44,7 @@ mycelium/
 │   └── src/components/ # Chat, Wiki, Logs, Sidebar controls
 ├── tests/              # Python test suite
 ├── examples/           # Library usage examples
-├── mnemos.toml         # Local runtime configuration
+├── mycelium.toml       # Local runtime configuration
 ├── start.sh            # Starts backend and frontend together
 └── pyproject.toml      # Python package and uv configuration
 ```
@@ -56,7 +56,7 @@ mycelium/
 - Python 3.11+
 - Node.js and npm
 - [Ollama](https://ollama.com/) running locally
-- A local model configured in `mnemos.toml` (currently `gemma4:latest`)
+- A local model configured in `mycelium.toml` (currently `gemma4:latest`)
 
 For web search and fetch tools, place an Ollama API key in the project-root `.env` file:
 
@@ -138,7 +138,7 @@ Chat sessions maintain an active episode buffer. Encoding happens when an episod
 
 The encoder sees the conversation transcript and extracts user-specific or interaction-specific facts into raw logs. It treats user messages as the primary source, uses assistant messages for context, and can capture personalized recommendations or plans without turning generic model knowledge into memory.
 
-Encoded episode IDs are stored in `mnemos_store/sessions_meta.json`. This prevents already-flushed active episodes from being repeatedly encoded unless memory is cleared/reset.
+Encoded episode IDs are stored in `mycelium_store/sessions_meta.json`. This prevents already-flushed active episodes from being repeatedly encoded unless memory is cleared/reset.
 
 ### 4. Dream Consolidation
 
@@ -174,10 +174,10 @@ The web UI can also trigger the same memory operations manually.
 
 ## Storage Layout
 
-The default store is `./mnemos_store`:
+The default store is `./mycelium_store`:
 
 ```text
-mnemos_store/
+mycelium_store/
 ├── sessions_meta.json  # Chat sessions, transcripts, active episodes, encoded episode markers
 ├── logs/               # Daily raw episodic logs
 ├── wiki/               # Semantic memory pages and _index.md
@@ -189,11 +189,11 @@ The memory store is meant to be readable and editable, but prefer the UI/API for
 
 ## Configuration
 
-Runtime settings live in `mnemos.toml`:
+Runtime settings live in `mycelium.toml`:
 
 ```toml
 [store]
-path = "./mnemos_store"
+path = "./mycelium_store"
 git_commits = false
 
 [llm]

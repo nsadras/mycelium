@@ -154,4 +154,4 @@ cython_debug/
 # Project specific
 smoke_test_store/
 agent_memory/
-mnemos_store/
+mycelium_store/

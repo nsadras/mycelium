@@ -1,4 +1,4 @@
-# MnemOS
+# Mycelium
 ## Neurobiologically-Inspired Agent Memory System
 ### Product Requirements Document & Technical Specification — v0.2
 
@@ -30,7 +30,7 @@
 
 ### 1.1 Vision
 
-MnemOS is a **dependency-light Python library** that gives LLM-based agents a memory system modeled on human neurobiology. It implements the full cognitive lifecycle — encoding, consolidation, reconsolidation, decay, and associative recall — using nothing but **plain markdown files and a locally-running LLM**.
+Mycelium is a **dependency-light Python library** that gives LLM-based agents a memory system modeled on human neurobiology. It implements the full cognitive lifecycle — encoding, consolidation, reconsolidation, decay, and associative recall — using nothing but **plain markdown files and a locally-running LLM**.
 
 There are no vector databases. No embedding models. No graph databases. No cloud API calls. The entire memory store is a directory of human-readable text files, and all intelligence (consolidation, relevancy ranking, reconsolidation) is performed by a local LLM via Ollama.
 
@@ -40,14 +40,14 @@ There are no vector databases. No embedding models. No graph databases. No cloud
 
 **From neuroscience:** retrieval is not read-only. When a memory is recalled, it enters a labile (destabilized) state and can be updated before restabilizing. This is **reconsolidation** — the mechanism by which humans correct beliefs, integrate new experience, and keep memory context-sensitive over time.
 
-MnemOS is the first agent memory framework to implement reconsolidation. That is its primary research contribution.
+Mycelium is the first agent memory framework to implement reconsolidation. That is its primary research contribution.
 
 ### 1.3 Design Principles
 
 - **Plain text over infrastructure.** Every memory artifact is a readable markdown file. The store can be inspected, edited, version-controlled with git, and understood without any tooling.
 - **Local LLM over API calls.** All LLM work (encoding, consolidation, reconsolidation, relevancy routing) runs via Ollama. No token costs, no rate limits, no data leaving the machine.
 - **LLM calls over algorithms.** Clustering, ranking, conflict detection, and abstraction are all LLM calls — not embedding similarity or graph traversal. This is more powerful, more flexible, and eliminates the entire embedding stack.
-- **No frameworks.** MnemOS has no dependency on LangChain, LangGraph, or any agent framework. It is a plain Python library. Agent harnesses can be built on top of it using whatever framework the developer prefers.
+- **No frameworks.** Mycelium has no dependency on LangChain, LangGraph, or any agent framework. It is a plain Python library. Agent harnesses can be built on top of it using whatever framework the developer prefers.
 
 ### 1.4 Scope
 
@@ -66,9 +66,9 @@ This document covers:
 
 ### 2.1 Biological Analogs
 
-MnemOS maps directly to well-established neuroscience. The plain-text architecture does not change these mappings — it changes only the substrate.
+Mycelium maps directly to well-established neuroscience. The plain-text architecture does not change these mappings — it changes only the substrate.
 
-| Neurobiology | MnemOS Component | File Artifact |
+| Neurobiology | Mycelium Component | File Artifact |
 |---|---|---|
 | Hippocampus | Episodic Log | `logs/YYYY-MM-DD.md` |
 | Neocortex | Wiki (semantic store) | `wiki/<topic>.md` |
@@ -82,7 +82,7 @@ MnemOS maps directly to well-established neuroscience. The plain-text architectu
 
 The Karpathy wiki pattern (April 2026) makes the case compellingly: for curated agent knowledge bases, loading pre-digested markdown into the context window outperforms RAG on accuracy, speed, and maintainability. RAG re-discovers knowledge on every query — nothing accumulates. A maintained wiki *compounds* over time.
 
-The additional advantages for MnemOS specifically:
+The additional advantages for Mycelium specifically:
 
 - **Debuggability.** Memory failures are visible. You can read the wiki pages that the agent read, see exactly what was in context, and understand why it behaved as it did.
 - **Version control.** The entire memory store is a git repository. Every reconsolidation event, every dream process run, every decay update is a diff. You have a complete audit trail for free.
@@ -91,7 +91,7 @@ The additional advantages for MnemOS specifically:
 
 ### 2.3 Why Local LLM
 
-Using a local LLM (Gemma 3, Llama 3, Mistral, etc. via Ollama) for all memory operations changes the economics entirely. Operations that would be prohibitively expensive with API pricing — re-ranking all retrieved pages, running a reconsolidation check on every retrieval, running nightly dream passes over the full episodic log — become essentially free. This allows MnemOS to be *much more aggressive* with LLM-driven intelligence than any API-based system could be.
+Using a local LLM (Gemma 3, Llama 3, Mistral, etc. via Ollama) for all memory operations changes the economics entirely. Operations that would be prohibitively expensive with API pricing — re-ranking all retrieved pages, running a reconsolidation check on every retrieval, running nightly dream passes over the full episodic log — become essentially free. This allows Mycelium to be *much more aggressive* with LLM-driven intelligence than any API-based system could be.
 
 ### 2.4 Gap in Existing Systems
 
@@ -102,7 +102,7 @@ A survey of current agent memory frameworks (Mem0, A-MEM, HippoRAG, MemoryBank, 
 - **No prediction error signal.** No system computes the discrepancy between a recalled memory and present context.
 - **No lability window.** No concept of a memory being temporarily destabilized and editable.
 
-The Karpathy wiki addresses the first two partially (the agent can rewrite wiki pages) but provides no protocol for *when* or *why* a page should be rewritten on retrieval. MnemOS provides that protocol.
+The Karpathy wiki addresses the first two partially (the agent can rewrite wiki pages) but provides no protocol for *when* or *why* a page should be rewritten on retrieval. Mycelium provides that protocol.
 
 ---
 
@@ -172,7 +172,7 @@ The Karpathy wiki addresses the first two partially (the agent can rewrite wiki 
 `wiki/_index.md` is the routing layer — the replacement for vector similarity search. It is a structured markdown file listing all wiki pages with one-line descriptions, topic tags, and typed cross-links between pages. At session start, the local LLM reads the index and selects which pages to load. This is cheap: the index stays compact even as the wiki grows.
 
 ```markdown
-# MnemOS Wiki Index
+# Mycelium Wiki Index
 _last updated: 2026-05-10 02:14_
 
 ## Pages
@@ -200,7 +200,7 @@ Note the typed relationships on `related:` links. These encode the knowledge gra
 ## 4. File System Layout
 
 ```
-mnemos_store/
+mycelium_store/
 │
 ├── wiki/
 │   ├── _index.md                  # routing index + cross-links
@@ -215,7 +215,7 @@ mnemos_store/
 ├── labile/
 │   └── <topic>.<session_id>.md    # wiki pages currently in labile state
 │
-└── mnemos.toml                    # configuration
+└── mycelium.toml                    # configuration
 ```
 
 ### 4.1 Wiki Page Format
@@ -367,7 +367,7 @@ report = await dream.run(
 
 ### 5.3 Reconsolidation — The Novel Core
 
-**This is MnemOS's primary research contribution.** When a wiki page is loaded into context, MnemOS runs a prediction error check by asking the local LLM whether the retrieved content conflicts with the current context. If the discrepancy exceeds the configured threshold, the page enters a **labile state** and is eligible for rewriting.
+**This is Mycelium's primary research contribution.** When a wiki page is loaded into context, Mycelium runs a prediction error check by asking the local LLM whether the retrieved content conflicts with the current context. If the discrepancy exceeds the configured threshold, the page enters a **labile state** and is eligible for rewriting.
 
 #### 5.3.1 Prediction Error Check
 
@@ -456,7 +456,7 @@ This gives a complete, human-readable audit trail for every memory revision with
 
 ### 5.4 Retrieval (Context Loading)
 
-At session start, MnemOS loads relevant wiki pages into the Context Buffer. The routing step replaces vector similarity search with an LLM call over the index:
+At session start, Mycelium loads relevant wiki pages into the Context Buffer. The routing step replaces vector similarity search with an LLM call over the index:
 
 **Step 1 — Page selection:**
 ```
@@ -523,15 +523,15 @@ Wiki pages with `decay_score < archive_threshold` (default 0.1) are moved to `wi
 
 ## 6. Python API Specification
 
-MnemOS is a plain Python library. Dependencies: `pathlib`, `httpx` (Ollama client), `tomllib`, `apscheduler`. No LangChain, no vector DB, no embedding model.
+Mycelium is a plain Python library. Dependencies: `pathlib`, `httpx` (Ollama client), `tomllib`, `apscheduler`. No LangChain, no vector DB, no embedding model.
 
 ### 6.1 Core Client
 
 ```python
-import mnemos
+import mycelium
 
-mem = mnemos.MnemOS(
-    store_path='./mnemos_store',       # path to file store
+mem = mycelium.Mycelium(
+    store_path='./mycelium_store',       # path to file store
     ollama_model='gemma3:12b',         # local model via Ollama
     ollama_url='http://localhost:11434',
     context_budget_tokens=8192,        # max tokens to inject per session
@@ -639,13 +639,13 @@ history = mem.wiki.history('project-architecture')
 
 ### 6.7 Agent Harness Integration (Framework-Agnostic)
 
-MnemOS is framework-agnostic. Here is how it integrates with a LangGraph outer loop:
+Mycelium is framework-agnostic. Here is how it integrates with a LangGraph outer loop:
 
 ```python
 from langgraph.graph import StateGraph
-import mnemos
+import mycelium
 
-mem = mnemos.MnemOS(store_path='./store', ollama_model='gemma3:12b')
+mem = mycelium.Mycelium(store_path='./store', ollama_model='gemma3:12b')
 
 async def memory_node(state):
     """Load relevant memory into agent state."""
@@ -673,10 +673,10 @@ graph.add_node('record_memory', record_node)
 
 ### 7.1 Ollama Setup
 
-MnemOS targets Ollama as the local LLM runtime. All LLM calls go to `http://localhost:11434/api/generate` (or chat endpoint).
+Mycelium targets Ollama as the local LLM runtime. All LLM calls go to `http://localhost:11434/api/generate` (or chat endpoint).
 
 ```toml
-# mnemos.toml
+# mycelium.toml
 [llm]
 provider = "ollama"
 url = "http://localhost:11434"
@@ -696,7 +696,7 @@ temperature = 0.2               # low temp for memory operations
 
 ### 7.3 LLM Call Wrapper
 
-All MnemOS LLM calls go through a single wrapper that handles structured output parsing, retries, and logging:
+All Mycelium LLM calls go through a single wrapper that handles structured output parsing, retries, and logging:
 
 ```python
 class OllamaClient:
@@ -718,7 +718,7 @@ class OllamaClient:
 
 ### 7.4 Token Budget Management
 
-Since local models have finite context windows, MnemOS tracks token usage using `tiktoken` (approximate, model-agnostic):
+Since local models have finite context windows, Mycelium tracks token usage using `tiktoken` (approximate, model-agnostic):
 
 ```python
 class ContextBudget:
@@ -744,10 +744,10 @@ Pages are loaded in priority order until the budget is exhausted. The index file
 ## 8. Configuration Reference
 
 ```toml
-# mnemos.toml — full reference
+# mycelium.toml — full reference
 
 [store]
-path = "./mnemos_store"
+path = "./mycelium_store"
 git_commits = te            # auto-commit after each dream run
 
 [llm]
@@ -786,7 +786,7 @@ half_lifers = 168         # 1 week for importance=0 entries
 
 ## 9. Open Research Questions
 
-MnemOS is designed to be publishable. The following are open empirical questions each suitable as a focused experiment.
+Mycelium is designed to be publishable. The following are open empirical questions each suitable as a focused experiment.
 
 ### 9.1 Prediction Error Calibration
 
@@ -794,7 +794,7 @@ What is the optimal `lability_threshold`? Too low: memories update constantly, l
 
 ### 9.2 LLM-as-Algorithm vs. Embedding-as-Algorithm
 
-MnemOS uses LLM calls for routing, ranking, and conflict detection — replacing cosine similarity and graph traversal. How do these compare on accuracy and latency? A controlled experiment (MnemOS vs. embedding-based MnemOS-E on the same benchmark) would quantify the tradeoff and justify the design choice.
+Mycelium uses LLM calls for routing, ranking, and conflict detection — replacing cosine similarity and graph traversal. How do these compare on accuracy and latency? A controlled experiment (Mycelium vs. embedding-based Mycelium-E on the same benchmark) would quantify the tradeoff and justify the design choice.
 
 ### 9.3 Consolidation Selectivity
 
@@ -802,7 +802,7 @@ Should the Dream Process consolidate all new log entries, or only those above an
 
 ### 9.4 Forgetting as a Feature
 
-MnemOS archives rather than deletes. Does active forgetting (deletion below threshold) improve long-horizon agent performance by reducing context noise? Comparing full-retention vs. active-forgetting conditions on a multi-session task would swer this.
+Mycelium archives rather than deletes. Does active forgetting (deletion below threshold) improve long-horizon agent performance by reducing context noise? Comparing full-retention vs. active-forgetting conditions on a multi-session task would swer this.
 
 ### 9.5 Multi-Agent Shared Memory
 
@@ -818,19 +818,19 @@ Every reconsolidation event captures a structured pair: (original belief, correc
 
 | Phase | Milestone | Key Deliverables |
 |---|---|---|
-| **v0.1 — Foundation** | File store + episodic log | `MnemOS` client, `mnemos_store/` layout, log append, TOML config, Ollama wrapper |
+| **v0.1 — Foundation** | File store + episodic log | `Mycelium` client, `mycelium_store/` layout, log append, TOML config, Ollama wrapper |
 | **v0.2 — Encoding** | LLM-based memory extraction | `encode()`, `encode_session()`, importascoring LLM call, log frontmatter |
 | **v0.3 — Wiki + Retrieval** | Index routing + context loading | `_index.md` format, `load_context()` LLM routing call, context budget manager, `session()` context manager |
 | **v0.4 — Dream Process** | Async consolidation pipeline | `dream()`, page identification LLM call, page rewrite LLM call, index update, decay engine, git commits |
 | **v0.5 — Reconsolidation** | Lability window + prediction error | Prediction error LLM call, labile file management, rewrite sys, `update_log` provenance |
-| **v0.6 — Harness** | Agent integration examples | LangGraph integration example, CLI tool (`mnemos dream`, `mnemos status`), documentation |
+| **v0.6 — Harness** | Agent integration examples | LangGraph integration example, CLI tool (`mycelium dream`, `mycelium status`), documentation |
 | **v1.0 — Benchmarks** | Evaluation + release | LOCOMO eval, comparison vs. Mem0 / HippoRAG / plain Karpathy wiki, PyPI release |
 
 ---
 
 ## 11. Publication Potential
 
-MnemOS addresses a gap explicitly identified in the 2025–2026 agent memory survey literature: retrieval-triggered reconsolidation has no implementation in any existingwork. The plain-text-first architecture also provides a clean comparison point against embedding-based systems.
+Mycelium addresses a gap explicitly identified in the 2025–2026 agent memory survey literature: retrieval-triggered reconsolidation has no implementation in any existingwork. The plain-text-first architecture also provides a clean comparison point against embedding-based systems.
 
 The combination of:
 - Neurobiologically grounded design (citable to Nader et al. 2000; Squire & Alvarez 1995)
@@ -838,14 +838,14 @@ The combination of:
 - LLM-as-algorithm replacing embeddings (novel systems contribution)
 - Concrete open-source Python implementation
 - Empirical evaluation on LOCOMO benchmark
-- Ablations: reconsolidation on/off, plain wiki vs. MnemOS, local vs. API LLM
+- Ablations: reconsolidation on/off, plain wiki vs. Mycelium, local vs. API LLM
 
 ...constitutes a strong submission to:
 
 - **ICLR MemAgents Workshop** — directly on-topic
 - **NeurIPS** — systems or cognitive science track
 - **EMNLP / ACL** — language grounding and memory
-- **Journal of Neural Engineering** — framing MnemOS as a computational model of reconsolidation bridges neuroscience and AI in a way that is rare and highly reviewable given your publication history there
+- **Journal of Neural Engineering** — framing Mycelium as a computational model of reconsolidation bridges neuroscience and AI in a way that is rare and highly reviewable given your publication history there
 
 The JNE framing is particularly strong: reconsolidation is well-established neuroscience (Nader 24000+ citations), implementing it computationally and validating it on agent benchmarks is a genuine contribution to computational cognitive neuroscience, not just ML systems.
 

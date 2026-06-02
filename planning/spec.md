@@ -1,7 +1,7 @@
 # Mycelium — Developer Spec
 ## For use with Claude Code / Cursor
 
-This document is the implementation spec for **Mycelium** (internally: MnemOS), a neurobiologically-inspired agent memory library. Use it as the authoritative reference for all implementation decisions. When in doubt, refer back here.
+This document is the implementation spec for **Mycelium** (internally: Mycelium), a neurobiologically-inspired agent memory library. Use it as the authoritative reference for all implementation decisions. When in doubt, refer back here.
 
 ---
 
@@ -39,7 +39,7 @@ mycelium/
 │   ├── budget.py              # Token budget / context window manager
 │   ├── models.py              # Dataclasses: WikiPage, LogEntry, etc.
 │   ├── prompts.py             # All LLM prompt templates (single source of truth)
-│   └── config.py              # Config loading from mnemos.toml
+│   └── config.py              # Config loading from mycelium.toml
 │
 ├── tests/
 │   ├── conftest.py            # shared fixtures
@@ -56,7 +56,7 @@ mycelium/
 │
 ├── pyproject.toml
 ├── README.md
-└── mnemos.toml                # default config (copied to store on init)
+└── mycelium.toml                # default config (copied to store on init)
 ```
 
 ---
@@ -653,7 +653,7 @@ class Mycelium:
         """
         Initializes all sub-components. If store_path doesn't exist,
         calls _init_store() to create the directory structure and
-        default files (_index.md, mnemos.toml).
+        default files (_index.md, mycelium.toml).
 
         If config_path is provided, loads config from TOML and
         config values override constructor arguments.
@@ -668,7 +668,7 @@ class Mycelium:
           store_path/logs/
           store_path/labile/
           store_path/wiki/_archive/
-          store_path/mnemos.toml     (default config)
+          store_path/mycelium.toml     (default config)
         """
         ...
 
@@ -749,7 +749,7 @@ class DecayConfig:
 
 @dataclass
 class Config:
-    store_path: Path = Path('./mnemos_store')
+    store_path: Path = Path('./mycelium_store')
     git_commits: bool = False
     context_budget_tokens: int = 8192
     min_importance_to_encode: float = 0.3
@@ -760,7 +760,7 @@ class Config:
 
     @classmethod
     def from_toml(cls, path: Path) -> 'Config':
-        """Loads config from mnemos.toml, returns Config with defaults for missing keys."""
+        """Loads config from mycelium.toml, returns Config with defaults for missing keys."""
         ...
 
     @classmethod

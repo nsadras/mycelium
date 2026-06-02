@@ -44,7 +44,7 @@ from typing import Optional
 
 @dataclass
 class Config:
-    store_path: Path = Path('./mnemos_store')
+    store_path: Path = Path('./mycelium_store')
     git_commits: bool = False
     context_budget_tokens: int = 8192
     llm: Optional[LLMConfig] = None
@@ -64,14 +64,14 @@ class Config:
 
     @classmethod
     def from_toml(cls, path: Path) -> 'Config':
-        """Loads config from mnemos.toml, returns Config with defaults for missing keys."""
+        """Loads config from mycelium.toml, returns Config with defaults for missing keys."""
         if not path.exists():
             return cls.defaults()
         
         with open(path, "rb") as f:
             data = tomllib.load(f)
             
-        store_path = Path(data.get('store', {}).get('path', './mnemos_store'))
+        store_path = Path(data.get('store', {}).get('path', './mycelium_store'))
         git_commits = data.get('store', {}).get('git_commits', False)
         context_budget_tokens = data.get('session', {}).get('context_budget_tokens', 8192)
         

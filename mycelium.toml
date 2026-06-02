@@ -1,5 +1,5 @@
 [store]
-path = "./mnemos_store"
+path = "./mycelium_store"
 git_commits = false
 
 [llm]

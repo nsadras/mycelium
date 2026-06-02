@@ -83,6 +83,54 @@ Start both the backend and frontend:
 - Frontend: http://localhost:5173
 - Backend API: http://localhost:8000
 
+For access from another trusted device on your home network or Tailscale tailnet, open the frontend using the dev machine's LAN or Tailscale IP:
+
+```text
+http://<dev-machine-ip>:5173
+```
+
+The frontend derives the backend API origin from the hostname used to load the page, so `http://192.168.x.x:5173` calls `http://192.168.x.x:8000/api`, and `http://100.x.x.x:5173` does the same over Tailscale. You can override this with `VITE_API_ORIGIN` when starting the UI:
+
+```bash
+cd ui
+VITE_API_ORIGIN=http://localhost:8000 npm run dev
+```
+
+Keep Ollama bound to localhost; the backend talks to it locally.
+
+### WSL on Windows
+
+If you run Mycelium inside WSL, use WSL mirrored networking so other devices can reach the WSL dev servers through the Windows LAN or Tailscale IP. In Windows, create or edit:
+
+```text
+C:\Users\<you>\.wslconfig
+```
+
+Add:
+
+```ini
+[wsl2]
+networkingMode=mirrored
+```
+
+Then restart WSL from PowerShell:
+
+```powershell
+wsl --shutdown
+```
+
+Start Mycelium again with `./start.sh`, then open the Windows LAN or Tailscale IP from your phone:
+
+```text
+http://<windows-lan-or-tailscale-ip>:5173
+```
+
+If mirrored networking is not available or does not work on your Windows/WSL version, use the port-proxy fallback from an Administrator WSL terminal:
+
+```bash
+powershell.exe -ExecutionPolicy Bypass -File "$(wslpath -w scripts/Expose-MyceliumWsl.ps1)" -SetPrivateNetwork
+```
+
 You can also run the backend directly:
 
 ```bash

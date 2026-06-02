@@ -1,0 +1,212 @@
+<svg
+  viewBox="0 0 1200 400"
+  width="1200"
+  height="400"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <defs>
+    <!-- Base Gradients for Myco -->
+    <linearGradient id="capGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#a3bcb0" />
+      <stop offset="100%" stop-color="#7e9c8e" />
+    </linearGradient>
+    <linearGradient id="underCapGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4d665a" />
+      <stop offset="100%" stop-color="#3d5248" />
+    </linearGradient>
+    <linearGradient id="bodyGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#faf8f2" />
+      <stop offset="100%" stop-color="#e9e5d4" />
+    </linearGradient>
+    <linearGradient id="bodyShadowGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ded9c3" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#cfc9af" stop-opacity="0.2" />
+    </linearGradient>
+
+    <!-- Bioluminescent Text and Accent Gradients -->
+    <linearGradient id="textGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#10b981" />
+      <stop offset="50%" stop-color="#34d399" />
+      <stop offset="100%" stop-color="#6ee7b7" />
+    </linearGradient>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#040605" />
+      <stop offset="60%" stop-color="#090e0c" />
+      <stop offset="100%" stop-color="#0d1411" />
+    </linearGradient>
+
+    <!-- Glowing Spore Gradients -->
+    <radialGradient id="sporeEmerald" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.25" />
+      <stop offset="100%" stop-color="#10b981" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="sporeMint" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#34d399" stop-opacity="0.2" />
+      <stop offset="100%" stop-color="#34d399" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="sporePurple" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.15" />
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <!-- 1. BACKGROUND CANVAS -->
+  <rect width="1200" height="400" fill="url(#bgGrad)" />
+
+  <!-- 2. GLOWING ACCENT SPORES (BACKGROUND DEPTH) -->
+  <circle cx="150" cy="100" r="140" fill="url(#sporeMint)" />
+  <circle cx="480" cy="320" r="100" fill="url(#sporePurple)" />
+  <circle cx="850" cy="80" r="160" fill="url(#sporeEmerald)" />
+  <circle cx="1120" cy="260" r="120" fill="url(#sporeMint)" />
+
+  <!-- Subtle micro-spore glowing specks -->
+  <circle cx="280" cy="220" r="6" fill="#10b981" opacity="0.6" />
+  <circle cx="295" cy="210" r="3" fill="#34d399" opacity="0.8" />
+  <circle cx="940" cy="310" r="8" fill="#10b981" opacity="0.5" />
+  <circle cx="960" cy="295" r="4" fill="#34d399" opacity="0.7" />
+
+  <!-- 3. MASCOT MYCO (LEFT SIDE - SCALED AND TRANSLATED) -->
+  <g transform="translate(100, 45) scale(2.2)">
+    <!-- Body Shape -->
+    <path
+      d="M 50,75 C 50,110 56,128 65,128 C 72,128 74,120 80,120 C 86,120 88,128 95,128 C 104,128 110,110 110,75 Z"
+      fill="url(#bodyGrad)"
+    />
+
+    <!-- Shadow on Body immediately below Cap -->
+    <path
+      d="M 50,75 C 60,82 100,82 110,75 C 110,77 100,83 80,83 C 60,83 50,77 50,75 Z"
+      fill="url(#bodyShadowGrad)"
+    />
+
+    <!-- Blush -->
+    <g>
+      <ellipse cx="60" cy="97" rx="5.5" ry="3.5" fill="#e8a9a9" opacity="0.5" />
+      <ellipse cx="100" cy="97" rx="5.5" ry="3.5" fill="#e8a9a9" opacity="0.5" />
+    </g>
+
+    <!-- Eyes (Cute vertical pill eyes) -->
+    <g>
+      <rect x="66" y="90" width="5" height="9" rx="2.5" fill="#2c3531" />
+      <rect x="89" y="90" width="5" height="9" rx="2.5" fill="#2c3531" />
+    </g>
+
+    <!-- Mouth (Smile) -->
+    <path d="M 78,98 Q 80,100 82,98" stroke="#2c3531" stroke-width="1.8" stroke-linecap="round" fill="none" />
+
+    <!-- Cap Crevice (Shadow) -->
+    <path
+      d="M 24,70 C 24,82 45,86 80,86 C 115,86 136,82 136,70 C 136,70 115,74 80,74 C 45,74 24,70 24,70 Z"
+      fill="url(#underCapGrad)"
+    />
+
+    <!-- Cap Shape -->
+    <path
+      d="M 20,70 C 20,32 45,18 80,18 C 115,18 140,32 140,70 C 140,84 115,88 80,88 C 45,88 20,84 20,70 Z"
+      fill="url(#capGrad)"
+    />
+
+    <!-- Symmetrical Resting Arms -->
+    <g>
+      <!-- Left arm (chubby, downward) -->
+      <path
+        d="M 54,91 C 38,91 34,97 34,103 C 34,110 40,111 54,107 Z"
+        fill="url(#bodyGrad)"
+      />
+      <!-- Right arm (chubby, downward) -->
+      <path
+        d="M 106,91 C 122,91 126,97 126,103 C 126,110 120,111 106,107 Z"
+        fill="url(#bodyGrad)"
+      />
+    </g>
+  </g>
+
+  <!-- 4. BRANDING AND TEXT CONTENT (RIGHT SIDE) -->
+  <!-- Main Title: MYCELIUM -->
+  <text
+    x="450"
+    y="135"
+    fill="url(#textGrad)"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+    font-weight="900"
+    font-size="76"
+    letter-spacing="14"
+  >MYCELIUM</text>
+
+
+  <!-- Pitch Description -->
+  <text
+    x="455"
+    y="185"
+    fill="#faf8f2"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+    font-weight="600"
+    font-size="20"
+    letter-spacing="0.5"
+  >Self-Consolidating Plaintext Memory Store for LLM Agents</text>
+
+  <text
+    x="455"
+    y="225"
+    fill="#7e9c8e"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+    font-weight="400"
+    font-size="14.5"
+    letter-spacing="0.2"
+  >Encodes chat sessions into episodic logs, consolidates technical facts into a Markdown wiki,</text>
+  <text
+    x="455"
+    y="248"
+    fill="#7e9c8e"
+    font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+    font-weight="400"
+    font-size="14.5"
+    letter-spacing="0.2"
+  >and manages memory state using Ebbinghaus forgetting curves.</text>
+
+  <!-- 5. GLOWING OPT-IN FEATURE BADGES -->
+  <!-- Badge 1: EPISODIC LOGGING -->
+  <g transform="translate(455, 290)">
+    <rect width="160" height="30" rx="15" fill="#090e0c" stroke="#10b981" stroke-opacity="0.25" stroke-width="1" />
+    <circle cx="20" cy="15" r="4" fill="#10b981" />
+    <text
+      x="35"
+      y="19"
+      fill="#a3bcb0"
+      font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+      font-weight="700"
+      font-size="10.5"
+      letter-spacing="1"
+    >EPISODIC LOGGING</text>
+  </g>
+
+  <!-- Badge 2: DREAM CONSOLIDATION -->
+  <g transform="translate(630, 290)">
+    <rect width="185" height="30" rx="15" fill="#090e0c" stroke="#10b981" stroke-opacity="0.25" stroke-width="1" />
+    <circle cx="20" cy="15" r="4" fill="#34d399" />
+    <text
+      x="35"
+      y="19"
+      fill="#a3bcb0"
+      font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+      font-weight="700"
+      font-size="10.5"
+      letter-spacing="1"
+    >DREAM CONSOLIDATION</text>
+  </g>
+
+  <!-- Badge 3: COGNITIVE FORGETTING -->
+  <g transform="translate(830, 290)">
+    <rect width="195" height="30" rx="15" fill="#090e0c" stroke="#10b981" stroke-opacity="0.25" stroke-width="1" />
+    <circle cx="20" cy="15" r="4" fill="#a78bfa" />
+    <text
+      x="35"
+      y="19"
+      fill="#a3bcb0"
+      font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+      font-weight="700"
+      font-size="10.5"
+      letter-spacing="1"
+    >COGNITIVE FORGETTING</text>
+  </g>
+</svg>

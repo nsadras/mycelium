@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="banner.svg" alt="Mycelium Banner" width="100%" />
+</p>
+
 # Mycelium (MnemOS)
 
 Mycelium is a local, plain-text memory system for LLM agents. It stores raw experience as episodic logs, consolidates useful knowledge into a Markdown wiki, and reloads relevant wiki pages into future chats.

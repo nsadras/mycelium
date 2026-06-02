@@ -16,7 +16,7 @@ const memoryOperationStatus: Record<
   'flush-all': { activity: 'flushing', label: 'Flushing', detail: 'Encoding all episodes' },
   'reconsolidate-current': { activity: 'reconsolidating', label: 'Resolving', detail: 'Applying memory updates' },
   dream: { activity: 'dreaming', label: 'Dreaming', detail: 'Consolidating logs' },
-  decay: { activity: 'decaying', label: 'Decaying', detail: 'Updating memory scores' },
+  decay: { activity: 'decaying', label: 'Decaying', detail: 'Refreshing memory state' },
   'clear-memory': { activity: 'flushing', label: 'Clearing', detail: 'Resetting memory store' },
   'clear-wiki': { activity: 'flushing', label: 'Clearing Wiki', detail: 'Resetting wiki index' },
 };

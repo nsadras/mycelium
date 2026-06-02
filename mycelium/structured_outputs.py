@@ -27,6 +27,16 @@ class RoutingOutput(RootModel[list[RoutingSelectionOutput]]):
     pass
 
 
+class MemoryUsageItemOutput(BaseModel):
+    page: str
+    used: bool
+    reason: str | None = None
+
+
+class MemoryUsageOutput(BaseModel):
+    pages: list[MemoryUsageItemOutput]
+
+
 class ConsolidationTargetOutput(BaseModel):
     page: str
     action: Literal["update", "create", "none"]

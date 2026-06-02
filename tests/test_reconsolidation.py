@@ -28,7 +28,6 @@ def sample_page():
         last_updated=datetime.now(),
         version=1,
         confidence=0.9,
-        decay_score=1.0,
         importance=0.5
     )
 

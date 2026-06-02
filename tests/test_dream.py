@@ -53,7 +53,7 @@ async def test_dream_process_run(dream_process, mock_llm, mock_wiki, mock_logs):
     existing = WikiPage(
         slug="existing-page", title="Existing", content="Old",
         created=datetime.now(), last_updated=datetime.now(),
-        version=1, confidence=0.8, decay_score=1.0, importance=0.5
+        version=1, confidence=0.8, importance=0.5
     )
     mock_wiki.get.return_value = existing
     
@@ -171,7 +171,7 @@ async def test_dream_process_fork_on_actual_contradiction(dream_process, mock_ll
     existing = WikiPage(
         slug="existing-page", title="Existing", content="Original content",
         created=datetime.now(), last_updated=datetime.now(),
-        version=1, confidence=0.8, decay_score=1.0, importance=0.5
+        version=1, confidence=0.8, importance=0.5
     )
     mock_wiki.get.return_value = existing
 
@@ -231,7 +231,7 @@ async def test_dream_process_override_on_non_contradiction(dream_process, mock_l
     existing = WikiPage(
         slug="existing-page", title="Existing", content="Original content",
         created=datetime.now(), last_updated=datetime.now(),
-        version=1, confidence=0.8, decay_score=1.0, importance=0.5
+        version=1, confidence=0.8, importance=0.5
     )
     mock_wiki.get.return_value = existing
 
@@ -333,5 +333,4 @@ async def test_dream_process_precise_log_routing(dream_process, mock_llm, mock_w
     assert "user-profile" in saved_pages
     assert saved_pages["react-loop"].source_log_entries == ["2026-05-10#Entry1"]
     assert saved_pages["user-profile"].source_log_entries == ["2026-05-10#Entry2"]
-
 

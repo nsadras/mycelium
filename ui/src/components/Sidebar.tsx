@@ -1,4 +1,4 @@
-import { Archive, Book, BrainCircuit, FileText, Loader2, MessageSquare, Moon, RefreshCw, Save, Sparkles, Trash2 } from 'lucide-react';
+import { Archive, Book, BrainCircuit, FileText, Loader2, MessageSquare, Moon, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import Avatar from './Avatar';
@@ -69,7 +69,7 @@ export default function Sidebar({
       label: 'Decay Pass',
       icon: RefreshCw,
       needsSession: false,
-      tooltip: 'Recompute decay scores and archive weak memories.',
+      tooltip: 'Refresh retrievability and archive weak memories.',
     },
     {
       id: 'clear-wiki',

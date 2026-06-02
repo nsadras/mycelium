@@ -31,8 +31,16 @@ class WikiPage:
     last_updated: datetime
     version: int
     confidence: float                    # 0.0–1.0
-    decay_score: float                   # 0.0–1.0
     importance: float                    # 0.0–1.0
+    stability_days: float = 14.0
+    difficulty: float = 0.4
+    retrievability: float = 1.0
+    last_accessed: Optional[datetime] = None
+    last_reviewed: Optional[datetime] = None
+    review_count: int = 0
+    reinforced_count: int = 0
+    conflict_count: int = 0
+    pinned: bool = False
     tags: list[str] = field(default_factory=list)
     related: list[Edge] = field(default_factory=list)
     source_log_entries: list[str] = field(default_factory=list)

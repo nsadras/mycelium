@@ -2,14 +2,14 @@ import { useState } from 'react';
 import { Settings, X } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import type { AssistantStatus } from '../lib/assistantStatus';
+import type { AssistantActivity, AssistantStatus } from '../lib/assistantStatus';
 import { avatarsRegistry } from './avatars';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-const activityCopy: Record<AssistantStatus['activity'], { label: string; detail: string }> = {
+const activityCopy: Record<AssistantActivity, { label: string; detail: string }> = {
   idle: { label: 'Idle', detail: 'Ready' },
   listening: { label: 'Listening', detail: 'Composing' },
   thinking: { label: 'Thinking', detail: 'Calling model' },
@@ -17,9 +17,15 @@ const activityCopy: Record<AssistantStatus['activity'], { label: string; detail:
   responding: { label: 'Responding', detail: 'Writing' },
   flushing: { label: 'Flushing', detail: 'Encoding episode' },
   dreaming: { label: 'Dreaming', detail: 'Consolidating logs' },
-  decaying: { label: 'Decaying', detail: 'Updating scores' },
+  decaying: { label: 'Decaying', detail: 'Refreshing memory state' },
   reconsolidating: { label: 'Resolving', detail: 'Updating memory' },
   error: { label: 'Error', detail: 'Check logs' },
+  clicked: { label: 'Hello', detail: 'Interacting' },
+  'clicked-left': { label: 'Hello', detail: 'Interacting' },
+  'clicked-right': { label: 'Hello', detail: 'Interacting' },
+  wiki: { label: 'Wiki', detail: 'Browsing memory' },
+  logs: { label: 'Logs', detail: 'Inspecting episodes' },
+  chat: { label: 'Chat', detail: 'Ready' },
 };
 
 export default function Avatar({ status, activeTab }: { status: AssistantStatus; activeTab?: 'chat' | 'wiki' | 'logs' }) {
@@ -52,7 +58,6 @@ export default function Avatar({ status, activeTab }: { status: AssistantStatus;
   const copy = activityCopy[status.activity];
   const label = status.label ?? copy.label;
   const detail = status.detail ?? copy.detail;
-  const active = status.activity !== 'idle' && status.activity !== 'error';
 
   // Find the selected avatar definition
   const avatarDef = avatarsRegistry.find(a => a.id === selectedAvatarId) || avatarsRegistry[0];

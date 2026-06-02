@@ -15,8 +15,8 @@ def test_wiki_store_save_and_get(tmp_path):
         last_updated=datetime(2026, 5, 10, 10, 0, 0),
         version=1,
         confidence=0.9,
-        decay_score=0.95,
         importance=0.8,
+        retrievability=0.95,
         tags=["test"],
         related=[Edge(target="other-page", relation="causes", weight=0.5)],
         update_log=[
@@ -49,8 +49,8 @@ def test_wiki_store_save_and_get(tmp_path):
 def test_wiki_store_list_all(tmp_path):
     store = WikiStore(tmp_path / "wiki")
     
-    store.save(WikiPage(slug="page1", title="1", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, decay_score=1.0, importance=1.0))
-    store.save(WikiPage(slug="page2", title="2", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, decay_score=1.0, importance=1.0))
+    store.save(WikiPage(slug="page1", title="1", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
+    store.save(WikiPage(slug="page2", title="2", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
     store.save_index("# Index")
     
     pages = store.list_all()
@@ -61,7 +61,7 @@ def test_wiki_store_list_all(tmp_path):
 
 def test_wiki_store_archive(tmp_path):
     store = WikiStore(tmp_path / "wiki")
-    store.save(WikiPage(slug="archive-me", title="A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, decay_score=1.0, importance=1.0))
+    store.save(WikiPage(slug="archive-me", title="A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
     assert store.exists("archive-me")
     store.archive("archive-me")
     assert not store.exists("archive-me")
@@ -69,7 +69,7 @@ def test_wiki_store_archive(tmp_path):
 
 def test_wiki_store_labile(tmp_path):
     store = WikiStore(tmp_path / "wiki")
-    store.save(WikiPage(slug="labile-page", title="L", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, decay_score=1.0, importance=1.0))
+    store.save(WikiPage(slug="labile-page", title="L", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
     
     store.mark_labile("labile-page", "ses-123")
     assert (tmp_path / "labile" / "labile-page.ses-123.md").exists()
@@ -157,7 +157,7 @@ def test_mycelium_init_seeds_user_profile(tmp_path):
     
     page = myc.wiki.get("user-profile")
     assert page.title == "User Profile"
-    assert page.decay_score == 0.0
+    assert page.pinned
     assert page.confidence == 0.8
     assert "profile" in page.tags
     
@@ -216,8 +216,8 @@ def test_clear_wiki_store(tmp_path, monkeypatch):
     assert len(myc.log_store.get_unconsolidated()) == 0
     
     from mycelium.models import WikiPage
-    myc.wiki.save(WikiPage(slug="page-a", title="Page A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, decay_score=1.0, importance=1.0))
-    myc.wiki.save(WikiPage(slug="page-b", title="Page B", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, decay_score=1.0, importance=1.0))
+    myc.wiki.save(WikiPage(slug="page-a", title="Page A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
+    myc.wiki.save(WikiPage(slug="page-b", title="Page B", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
     myc.wiki.save_index("# Wiki Index\n\n## Pages\n- [[user-profile]]\n- [[page-a]]\n- [[page-b]]")
     
     assert myc.wiki.exists("page-a")
@@ -249,7 +249,7 @@ async def test_delete_individual_wiki_page_api(tmp_path, monkeypatch):
     monkeypatch.setattr("server.api.memory.get_mem", lambda: myc)
     
     from mycelium.models import WikiPage
-    myc.wiki.save(WikiPage(slug="target-page", title="Target", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, decay_score=1.0, importance=1.0))
+    myc.wiki.save(WikiPage(slug="target-page", title="Target", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
     myc.wiki.save_index("# Wiki Index\n\n## Pages\n- [[user-profile]]\n- [[target-page]]")
     
     assert myc.wiki.exists("target-page")

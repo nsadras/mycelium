@@ -9,7 +9,7 @@ from mycelium.store import WikiStore, LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.config import Config
 from mycelium import prompts
-from mycelium.decay import DecayEngine
+from mycelium.decay import DecayEngine, record_memory_event
 from mycelium.structured_outputs import (
     ConsolidationIdentifyOutput,
     WikiIndexOutput,
@@ -172,6 +172,7 @@ class DreamProcess:
                     existing_page.confidence = confidence
                     existing_page.importance = importance
                     existing_page.update_log.append(log)
+                    record_memory_event(existing_page, "dream_updated", now=now)
                     if not dry_run:
                         self.wiki.save(existing_page)
                     pages_updated += 1
@@ -185,13 +186,13 @@ class DreamProcess:
                     last_updated=now,
                     version=1,
                     confidence=confidence,
-                    decay_score=1.0,
                     importance=importance,
                     tags=tags,
                     related=related_edges,
                     source_log_entries=page_source_ids,
                     update_log=[UpdateLogEntry(1, now, "system", "dream", 0.0, "Initial creation", 0.0, confidence)]
                 )
+                record_memory_event(new_page, "dream_created", now=now)
                 if not dry_run:
                     self.wiki.save(new_page)
                 title_to_slug[title_key] = page_slug
@@ -243,6 +244,7 @@ class DreamProcess:
                     existing_page.confidence = confidence
                     existing_page.importance = importance
                     existing_page.update_log.append(log)
+                    record_memory_event(existing_page, "dream_updated", now=now)
                     
                     if not dry_run:
                         self.wiki.save(existing_page)
@@ -257,7 +259,6 @@ class DreamProcess:
                         last_updated=now,
                         version=1,
                         confidence=confidence,
-                        decay_score=1.0,
                         importance=importance,
                         tags=tags,
                         related=related_edges + [Edge(page_slug, "contradicts", 1.0)],
@@ -273,9 +274,11 @@ class DreamProcess:
                             confidence,
                         )]
                     )
+                    record_memory_event(fork_page, "dream_created", now=now)
                     
                     existing_page.related.append(Edge(fork_slug, "contradicts", 1.0))
                     existing_page.confidence = max(0.0, existing_page.confidence - 0.1)
+                    record_memory_event(existing_page, "contradicted", now=now)
                     
                     conflicts_found.append(page_slug)
                     conflicts_resolved += 1
@@ -300,6 +303,7 @@ class DreamProcess:
                         existing_page.last_updated = now
                         log = UpdateLogEntry(existing_page.version, now, "system", "dream", 0.0, "Merged during dream", existing_page.confidence, confidence)
                         existing_page.update_log.append(log)
+                        record_memory_event(existing_page, "dream_updated", now=now)
                         if not dry_run:
                             self.wiki.save(existing_page)
                         pages_updated += 1

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, memo, type FormEvent } from 'react';
+import { useState, useEffect, useRef, memo, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
@@ -118,7 +118,7 @@ interface ChatProps {
   onSelect: (id: string) => void;
   onCreate: (query?: string) => void;
   onRename: (id: string, query: string) => void;
-  setAssistantStatus: (status: AssistantStatus) => void;
+  setAssistantStatus: Dispatch<SetStateAction<AssistantStatus>>;
 }
 
 export default function Chat({ sessions, selectedId, onSelect, onCreate, onRename, setAssistantStatus }: ChatProps) {

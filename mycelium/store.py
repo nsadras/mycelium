@@ -72,6 +72,18 @@ class WikiStore:
         last_updated = post.metadata.get("last_updated")
         if isinstance(last_updated, str):
             last_updated = datetime.fromisoformat(last_updated)
+
+        last_accessed = post.metadata.get("last_accessed")
+        if isinstance(last_accessed, str):
+            last_accessed = datetime.fromisoformat(last_accessed)
+
+        last_reviewed = post.metadata.get("last_reviewed")
+        if isinstance(last_reviewed, str):
+            last_reviewed = datetime.fromisoformat(last_reviewed)
+
+        now = datetime.now()
+        created = created or now
+        last_updated = last_updated or created
             
         return WikiPage(
             slug=post.metadata.get("id", slug),
@@ -81,8 +93,16 @@ class WikiStore:
             last_updated=last_updated,
             version=post.metadata.get("version", 1),
             confidence=post.metadata.get("confidence", 0.0),
-            decay_score=post.metadata.get("decay_score", 1.0),
             importance=post.metadata.get("importance", 0.5),
+            stability_days=post.metadata.get("stability_days", 14.0),
+            difficulty=post.metadata.get("difficulty", 0.4),
+            retrievability=post.metadata.get("retrievability", 1.0),
+            last_accessed=last_accessed,
+            last_reviewed=last_reviewed,
+            review_count=post.metadata.get("review_count", 0),
+            reinforced_count=post.metadata.get("reinforced_count", 0),
+            conflict_count=post.metadata.get("conflict_count", 0),
+            pinned=post.metadata.get("pinned", False),
             tags=post.metadata.get("tags", []),
             related=related,
             source_log_entries=post.metadata.get("source_log_entries", []),
@@ -101,8 +121,16 @@ class WikiStore:
         post.metadata["last_updated"] = page.last_updated.isoformat() if page.last_updated else None
         post.metadata["version"] = page.version
         post.metadata["confidence"] = page.confidence
-        post.metadata["decay_score"] = page.decay_score
         post.metadata["importance"] = page.importance
+        post.metadata["stability_days"] = page.stability_days
+        post.metadata["difficulty"] = page.difficulty
+        post.metadata["retrievability"] = page.retrievability
+        post.metadata["last_accessed"] = page.last_accessed.isoformat() if page.last_accessed else None
+        post.metadata["last_reviewed"] = page.last_reviewed.isoformat() if page.last_reviewed else None
+        post.metadata["review_count"] = page.review_count
+        post.metadata["reinforced_count"] = page.reinforced_count
+        post.metadata["conflict_count"] = page.conflict_count
+        post.metadata["pinned"] = page.pinned
         post.metadata["tags"] = page.tags
         post.metadata["related"] = [_edge_to_dict(r) for r in page.related]
         post.metadata["source_log_entries"] = page.source_log_entries

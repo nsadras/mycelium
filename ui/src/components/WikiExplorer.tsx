@@ -23,6 +23,7 @@ export default function WikiExplorer() {
   const [editTags, setEditTags] = useState('');
   const [editConfidence, setEditConfidence] = useState('0.5');
   const [editImportance, setEditImportance] = useState('0.5');
+  const [editPinned, setEditPinned] = useState(false);
   const [editContent, setEditContent] = useState('');
 
   useEffect(() => {
@@ -60,6 +61,7 @@ export default function WikiExplorer() {
     setEditTags(pageData.tags.join(', '));
     setEditConfidence(String(pageData.confidence ?? 0.5));
     setEditImportance(String(pageData.importance ?? 0.5));
+    setEditPinned(Boolean(pageData.pinned));
     setEditContent(pageData.content || '');
     setIsEditing(true);
   };
@@ -74,9 +76,10 @@ export default function WikiExplorer() {
         tags: editTags.split(',').map(t => t.trim()).filter(Boolean),
         confidence: Number(editConfidence),
         importance: Number(editImportance),
+        pinned: editPinned,
       });
       setPageData(res.data);
-      setPages(prev => prev.map(p => p.slug === res.data.slug ? { ...p, title: res.data.title, confidence: res.data.confidence, tags: res.data.tags } : p));
+      setPages(prev => prev.map(p => p.slug === res.data.slug ? { ...p, ...res.data } : p));
       setIsEditing(false);
     } catch (err) {
       console.error("Failed to save wiki page", err);
@@ -153,6 +156,15 @@ export default function WikiExplorer() {
                 </div>
                 <span className="text-[10px] font-medium text-slate-400">{(p.confidence * 100).toFixed(0)}%</span>
               </div>
+              <div className="mt-1 flex items-center gap-2">
+                <div className="flex-1 h-1 bg-slate-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-cyan-400 transition-all duration-500"
+                    style={{ width: `${((p.retrievability ?? 1) * 100)}%` }}
+                  />
+                </div>
+                <span className="text-[10px] font-medium text-slate-400">R {((p.retrievability ?? 1) * 100).toFixed(0)}%</span>
+              </div>
             </button>
           ))}
         </div>
@@ -210,7 +222,7 @@ export default function WikiExplorer() {
                     onChange={(e) => setEditTitle(e.target.value)}
                     className="w-full rounded-lg border border-slate-200 px-3 py-2 text-3xl font-extrabold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
                     <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       Tags
                       <input
@@ -243,6 +255,15 @@ export default function WikiExplorer() {
                         className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm normal-case tracking-normal text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                     </label>
+                    <label className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      <input
+                        type="checkbox"
+                        checked={editPinned}
+                        onChange={(e) => setEditPinned(e.target.checked)}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      Pinned
+                    </label>
                   </div>
                 </div>
               ) : (
@@ -256,6 +277,12 @@ export default function WikiExplorer() {
                   <ShieldCheck size={16} className="text-indigo-500" />
                   <span className="font-medium">v{pageData.version}</span>
                 </div>
+                {pageData.pinned && (
+                  <div className="flex items-center gap-1.5 bg-emerald-50 px-3 py-1.5 rounded-full text-emerald-700">
+                    <ShieldCheck size={16} />
+                    <span className="font-medium">Pinned</span>
+                  </div>
+                )}
                 <div className="flex items-center gap-1.5 bg-slate-100 px-3 py-1.5 rounded-full">
                   <Clock size={16} />
                   <span>Last updated {new Date().toLocaleDateString()}</span>
@@ -278,6 +305,46 @@ export default function WikiExplorer() {
               />
             ) : (
               <>
+                <section className="mb-8 grid grid-cols-2 gap-3 border-y border-slate-100 py-4 md:grid-cols-4">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Retrievability</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-800">{((pageData.retrievability ?? 1) * 100).toFixed(0)}%</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Stability</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-800">{(pageData.stability_days ?? 0).toFixed(1)} days</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Difficulty</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-800">{((pageData.difficulty ?? 0) * 100).toFixed(0)}%</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Events</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-800">
+                      {pageData.review_count ?? 0} reviews / {pageData.reinforced_count ?? 0} reinforced
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Last Accessed</div>
+                    <div className="mt-1 text-xs font-medium text-slate-600">
+                      {pageData.last_accessed ? new Date(pageData.last_accessed).toLocaleString() : 'Never'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Last Reviewed</div>
+                    <div className="mt-1 text-xs font-medium text-slate-600">
+                      {pageData.last_reviewed ? new Date(pageData.last_reviewed).toLocaleString() : 'Never'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Conflicts</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-800">{pageData.conflict_count ?? 0}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Importance</div>
+                    <div className="mt-1 text-sm font-semibold text-slate-800">{((pageData.importance ?? 0) * 100).toFixed(0)}%</div>
+                  </div>
+                </section>
                 <div className="prose prose-slate prose-indigo max-w-none mb-10">
                   <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
                     {pageData.content || ''}

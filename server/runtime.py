@@ -314,8 +314,11 @@ async def run_dream() -> dict[str, Any]:
 
 
 async def run_decay() -> dict[str, Any]:
-    changed_scores = await get_mem().dream_process.decay_engine.run_pass()
-    return {"pages_changed": len(changed_scores), "changed_scores": changed_scores}
+    changed_retrievability = await get_mem().dream_process.decay_engine.run_pass()
+    return {
+        "pages_changed": len(changed_retrievability),
+        "changed_retrievability": changed_retrievability,
+    }
 
 
 def clear_memory_store() -> dict[str, int]:
@@ -366,6 +369,7 @@ def clear_memory_store() -> dict[str, int]:
         }
         counts["sessions_reset"] += 1
     save_meta(meta)
+    mem._ensure_user_profile()
     return counts
 
 

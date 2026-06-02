@@ -22,7 +22,6 @@ async def test_session_lifecycle(temp_mycelium):
             last_updated=None,
             version=1,
             confidence=0.8,
-            decay_score=1.0,
             importance=0.5
         )
         mock_load.return_value = [mock_page]

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Menu, History } from 'lucide-react';
 import api, { type Session } from './lib/api';
 import Chat from './components/Chat';
 import WikiExplorer from './components/WikiExplorer';
@@ -31,6 +32,8 @@ function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [runningMemoryOperation, setRunningMemoryOperation] = useState<string | null>(null);
   const [assistantStatus, setAssistantStatus] = useState<AssistantStatus>(idleStatus);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
 
   useEffect(() => {
     fetchSessions();
@@ -141,7 +144,7 @@ function App() {
   };
 
   return (
-    <div className="relative flex h-screen text-slate-100 overflow-hidden z-10">
+    <div className="relative flex w-full h-dvh text-slate-100 overflow-hidden z-10">
       <SporeBackground />
       <Sidebar 
         activeTab={activeTab} 
@@ -151,17 +154,53 @@ function App() {
         hasSelectedSession={Boolean(selectedSessionId)}
         runningMemoryOperation={runningMemoryOperation}
         assistantStatus={assistantStatus}
+        isOpenMobile={sidebarOpen}
+        onCloseMobile={() => setSidebarOpen(false)}
       />
       
       <main className="flex-1 flex flex-col min-w-0 h-full relative z-10">
+        {/* Mobile top header bar */}
+        <div className="flex md:hidden items-center justify-between p-4 bg-slate-900 border-b border-slate-800 text-white shrink-0">
+          <button 
+            onClick={() => setSidebarOpen(true)}
+            className="p-1 hover:bg-slate-800 rounded-md text-emerald-400 cursor-pointer"
+            title="Open Menu"
+          >
+            <Menu size={24} />
+          </button>
+          
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-sm uppercase tracking-wider text-emerald-400">
+              {activeTab}
+            </span>
+          </div>
+
+          {activeTab === 'chat' ? (
+            <button 
+              onClick={() => setSessionsOpen(true)}
+              className="p-1 hover:bg-slate-800 rounded-md text-emerald-400 cursor-pointer"
+              title="Open Sessions"
+            >
+              <History size={24} />
+            </button>
+          ) : (
+            <div className="w-8" />
+          )}
+        </div>
+
         {activeTab === 'chat' && (
           <Chat 
             sessions={sessions}
             selectedId={selectedSessionId}
-            onSelect={setSelectedSessionId}
+            onSelect={(id) => {
+              setSelectedSessionId(id);
+              setSessionsOpen(false);
+            }}
             onCreate={handleCreateSession}
             onRename={handleRenameSession}
             setAssistantStatus={setAssistantStatus}
+            sessionsOpenMobile={sessionsOpen}
+            onCloseSessionsMobile={() => setSessionsOpen(false)}
           />
         )}
         {activeTab === 'wiki' && <WikiExplorer />}

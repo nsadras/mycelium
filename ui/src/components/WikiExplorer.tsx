@@ -207,9 +207,9 @@ export default function WikiExplorer() {
   const decayData = pageData ? calculateDecayPoints(pageData) : null;
 
   return (
-    <div className="flex h-full min-w-0">
+    <div className="flex flex-col md:flex-row flex-1 min-h-0 min-w-0">
       {/* Page List */}
-      <div className="w-80 bg-white border-r border-slate-200 flex flex-col">
+      <div className="w-full md:w-80 h-64 md:h-full bg-white border-b md:border-b-0 md:border-r border-slate-200 flex flex-col shrink-0">
         <div className="p-4 border-b border-slate-200">
           <div className="relative">
             <Search size={16} className="absolute left-3 top-2.5 text-slate-400" />

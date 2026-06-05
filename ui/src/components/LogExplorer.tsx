@@ -66,8 +66,8 @@ export default function LogExplorer() {
   };
 
   return (
-    <div className="flex h-full min-w-0">
-      <div className="w-64 bg-white border-r border-slate-200 flex flex-col">
+    <div className="flex flex-col md:flex-row flex-1 min-h-0 min-w-0">
+      <div className="w-full md:w-64 h-48 md:h-full bg-white border-b md:border-b-0 md:border-r border-slate-200 flex flex-col shrink-0">
         <div className="p-4 border-b border-slate-200">
           <h2 className="font-semibold text-slate-700 flex items-center gap-2">
             <Calendar size={16} /> Daily Logs

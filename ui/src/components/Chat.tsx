@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
-import { BookOpen, Check, ChevronDown, ChevronRight, Globe, Pencil, Send, Plus, History, X } from 'lucide-react';
+import { BookOpen, Check, ChevronDown, ChevronRight, Globe, Pencil, Send, Plus, History, X, Compass } from 'lucide-react';
 import api, { type Session, type Message } from '../lib/api';
 import type { AssistantStatus } from '../lib/assistantStatus';
 import { clsx, type ClassValue } from 'clsx';
@@ -101,8 +101,18 @@ const ChatMessageItem = memo(function ChatMessageItem({ m, id }: { m: Message; i
             {m.tool_events && m.tool_events.length > 0 && (
               <ToolEvents events={m.tool_events} />
             )}
-            <div className="prose prose-sm prose-slate max-w-none prose-chat">
-              <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+            <div className="prose prose-sm prose-slate max-w-none prose-chat overflow-hidden">
+              <ReactMarkdown 
+                remarkPlugins={[remarkGfm, remarkMath]} 
+                rehypePlugins={[rehypeKatex]}
+                components={{
+                  table: ({ node, ...props }) => (
+                    <div className="overflow-x-auto max-w-full my-4 rounded-lg border border-slate-700/40">
+                      <table className="min-w-full divide-y divide-slate-800" {...props} />
+                    </div>
+                  )
+                }}
+              >
                 {m.content}
               </ReactMarkdown>
             </div>
@@ -120,9 +130,20 @@ interface ChatProps {
   onCreate: (query?: string) => void;
   onRename: (id: string, query: string) => void;
   setAssistantStatus: Dispatch<SetStateAction<AssistantStatus>>;
+  sessionsOpenMobile?: boolean;
+  onCloseSessionsMobile?: () => void;
 }
 
-export default function Chat({ sessions, selectedId, onSelect, onCreate, onRename, setAssistantStatus }: ChatProps) {
+export default function Chat({
+  sessions,
+  selectedId,
+  onSelect,
+  onCreate,
+  onRename,
+  setAssistantStatus,
+  sessionsOpenMobile = false,
+  onCloseSessionsMobile,
+}: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -131,6 +152,7 @@ export default function Chat({ sessions, selectedId, onSelect, onCreate, onRenam
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const [activePromptIndex, setActivePromptIndex] = useState<number | null>(null);
+  const [navOpenMobile, setNavOpenMobile] = useState(false);
 
   const userPrompts = messages
     .map((m, index) => ({ ...m, originalIndex: index }))
@@ -189,6 +211,7 @@ export default function Chat({ sessions, selectedId, onSelect, onCreate, onRenam
       setMessages([]);
     }
     setAssistantStatus({ activity: 'idle', label: 'Idle', detail: selectedId ? 'Ready' : 'Select a session' });
+    setNavOpenMobile(false);
   }, [selectedId]);
 
   useEffect(() => {
@@ -267,9 +290,25 @@ export default function Chat({ sessions, selectedId, onSelect, onCreate, onRenam
   };
 
   return (
-    <div className="flex flex-1 min-w-0 h-full">
+    <div className="flex flex-1 min-w-0 min-h-0 relative">
+      {/* Mobile backdrop for Session list */}
+      {sessionsOpenMobile && (
+        <div 
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30 md:hidden"
+          onClick={onCloseSessionsMobile}
+        />
+      )}
       {/* Session History Sidebar */}
-      <div className="w-64 bg-white border-r border-slate-200 flex flex-col">
+      <div 
+        className={cn(
+          "bg-white border-r border-slate-200 flex flex-col shrink-0 transition-transform duration-300 z-40 md:z-auto",
+          // Desktop styling
+          "md:translate-x-0 md:static md:w-64 md:h-full md:flex",
+          // Mobile styling: overlay slide-in drawer
+          "fixed top-0 left-0 h-full w-64 shadow-2xl",
+          sessionsOpenMobile ? "translate-x-0" : "-translate-x-full"
+        )}
+      >
         <div className="p-4 flex items-center justify-between border-b border-slate-200">
           <h2 className="font-semibold text-slate-700 flex items-center gap-2">
             <History size={16} /> Sessions
@@ -337,11 +376,11 @@ export default function Chat({ sessions, selectedId, onSelect, onCreate, onRenam
       </div>
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col bg-white relative">
+      <div className="flex-1 flex flex-col min-w-0 bg-white relative">
         <div 
           className={cn(
-            "flex-1 overflow-y-auto p-6 space-y-6",
-            showNav ? "pr-14 md:pr-20" : "pr-6"
+            "flex-1 overflow-y-auto px-3 py-6 space-y-6 md:pl-6",
+            showNav ? "md:pr-20" : "md:pr-6"
           )} 
           ref={scrollRef}
         >
@@ -366,14 +405,41 @@ export default function Chat({ sessions, selectedId, onSelect, onCreate, onRenam
         </div>
 
         {showNav && (
-          <PromptNavigator
-            userPrompts={userPrompts}
-            activePromptIndex={activePromptIndex}
-            onJumpToPrompt={handleJumpToPrompt}
-          />
+          <>
+            {/* Desktop Navigation stack (hidden on mobile) */}
+            <PromptNavigator
+              userPrompts={userPrompts}
+              activePromptIndex={activePromptIndex}
+              onJumpToPrompt={handleJumpToPrompt}
+            />
+
+            {/* Mobile Navigation float trigger button */}
+            <button
+              type="button"
+              onClick={() => setNavOpenMobile(true)}
+              className="md:hidden fixed right-3 bottom-24 w-10 h-10 rounded-full bg-slate-900/90 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shadow-lg hover:bg-slate-800 transition-colors z-20 cursor-pointer active:scale-95"
+              title="Thread Navigation"
+            >
+              <Compass size={20} />
+            </button>
+
+            {/* Mobile Navigation overlay drawer */}
+            {navOpenMobile && (
+              <PromptNavigator
+                userPrompts={userPrompts}
+                activePromptIndex={activePromptIndex}
+                onJumpToPrompt={(idx) => {
+                  handleJumpToPrompt(idx);
+                  setNavOpenMobile(false);
+                }}
+                isMobileView={true}
+                onCloseMobile={() => setNavOpenMobile(false)}
+              />
+            )}
+          </>
         )}
 
-        <form onSubmit={handleSend} className="p-6 border-t border-slate-200">
+        <form onSubmit={handleSend} className="p-3 md:p-6 border-t border-slate-200">
           <div className="relative">
             <input
               type="text"

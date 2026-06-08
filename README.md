@@ -196,40 +196,15 @@ Generated wiki content is intended to be Obsidian-compatible: cross-page referen
 
 ```mermaid
 flowchart TD
-    A[Unconsolidated raw logs] --> B[Prepare entries]
-    B --> C{Entry usable?}
-    C -- non-durable or empty --> D[Skip for wiki consolidation]
-    C -- normal durable log --> E[Prepared entry]
-    C -- durable tool log --> F[Tool fact extraction LLM]
-    F --> G{Durable facts found?}
-    G -- no --> D
-    G -- yes --> E
-
-    E --> H[Batch entries in chunks of 15]
-    H --> I[Identify target pages LLM per batch]
-    I --> J[Exact slug dedupe]
-    J --> K[Canonicalization LLM once per dream pass]
-    K --> L[Merge same-pass near-duplicates and map to existing pages]
-    L --> M[Final target list]
-
-    M --> N{Target exists?}
-    N -- create --> O[Rewrite page LLM with empty existing page]
-    N -- update --> P[Rewrite page LLM with existing page]
-    P --> Q{Conflict policy}
-    Q -- override --> R[Update in place]
-    Q -- fork --> S[Prediction-error check, fork only on contradiction]
-    Q -- merge --> T[Merge rewritten and existing content]
-    O --> U[Save new page]
-    R --> V[Save updated page]
-    S --> V
-    T --> V
-
-    U --> W[Record dream_created event]
-    V --> X[Record dream_updated or contradicted event]
-    W --> Y[Deterministic _index.md rebuild]
-    X --> Y
-    Y --> Z[Mark raw logs consolidated]
-    Z --> AA[Run decay pass]
+    A[Unconsolidated raw logs] --> B[Prepare durable entries]
+    B --> C[Extract durable facts from tool observations]
+    C --> D[Identify candidate wiki targets]
+    D --> E[Canonicalize targets and merge near-duplicates]
+    E --> F[Rewrite or create wiki pages]
+    F --> G[Record memory events]
+    G --> H[Rebuild deterministic wiki index]
+    H --> I[Mark logs consolidated]
+    I --> J[Run decay pass]
 ```
 
 Key behavior:

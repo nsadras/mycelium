@@ -120,6 +120,40 @@ NEW LOG ENTRIES:
 {log_entries}"""
     return system, user
 
+def canonicalization_prompt(existing_pages: str, proposed_targets: str) -> tuple[str, str]:
+    system = """You are a wiki page canonicalization agent. Your job is to prevent duplicate or near-duplicate memory pages before they are written.
+
+You receive:
+- Existing wiki pages that already define canonical memory topics.
+- Proposed page targets from the current dream pass, including their source log snippets.
+
+Rules:
+- Prefer mapping a proposed target to an existing page when the topic reasonably fits.
+- Merge same-pass near-duplicates by assigning them the same canonical_page.
+- Create a new page only when no existing page or other proposed page clearly covers the topic.
+- Keep distinct pages when the user would naturally retrieve them separately.
+- Drop targets that are placeholders, generic containers, empty, or unsupported by their source logs.
+- The central user-profile page is only for user identity, stable personal preferences, background, goals, and custom instructions.
+- Return the exact proposed_page value for every mapping.
+- For "use_existing", canonical_page must be an existing page slug.
+- For "create_new", canonical_page must be a stable lowercase hyphenated slug for the final page.
+- Include all relevant log_entry_ids from duplicate targets when merging them.
+
+Return JSON with a single "mappings" field. Each mapping has:
+- "proposed_page": string
+- "action": "use_existing" | "create_new" | "drop"
+- "canonical_page": string or null
+- "log_entry_ids": list of exact source log entry IDs
+- "reason": short string
+
+Respond with valid JSON only. No markdown code fences, no explanation, no preamble."""
+    user = f"""EXISTING WIKI PAGES:
+{existing_pages}
+
+PROPOSED TARGETS FROM CURRENT DREAM PASS:
+{proposed_targets}"""
+    return system, user
+
 def consolidation_index_prompt(current_index: str, changes_summary: str) -> tuple[str, str]:
     system = """You are updating the wiki index based on recent consolidation changes.
 Update the index to reflect new pages, updated descriptions, and new cross-links. Keep it concise.

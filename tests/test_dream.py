@@ -40,6 +40,13 @@ async def test_dream_process_run(dream_process, mock_llm, mock_wiki, mock_logs):
     mock_llm.call_structured.side_effect = [
         # Identify
         [{"page": "project-notes", "action": "create"}, {"page": "existing-page", "action": "update"}],
+        # Canonicalize
+        {
+            "mappings": [
+                {"proposed_page": "project-notes", "action": "create_new", "canonical_page": "project-notes", "log_entry_ids": ["2026-05-10#Entry1"]},
+                {"proposed_page": "existing-page", "action": "use_existing", "canonical_page": "existing-page", "log_entry_ids": ["2026-05-10#Entry1"]},
+            ]
+        },
         # Rewrite new
         {"title": "New Title", "content": "New content", "confidence": 0.8, "importance": 0.7},
         # Rewrite existing
@@ -132,6 +139,12 @@ async def test_dream_process_merges_same_title_creates(dream_process, mock_llm, 
             {"page": "rlhf", "action": "create"},
             {"page": "dpo", "action": "create"},
         ],
+        {
+            "mappings": [
+                {"proposed_page": "rlhf", "action": "create_new", "canonical_page": "rlhf", "log_entry_ids": []},
+                {"proposed_page": "dpo", "action": "create_new", "canonical_page": "dpo", "log_entry_ids": []},
+            ]
+        },
         {"title": "Reinforcement Learning and Cognitive Modeling", "content": "First", "confidence": 0.8, "importance": 0.7},
         {"title": "Reinforcement Learning and Cognitive Modeling", "content": "Second", "confidence": 0.85, "importance": 0.75},
     ]
@@ -293,6 +306,12 @@ async def test_dream_process_precise_log_routing(dream_process, mock_llm, mock_w
             {"page": "react-loop", "action": "create", "log_entry_ids": ["2026-05-10#Entry1"]},
             {"page": "user-profile", "action": "create", "log_entry_ids": ["2026-05-10#Entry2"]}
         ],
+        {
+            "mappings": [
+                {"proposed_page": "react-loop", "action": "create_new", "canonical_page": "react-loop", "log_entry_ids": ["2026-05-10#Entry1"]},
+                {"proposed_page": "user-profile", "action": "create_new", "canonical_page": "user-profile", "log_entry_ids": ["2026-05-10#Entry2"]},
+            ]
+        },
         # Rewrite for react-loop
         {"title": "ReAct Loop", "content": "ReAct loop notes", "confidence": 0.9, "importance": 0.8},
         # Rewrite for user-profile
@@ -305,17 +324,17 @@ async def test_dream_process_precise_log_routing(dream_process, mock_llm, mock_w
     assert report.entries_consolidated == 2
 
     # Verify that the correct specific log entry content was fed to the rewrite calls
-    # Call 0 is Identify, Call 1 is Rewrite react-loop, Call 2 is Rewrite user-profile
+    # Call 0 is Identify, Call 1 is Canonicalize, Call 2 is Rewrite react-loop, Call 3 is Rewrite user-profile
     calls = mock_llm.call_structured.call_args_list
-    assert len(calls) == 3
+    assert len(calls) == 4
 
-    # Call 1 (react-loop rewrite) should receive only entry1 content, NOT entry2 content
-    react_loop_rewrite_user_prompt = calls[1][0][1] # (system, user, output_class) -> user prompt is index 1
+    # Call 2 (react-loop rewrite) should receive only entry1 content, NOT entry2 content
+    react_loop_rewrite_user_prompt = calls[2][0][1] # (system, user, output_class) -> user prompt is index 1
     assert "Technical ReAct agent loop" in react_loop_rewrite_user_prompt
     assert "User likes dark forest green" not in react_loop_rewrite_user_prompt
 
-    # Call 2 (user-profile rewrite) should receive only entry2 content, NOT entry1 content
-    user_profile_rewrite_user_prompt = calls[2][0][1]
+    # Call 3 (user-profile rewrite) should receive only entry2 content, NOT entry1 content
+    user_profile_rewrite_user_prompt = calls[3][0][1]
     assert "User likes dark forest green" in user_profile_rewrite_user_prompt
     assert "Technical ReAct agent loop" not in user_profile_rewrite_user_prompt
 
@@ -324,6 +343,74 @@ async def test_dream_process_precise_log_routing(dream_process, mock_llm, mock_w
     assert "user-profile" in saved_pages
     assert saved_pages["react-loop"].source_log_entries == ["2026-05-10#Entry1"]
     assert saved_pages["user-profile"].source_log_entries == ["2026-05-10#Entry2"]
+
+
+@pytest.mark.asyncio
+async def test_dream_process_canonicalizes_same_pass_near_duplicates(dream_process, mock_llm, mock_wiki, mock_logs):
+    entry1 = LogEntry(
+        entry_id="2026-05-10#Entry1",
+        session_id="ses-123",
+        timestamp=datetime.now(),
+        content="The user wants local LLM model selection criteria for 4B-8B models.",
+        importance=0.8,
+        status="raw",
+    )
+    entry2 = LogEntry(
+        entry_id="2026-05-10#Entry2",
+        session_id="ses-123",
+        timestamp=datetime.now(),
+        content="The user needs a deployment strategy for quantized local LLMs on consumer GPUs.",
+        importance=0.9,
+        status="raw",
+    )
+    mock_logs.get_unconsolidated.return_value = [entry1, entry2]
+    mock_wiki.get_index.return_value = "# Index"
+    mock_wiki.exists.return_value = False
+    mock_wiki.list_all.return_value = []
+
+    saved_pages = {}
+    mock_wiki.save.side_effect = lambda page: saved_pages.setdefault(page.slug, page)
+    mock_llm.call_structured.side_effect = [
+        [
+            {"page": "llm-selection", "action": "create", "log_entry_ids": ["2026-05-10#Entry1"]},
+            {"page": "local-llm-deployment", "action": "create", "log_entry_ids": ["2026-05-10#Entry2"]},
+        ],
+        {
+            "mappings": [
+                {
+                    "proposed_page": "llm-selection",
+                    "action": "create_new",
+                    "canonical_page": "llm-deployment-strategy",
+                    "log_entry_ids": ["2026-05-10#Entry1"],
+                },
+                {
+                    "proposed_page": "local-llm-deployment",
+                    "action": "create_new",
+                    "canonical_page": "llm-deployment-strategy",
+                    "log_entry_ids": ["2026-05-10#Entry2"],
+                },
+            ]
+        },
+        {
+            "title": "LLM Deployment Strategy",
+            "content": "Local model selection and deployment strategy.",
+            "confidence": 0.9,
+            "importance": 0.9,
+        },
+    ]
+
+    report = await dream_process.run(strategy="full", conflict_policy="override")
+
+    assert report.pages_created == 1
+    assert report.pages_updated == 0
+    assert set(saved_pages) == {"llm-deployment-strategy"}
+    assert saved_pages["llm-deployment-strategy"].source_log_entries == [
+        "2026-05-10#Entry1",
+        "2026-05-10#Entry2",
+    ]
+    rewrite_prompt = mock_llm.call_structured.call_args_list[2][0][1]
+    assert "4B-8B models" in rewrite_prompt
+    assert "consumer GPUs" in rewrite_prompt
 
 
 @pytest.mark.asyncio

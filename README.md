@@ -190,9 +190,55 @@ Encoded episode IDs are stored in `mycelium_store/sessions_meta.json`. This prev
 
 ### 4. Dream Consolidation
 
-The dream process reads unconsolidated logs and asks the LLM which wiki pages should be created or updated. It then rewrites pages as abstract semantic memory, tracks source log entry IDs, updates the wiki index, and marks logs consolidated.
+The dream process is the offline consolidation pass that turns durable raw logs into semantic wiki pages. It filters unsuitable logs, extracts durable facts from tool observations, batches target identification, canonicalizes proposed page targets to avoid near-duplicates, rewrites one page per final target, updates the deterministic wiki index, marks raw logs consolidated, and runs a decay pass.
 
 Generated wiki content is intended to be Obsidian-compatible: cross-page references should use `[[page-slug]]`.
+
+```mermaid
+flowchart TD
+    A[Unconsolidated raw logs] --> B[Prepare entries]
+    B --> C{Entry usable?}
+    C -- non-durable or empty --> D[Skip for wiki consolidation]
+    C -- normal durable log --> E[Prepared entry]
+    C -- durable tool log --> F[Tool fact extraction LLM]
+    F --> G{Durable facts found?}
+    G -- no --> D
+    G -- yes --> E
+
+    E --> H[Batch entries in chunks of 15]
+    H --> I[Identify target pages LLM per batch]
+    I --> J[Exact slug dedupe]
+    J --> K[Canonicalization LLM once per dream pass]
+    K --> L[Merge same-pass near-duplicates and map to existing pages]
+    L --> M[Final target list]
+
+    M --> N{Target exists?}
+    N -- create --> O[Rewrite page LLM with empty existing page]
+    N -- update --> P[Rewrite page LLM with existing page]
+    P --> Q{Conflict policy}
+    Q -- override --> R[Update in place]
+    Q -- fork --> S[Prediction-error check, fork only on contradiction]
+    Q -- merge --> T[Merge rewritten and existing content]
+    O --> U[Save new page]
+    R --> V[Save updated page]
+    S --> V
+    T --> V
+
+    U --> W[Record dream_created event]
+    V --> X[Record dream_updated or contradicted event]
+    W --> Y[Deterministic _index.md rebuild]
+    X --> Y
+    Y --> Z[Mark raw logs consolidated]
+    Z --> AA[Run decay pass]
+```
+
+Key behavior:
+
+- Tool observations are not consolidated directly. A tool-specific extraction prompt first keeps only source-grounded durable facts and discards page furniture, navigation text, ranking labels, and boilerplate.
+- Target identification is batched by log entries, but canonicalization sees all proposed targets from the full dream pass at once. This prevents same-pass near-duplicates such as `llm-selection` and `local-llm-deployment` from becoming separate pages.
+- Page rewrites happen once per final canonical target under the default `override` policy. `fork` and `merge` can add extra LLM calls for existing-page updates.
+- Session-only and ephemeral logs are marked consolidated but do not become durable wiki pages.
+- `_index.md` is generated deterministically from actual wiki pages rather than rewritten by the LLM.
 
 ### 5. Reconsolidation
 

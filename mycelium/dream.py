@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import datetime
+from difflib import SequenceMatcher
 from typing import Literal, Optional
 import uuid
 
@@ -11,6 +12,7 @@ from mycelium.config import Config
 from mycelium import prompts
 from mycelium.decay import DecayEngine, record_memory_event
 from mycelium.structured_outputs import (
+    CanonicalizationOutput,
     ConsolidationIdentifyOutput,
     ToolObservationExtractionOutput,
     WikiMergeOutput,
@@ -106,6 +108,7 @@ class DreamProcess:
             all_targets.extend(chunk_targets)
             
         identification = self._dedupe_identification(all_targets)
+        identification = await self._canonicalize_identification(identification, entries)
             
         pages_updated = 0
         pages_created = 0
@@ -437,6 +440,157 @@ class DreamProcess:
                         existing_ids.append(entry_id)
         return list(deduped.values())
 
+    async def _canonicalize_identification(
+        self,
+        identification: list[dict],
+        entries: list[LogEntry],
+    ) -> list[dict]:
+        if not identification:
+            return []
+
+        existing_pages = self._canonicalization_page_catalog()
+        if len(identification) < 2 and not existing_pages:
+            return identification
+
+        proposed_targets = self._canonicalization_target_catalog(identification, entries)
+        if not proposed_targets:
+            return identification
+
+        system, user = prompts.canonicalization_prompt(
+            json.dumps(existing_pages, indent=2),
+            json.dumps(proposed_targets, indent=2),
+        )
+        try:
+            response = await self.llm.call_structured(system, user, CanonicalizationOutput)
+        except Exception:
+            return identification
+
+        mappings = []
+        if isinstance(response, dict):
+            mappings = response.get("mappings", [])
+        elif hasattr(response, "mappings"):
+            mappings = response.mappings
+        if not mappings:
+            return identification
+
+        original_by_slug = {
+            _slugify(str(item.get("page", ""))): item
+            for item in identification
+            if isinstance(item, dict) and item.get("page")
+        }
+        existing_slugs = {page["slug"] for page in existing_pages}
+        canonicalized: list[dict] = []
+
+        for mapping in mappings:
+            if not isinstance(mapping, dict):
+                continue
+            proposed_slug = _slugify(str(mapping.get("proposed_page", "")))
+            original = original_by_slug.get(proposed_slug)
+            if original is None:
+                continue
+
+            action = mapping.get("action")
+            if action == "drop":
+                continue
+
+            canonical_slug = _slugify(str(mapping.get("canonical_page") or proposed_slug))
+            if not canonical_slug or self._is_placeholder_slug(canonical_slug):
+                continue
+
+            log_entry_ids = self._clean_log_entry_ids(mapping.get("log_entry_ids", []))
+            if not log_entry_ids:
+                log_entry_ids = list(original.get("log_entry_ids", []))
+
+            lexical_match = self._lexical_existing_match(canonical_slug, existing_pages)
+            if lexical_match:
+                canonical_slug = lexical_match
+                canonical_action = "update"
+            elif action == "use_existing":
+                if canonical_slug not in existing_slugs:
+                    canonical_slug = proposed_slug
+                    canonical_action = original.get("action", "create")
+                else:
+                    canonical_action = "update"
+            elif self.wiki.exists(canonical_slug):
+                canonical_action = "update"
+            else:
+                canonical_action = "create"
+
+            canonicalized.append(
+                {
+                    "page": canonical_slug,
+                    "action": canonical_action,
+                    "log_entry_ids": log_entry_ids,
+                }
+            )
+
+        if not canonicalized:
+            return identification
+        return self._dedupe_identification(canonicalized)
+
+    def _canonicalization_page_catalog(self) -> list[dict]:
+        try:
+            pages = self.wiki.list_all()
+        except Exception:
+            return []
+        if not isinstance(pages, list):
+            return []
+
+        catalog = []
+        for page in pages:
+            if self._is_placeholder_slug(page.slug):
+                continue
+            body = self._normalized_text(page.content)
+            catalog.append(
+                {
+                    "slug": page.slug,
+                    "title": page.title,
+                    "tags": page.tags,
+                    "summary": self._index_summary(page),
+                    "content_preview": body[:500],
+                    "confidence": page.confidence,
+                    "importance": page.importance,
+                    "source_count": len(page.source_log_entries),
+                }
+            )
+        return catalog
+
+    def _canonicalization_target_catalog(
+        self,
+        identification: list[dict],
+        entries: list[LogEntry],
+    ) -> list[dict]:
+        entries_by_id = {entry.entry_id: entry for entry in entries}
+        catalog = []
+        for item in identification:
+            if not isinstance(item, dict):
+                continue
+            page_slug = _slugify(str(item.get("page", "")))
+            if not page_slug or self._is_placeholder_slug(page_slug):
+                continue
+
+            log_entry_ids = list(item.get("log_entry_ids", []))
+            target_entries = [entries_by_id[eid] for eid in log_entry_ids if eid in entries_by_id]
+            if not target_entries:
+                target_entries = entries[:6]
+
+            catalog.append(
+                {
+                    "page": page_slug,
+                    "action": item.get("action"),
+                    "log_entry_ids": log_entry_ids,
+                    "source_snippets": [
+                        {
+                            "entry_id": entry.entry_id,
+                            "importance": entry.importance,
+                            "content": self._normalized_text(entry.content)[:500],
+                        }
+                        for entry in target_entries[:6]
+                    ],
+                }
+            )
+        return catalog
+
     async def _prepare_entries(self, entries: list[LogEntry]) -> list[LogEntry]:
         prepared: list[LogEntry] = []
         for entry in entries:
@@ -520,6 +674,39 @@ class DreamProcess:
             if entry_id not in merged:
                 merged.append(entry_id)
         return merged
+
+    def _clean_log_entry_ids(self, raw_ids: list) -> list[str]:
+        log_entry_ids = []
+        for raw_id in raw_ids:
+            if isinstance(raw_id, str):
+                cleaned = raw_id.strip("[]'\" ")
+                if " — " in cleaned:
+                    cleaned = cleaned.split(" — ")[0]
+                if " - " in cleaned:
+                    cleaned = cleaned.split(" - ")[0]
+                cleaned = cleaned.strip()
+                if cleaned and cleaned not in log_entry_ids:
+                    log_entry_ids.append(cleaned)
+        return log_entry_ids
+
+    def _lexical_existing_match(self, slug: str, existing_pages: list[dict]) -> str | None:
+        slug_key = _normalize_page_key(slug)
+        best_slug = None
+        best_score = 0.0
+        for page in existing_pages:
+            page_slug = str(page.get("slug", ""))
+            candidates = [
+                _normalize_page_key(page_slug),
+                _normalize_page_key(str(page.get("title", ""))),
+            ]
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                score = SequenceMatcher(None, slug_key, candidate).ratio()
+                if score > best_score:
+                    best_score = score
+                    best_slug = page_slug
+        return best_slug if best_score >= 0.88 else None
 
     def _valid_slugs(self, extra: list[str] | None = None) -> set[str]:
         slugs = set(extra or [])

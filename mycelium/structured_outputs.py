@@ -47,6 +47,18 @@ class ConsolidationIdentifyOutput(BaseModel):
     targets: list[ConsolidationTargetOutput]
 
 
+class CanonicalizationMappingOutput(BaseModel):
+    proposed_page: str
+    action: Literal["use_existing", "create_new", "drop"]
+    canonical_page: str | None = None
+    log_entry_ids: list[str] = []
+    reason: str | None = None
+
+
+class CanonicalizationOutput(BaseModel):
+    mappings: list[CanonicalizationMappingOutput]
+
+
 class RelatedEdgeOutput(BaseModel):
     target: str
     relation: str

@@ -70,6 +70,21 @@ class WikiIndexOutput(BaseModel):
     index: str
 
 
+class ToolExtractedFactOutput(BaseModel):
+    fact: str
+    confidence: float = 0.5
+    recommended_memory_scope: Literal["ignore", "session", "durable"] = "ignore"
+    suggested_topics: list[str] = []
+
+
+class ToolObservationExtractionOutput(BaseModel):
+    source_tool_entry_id: str
+    tool_name: str | None = None
+    query_or_url: str | None = None
+    facts: list[ToolExtractedFactOutput] = []
+    discarded_noise: list[str] = []
+
+
 class PredictionErrorOutput(BaseModel):
     conflict_type: Literal["none", "additive", "partial", "major"]
     discrepancy_score: float

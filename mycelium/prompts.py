@@ -56,7 +56,7 @@ If multiple log entries concern the same theme, return one page target for that 
 
 - The central `user-profile` page should ONLY receive user-specific personal details, style preferences, project configurations, background, goals, or custom instructions. Do NOT consolidate technical, generic tool observations, or general agent loop architecture details into the `user-profile` page. Create separate descriptive wiki pages for those technical concepts (e.g. `agent-harness-anatomy`, `react-agent-loop`, `paper-review-agentic-benchmarks`).
 
-Important: Log entries with IDs starting with 'tool-' contain direct system tool observations (such as web search or fetch results). Carefully analyze these search results. Extract specific, factual, and actionable details discovered during these queries (e.g., specific library syntax, API specifications, hardware details, or custom scientific facts requested by the user) and identify appropriate wiki pages to create or update to store this permanent knowledge.
+Important: Log entries with IDs starting with 'tool-' have already been preprocessed into extracted tool facts. Use only the extracted facts, not page furniture, search result labels, navigation text, or citation widgets.
 
 Return a JSON object with a single "targets" field containing a list of objects, where each object contains:
 - "page": the lowercase, hyphenated slug of the wiki page. You MUST use a descriptive slug name representing the specific topic. NEVER return a number, a single letter, or a placeholder like "1", "2", "Page A", or "New Page".
@@ -91,7 +91,7 @@ def consolidation_rewrite_prompt(existing_page: str, log_entries: str) -> tuple[
     system = """You are rewriting a wiki page to incorporate new experience.
 Rules:
 - PERSONALIZATION vs GENERAL KNOWLEDGE: The wiki is a Personalized User-Agent Ledger, not a generic encyclopedia. NEVER write general textbook information that is already in your pre-trained weights (e.g. general explanations of basic algorithms, basic Python tutorials). However, you MUST capture specific, specialized, or newly-discovered factual knowledge retrieved via tool calls/web searches (e.g., library version compatibility, fresh API syntaxes, hardware compatibility tables, or documentation pages fetched during the session) that are highly relevant to the user's project. This is information you had to fetch because it is NOT stored in your weights. Save these facts alongside the user's specific decisions, variables, configurations, folder paths, and preferences so they are permanently accessible.
-- CAPTURE TOOL RESULTS: Log entries with IDs starting with 'tool-' contain direct system tool observations (such as web search or page fetch results). Integrate any fresh factual discoveries, library version numbers, specific API specifications, or technical details uncovered by these tools into the wiki page to preserve them in permanent context. Do not ignore these search discoveries; they represent the exact new factual information retrieved because it wasn't in your weights!
+- CAPTURE TOOL FACTS: Log entries with IDs starting with 'tool-' contain pre-extracted, source-grounded tool facts. Integrate durable factual discoveries, library version numbers, specific API specifications, or technical details where they directly fit this page. Do not preserve page furniture, search ranking labels, navigation text, or citation widgets.
 - ABSTRACT EVENTS, PRESERVE DETAILS: When processing logs, abstract the specific chat turn, but do NOT strip away crucial actionable details like custom file names, custom directories, variable names, or hardware models. Preserve these specifics, but write them as durable facts rather than episodic stories (e.g. write 'The BCI project uses a custom POMDP loop' rather than 'The user said they want to use POMDP').
 - AVOID EPISODIC STORIES: Do not write pages as a chronological diary of your chats (e.g. skip 'On May 28, the user asked...'). Write them as structured technical documents or profile cards describing the current status, configurations, and design specifications of the user's project.
 - FOCUS ON THE SPECIFIC TOPIC: Extract and integrate ONLY the facts from the log entries that are directly relevant to the specific title, slug, and theme of this page. Ignore log entries that belong to other, unrelated wiki topics.
@@ -134,6 +134,33 @@ Respond with valid JSON only. No markdown code fences, no explanation, no preamb
 
 CHANGES:
 {changes_summary}"""
+    return system, user
+
+def tool_observation_extract_prompt(entry_id: str, tool_observation: str) -> tuple[str, str]:
+    system = """You are a memory ingestion filter for tool results. Extract only specific facts from a raw tool observation that may be useful to remember later.
+
+Rules:
+- Keep facts only when they are source-grounded and specific to the user's project, question, decision, or a fresh external result.
+- Mark boilerplate, page navigation, search result labels, citation widgets, UI headings, empty headings, and generic page furniture as discarded noise.
+- Do not turn broad textbook knowledge into memory.
+- Use "durable" only for facts that should be available in future sessions.
+- Use "session" for facts that are only useful for the current short-lived task.
+- Use "ignore" for weak, redundant, empty, generic, or decorative observations.
+- If no durable or session-worthy facts exist, return an empty facts list and explain the discarded noise.
+
+Return JSON with fields:
+- "source_tool_entry_id": exact source entry id
+- "tool_name": string or null
+- "query_or_url": string or null
+- "facts": list of objects {fact: string, confidence: float, recommended_memory_scope: "ignore"|"session"|"durable", suggested_topics: list[str]}
+- "discarded_noise": list of short strings
+
+Respond with valid JSON only. No markdown code fences, no explanation, no preamble."""
+    user = f"""SOURCE TOOL ENTRY ID:
+{entry_id}
+
+RAW TOOL OBSERVATION:
+{tool_observation}"""
     return system, user
 
 def prediction_error_prompt(wiki_page: str, current_context: str) -> tuple[str, str]:

@@ -252,23 +252,24 @@ class LogStore:
             with open(path, "r", encoding="utf-8") as f:
                 content = f.read()
                 
-            sections = content.split("## ")
-            for section in sections[1:]: # skip header
-                lines = section.strip().split("\n")
-                if not lines:
-                    continue
-                
-                header_line = lines[0]
-                entry_name = header_line.split(" — ")[0].strip()
+            entry_header = re.compile(r"^## (?P<name>.+?) — (?P<time>\d{2}:\d{2})\s*$", re.MULTILINE)
+            matches = list(entry_header.finditer(content))
+            for idx, match in enumerate(matches):
+                section_start = match.end()
+                section_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(content)
+                section = content[section_start:section_end].strip()
+                if section.endswith("---"):
+                    section = section[:-3].rstrip()
+
+                lines = section.split("\n")
+                entry_name = match.group("name").strip()
+                time_str = match.group("time").strip()
                 
                 metadata: dict = {}
                 body_lines = []
                 in_body = False
                 
-                for line in lines[1:]:
-                    if line == "---":
-                        break
-                    
+                for line in lines:
                     m = re.match(r"^\*\*([^*]+):\*\*\s*(.*)", line)
                     if not in_body:
                         if m:
@@ -283,9 +284,11 @@ class LogStore:
                     else:
                         body_lines.append(line)
                 
+                if "consolidated" not in metadata:
+                    continue
+
                 is_consolidated = metadata.get("consolidated", "false").lower() == "true"
                 if not is_consolidated:
-                    time_str = header_line.split(" — ")[1].strip() if " — " in header_line else "00:00"
                     try:
                         timestamp = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
                     except ValueError:

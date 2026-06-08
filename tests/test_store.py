@@ -127,6 +127,40 @@ def test_log_store_mark_consolidated(tmp_path):
     unconsolidated = store.get_unconsolidated()
     assert len(unconsolidated) == 0
 
+
+def test_log_store_markdown_headings_inside_body_are_not_entries(tmp_path):
+    store = LogStore(tmp_path / "logs")
+
+    entry = LogEntry(
+        entry_id="2026-05-10#tool-abc123",
+        session_id="ses-123",
+        timestamp=datetime(2026, 5, 10, 10, 0, 0),
+        content=(
+            "Tool observation from chat.\n\n"
+            "## Submission history\n\n"
+            "This heading is part of the tool result.\n\n"
+            "---\n\n"
+            "## Access Paper:\n\n"
+            "This is also body content, not a new log entry."
+        ),
+        importance=0.5,
+        status="raw",
+        durability="durable",
+        consolidated=False,
+        decay_score=1.0,
+    )
+
+    store.append(entry)
+    unconsolidated = store.get_unconsolidated()
+
+    assert len(unconsolidated) == 1
+    assert unconsolidated[0].entry_id == "2026-05-10#tool-abc123"
+    assert "## Submission history" in unconsolidated[0].content
+    assert "## Access Paper:" in unconsolidated[0].content
+
+    store.mark_consolidated(["2026-05-10#tool-abc123"])
+    assert store.get_unconsolidated() == []
+
 def test_log_store_update_decay(tmp_path):
     store = LogStore(tmp_path / "logs")
     

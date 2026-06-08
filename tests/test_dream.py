@@ -39,13 +39,11 @@ async def test_dream_process_run(dream_process, mock_llm, mock_wiki, mock_logs):
     # LLM responses
     mock_llm.call_structured.side_effect = [
         # Identify
-        [{"page": "new-page", "action": "create"}, {"page": "existing-page", "action": "update"}],
-        # Rewrite existing
-        {"title": "Existing Title", "content": "Updated content", "confidence": 0.9, "importance": 0.8},
+        [{"page": "project-notes", "action": "create"}, {"page": "existing-page", "action": "update"}],
         # Rewrite new
         {"title": "New Title", "content": "New content", "confidence": 0.8, "importance": 0.7},
-        # Update index
-        {"index": "# Updated Index"}
+        # Rewrite existing
+        {"title": "Existing Title", "content": "Updated content", "confidence": 0.9, "importance": 0.8},
     ]
     
     mock_wiki.exists.side_effect = lambda slug: slug == "existing-page"
@@ -67,7 +65,9 @@ async def test_dream_process_run(dream_process, mock_llm, mock_wiki, mock_logs):
     assert mock_wiki.save.call_count == 2
     saved_pages = [call.args[0] for call in mock_wiki.save.call_args_list]
     assert all("2026-05-10#Entry1" in page.source_log_entries for page in saved_pages)
-    mock_wiki.save_index.assert_called_once_with("# Updated Index")
+    saved_index = mock_wiki.save_index.call_args.args[0]
+    assert "[[project-notes]]" in saved_index
+    assert "[[existing-page]]" in saved_index
     mock_logs.mark_consolidated.assert_called_once_with(["2026-05-10#Entry1"])
 
 
@@ -92,7 +92,6 @@ async def test_dream_process_dedupes_duplicate_identification(dream_process, moc
             {"page": "rlhf.md", "action": "create"},
         ],
         {"title": "RLHF", "content": "One page", "confidence": 0.8, "importance": 0.7},
-        {"index": "# Updated Index"},
     ]
 
     report = await dream_process.run(strategy="full", conflict_policy="override")
@@ -135,7 +134,6 @@ async def test_dream_process_merges_same_title_creates(dream_process, mock_llm, 
         ],
         {"title": "Reinforcement Learning and Cognitive Modeling", "content": "First", "confidence": 0.8, "importance": 0.7},
         {"title": "Reinforcement Learning and Cognitive Modeling", "content": "Second", "confidence": 0.85, "importance": 0.75},
-        {"index": "# Updated Index"},
     ]
 
     report = await dream_process.run(strategy="full", conflict_policy="override")
@@ -179,12 +177,10 @@ async def test_dream_process_fork_on_actual_contradiction(dream_process, mock_ll
     # 1. Identify
     # 2. Rewrite
     # 3. Prediction Error check (returns contradiction!)
-    # 4. Update index
     mock_llm.call_structured.side_effect = [
         [{"page": "existing-page", "action": "update"}],
         {"title": "Existing Title", "content": "Updated contradictory content", "confidence": 0.9, "importance": 0.8},
         {"conflict_type": "major", "discrepancy_score": 0.8, "explanation": "Strong contradiction detected", "suggested_update": None},
-        {"index": "# Updated Index"}
     ]
 
     report = await dream_process.run(strategy="full", conflict_policy="fork")
@@ -239,12 +235,10 @@ async def test_dream_process_override_on_non_contradiction(dream_process, mock_l
     # 1. Identify
     # 2. Rewrite
     # 3. Prediction Error check (returns non-contradiction / additive!)
-    # 4. Update index
     mock_llm.call_structured.side_effect = [
         [{"page": "existing-page", "action": "update"}],
         {"title": "Existing Title", "content": "Updated additive content", "confidence": 0.9, "importance": 0.8},
         {"conflict_type": "additive", "discrepancy_score": 0.2, "explanation": "Compatible additive update", "suggested_update": None},
-        {"index": "# Updated Index"}
     ]
 
     report = await dream_process.run(strategy="full", conflict_policy="fork")
@@ -293,7 +287,6 @@ async def test_dream_process_precise_log_routing(dream_process, mock_llm, mock_w
     # 2. LLM response mocks
     # First: Identify returns pages mapping to specific log entry IDs
     # Second & Third: Rewrite outputs
-    # Fourth: Update index
     mock_llm.call_structured.side_effect = [
         # Identify pass maps each page to a specific log entry ID!
         [
@@ -304,8 +297,6 @@ async def test_dream_process_precise_log_routing(dream_process, mock_llm, mock_w
         {"title": "ReAct Loop", "content": "ReAct loop notes", "confidence": 0.9, "importance": 0.8},
         # Rewrite for user-profile
         {"title": "User Profile", "content": "Obsidian style preference", "confidence": 0.95, "importance": 0.9},
-        # Index update
-        {"index": "# Index\n- [[react-loop]]\n- [[user-profile]]"}
     ]
 
     report = await dream_process.run(strategy="full", conflict_policy="override")
@@ -314,9 +305,9 @@ async def test_dream_process_precise_log_routing(dream_process, mock_llm, mock_w
     assert report.entries_consolidated == 2
 
     # Verify that the correct specific log entry content was fed to the rewrite calls
-    # Call 0 is Identify, Call 1 is Rewrite react-loop, Call 2 is Rewrite user-profile, Call 3 is Index
+    # Call 0 is Identify, Call 1 is Rewrite react-loop, Call 2 is Rewrite user-profile
     calls = mock_llm.call_structured.call_args_list
-    assert len(calls) == 4
+    assert len(calls) == 3
 
     # Call 1 (react-loop rewrite) should receive only entry1 content, NOT entry2 content
     react_loop_rewrite_user_prompt = calls[1][0][1] # (system, user, output_class) -> user prompt is index 1
@@ -334,3 +325,77 @@ async def test_dream_process_precise_log_routing(dream_process, mock_llm, mock_w
     assert saved_pages["react-loop"].source_log_entries == ["2026-05-10#Entry1"]
     assert saved_pages["user-profile"].source_log_entries == ["2026-05-10#Entry2"]
 
+
+@pytest.mark.asyncio
+async def test_dream_process_extracts_tool_facts_before_identification(dream_process, mock_llm, mock_wiki, mock_logs):
+    entry = LogEntry(
+        entry_id="2026-05-10#tool-abc123",
+        session_id="ses-123",
+        timestamp=datetime.now(),
+        content="Tool observation from chat.\n\n## Navigation\n\nResult: Library X version 2.0 adds frobnicate().",
+        importance=0.5,
+        status="raw",
+        durability="durable",
+    )
+    mock_logs.get_unconsolidated.return_value = [entry]
+    mock_wiki.get_index.return_value = "# Index"
+    mock_wiki.exists.return_value = False
+    mock_wiki.list_all.return_value = []
+
+    saved_pages = {}
+    mock_wiki.save.side_effect = lambda page: saved_pages.setdefault(page.slug, page)
+    mock_llm.call_structured.side_effect = [
+        {
+            "source_tool_entry_id": "2026-05-10#tool-abc123",
+            "tool_name": "web_search",
+            "query_or_url": "Library X",
+            "facts": [
+                {
+                    "fact": "Library X version 2.0 adds frobnicate().",
+                    "confidence": 0.9,
+                    "recommended_memory_scope": "durable",
+                    "suggested_topics": ["library-x"],
+                },
+                {
+                    "fact": "Navigation heading",
+                    "confidence": 0.2,
+                    "recommended_memory_scope": "ignore",
+                    "suggested_topics": [],
+                },
+            ],
+            "discarded_noise": ["Navigation"],
+        },
+        [{"page": "library-x", "action": "create", "log_entry_ids": ["2026-05-10#tool-abc123"]}],
+        {"title": "Library X", "content": "Library X version 2.0 adds frobnicate().", "confidence": 0.9, "importance": 0.8},
+    ]
+
+    report = await dream_process.run(strategy="full", conflict_policy="override")
+
+    assert report.pages_created == 1
+    calls = mock_llm.call_structured.call_args_list
+    identify_prompt = calls[1][0][1]
+    assert "Library X version 2.0 adds frobnicate()." in identify_prompt
+    assert "## Navigation" not in identify_prompt
+    mock_logs.mark_consolidated.assert_called_once_with(["2026-05-10#tool-abc123"])
+
+
+@pytest.mark.asyncio
+async def test_dream_process_skips_session_durability_entries(dream_process, mock_llm, mock_wiki, mock_logs):
+    entry = LogEntry(
+        entry_id="2026-05-10#Entry1",
+        session_id="ses-123",
+        timestamp=datetime.now(),
+        content="User has a temporary cold today.",
+        importance=0.9,
+        status="raw",
+        durability="session",
+    )
+    mock_logs.get_unconsolidated.return_value = [entry]
+
+    report = await dream_process.run(strategy="full", conflict_policy="override")
+
+    assert report.pages_created == 0
+    assert report.pages_updated == 0
+    assert report.entries_consolidated == 1
+    mock_llm.call_structured.assert_not_called()
+    mock_logs.mark_consolidated.assert_called_once_with(["2026-05-10#Entry1"])

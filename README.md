@@ -49,6 +49,147 @@ mycelium/
 └── pyproject.toml      # Python package and uv configuration
 ```
 
+## Benchmarks
+
+Mycelium includes a local benchmark harness for comparing memory behavior against a no-memory baseline and a full-context baseline. Keep benchmark repositories outside this repo, for example:
+
+```text
+/home/nitin/Development/
+├── mycellium/
+├── locomo/
+└── MemoryAgentBench/
+```
+
+Run a small LoCoMo smoke benchmark:
+
+```bash
+uv run python -m benchmarks.mycelium_bench locomo \
+  --locomo-path ../locomo/data/locomo10.json \
+  --system mycelium \
+  --qa-model gemma4:latest \
+  --memory-model gemma4:latest \
+  --max-samples 1 \
+  --max-questions 3
+```
+
+Compare with no persistent memory:
+
+```bash
+uv run python -m benchmarks.mycelium_bench locomo \
+  --locomo-path ../locomo/data/locomo10.json \
+  --system null \
+  --qa-model gemma4:latest \
+  --max-samples 1 \
+  --max-questions 3
+```
+
+Run through MemoryAgentBench data loading and metrics:
+
+```bash
+uv run python -m benchmarks.mycelium_bench mab \
+  --mab-root ../MemoryAgentBench \
+  --dataset-config ../MemoryAgentBench/configs/data_conf/Accurate_Retrieval/EventQA/Eventqa_64k.yaml \
+  --system mycelium \
+  --qa-model gemma4:latest \
+  --memory-model gemma4:latest \
+  --max-contexts 1 \
+  --max-queries 3
+```
+
+Run the full LoCoMo QA benchmark:
+
+```bash
+uv run python -m benchmarks.mycelium_bench locomo \
+  --locomo-path ../locomo/data/locomo10.json \
+  --system mycelium \
+  --qa-model gemma4:latest \
+  --memory-model gemma4:latest \
+  --run-id locomo-mycelium-full
+```
+
+Or run the full LoCoMo suite, including Mycelium, no-memory, and full-context:
+
+```bash
+scripts/benchmark-locomo-full.sh
+```
+
+Run the full LoCoMo no-memory baseline:
+
+```bash
+uv run python -m benchmarks.mycelium_bench locomo \
+  --locomo-path ../locomo/data/locomo10.json \
+  --system null \
+  --qa-model gemma4:latest \
+  --run-id locomo-null-full
+```
+
+Run the full LoCoMo full-context baseline:
+
+```bash
+uv run python -m benchmarks.mycelium_bench locomo \
+  --locomo-path ../locomo/data/locomo10.json \
+  --system full_context \
+  --qa-model gemma4:latest \
+  --run-id locomo-full-context-full
+```
+
+Run MemoryAgentBench across the released dataset configs:
+
+```bash
+for config in \
+  ../MemoryAgentBench/configs/data_conf/Accurate_Retrieval/EventQA/Eventqa_full.yaml \
+  ../MemoryAgentBench/configs/data_conf/Accurate_Retrieval/LongMemEval/Longmemeval_s.yaml \
+  ../MemoryAgentBench/configs/data_conf/Accurate_Retrieval/LongMemEval/Longmemeval_s_star.yaml \
+  ../MemoryAgentBench/configs/data_conf/Conflict_Resolution/Factconsolidation_sh_6k.yaml \
+  ../MemoryAgentBench/configs/data_conf/Conflict_Resolution/Factconsolidation_sh_32k.yaml \
+  ../MemoryAgentBench/configs/data_conf/Conflict_Resolution/Factconsolidation_sh_64k.yaml \
+  ../MemoryAgentBench/configs/data_conf/Conflict_Resolution/Factconsolidation_mh_6k.yaml \
+  ../MemoryAgentBench/configs/data_conf/Conflict_Resolution/Factconsolidation_mh_32k.yaml \
+  ../MemoryAgentBench/configs/data_conf/Conflict_Resolution/Factconsolidation_mh_64k.yaml \
+  ../MemoryAgentBench/configs/data_conf/Long_Range_Understanding/Detective_QA.yaml \
+  ../MemoryAgentBench/configs/data_conf/Long_Range_Understanding/InfBench_sum.yaml \
+  ../MemoryAgentBench/configs/data_conf/Test_Time_Learning/ICL/ICL_banking77.yaml \
+  ../MemoryAgentBench/configs/data_conf/Test_Time_Learning/ICL/ICL_clinic150.yaml \
+  ../MemoryAgentBench/configs/data_conf/Test_Time_Learning/ICL/ICL_nlu.yaml \
+  ../MemoryAgentBench/configs/data_conf/Test_Time_Learning/ICL/ICL_trec_coarse.yaml \
+  ../MemoryAgentBench/configs/data_conf/Test_Time_Learning/ICL/ICL_trec_fine.yaml; do
+  name="$(basename "$config" .yaml)"
+  uv run python -m benchmarks.mycelium_bench mab \
+    --mab-root ../MemoryAgentBench \
+    --dataset-config "$config" \
+    --system mycelium \
+    --qa-model gemma4:latest \
+    --memory-model gemma4:latest \
+    --run-id "mab-mycelium-$name"
+done
+```
+
+Or run the same MemoryAgentBench config set with:
+
+```bash
+scripts/benchmark-memoryagentbench-full.sh
+```
+
+Run both full suites:
+
+```bash
+scripts/benchmark-all-full.sh
+```
+
+The scripts accept environment overrides:
+
+```bash
+QA_MODEL=llama3.1:8b MEMORY_MODEL=gemma4:latest RUN_TAG=after-decay-tuning scripts/benchmark-all-full.sh
+```
+
+Full-run scripts default to `DREAM_POLICY=per-case` so Mycelium consolidates once per benchmark case instead of after every ingested chunk/session. Override it when needed:
+
+```bash
+DREAM_POLICY=per-batch scripts/benchmark-locomo-full.sh mycelium
+```
+
+Results are written under `benchmark_runs/<run-id>/` as JSON predictions, JSONL rows, and summaries. MemoryAgentBench may require installing its own dependencies and downloading its Hugging Face dataset.
+
 ## Quick Start
 
 ### Requirements

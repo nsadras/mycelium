@@ -1,0 +1,30 @@
+[
+  {
+    "sample_id": "tiny-1",
+    "conversation": {
+      "speaker_a": "Avery",
+      "speaker_b": "Blair",
+      "session_1_date_time": "2026-01-01 09:00",
+      "session_1": [
+        {
+          "dia_id": "D1:1",
+          "speaker": "Avery",
+          "text": "I adopted a cat named Pixel yesterday."
+        },
+        {
+          "dia_id": "D1:2",
+          "speaker": "Blair",
+          "text": "Pixel sounds great."
+        }
+      ]
+    },
+    "qa": [
+      {
+        "question": "What is Avery's cat named?",
+        "answer": "Pixel",
+        "evidence": ["D1:1"],
+        "category": 1
+      }
+    ]
+  }
+]

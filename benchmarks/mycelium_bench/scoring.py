@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import re
+import string
+from collections import Counter, defaultdict
+from typing import Any
+
+
+def normalize_answer(text: Any) -> str:
+    value = str(text).replace(",", "").lower()
+    value = "".join(ch for ch in value if ch not in string.punctuation)
+    value = re.sub(r"\b(a|an|the|and)\b", " ", value)
+    return " ".join(value.split())
+
+
+def token_f1(prediction: Any, ground_truth: Any) -> float:
+    prediction_tokens = normalize_answer(prediction).split()
+    truth_tokens = normalize_answer(ground_truth).split()
+    if not prediction_tokens or not truth_tokens:
+        return float(prediction_tokens == truth_tokens)
+    common = Counter(prediction_tokens) & Counter(truth_tokens)
+    same = sum(common.values())
+    if same == 0:
+        return 0.0
+    precision = same / len(prediction_tokens)
+    recall = same / len(truth_tokens)
+    return 2 * precision * recall / (precision + recall)
+
+
+def locomo_score(prediction: Any, answer: Any, category: int) -> float:
+    if category == 3:
+        answer = str(answer).split(";")[0].strip()
+    if category in {2, 3, 4}:
+        return token_f1(prediction, answer)
+    if category == 1:
+        prediction_parts = [part.strip() for part in str(prediction).split(",") if part.strip()]
+        truth_parts = [part.strip() for part in str(answer).split(",") if part.strip()]
+        if not prediction_parts or not truth_parts:
+            return 0.0
+        return sum(max(token_f1(pred, truth) for pred in prediction_parts) for truth in truth_parts) / len(truth_parts)
+    if category == 5:
+        lower = str(prediction).lower()
+        return 1.0 if "no information available" in lower or "not mentioned" in lower else 0.0
+    return token_f1(prediction, answer)
+
+
+def summarize_scores(rows: list[dict[str, Any]], score_key: str = "score") -> dict[str, Any]:
+    by_category: dict[str, list[float]] = defaultdict(list)
+    scores = []
+    for row in rows:
+        score = float(row.get(score_key, 0.0))
+        scores.append(score)
+        category = str(row.get("category", "unknown"))
+        by_category[category].append(score)
+
+    return {
+        "count": len(scores),
+        "mean_score": sum(scores) / len(scores) if scores else 0.0,
+        "by_category": {
+            category: {
+                "count": len(values),
+                "mean_score": sum(values) / len(values) if values else 0.0,
+            }
+            for category, values in sorted(by_category.items())
+        },
+    }

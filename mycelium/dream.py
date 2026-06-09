@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -19,6 +20,8 @@ from mycelium.structured_outputs import (
     WikiRewriteOutput,
     PredictionErrorOutput,
 )
+
+logger = logging.getLogger(__name__)
 
 VALID_EDGE_RELATIONS = {
     "causes",
@@ -158,7 +161,11 @@ class DreamProcess:
                 system, user = prompts.consolidation_rewrite_prompt("", page_entries_str)
                 is_create = True
             
-            rewritten = await self.llm.call_structured(system, user, WikiRewriteOutput)
+            try:
+                rewritten = await self.llm.call_structured(system, user, WikiRewriteOutput)
+            except Exception as exc:
+                logger.warning("Skipping dream rewrite for %s after structured output failure: %s", page_slug, exc)
+                continue
             if not isinstance(rewritten, dict):
                 continue
                 
@@ -341,7 +348,11 @@ class DreamProcess:
                     system = "You are a memory synthesis agent. Merge the following two versions of a wiki page into a single, cohesive, abstracted page."
                     user = f"VERSION 1:\n{existing_page.content}\n\nVERSION 2:\n{content}"
                     
-                    merged = await self.llm.call_structured(system, user, WikiMergeOutput)
+                    try:
+                        merged = await self.llm.call_structured(system, user, WikiMergeOutput)
+                    except Exception as exc:
+                        logger.warning("Skipping dream merge for %s after structured output failure: %s", page_slug, exc)
+                        continue
                     if isinstance(merged, dict):
                         merged_content = self._sanitize_wiki_links(merged.get("content", existing_page.content), self._valid_slugs(extra=[page_slug]))
                         if self._normalized_text(merged_content) == self._normalized_text(existing_page.content):

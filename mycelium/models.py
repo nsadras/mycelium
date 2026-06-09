@@ -52,6 +52,7 @@ class WikiPage:
     was_flagged: bool = field(default=False, repr=False)
     discrepancy_score: float = field(default=0.0, repr=False)
     discrepancy_explanation: str = field(default='', repr=False)
+    source_context: str = field(default='', repr=False)
 
 @dataclass
 class LogEntry:

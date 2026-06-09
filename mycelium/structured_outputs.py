@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, RootModel
+from pydantic import BaseModel, Field, RootModel
 
 
 class EncodedEntryOutput(BaseModel):
@@ -10,7 +10,7 @@ class EncodedEntryOutput(BaseModel):
 
 
 class EncodedSessionOutput(BaseModel):
-    entries: list[EncodedEntryOutput]
+    entries: list[EncodedEntryOutput] = Field(default_factory=list, max_length=20)
 
 
 class ImportanceRatingOutput(BaseModel):
@@ -24,7 +24,7 @@ class RoutingSelectionOutput(BaseModel):
 
 
 class RoutingOutput(RootModel[list[RoutingSelectionOutput]]):
-    pass
+    root: list[RoutingSelectionOutput] = Field(default_factory=list, max_length=8)
 
 
 class MemoryUsageItemOutput(BaseModel):
@@ -34,29 +34,31 @@ class MemoryUsageItemOutput(BaseModel):
 
 
 class MemoryUsageOutput(BaseModel):
-    pages: list[MemoryUsageItemOutput]
+    pages: list[MemoryUsageItemOutput] = Field(default_factory=list, max_length=12)
 
 
 class ConsolidationTargetOutput(BaseModel):
     page: str
     action: Literal["update", "create", "none"]
-    log_entry_ids: list[str] = []
+    page_type: Literal["entity", "event", "topic"] = "topic"
+    log_entry_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
 class ConsolidationIdentifyOutput(BaseModel):
-    targets: list[ConsolidationTargetOutput]
+    targets: list[ConsolidationTargetOutput] = Field(default_factory=list, max_length=8)
 
 
 class CanonicalizationMappingOutput(BaseModel):
     proposed_page: str
     action: Literal["use_existing", "create_new", "drop"]
     canonical_page: str | None = None
-    log_entry_ids: list[str] = []
+    page_type: Literal["entity", "event", "topic"] = "topic"
+    log_entry_ids: list[str] = Field(default_factory=list, max_length=20)
     reason: str | None = None
 
 
 class CanonicalizationOutput(BaseModel):
-    mappings: list[CanonicalizationMappingOutput]
+    mappings: list[CanonicalizationMappingOutput] = Field(default_factory=list, max_length=20)
 
 
 class RelatedEdgeOutput(BaseModel):
@@ -70,8 +72,8 @@ class WikiRewriteOutput(BaseModel):
     content: str
     confidence: float
     importance: float
-    tags: list[str] = []
-    related: list[RelatedEdgeOutput] = []
+    tags: list[str] = Field(default_factory=list, max_length=12)
+    related: list[RelatedEdgeOutput] = Field(default_factory=list, max_length=12)
 
 
 class WikiMergeOutput(BaseModel):
@@ -86,15 +88,15 @@ class ToolExtractedFactOutput(BaseModel):
     fact: str
     confidence: float = 0.5
     recommended_memory_scope: Literal["ignore", "session", "durable"] = "ignore"
-    suggested_topics: list[str] = []
+    suggested_topics: list[str] = Field(default_factory=list, max_length=8)
 
 
 class ToolObservationExtractionOutput(BaseModel):
     source_tool_entry_id: str
     tool_name: str | None = None
     query_or_url: str | None = None
-    facts: list[ToolExtractedFactOutput] = []
-    discarded_noise: list[str] = []
+    facts: list[ToolExtractedFactOutput] = Field(default_factory=list, max_length=12)
+    discarded_noise: list[str] = Field(default_factory=list, max_length=12)
 
 
 class PredictionErrorOutput(BaseModel):
@@ -109,5 +111,5 @@ class ReconsolidationRewriteOutput(BaseModel):
     content: str
     confidence: float
     update_reason: str
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list, max_length=12)
     importance: float | None = None

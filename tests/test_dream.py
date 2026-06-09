@@ -108,6 +108,67 @@ async def test_dream_process_dedupes_duplicate_identification(dream_process, moc
 
 
 @pytest.mark.asyncio
+async def test_dream_identification_splits_failed_raw_log_batch(dream_process, mock_llm):
+    entry1 = LogEntry(
+        entry_id="2026-05-10#session-1",
+        session_id="ses-123",
+        timestamp=datetime.now(),
+        content="A" * 4000,
+        importance=0.8,
+        status="raw",
+    )
+    entry2 = LogEntry(
+        entry_id="2026-05-10#session-2",
+        session_id="ses-123",
+        timestamp=datetime.now(),
+        content="B" * 4000,
+        importance=0.8,
+        status="raw",
+    )
+    mock_llm.call_structured.side_effect = [
+        ValueError("bad json"),
+        [{"page": "caroline-profile", "action": "create", "log_entry_ids": [entry1.entry_id]}],
+        [{"page": "melanie-profile", "action": "create", "log_entry_ids": [entry2.entry_id]}],
+    ]
+
+    targets = await dream_process._identify_targets_for_chunk("# Index", [entry1, entry2])
+
+    assert [target["page"] for target in targets] == ["caroline-profile", "melanie-profile"]
+    assert mock_llm.call_structured.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_dream_identification_splits_failed_single_long_raw_log(dream_process, mock_llm):
+    entry = LogEntry(
+        entry_id="2026-06-09#session-b7ce924b",
+        session_id="session_1",
+        timestamp=datetime.now(),
+        content="\n\n".join(
+            [
+                "Raw conversation transcript.",
+                "speaker_a: Caroline talks about pottery and running." * 80,
+                "speaker_b: Melanie discusses Paris travel plans." * 80,
+            ]
+        ),
+        importance=0.8,
+        status="raw",
+    )
+    mock_llm.call_structured.return_value = [
+        {"page": "caroline-profile", "action": "create", "log_entry_ids": [entry.entry_id]}
+    ]
+
+    targets = await dream_process._identify_targets_for_chunk("# Index", [entry])
+
+    assert targets
+    assert all(target["log_entry_ids"] == [entry.entry_id] for target in targets)
+    assert mock_llm.call_structured.call_count >= 1
+    first_prompt = mock_llm.call_structured.call_args_list[0][0][1]
+    assert "Excerpt 1/" in first_prompt
+    assert entry.entry_id in first_prompt
+    assert "session-b7ce924b-1" not in first_prompt
+
+
+@pytest.mark.asyncio
 async def test_dream_process_merges_same_title_creates(dream_process, mock_llm, mock_wiki, mock_logs):
     entry = LogEntry(
         entry_id="2026-05-10#Entry1",
@@ -343,6 +404,55 @@ async def test_dream_process_precise_log_routing(dream_process, mock_llm, mock_w
     assert "user-profile" in saved_pages
     assert saved_pages["react-loop"].source_log_entries == ["2026-05-10#Entry1"]
     assert saved_pages["user-profile"].source_log_entries == ["2026-05-10#Entry2"]
+
+
+@pytest.mark.asyncio
+async def test_dream_process_passes_page_type_to_rewrite_and_tags_page(
+    dream_process,
+    mock_llm,
+    mock_wiki,
+    mock_logs,
+):
+    entry = LogEntry(
+        entry_id="2026-05-10#Entry1",
+        session_id="ses-123",
+        timestamp=datetime.now(),
+        content="Melanie painted a lake sunrise last year.",
+        importance=0.9,
+        status="raw",
+    )
+    mock_logs.get_unconsolidated.return_value = [entry]
+    mock_wiki.get_index.return_value = "# Index"
+    mock_wiki.exists.return_value = False
+    mock_wiki.list_all.return_value = []
+
+    saved_pages = {}
+    mock_wiki.save.side_effect = lambda page: saved_pages.setdefault(page.slug, page)
+    mock_llm.call_structured.side_effect = [
+        [
+            {
+                "page": "person-melanie",
+                "action": "create",
+                "page_type": "entity",
+                "log_entry_ids": ["2026-05-10#Entry1"],
+            }
+        ],
+        {
+            "title": "Melanie",
+            "content": "Melanie painted a lake sunrise last year.",
+            "tags": ["person"],
+            "confidence": 0.9,
+            "importance": 0.8,
+        },
+    ]
+
+    report = await dream_process.run(strategy="full", conflict_policy="override")
+
+    assert report.pages_created == 1
+    rewrite_system_prompt = mock_llm.call_structured.call_args_list[1][0][0]
+    assert "slug=`person-melanie`" in rewrite_system_prompt
+    assert "page_type=`entity`" in rewrite_system_prompt
+    assert saved_pages["person-melanie"].tags == ["person", "page-type-entity"]
 
 
 @pytest.mark.asyncio

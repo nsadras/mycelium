@@ -12,6 +12,8 @@ from mycelium.budget import ContextBudget
 from mycelium.session import Session
 from mycelium import prompts
 from mycelium.decay import initialize_memory_state, record_memory_event
+from mycelium.facts import page_recall_context, routing_recall_index
+from mycelium.sources import source_context_for_page
 from mycelium.structured_outputs import MemoryUsageOutput, RoutingOutput
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,7 @@ class Mycelium:
         conflict_policy: Literal['fork', 'override', 'merge'] = 'override',
         git_commits: bool = False,
         config_path: str | Path | None = None,
+        memory_profile: Literal["user", "scenario", "none"] = "user",
     ):
         self.store_path = Path(store_path)
         
@@ -46,12 +49,11 @@ class Mycelium:
             self.config.dream.conflict_policy = conflict_policy
             self.config.git_commits = git_commits
 
-        if not self.store_path.exists():
-            self._init_store()
+        self._init_store()
             
         self._wiki = WikiStore(self.store_path / "wiki")
         self._log_store = LogStore(self.store_path / "logs")
-        self._ensure_user_profile()
+        self._ensure_seed_profile(memory_profile)
         self.llm = OllamaClient(
             url=self.config.llm.url,
             model=self.config.llm.model,
@@ -65,22 +67,48 @@ class Mycelium:
         from mycelium.dream import DreamProcess
         self.dream_process = DreamProcess(self.llm, self._wiki, self._log_store, self.config)
 
-    def _ensure_user_profile(self) -> None:
-        if not self._wiki.exists("user-profile"):
+    def _ensure_seed_profile(self, memory_profile: Literal["user", "scenario", "none"]) -> None:
+        if memory_profile == "none":
+            return
+        if memory_profile == "scenario":
+            slug = "scenario-profile"
+            title = "Scenario Profile"
+            content = (
+                "Central repository for benchmark scenario participants, conversation setup, "
+                "and durable facts that do not belong to one real user's personal profile.\n\n"
+                "## Key Facts\n"
+                "- This store represents an evaluation scenario, not the operator's personal memory.\n\n"
+                "## Event Timeline\n"
+            )
+            tags = ["profile", "scenario", "benchmark"]
+            summary = "Central repository for benchmark scenario participants and conversation setup."
+        else:
+            slug = "user-profile"
+            title = "User Profile"
+            content = (
+                "Central repository for user preferences, background, plans, and custom instructions.\n\n"
+                "## Key Facts\n"
+                "- The page tracks durable user-specific details and preferences.\n\n"
+                "## Event Timeline\n"
+            )
+            tags = ["profile", "personalization"]
+            summary = "Central repository for user preferences, background, plans, and custom instructions."
+
+        if not self._wiki.exists(slug):
             from mycelium.models import WikiPage
             from datetime import datetime
             
             profile_page = WikiPage(
-                slug="user-profile",
-                title="User Profile",
-                content="Central repository for user preferences, background, plans, and custom instructions.",
+                slug=slug,
+                title=title,
+                content=content,
                 created=datetime.now(),
                 last_updated=datetime.now(),
                 version=1,
                 confidence=0.8,
                 importance=1.0,
                 pinned=True,
-                tags=["profile", "personalization"],
+                tags=tags,
                 related=[]
             )
             initialize_memory_state(profile_page, "manual_created")
@@ -88,7 +116,7 @@ class Mycelium:
             
             # Register in the index if not present
             index_content = self._wiki.get_index()
-            if "[[user-profile]]" not in index_content:
+            if f"[[{slug}]]" not in index_content:
                 lines = index_content.splitlines()
                 pages_header_idx = -1
                 for idx, line in enumerate(lines):
@@ -96,12 +124,15 @@ class Mycelium:
                         pages_header_idx = idx
                         break
                 
-                profile_line = "- [[user-profile]]: Central repository for user preferences, background, plans, and custom instructions."
+                profile_line = f"- [[{slug}]]: {summary}"
                 if pages_header_idx != -1:
                     lines.insert(pages_header_idx + 1, profile_line)
                 else:
                     lines.append(profile_line)
                 self._wiki.save_index("\n".join(lines))
+
+    def _ensure_user_profile(self) -> None:
+        self._ensure_seed_profile("user")
 
     def _init_store(self) -> None:
         self.store_path.mkdir(parents=True, exist_ok=True)
@@ -134,6 +165,9 @@ class Mycelium:
         budget_tokens = budget_tokens or self.config.context_budget_tokens
         budget = ContextBudget(budget_tokens)
         
+        if not self.wiki.list_all():
+            return []
+
         index_content = self._routing_index()
         budget.consume(index_content)
         
@@ -159,10 +193,14 @@ class Mycelium:
                 continue
                 
             page = self.wiki.get(slug)
+            recall_context = page_recall_context(page)
+            recall_block = f"{recall_context}\n\n" if recall_context else ""
+            page.source_context = source_context_for_page(page, self.log_store, query)
+            source_block = f"\n\n{page.source_context}" if page.source_context else ""
             content = (
                 f"=== MEMORY: {page.title} "
                 f"(confidence: {page.confidence:.2f}, retrievability: {page.retrievability:.2f}, v{page.version}) ===\n"
-                f"{page.content}\n=== END MEMORY ==="
+                f"{recall_block}{page.content}{source_block}\n=== END MEMORY ==="
             )
             
             if budget.fits(content):
@@ -201,7 +239,11 @@ class Mycelium:
                 for p in pages
             ],
         ]
-        return f"{base_index}\n\n" + "\n".join(metadata_lines)
+        recall_index = routing_recall_index(pages)
+        parts = [base_index, "\n".join(metadata_lines)]
+        if recall_index:
+            parts.append(recall_index)
+        return "\n\n".join(parts)
 
     async def record_memory_usage(
         self,

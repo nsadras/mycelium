@@ -35,6 +35,9 @@ VALID_EDGE_RELATIONS = {
 
 PLACEHOLDER_SLUG_RE = re.compile(r"^(page-slug|new-page|page|topic|untitled)(-\d+|-?[a-z])?$")
 PLACEHOLDER_TITLE_RE = re.compile(r"^(page|topic|new page|project documentation)$", re.IGNORECASE)
+IDENTIFICATION_MAX_CHARS_PER_ENTRY = 3500
+IDENTIFICATION_EXCERPT_CHARS = 3000
+PAGE_TYPES = {"entity", "event", "topic"}
 
 
 def _normalize_page_key(value: str) -> str:
@@ -83,32 +86,9 @@ class DreamProcess:
             
         index_content = self.wiki.get_index()
         
-        # Chunk entries to prevent overwhelming the local LLM context window
-        chunk_size = 15
         all_targets = []
-        
-        for idx in range(0, len(entries), chunk_size):
-            chunk = entries[idx:idx + chunk_size]
-            chunk_str = "\n".join([
-                (
-                    f"[{e.entry_id}] "
-                    f"durability={e.durability}; importance={e.importance:.2f}\n{e.content}"
-                )
-                for e in chunk
-            ])
-            
-            system, user = prompts.consolidation_identify_prompt(index_content, chunk_str)
-            identification_res = await self.llm.call_structured(system, user, ConsolidationIdentifyOutput)
-            
-            chunk_targets = []
-            if isinstance(identification_res, dict):
-                chunk_targets = identification_res.get("targets", [])
-            elif isinstance(identification_res, list):
-                chunk_targets = identification_res
-            elif hasattr(identification_res, "targets"):
-                chunk_targets = identification_res.targets
-                
-            all_targets.extend(chunk_targets)
+        for chunk in self._entry_chunks(entries):
+            all_targets.extend(await self._identify_targets_for_chunk(index_content, chunk))
             
         identification = self._dedupe_identification(all_targets)
         identification = await self._canonicalize_identification(identification, entries)
@@ -126,6 +106,7 @@ class DreamProcess:
                 
             page_slug = _slugify(str(item.get("page", "")))
             action = item.get("action")
+            page_type = self._page_type_for_target(item)
             
             if not page_slug or action not in ("update", "create"):
                 continue
@@ -142,23 +123,31 @@ class DreamProcess:
             else:
                 page_entries = entries
 
-            page_entries_str = "\n".join([
-                (
-                    f"[{e.entry_id}] "
-                    f"durability={e.durability}; importance={e.importance:.2f}\n{e.content}"
-                )
-                for e in page_entries
-            ])
+            page_entries_str = self._format_entries_for_prompt(
+                page_entries,
+                max_chars_per_entry=2500,
+                max_total_chars=12000,
+            )
             page_source_ids = [e.entry_id for e in page_entries]
 
             page_exists = self.wiki.exists(page_slug)
             if page_exists:
                 existing_page = self.wiki.get(page_slug)
-                system, user = prompts.consolidation_rewrite_prompt(existing_page.content, page_entries_str)
+                system, user = prompts.consolidation_rewrite_prompt(
+                    existing_page.content,
+                    page_entries_str,
+                    page_slug=page_slug,
+                    page_type=page_type,
+                )
                 is_create = False
             else:
                 existing_page = None
-                system, user = prompts.consolidation_rewrite_prompt("", page_entries_str)
+                system, user = prompts.consolidation_rewrite_prompt(
+                    "",
+                    page_entries_str,
+                    page_slug=page_slug,
+                    page_type=page_type,
+                )
                 is_create = True
             
             try:
@@ -173,6 +162,7 @@ class DreamProcess:
             title = rewritten.get("title", page_slug)
             content = rewritten.get("content", "")
             tags = rewritten.get("tags", [])
+            tags = self._typed_tags(tags, page_type)
             confidence = float(rewritten.get("confidence", 0.5))
             importance = float(rewritten.get("importance", 0.5))
             title_key = _normalize_page_key(title)
@@ -404,6 +394,207 @@ class DreamProcess:
             git_commit_sha=commit_sha
         )
 
+    async def _identify_targets_for_chunk(
+        self,
+        index_content: str,
+        entries: list[LogEntry],
+    ) -> list:
+        if not entries:
+            return []
+        if len(entries) == 1:
+            excerpt_entries = self._split_entry_for_identification(entries[0])
+            if len(excerpt_entries) > 1:
+                all_targets = []
+                for excerpt_chunk in self._entry_chunks(excerpt_entries, max_chars=9000):
+                    all_targets.extend(await self._identify_targets_for_chunk(index_content, excerpt_chunk))
+                return all_targets
+
+        chunk_str = self._format_entries_for_prompt(
+            entries,
+            max_chars_per_entry=IDENTIFICATION_MAX_CHARS_PER_ENTRY,
+        )
+        system, user = prompts.consolidation_identify_prompt(index_content, chunk_str)
+        try:
+            identification_res = await self.llm.call_structured(system, user, ConsolidationIdentifyOutput)
+        except Exception as exc:
+            if len(entries) <= 1:
+                logger.warning(
+                    "Skipping dream identification for %s after structured output failure: %s",
+                    entries[0].entry_id,
+                    exc,
+                )
+                return []
+
+            midpoint = max(1, len(entries) // 2)
+            return [
+                *await self._identify_targets_for_chunk(index_content, entries[:midpoint]),
+                *await self._identify_targets_for_chunk(index_content, entries[midpoint:]),
+            ]
+
+        if isinstance(identification_res, dict):
+            return identification_res.get("targets", [])
+        if isinstance(identification_res, list):
+            return identification_res
+        if hasattr(identification_res, "targets"):
+            return identification_res.targets
+        return []
+
+    def _split_entry_for_identification(self, entry: LogEntry) -> list[LogEntry]:
+        content = entry.content.strip()
+        if len(content) <= IDENTIFICATION_MAX_CHARS_PER_ENTRY:
+            return [entry]
+
+        chunks = self._split_text_for_prompt(content, IDENTIFICATION_EXCERPT_CHARS)
+        if len(chunks) <= 1:
+            return [entry]
+
+        return [
+            LogEntry(
+                entry_id=entry.entry_id,
+                session_id=entry.session_id,
+                timestamp=entry.timestamp,
+                content=(
+                    f"Excerpt {index + 1}/{len(chunks)} from original log entry {entry.entry_id}. "
+                    "When citing this excerpt, use the original log entry ID only.\n\n"
+                    f"{chunk}"
+                ),
+                importance=entry.importance,
+                status=entry.status,
+                durability=entry.durability,
+                consolidated=entry.consolidated,
+                decay_score=entry.decay_score,
+            )
+            for index, chunk in enumerate(chunks)
+        ]
+
+    def _split_text_for_prompt(self, text: str, max_chars: int) -> list[str]:
+        if len(text) <= max_chars:
+            return [text]
+
+        chunks: list[str] = []
+        current: list[str] = []
+        current_chars = 0
+        paragraphs = re.split(r"\n{2,}", text)
+
+        for paragraph in paragraphs:
+            paragraph = paragraph.strip()
+            if not paragraph:
+                continue
+
+            if len(paragraph) > max_chars:
+                if current:
+                    chunks.append("\n\n".join(current))
+                    current = []
+                    current_chars = 0
+                chunks.extend(self._split_long_paragraph(paragraph, max_chars))
+                continue
+
+            separator_chars = 2 if current else 0
+            if current and current_chars + separator_chars + len(paragraph) > max_chars:
+                chunks.append("\n\n".join(current))
+                current = []
+                current_chars = 0
+
+            current.append(paragraph)
+            current_chars += separator_chars + len(paragraph)
+
+        if current:
+            chunks.append("\n\n".join(current))
+
+        return chunks or [text[:max_chars]]
+
+    def _split_long_paragraph(self, text: str, max_chars: int) -> list[str]:
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = min(start + max_chars, len(text))
+            if end < len(text):
+                split_at = text.rfind("\n", start, end)
+                if split_at <= start:
+                    split_at = text.rfind(" ", start, end)
+                if split_at > start:
+                    end = split_at
+            chunks.append(text[start:end].strip())
+            start = end
+            while start < len(text) and text[start].isspace():
+                start += 1
+        return [chunk for chunk in chunks if chunk]
+
+    def _entry_chunks(self, entries: list[LogEntry], *, max_chars: int = 12000) -> list[list[LogEntry]]:
+        chunks: list[list[LogEntry]] = []
+        current: list[LogEntry] = []
+        current_chars = 0
+
+        for entry in entries:
+            formatted_len = len(self._format_entry_for_prompt(entry))
+            if current and current_chars + formatted_len > max_chars:
+                chunks.append(current)
+                current = []
+                current_chars = 0
+            current.append(entry)
+            current_chars += formatted_len
+
+        if current:
+            chunks.append(current)
+        return chunks
+
+    def _format_entries_for_prompt(
+        self,
+        entries: list[LogEntry],
+        *,
+        max_chars_per_entry: int | None = None,
+        max_total_chars: int | None = None,
+    ) -> str:
+        formatted_entries = []
+        total_chars = 0
+        for entry in entries:
+            formatted = self._format_entry_for_prompt(entry, max_chars=max_chars_per_entry)
+            if max_total_chars is not None and formatted_entries and total_chars + len(formatted) > max_total_chars:
+                break
+            formatted_entries.append(formatted)
+            total_chars += len(formatted)
+        return "\n".join(formatted_entries)
+
+    def _format_entry_for_prompt(self, entry: LogEntry, *, max_chars: int | None = None) -> str:
+        content = entry.content
+        if max_chars is not None and len(content) > max_chars:
+            content = content[: max_chars - 32].rstrip() + "\n[entry truncated for prompt]"
+        return (
+            f"[{entry.entry_id}] "
+            f"durability={entry.durability}; importance={entry.importance:.2f}\n{content}"
+        )
+
+    def _page_type_for_target(self, item: dict, fallback: str = "topic") -> str:
+        raw_page_type = str(item.get("page_type", fallback)).strip().lower()
+        if raw_page_type in PAGE_TYPES:
+            return raw_page_type
+        return self._page_type_for_slug(_slugify(str(item.get("page", ""))), [])
+
+    def _page_type_for_slug(self, slug: str, tags: list | tuple | None) -> str:
+        normalized_tags = {_slugify(str(tag)) for tag in (tags or [])}
+        for page_type in PAGE_TYPES:
+            if f"page-type-{page_type}" in normalized_tags:
+                return page_type
+        if slug.startswith(("person-", "organization-", "place-", "pet-", "product-")):
+            return "entity"
+        if slug.startswith("event-"):
+            return "event"
+        return "topic"
+
+    def _merge_page_type(self, existing: str, new: str) -> str:
+        if existing == new:
+            return existing
+        if existing == "topic":
+            return new
+        return existing
+
+    def _typed_tags(self, tags: list, page_type: str) -> list[str]:
+        cleaned = [str(tag) for tag in tags if str(tag).strip()]
+        type_tag = f"page-type-{page_type}"
+        if type_tag not in {_slugify(tag) for tag in cleaned}:
+            cleaned.append(type_tag)
+        return cleaned
+
     def _dedupe_identification(self, identification: list) -> list[dict]:
         deduped: dict[str, dict] = {}
         for item in identification:
@@ -439,11 +630,16 @@ class DreamProcess:
                 deduped[slug] = {
                     "page": slug,
                     "action": action,
+                    "page_type": self._page_type_for_target(item),
                     "log_entry_ids": log_entry_ids
                 }
             else:
                 if existing["action"] == "create" and action == "update":
                     existing["action"] = "update"
+                existing["page_type"] = self._merge_page_type(
+                    str(existing.get("page_type", "topic")),
+                    self._page_type_for_target(item),
+                )
                 # Merge log_entry_ids
                 existing_ids = existing.setdefault("log_entry_ids", [])
                 for entry_id in log_entry_ids:
@@ -511,7 +707,7 @@ class DreamProcess:
             log_entry_ids = self._clean_log_entry_ids(mapping.get("log_entry_ids", []))
             if not log_entry_ids:
                 log_entry_ids = list(original.get("log_entry_ids", []))
-
+            page_type = self._page_type_for_target(mapping, fallback=self._page_type_for_target(original))
             lexical_match = self._lexical_existing_match(canonical_slug, existing_pages)
             if lexical_match:
                 canonical_slug = lexical_match
@@ -531,6 +727,7 @@ class DreamProcess:
                 {
                     "page": canonical_slug,
                     "action": canonical_action,
+                    "page_type": page_type,
                     "log_entry_ids": log_entry_ids,
                 }
             )
@@ -557,6 +754,7 @@ class DreamProcess:
                     "slug": page.slug,
                     "title": page.title,
                     "tags": page.tags,
+                    "page_type": self._page_type_for_slug(page.slug, page.tags),
                     "summary": self._index_summary(page),
                     "content_preview": body[:500],
                     "confidence": page.confidence,
@@ -589,6 +787,7 @@ class DreamProcess:
                 {
                     "page": page_slug,
                     "action": item.get("action"),
+                    "page_type": self._page_type_for_target(item),
                     "log_entry_ids": log_entry_ids,
                     "source_snippets": [
                         {

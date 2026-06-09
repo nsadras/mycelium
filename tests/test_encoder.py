@@ -25,54 +25,29 @@ def encoder(mock_llm, mock_wiki_store, mock_log_store):
 
 @pytest.mark.asyncio
 async def test_encode_session(encoder, mock_llm, mock_log_store):
-    mock_llm.call_structured.return_value = {
-        "entries": [
-            {
-                "content": "Important detail 1",
-                "durability": "durable",
-                "importance": "high",
-            },
-            {
-                "content": "Durable user detail",
-                "durability": "durable",
-                "importance": "low",
-            },
-            {
-                "content": "Trivial detail",
-                "durability": "ephemeral",
-                "importance": "low",
-            },
-            {
-                "content": "The assistant recommended model-based RL projects tailored to the user's neuroscience background.",
-                "durability": "session",
-                "importance": "low",
-            },
-            {
-                "content": "Important detail 2",
-                "durability": "session",
-                "importance": "medium",
-            },
-        ]
-    }
-    
-    entries = await encoder.encode_session("some transcript", "ses-123")
-    
-    assert len(entries) == 5
-    assert entries[0].content == "Important detail 1"
-    assert entries[0].importance == 0.9
-    assert entries[1].content == "Durable user detail"
-    assert entries[1].importance == 0.25
-    assert entries[2].content == "Trivial detail"
-    assert entries[2].importance == 0.25
-    assert entries[3].content.startswith("The assistant recommended")
-    assert entries[3].importance == 0.25
-    assert entries[4].content == "Important detail 2"
-    assert entries[4].importance == 0.6
-    
-    assert mock_log_store.append.call_count == 5
+    entries = await encoder.encode_session("USER: some transcript", "ses-123")
+
+    assert len(entries) == 1
+    assert "Raw conversation transcript" in entries[0].content
+    assert "USER: some transcript" in entries[0].content
+    assert entries[0].importance == 0.8
+    assert entries[0].durability == "durable"
+    assert entries[0].session_id == "ses-123"
+
+    mock_llm.call_structured.assert_not_called()
+    assert mock_log_store.append.call_count == 1
     args, _ = mock_log_store.append.call_args_list[0]
     assert isinstance(args[0], LogEntry)
     assert args[0].session_id == "ses-123"
+
+
+@pytest.mark.asyncio
+async def test_encode_session_skips_empty_transcript(encoder, mock_llm, mock_log_store):
+    entries = await encoder.encode_session("   ", "ses-123")
+
+    assert entries == []
+    mock_llm.call_structured.assert_not_called()
+    mock_log_store.append.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_encode_direct_with_importance(encoder, mock_llm, mock_log_store):

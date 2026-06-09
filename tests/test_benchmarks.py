@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
 from benchmarks.mycelium_bench.adapters import BenchmarkAnswer, BenchmarkMessage, format_messages_for_memory
+from benchmarks.mycelium_bench.adapters import MyceliumMemorySystem
 from benchmarks.mycelium_bench.locomo import iter_locomo_sessions, run_locomo
 from benchmarks.mycelium_bench.scoring import locomo_score
+from mycelium.core import Mycelium
 
 
 class FakeMemorySystem:
@@ -82,3 +85,34 @@ async def test_run_locomo_writes_predictions(tmp_path):
     assert (tmp_path / "predictions.json").exists()
     assert (tmp_path / "predictions.jsonl").exists()
     assert (tmp_path / "summary.json").exists()
+
+
+def test_memory_profile_none_skips_seed_profile(tmp_path):
+    mem = Mycelium(tmp_path / "store", memory_profile="none")
+
+    assert not mem.wiki.exists("user-profile")
+
+
+@pytest.mark.asyncio
+async def test_mycelium_benchmark_adapter_preserves_raw_transcript_on_encode_failure(tmp_path):
+    class FakeQa:
+        pass
+
+    system = MyceliumMemorySystem(
+        run_dir=tmp_path,
+        qa_client=FakeQa(),
+        memory_model="test",
+        ollama_url="http://localhost:11434",
+        dream_policy="none",
+    )
+    await system.reset("case-1")
+    system.mem.encoder.encode_session = AsyncMock(side_effect=ValueError("bad json"))
+    system.mem.encoder.encode = AsyncMock()
+
+    await system.memorize([BenchmarkMessage(role="user", content="Caroline researched adoption agencies.")])
+
+    system.mem.encoder.encode.assert_called_once()
+    kwargs = system.mem.encoder.encode.call_args.kwargs
+    assert "Raw benchmark session transcript preserved" in kwargs["content"]
+    assert "Caroline researched adoption agencies." in kwargs["content"]
+    assert system.stats()["encoded_batches"] == 1

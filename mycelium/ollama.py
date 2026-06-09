@@ -1,9 +1,11 @@
 import json
 import logging
+import os
 import time
 import re
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Union, Optional
 
 from dotenv import load_dotenv
@@ -11,6 +13,7 @@ from ollama import AsyncClient, Client, RequestError, ResponseError, web_fetch, 
 from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
+LLM_DEBUG_DIR_ENV = "MYCELIUM_LLM_DEBUG_DIR"
 
 
 @dataclass
@@ -234,7 +237,7 @@ class OllamaClient:
                 model=self.model,
                 messages=messages,
                 tools=tools,
-                think=True if enable_tools else None,
+                think=True if enable_tools else False,
                 stream=False,
                 format=None,
                 options=options,
@@ -375,6 +378,24 @@ class OllamaClient:
         content = getattr(message, "content", "")
         return str(content).strip()
 
+    def _response_metadata(self, response: Any) -> dict[str, Any]:
+        fields = (
+            "done",
+            "done_reason",
+            "total_duration",
+            "load_duration",
+            "prompt_eval_count",
+            "prompt_eval_duration",
+            "eval_count",
+            "eval_duration",
+        )
+        metadata: dict[str, Any] = {}
+        for field in fields:
+            value = self._field(response, field)
+            if value is not None:
+                metadata[field] = value
+        return metadata
+
     def _parse_structured_response(
         self,
         content: str,
@@ -405,12 +426,16 @@ class OllamaClient:
         max_retries: int = 3,
     ) -> Union[dict, list]:
         """
-        Uses Ollama's one-shot generate API with native JSON Schema support.
+        Uses Ollama's chat API with native JSON Schema support.
         """
         call_id = str(uuid.uuid4())[:8]
         output_format, response_model = self._structured_format(schema)
-        options = {"temperature": 0.0}
-        endpoint = f"{self.url}/api/generate"
+        options = {"temperature": 0.0, "num_ctx": 32768, "num_predict": 4096}
+        endpoint = f"{self.url}/api/chat"
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
 
         for attempt in range(max_retries):
             start_time = time.time()
@@ -420,32 +445,55 @@ class OllamaClient:
                 max_retries=max_retries,
                 endpoint=endpoint,
                 model=self.model,
-                messages=None,
-                prompt=user,
-                system=system,
+                messages=messages,
                 output_format=output_format,
                 options=options,
             )
             try:
-                response = await self.client.generate(
+                response = await self.client.chat(
                     model=self.model,
-                    system=system,
-                    prompt=user,
+                    messages=messages,
+                    think=False,
                     stream=False,
                     format=output_format,
                     options=options,
                 )
-                content = self._generate_response_content(response)
+                assistant_message = self._assistant_message_dict(response)
+                content = str(assistant_message.get("content", "")).strip()
+                metadata = self._response_metadata(response)
                 latency_ms = int((time.time() - start_time) * 1000)
 
                 try:
                     parsed = self._parse_structured_response(content, response_model)
-                    self._log_call(call_id, attempt + 1, system, user, content, latency_ms, True)
+                    self._log_call(call_id, attempt + 1, system, user, content, latency_ms, True, metadata)
                     return parsed
-                except (json.JSONDecodeError, ValidationError, ValueError):
-                    self._log_call(call_id, attempt + 1, system, user, content, latency_ms, False)
+                except (json.JSONDecodeError, ValidationError, ValueError) as parse_exc:
+                    self._log_call(call_id, attempt + 1, system, user, content, latency_ms, False, metadata)
+                    debug_dump_path = self._dump_structured_failure(
+                        call_id=call_id,
+                        attempt=attempt + 1,
+                        max_retries=max_retries,
+                        endpoint=endpoint,
+                        model=self.model,
+                        messages=messages,
+                        output_format=output_format,
+                        options=options,
+                        assistant_message=assistant_message,
+                        response=content,
+                        metadata=metadata,
+                        error=parse_exc,
+                    )
                     if attempt == max_retries - 1:
-                        raise ValueError(f"Failed to parse JSON response from Ollama after {max_retries} attempts: {content}")
+                        metadata_text = f"; metadata={metadata}" if metadata else ""
+                        debug_text = (
+                            f"; debug_dump={debug_dump_path}"
+                            if debug_dump_path
+                            else f"; debug_dump disabled, set {LLM_DEBUG_DIR_ENV}=.llm-debug"
+                        )
+                        raise ValueError(
+                            f"Failed to parse JSON response from Ollama after {max_retries} attempts"
+                            f"{metadata_text}{debug_text}: {content}"
+                        )
                     continue
 
             except (RequestError, ResponseError) as e:
@@ -463,6 +511,54 @@ class OllamaClient:
         if isinstance(schema, type) and issubclass(schema, BaseModel):
             return schema.model_json_schema(), schema
         return schema, None
+
+    def _dump_structured_failure(
+        self,
+        *,
+        call_id: str,
+        attempt: int,
+        max_retries: int,
+        endpoint: str,
+        model: str,
+        messages: list[dict[str, Any]],
+        output_format: Union[str, dict[str, Any]],
+        options: dict[str, Any],
+        assistant_message: dict[str, Any],
+        response: str,
+        metadata: dict[str, Any],
+        error: Exception,
+    ) -> str | None:
+        debug_dir = os.getenv(LLM_DEBUG_DIR_ENV)
+        if not debug_dir:
+            return None
+
+        payload = {
+            "call_id": call_id,
+            "attempt": attempt,
+            "max_retries": max_retries,
+            "endpoint": endpoint,
+            "model": model,
+            "messages": messages,
+            "format": output_format,
+            "options": options,
+            "metadata": metadata,
+            "assistant_message": assistant_message,
+            "response": response,
+            "response_chars": len(response),
+            "error_type": type(error).__name__,
+            "error": str(error),
+        }
+
+        try:
+            path = Path(debug_dir).expanduser()
+            path.mkdir(parents=True, exist_ok=True)
+            filename = f"structured-failure-{call_id}-attempt-{attempt}.json"
+            dump_path = path / filename
+            dump_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+            return str(dump_path)
+        except Exception as dump_exc:
+            logger.warning("Failed to write structured LLM debug dump: %s", dump_exc)
+            return None
 
     def _generate_response_content(self, response: Any) -> str:
         content = getattr(response, "response", "")
@@ -515,6 +611,7 @@ class OllamaClient:
         response: str,
         latency_ms: int,
         success: bool,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         entry = {
             "timestamp": time.time(),
@@ -524,7 +621,8 @@ class OllamaClient:
             "user": user,
             "response": response,
             "latency_ms": latency_ms,
-            "success": success
+            "success": success,
+            "metadata": metadata or {},
         }
         self._call_log.append(entry)
         logger.info("LLM response\n%s", json.dumps(entry, indent=2, ensure_ascii=False))

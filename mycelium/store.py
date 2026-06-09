@@ -239,13 +239,17 @@ class LogStore:
             f.write(entry.content.strip() + "\n\n---\n\n")
 
     def get_unconsolidated(self, days: int = 7) -> List[LogEntry]:
+        return [entry for entry in self.list_entries(days=days) if not entry.consolidated]
+
+    def list_entries(self, days: int | None = 7) -> List[LogEntry]:
         import re
         import typing
         from typing import Literal
         entries = []
         
         log_files = sorted(self.logs_dir.glob("*.md"), reverse=True)
-        log_files = log_files[:days]
+        if days is not None:
+            log_files = log_files[:days]
         
         for path in log_files:
             date_str = path.stem
@@ -288,34 +292,53 @@ class LogStore:
                     continue
 
                 is_consolidated = metadata.get("consolidated", "false").lower() == "true"
-                if not is_consolidated:
-                    try:
-                        timestamp = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-                    except ValueError:
-                        timestamp = datetime.now()
-                        
-                    importance = float(metadata.get("importance", "0.0"))
-                    status = typing.cast(Literal['raw', 'consolidated', 'archived'], metadata.get("status", "raw"))
-                    decay_score = float(metadata.get("decay_score", "1.0"))
-                    durability = typing.cast(
-                        Literal['ephemeral', 'session', 'durable'],
-                        metadata.get("durability", "durable"),
-                    )
+                try:
+                    timestamp = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+                except ValueError:
+                    timestamp = datetime.now()
                     
-                    entry = LogEntry(
-                        entry_id=f"{date_str}#{entry_name}",
-                        session_id=metadata.get("session_id", ""),
-                        timestamp=timestamp,
-                        content="\n".join(body_lines).strip(),
-                        importance=importance,
-                        status=status,
-                        durability=durability,
-                        consolidated=is_consolidated,
-                        decay_score=decay_score
-                    )
-                    entries.append(entry)
+                importance = float(metadata.get("importance", "0.0"))
+                status = typing.cast(Literal['raw', 'consolidated', 'archived'], metadata.get("status", "raw"))
+                decay_score = float(metadata.get("decay_score", "1.0"))
+                durability = typing.cast(
+                    Literal['ephemeral', 'session', 'durable'],
+                    metadata.get("durability", "durable"),
+                )
+                
+                entry = LogEntry(
+                    entry_id=f"{date_str}#{entry_name}",
+                    session_id=metadata.get("session_id", ""),
+                    timestamp=timestamp,
+                    content="\n".join(body_lines).strip(),
+                    importance=importance,
+                    status=status,
+                    durability=durability,
+                    consolidated=is_consolidated,
+                    decay_score=decay_score
+                )
+                entries.append(entry)
                     
         return entries
+
+    def get(self, entry_id: str) -> LogEntry:
+        if "#" not in entry_id:
+            raise FileNotFoundError(f"Log entry {entry_id} not found.")
+
+        for entry in self.list_entries(days=None):
+            if entry.entry_id == entry_id:
+                return entry
+        raise FileNotFoundError(f"Log entry {entry_id} not found.")
+
+    def get_many(self, entry_ids: List[str]) -> List[LogEntry]:
+        if not entry_ids:
+            return []
+
+        wanted = set(entry_ids)
+        found: dict[str, LogEntry] = {}
+        for entry in self.list_entries(days=None):
+            if entry.entry_id in wanted:
+                found[entry.entry_id] = entry
+        return [found[entry_id] for entry_id in entry_ids if entry_id in found]
 
     def mark_consolidated(self, entry_ids: List[str]) -> None:
         # Note: This is an expensive operation since we rewrite the file.

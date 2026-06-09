@@ -23,6 +23,8 @@ Always capture:
 - Recommendations or plans you gave that were tailored to this user's specific context
 - How the user responded to agent suggestions — whether they accepted, pushed back, modified, or ignored them
 - Anything the agent would want to know to pick up this conversation coherently, without the full conversation transcript
+- Concrete answerable facts: exact names, dates, relative times, locations, titles, quantities, relationships, preferences, and source/dialog IDs when present
+- Event facts that may later answer who/what/when/where questions. Preserve the original temporal expression even when it is relative, such as "the week before 9 June 2023".
 
 For assistant-originated content:
 - Capture recommendations, plans, and explanations that were personalized to this user — but write them as interaction memory, not universal fact
@@ -34,7 +36,7 @@ Examples:
 - Keep (confirmed): "The user confirmed they will pursue a POMDP-based approach for their BCI project, building on the agent's recommendation."
 
 For each entry, output a json object with the following fields:
-- "content": one concise standalone memory fact written so a future agent can use it without the transcript. Always include what makes this specific to this user, not just the bare fact.
+- "content": one concise standalone memory fact written so a future agent can use it without the transcript. Include subject/person, action/event, object/topic, date or relative time, location, and source ID when available. Always include what makes this specific to this user or scenario, not just the bare fact.
 - "durability": one of "ephemeral" (single session relevance only), "session" (relevant for days), "durable" (stable until explicitly updated)
 - "importance": "low", "medium", or "high"
 
@@ -45,7 +47,16 @@ Return a JSON object with a single "entries" field containing a list of these ob
 def consolidation_identify_prompt(index_content: str, log_entries: str) -> tuple[str, str]:
     system = """You are a memory consolidation agent. Given recent log entries, identify which existing wiki pages are affected by new information, and whether any new pages need to be created.
 
-Group related log entries into distinct, highly focused semantic pages. Each page should target a single specific concept, project, tool, or area of user interest (e.g. `react-agent-loop`, `user-profile`, `typescript-port`). Do not create one page per log entry, but also do not over-merge unrelated logs.
+Use a fact-first page model with three page types:
+- entity pages: people, organizations, places, pets, products, or other named entities. Use slugs like `person-caroline`, `person-melanie`, `organization-connected-lgbtq-activists`, or `place-paris`.
+- event pages: specific dated or date-resolvable events. Use slugs like `event-caroline-lgbtq-support-group-2023-05-07` or `event-jon-paris-trip-2023-01-28`.
+- topic pages: durable projects, goals, tools, concepts, or synthesized areas of work. Use slugs like `adoption-goals`, `dance-studio-planning`, or `react-agent-loop`.
+
+Entity pages are the backbone when logs mention named people. If a conversation includes named participants or salient named third parties, create or update one entity page for each salient person/entity even when you also create topic or event pages. Topic pages do not replace entity pages.
+
+Event pages should be created for important facts with exact dates, relative dates, or benchmark-answerable temporal expressions. Preserve both the absolute conversation date and the relative expression in the eventual page. Do not create one event page for every turn; create event pages only for salient, future-answerable events.
+
+Topic pages should group related log entries into distinct, highly focused semantic pages. Each topic page should target a single specific concept, project, tool, or area of user interest (e.g. `react-agent-loop`, `user-profile`, `typescript-port`). Do not create one topic page per log entry, but also do not over-merge unrelated logs.
 
 CRITICAL: Avoid creating a single broad catch-all page (such as `knowledge-graph-summary`, `general-notes`, or `mycelium-development`) to dump unrelated logs. If the log entries cover genuinely separate topics (such as search observations, coding frameworks, user preferences, and distinct system tests), you MUST identify separate, highly focused wiki pages for each distinct topic.
 
@@ -53,27 +64,34 @@ Prefer updating an existing page from the wiki index when the new information fi
 Create a new page only when no existing page can reasonably absorb the information.
 Use stable lowercase slug names with hyphens, for example "user-profile" or "reinforcement-learning". Do not return placeholder names like "Page 1", "Topic A", or "New Page".
 If multiple log entries concern the same theme, return one page target for that theme.
+Return at most 8 targets. Prefer the few most salient durable pages. If nothing is worth consolidating, return {"targets": []}.
 
 - The central `user-profile` page should ONLY receive user-specific personal details, style preferences, project configurations, background, goals, or custom instructions. Do NOT consolidate technical, generic tool observations, or general agent loop architecture details into the `user-profile` page. Create separate descriptive wiki pages for those technical concepts (e.g. `agent-harness-anatomy`, `react-agent-loop`, `paper-review-agentic-benchmarks`).
+- For long conversations with named participants, prefer naturally arising participant and topic pages when the source material supports them. Parent/profile pages can summarize; child/topic pages should preserve concrete details. Do not create named pages unless the names and topics are salient in the source logs.
 
 Important: Log entries with IDs starting with 'tool-' have already been preprocessed into extracted tool facts. Use only the extracted facts, not page furniture, search result labels, navigation text, or citation widgets.
 
 Return a JSON object with a single "targets" field containing a list of objects, where each object contains:
 - "page": the lowercase, hyphenated slug of the wiki page. You MUST use a descriptive slug name representing the specific topic. NEVER return a number, a single letter, or a placeholder like "1", "2", "Page A", or "New Page".
 - "action": one of "update", "create", or "none"
+- "page_type": one of "entity", "event", or "topic"
 - "log_entry_ids": a list of the exact raw string IDs of the specific log entries (e.g., ["2026-05-28#Prologue", "2026-05-28#entry-97bccd56"]) containing information relevant to this page. You must output the exact entry ID string as it appears in the log. Only map a log entry to a page if that log entry actually contains information relevant to that page.
+
+If a log entry is a full raw session transcript, include that session log entry ID once for each relevant page. Do not output dialogue turn IDs, speaker labels, utterance IDs, or duplicate copies of the same log entry ID.
 
 Example response format:
 {
   "targets": [
     {
-      "page": "user-profile",
+      "page": "person-caroline",
       "action": "update",
+      "page_type": "entity",
       "log_entry_ids": ["2026-05-28#entry-123"]
     },
     {
       "page": "agent-harness-anatomy",
       "action": "create",
+      "page_type": "topic",
       "log_entry_ids": ["2026-05-28#Prologue", "2026-05-28#Chapter 1 · What Is a Harness"]
     }
   ]
@@ -87,12 +105,22 @@ RECENT LOG ENTRIES:
 {log_entries}"""
     return system, user
 
-def consolidation_rewrite_prompt(existing_page: str, log_entries: str) -> tuple[str, str]:
-    system = """You are rewriting a wiki page to incorporate new experience.
+def consolidation_rewrite_prompt(
+    existing_page: str,
+    log_entries: str,
+    page_slug: str = "",
+    page_type: str = "topic",
+) -> tuple[str, str]:
+    system = f"""You are rewriting a wiki page to incorporate new experience.
 Rules:
+- TARGET PAGE: slug=`{page_slug or "unknown"}`, page_type=`{page_type}`. Extract ONLY facts that belong on this specific page.
+- PAGE MODEL: Use entity pages for people/organizations/places, event pages for specific dated/date-resolvable events, and topic pages for synthesized projects/goals/concepts. Do not let topic pages replace entity or event pages.
 - PERSONALIZATION vs GENERAL KNOWLEDGE: The wiki is a Personalized User-Agent Ledger, not a generic encyclopedia. NEVER write general textbook information that is already in your pre-trained weights (e.g. general explanations of basic algorithms, basic Python tutorials). However, you MUST capture specific, specialized, or newly-discovered factual knowledge retrieved via tool calls/web searches (e.g., library version compatibility, fresh API syntaxes, hardware compatibility tables, or documentation pages fetched during the session) that are highly relevant to the user's project. This is information you had to fetch because it is NOT stored in your weights. Save these facts alongside the user's specific decisions, variables, configurations, folder paths, and preferences so they are permanently accessible.
 - CAPTURE TOOL FACTS: Log entries with IDs starting with 'tool-' contain pre-extracted, source-grounded tool facts. Integrate durable factual discoveries, library version numbers, specific API specifications, or technical details where they directly fit this page. Do not preserve page furniture, search ranking labels, navigation text, or citation widgets.
 - ABSTRACT EVENTS, PRESERVE DETAILS: When processing logs, abstract the specific chat turn, but do NOT strip away crucial actionable details like custom file names, custom directories, variable names, or hardware models. Preserve these specifics, but write them as durable facts rather than episodic stories (e.g. write 'The BCI project uses a custom POMDP loop' rather than 'The user said they want to use POMDP').
+- PRESERVE ANSWERABLE FACTS: Do NOT drop exact names, dates, relative time expressions, locations, quantities, source/dialog IDs, or relationships. If the page summary abstracts them, preserve the concrete details in `## Key Facts` or `## Event Timeline`.
+- RELATIVE DATES: If a log says "yesterday", "last year", "next month", "last Friday", or similar, preserve that exact expression and the anchor conversation date. If the absolute date can be inferred, include it too.
+- HIERARCHICAL MEMORY: Write readable parent/topic pages, but include links to focused child pages when the logs naturally split into subtopics. A broad profile page may summarize; a focused topic page must retain concrete details.
 - AVOID EPISODIC STORIES: Do not write pages as a chronological diary of your chats (e.g. skip 'On May 28, the user asked...'). Write them as structured technical documents or profile cards describing the current status, configurations, and design specifications of the user's project.
 - FOCUS ON THE SPECIFIC TOPIC: Extract and integrate ONLY the facts from the log entries that are directly relevant to the specific title, slug, and theme of this page. Ignore log entries that belong to other, unrelated wiki topics.
 - Keep the page focused on one coherent semantic topic. Do not produce the same broad page title for unrelated slugs.
@@ -104,11 +132,22 @@ Rules:
 - Use the page slug inside double brackets, not the title, unless the slug and title are identical.
 - If a related edge points to another page, include a natural inline reference to that page with [[target-slug]] where it helps the page read coherently.
 
+Required page structure:
+- Start with a readable overview that synthesizes the topic.
+- Include `## Current State` when the topic has a current status.
+- For entity pages, include `## Entity Profile` with fields such as type, aliases, relationships, stable attributes, preferences, goals, and current status when known.
+- For event pages, include `## Event Facts` as a Markdown table with rows for date, relative expression, participants/entities, location, event/action, outcome, and evidence/source.
+- Include `## Key Facts` with concise bullets for concrete future-answerable facts. Each bullet should preserve names, exact dates or relative time, locations, and source IDs when present.
+- Include `## Event Timeline` for event-like memories. Use a Markdown table with columns: `Date / Relative Time`, `Event`, `People / Entities`, `Source`.
+- Include `## Source Logs` with bullets linking the exact source log IDs used for this page, formatted as `- [[log:<entry-id>]]: short reason`. These are backlinks to raw source conversations or tool observations, not prose summaries.
+- Include `## Related Pages` when useful.
+- If no timeline facts exist, still include `## Event Timeline` with a short note such as `No dated events recorded yet.`
+
 Return the updated page content in JSON format with fields:
 - "title": string
 - "content": string (markdown body)
 - "tags": list of strings
-- "related": list of objects {target: str, relation: str, weight: float}
+- "related": list of objects {{target: str, relation: str, weight: float}}
 - "confidence": float
 - "importance": float
 
@@ -131,6 +170,7 @@ Rules:
 - Prefer mapping a proposed target to an existing page when the topic reasonably fits.
 - Merge same-pass near-duplicates by assigning them the same canonical_page.
 - Create a new page only when no existing page or other proposed page clearly covers the topic.
+- Preserve page-type boundaries: do not merge an entity page into a topic page, an event page into a topic page, or different people into the same entity page.
 - Keep distinct pages when the user would naturally retrieve them separately.
 - Drop targets that are placeholders, generic containers, empty, or unsupported by their source logs.
 - The central user-profile page is only for user identity, stable personal preferences, background, goals, and custom instructions.
@@ -143,6 +183,7 @@ Return JSON with a single "mappings" field. Each mapping has:
 - "proposed_page": string
 - "action": "use_existing" | "create_new" | "drop"
 - "canonical_page": string or null
+- "page_type": "entity" | "event" | "topic"
 - "log_entry_ids": list of exact source log entry IDs
 - "reason": short string
 

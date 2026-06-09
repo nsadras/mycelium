@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from copy import deepcopy
 
@@ -17,14 +18,26 @@ def snapshot_call(kwargs):
 
 
 class FakeSdkClient:
-    def __init__(self, content: str):
+    def __init__(self, content: str, *, done_reason: str = "stop", eval_count: int = 5, thinking: str = ""):
         self.content = content
+        self.done_reason = done_reason
+        self.eval_count = eval_count
+        self.thinking = thinking
         self.chat_calls = []
         self.generate_calls = []
 
     async def chat(self, **kwargs):
         self.chat_calls.append(snapshot_call(kwargs))
-        return SimpleNamespace(message=SimpleNamespace(content=self.content))
+        message = SimpleNamespace(content=self.content)
+        if self.thinking:
+            message.thinking = self.thinking
+        return SimpleNamespace(
+            message=message,
+            done=True,
+            done_reason=self.done_reason,
+            prompt_eval_count=10,
+            eval_count=self.eval_count,
+        )
 
     async def generate(self, **kwargs):
         self.generate_calls.append(kwargs)
@@ -119,6 +132,19 @@ async def test_call_messages_uses_explicit_message_history():
 
 
 @pytest.mark.asyncio
+async def test_call_messages_disables_thinking_when_tools_disabled():
+    client = OllamaClient("http://localhost:11434", "test-model", temperature=0.3)
+    fake_sdk = FakeSdkClient("hello")
+    client.client = fake_sdk
+
+    response = await client.call_messages([{"role": "user", "content": "question"}], enable_tools=False)
+
+    assert response.content == "hello"
+    assert fake_sdk.chat_calls[0]["tools"] is None
+    assert fake_sdk.chat_calls[0]["think"] is False
+
+
+@pytest.mark.asyncio
 async def test_call_messages_executes_web_tools(monkeypatch):
     client = OllamaClient("http://localhost:11434", "test-model")
     fake_sdk = FakeToolSdkClient()
@@ -156,17 +182,21 @@ async def test_call_structured_passes_schema_to_sdk_and_parses_content():
     response = await client.call_structured("system prompt", "user prompt", schema)
 
     assert response == {"answer": "yes"}
-    assert fake_sdk.chat_calls == []
-    assert fake_sdk.generate_calls == [
+    assert fake_sdk.chat_calls == [
         {
             "model": "test-model",
-            "system": "system prompt",
-            "prompt": "user prompt",
+            "messages": [
+                {"role": "system", "content": "system prompt"},
+                {"role": "user", "content": "user prompt"},
+            ],
+            "think": False,
             "stream": False,
             "format": schema,
-            "options": {"temperature": 0.0},
+            "options": {"temperature": 0.0, "num_ctx": 32768, "num_predict": 4096},
         }
     ]
+    assert fake_sdk.generate_calls == []
+    assert client._call_log[-1]["metadata"]["done_reason"] == "stop"
 
 
 class AnswerOutput(BaseModel):
@@ -186,7 +216,8 @@ async def test_call_structured_accepts_pydantic_model():
     response = await client.call_structured("system prompt", "user prompt", AnswerOutput)
 
     assert response == {"answer": "yes"}
-    assert fake_sdk.generate_calls[0]["format"] == AnswerOutput.model_json_schema()
+    assert fake_sdk.chat_calls[0]["format"] == AnswerOutput.model_json_schema()
+    assert fake_sdk.chat_calls[0]["think"] is False
 
 
 @pytest.mark.asyncio
@@ -198,4 +229,59 @@ async def test_call_structured_accepts_pydantic_root_model():
     response = await client.call_structured("system prompt", "user prompt", AnswerListOutput)
 
     assert response == [{"answer": "yes"}]
-    assert fake_sdk.generate_calls[0]["format"] == AnswerListOutput.model_json_schema()
+    assert fake_sdk.chat_calls[0]["format"] == AnswerListOutput.model_json_schema()
+
+
+@pytest.mark.asyncio
+async def test_call_structured_debug_dumps_failed_partial_response(tmp_path, monkeypatch):
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+    }
+    client = OllamaClient("http://localhost:11434", "test-model")
+    partial_json = '{"answer": "unfinished'
+    fake_sdk = FakeSdkClient(partial_json, done_reason="length", eval_count=4096)
+    client.client = fake_sdk
+    monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path))
+
+    with pytest.raises(ValueError, match="debug_dump=.*structured-failure-"):
+        await client.call_structured("system prompt", "user prompt", schema, max_retries=1)
+
+    dump_paths = list(tmp_path.glob("structured-failure-*-attempt-1.json"))
+    assert len(dump_paths) == 1
+    dump = json.loads(dump_paths[0].read_text(encoding="utf-8"))
+    assert dump["response"] == partial_json
+    assert dump["metadata"]["done_reason"] == "length"
+    assert dump["metadata"]["eval_count"] == 4096
+    assert dump["messages"] == [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": "user prompt"},
+    ]
+    assert dump["format"] == schema
+
+
+@pytest.mark.asyncio
+async def test_call_structured_debug_dump_includes_assistant_message(tmp_path, monkeypatch):
+    client = OllamaClient("http://localhost:11434", "test-model")
+    fake_sdk = FakeSdkClient("", done_reason="length", eval_count=4096, thinking="hidden chain")
+    client.client = fake_sdk
+    monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path))
+
+    with pytest.raises(ValueError):
+        await client.call_structured("system prompt", "user prompt", AnswerOutput, max_retries=1)
+
+    dump_path = next(tmp_path.glob("structured-failure-*-attempt-1.json"))
+    dump = json.loads(dump_path.read_text(encoding="utf-8"))
+    assert dump["response"] == ""
+    assert dump["assistant_message"]["thinking"] == "hidden chain"
+
+
+@pytest.mark.asyncio
+async def test_call_structured_mentions_debug_env_when_dump_disabled(monkeypatch):
+    client = OllamaClient("http://localhost:11434", "test-model")
+    client.client = FakeSdkClient('{"answer": "unfinished', done_reason="length", eval_count=4096)
+    monkeypatch.delenv("MYCELIUM_LLM_DEBUG_DIR", raising=False)
+
+    with pytest.raises(ValueError, match="set MYCELIUM_LLM_DEBUG_DIR=.llm-debug"):
+        await client.call_structured("system prompt", "user prompt", AnswerOutput, max_retries=1)

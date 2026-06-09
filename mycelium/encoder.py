@@ -7,7 +7,7 @@ from mycelium.store import WikiStore, LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.config import Config
 from mycelium import prompts
-from mycelium.structured_outputs import EncodedSessionOutput, ImportanceRatingOutput
+from mycelium.structured_outputs import ImportanceRatingOutput
 
 IMPORTANCE_LABELS = {
     "low": 0.25,
@@ -39,50 +39,32 @@ class Encoder:
         transcript: str,
         session_id: str,
     ) -> List[LogEntry]:
-        
-        index_content = self.wiki_store.get_index()
-        system, user = prompts.encoding_prompt(index_content, transcript)
-        
-        response = await self.llm.call_structured(system, user, EncodedSessionOutput)
-        if isinstance(response, dict):
-            response = response.get("entries", [])
-        elif not isinstance(response, list):
-            response = []
-            
-        created_entries = []
         now = datetime.datetime.now()
         date_str = now.strftime("%Y-%m-%d")
-        
-        for idx, item in enumerate(response):
-            if not isinstance(item, dict):
-                continue
-                
-            importance = normalize_importance(item.get("importance"), default=0.0)
-            durability = str(item.get("durability", "durable"))
-            content = item.get("content", "").strip()
-            if not content:
-                continue
-            
-            # Generate a unique entry ID
-            short_id = str(uuid.uuid4())[:8]
-            entry_id = f"{date_str}#entry-{short_id}"
-            
-            entry = LogEntry(
-                entry_id=entry_id,
-                session_id=session_id,
-                timestamp=now,
-                content=content,
-                importance=importance,
-                status="raw",
-                durability=durability,  # type: ignore[arg-type]
-                consolidated=False,
-                decay_score=1.0
-            )
-            
-            self.log_store.append(entry)
-            created_entries.append(entry)
-            
-        return created_entries
+        short_id = str(uuid.uuid4())[:8]
+        entry_id = f"{date_str}#session-{short_id}"
+        content = transcript.strip()
+        if not content:
+            return []
+
+        entry = LogEntry(
+            entry_id=entry_id,
+            session_id=session_id,
+            timestamp=now,
+            content=(
+                "Raw conversation transcript. Treat this as canonical source evidence during dream "
+                "consolidation and retrieval.\n\n"
+                f"{content}"
+            ),
+            importance=0.8,
+            status="raw",
+            durability="durable",
+            consolidated=False,
+            decay_score=1.0,
+        )
+
+        self.log_store.append(entry)
+        return [entry]
 
     async def encode(
         self,

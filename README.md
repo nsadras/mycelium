@@ -13,9 +13,9 @@ The project includes a Python memory library, a FastAPI backend, and a React web
 - **Plain-text memory store:** Wiki pages and episodic logs are Markdown files under `mycelium_store/`.
 - **Multi-session chat UI:** Create, rename, resume, and continue multiple chat sessions without treating each individual message as a full session.
 - **Long-term memory retrieval:** Each chat turn routes against the wiki index and loads relevant pages into the assistant's system context.
-- **Episodic encoding:** Active chat episodes can be flushed into raw durable logs with structured LLM output.
+- **Source-grounded episodic logs:** Active chat episodes flush into raw durable logs that remain the canonical source evidence.
 - **Tool-aware chat:** The assistant can call Ollama `web_search` and `web_fetch`; tool calls are shown in the UI and stored as separate raw log entries using the truncated result seen by the model.
-- **Dream consolidation:** Raw logs are consolidated into semantic wiki pages with source tracking and Obsidian-style `[[page-slug]]` cross-links.
+- **Dream consolidation:** Raw logs are consolidated into readable semantic wiki pages with source tracking, `[[log:<entry-id>]]` backlinks, and Obsidian-style `[[page-slug]]` cross-links.
 - **Reconsolidation:** Retrieved pages can be flagged as labile when current context appears to contradict or extend them, then resolved into updated wiki pages.
 - **Event-driven memory state:** Wiki pages track retrievability, stability, difficulty, access/reinforcement counts, and conservative archival state inspired by MemoryBank/FSRS.
 - **Wiki editor:** Wiki pages can be viewed and manually edited from the web UI.
@@ -29,7 +29,7 @@ The project includes a Python memory library, a FastAPI backend, and a React web
 mycelium/
 ├── mycelium/           # Core memory library
 │   ├── core.py         # Mycelium facade, retrieval, sessions, dream entrypoint
-│   ├── encoder.py      # Transcript-to-log encoding
+│   ├── encoder.py      # Raw transcript-to-log persistence
 │   ├── dream.py        # Log-to-wiki consolidation
 │   ├── reconsolidation.py
 │   ├── decay.py
@@ -302,7 +302,7 @@ Memory operation buttons show a spinner while a request is in progress and retur
 
 ### 1. Chat and Retrieval
 
-When a user sends a message, the backend builds a retrieval query from the chat title, recent thread context, and current message. The router LLM selects relevant wiki pages from the index. The routing context includes each page's confidence, importance, retrievability, and review timestamp so fresh stable memories are preferred without hiding older relevant pages. Loaded pages are added to the chat system prompt, marked as retrieved, and the full session transcript is passed to the chat model.
+When a user sends a message, the backend builds a retrieval query from the chat title, recent thread context, and current message. The router LLM selects relevant wiki pages from the index. The routing context includes each page's confidence, importance, retrievability, review timestamp, recall sections, and source-log references so fresh stable memories are preferred without hiding older relevant pages. Loaded pages are added to the chat system prompt with compact snippets from their backlinked raw logs, marked as retrieved, and the full session transcript is passed to the chat model.
 
 After the assistant responds, a small structured LLM call judges which loaded pages were actually used in the final answer. Pages judged as used receive a reinforcement event, increasing stability and resetting retrievability.
 
@@ -325,15 +325,15 @@ Chat sessions maintain an active episode buffer. Encoding happens when an episod
 - automatically for idle or large episodes,
 - on backend shutdown with a forced flush.
 
-The encoder sees the conversation transcript and extracts user-specific or interaction-specific facts into raw logs. It treats user messages as the primary source, uses assistant messages for context, and can capture personalized recommendations or plans without turning generic model knowledge into memory.
+The encoder writes the full conversation transcript into one raw durable log. This log is the canonical source evidence for later dream consolidation and retrieval. The LLM does not get an initial lossy pass that extracts only selected facts from the conversation.
 
 Encoded episode IDs are stored in `mycelium_store/sessions_meta.json`. This prevents already-flushed active episodes from being repeatedly encoded unless memory is cleared/reset.
 
 ### 4. Dream Consolidation
 
-The dream process is the offline consolidation pass that turns durable raw logs into semantic wiki pages. It filters unsuitable logs, extracts durable facts from tool observations, batches target identification, canonicalizes proposed page targets to avoid near-duplicates, rewrites one page per final target, updates the deterministic wiki index, marks raw logs consolidated, and runs a decay pass.
+The dream process is the offline consolidation pass that turns durable raw logs into semantic wiki pages. It filters unsuitable logs, extracts durable facts from tool observations, batches target identification, canonicalizes proposed page targets to avoid near-duplicates, rewrites one page per final target, records source-log backlinks, updates the deterministic wiki index, marks raw logs consolidated, and runs a decay pass.
 
-Generated wiki content is intended to be Obsidian-compatible: cross-page references should use `[[page-slug]]`.
+Generated wiki content is intended to be Obsidian-compatible: cross-page references should use `[[page-slug]]`, and source references should use `[[log:<entry-id>]]`.
 
 ```mermaid
 flowchart TD

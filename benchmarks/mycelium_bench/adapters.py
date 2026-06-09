@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from mycelium.core import Mycelium
+from mycelium.facts import page_recall_context
 from mycelium.ollama import OllamaClient
 
 
@@ -161,6 +162,7 @@ class MyceliumMemorySystem:
             context_budget_tokens=self.context_budget_tokens,
             dream_schedule="manual",
             config_path=self.config_path,
+            memory_profile="none",
         )
         self.mem.config.dream.schedule = "manual"
         self.mem.config.reconsolidation.check_on_load = self.reconsolidate
@@ -181,7 +183,16 @@ class MyceliumMemorySystem:
             await mem.encoder.encode_session(transcript, session_id)
         except Exception as exc:
             self._errors.append({"stage": "encode_session", "session_id": session_id, "error": str(exc)})
-            return
+            await mem.encoder.encode(
+                content=(
+                    "Raw benchmark session transcript preserved after structured encoding failed.\n"
+                    "Dream consolidation should extract durable facts, exact dates, people, and source IDs from this transcript.\n\n"
+                    f"{transcript}"
+                ),
+                session_id=session_id,
+                importance=0.6,
+                durability="durable",
+            )
         self._encoded_batches += 1
         if self.dream_policy == "per-batch":
             try:
@@ -207,7 +218,7 @@ class MyceliumMemorySystem:
             loaded_pages = []
         memory_construction_time = time.time() - start
         context = "\n\n".join(
-            f"=== MEMORY: {page.title} ({page.slug}) ===\n{page.content}"
+            f"=== MEMORY: {page.title} ({page.slug}) ===\n{format_page_for_prompt(page)}"
             for page in loaded_pages
         )
         answer = await self.qa_client.answer(question, context)
@@ -312,6 +323,15 @@ def format_messages_for_memory(messages: list[BenchmarkMessage], metadata: dict[
         body_lines.append(" ".join(pieces))
 
     return "\n".join([*prefix_lines, *body_lines]).strip()
+
+
+def format_page_for_prompt(page: Any) -> str:
+    recall_context = page_recall_context(page)
+    body = f"{recall_context}\n\n{page.content}" if recall_context else page.content
+    source_context = getattr(page, "source_context", "")
+    if source_context:
+        return f"{body}\n\n{source_context}"
+    return body
 
 
 def sanitize_path_part(value: str) -> str:

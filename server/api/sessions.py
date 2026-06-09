@@ -4,6 +4,7 @@ from dataclasses import asdict
 from typing import List, Optional
 import uuid
 
+from mycelium.facts import page_recall_context
 from server.runtime import (
     DEFAULT_MAX_TURNS,
     append_tool_event_logs,
@@ -110,7 +111,11 @@ async def chat(session_id: str, req: ChatRequest):
         blocks = []
         for page in loaded_pages:
             header = f"=== MEMORY: {page.title} (confidence: {page.confidence:.2f}, v{page.version}) ==="
-            blocks.append(f"{header}\n{page.content}")
+            recall_context = page_recall_context(page)
+            body = f"{recall_context}\n\n{page.content}" if recall_context else page.content
+            if page.source_context:
+                body = f"{body}\n\n{page.source_context}"
+            blocks.append(f"{header}\n{body}")
         memory_context = "\n\n".join(blocks) + "\n\n=== END MEMORY ==="
 
     system_prompt = (

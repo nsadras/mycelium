@@ -127,6 +127,40 @@ def test_log_store_mark_consolidated(tmp_path):
     unconsolidated = store.get_unconsolidated()
     assert len(unconsolidated) == 0
 
+    loaded = store.get("2026-05-10#Entry 1")
+    assert loaded.content == "User said hello."
+    assert loaded.consolidated
+
+
+def test_log_store_get_many_preserves_requested_order(tmp_path):
+    store = LogStore(tmp_path / "logs")
+
+    first = LogEntry(
+        entry_id="2026-05-10#Entry 1",
+        session_id="ses-123",
+        timestamp=datetime(2026, 5, 10, 10, 0, 0),
+        content="First source.",
+        importance=0.5,
+        status="raw",
+        consolidated=False,
+    )
+    second = LogEntry(
+        entry_id="2026-05-10#Entry 2",
+        session_id="ses-123",
+        timestamp=datetime(2026, 5, 10, 10, 5, 0),
+        content="Second source.",
+        importance=0.5,
+        status="raw",
+        consolidated=False,
+    )
+
+    store.append(first)
+    store.append(second)
+    store.mark_consolidated([first.entry_id, second.entry_id])
+
+    loaded = store.get_many([second.entry_id, first.entry_id])
+    assert [entry.entry_id for entry in loaded] == [second.entry_id, first.entry_id]
+
 
 def test_log_store_markdown_headings_inside_body_are_not_entries(tmp_path):
     store = LogStore(tmp_path / "logs")

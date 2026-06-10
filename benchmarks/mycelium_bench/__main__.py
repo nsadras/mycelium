@@ -19,6 +19,7 @@ def main() -> None:
     locomo.add_argument("--locomo-path", type=Path, default=Path("../locomo/data/locomo10.json"))
     locomo.add_argument("--max-samples", type=int, default=None)
     locomo.add_argument("--max-questions", type=int, default=None)
+    locomo.add_argument("--sample-index", type=int, default=None, help="Run one 1-based LoCoMo sample index.")
 
     mab = subparsers.add_parser("mab", help="Run MemoryAgentBench through its data/metric utilities.")
     add_common_args(mab)
@@ -51,6 +52,7 @@ def main() -> None:
                 prediction_key=args.prediction_key or f"{args.system}_prediction",
                 max_samples=args.max_samples,
                 max_questions=args.max_questions,
+                sample_index=args.sample_index,
             )
         )
     elif args.benchmark == "mab":

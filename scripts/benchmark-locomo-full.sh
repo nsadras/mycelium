@@ -11,7 +11,7 @@ MEMORY_MODEL="${MEMORY_MODEL:-${QA_MODEL}}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-benchmark_runs}"
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d-%H%M%S)}"
-DREAM_POLICY="${DREAM_POLICY:-per-case}"
+DREAM_POLICY="${DREAM_POLICY:-per-batch}"
 
 if [ "$#" -gt 0 ]; then
   SYSTEMS=("$@")

@@ -449,9 +449,13 @@ async def test_dream_process_passes_page_type_to_rewrite_and_tags_page(
     report = await dream_process.run(strategy="full", conflict_policy="override")
 
     assert report.pages_created == 1
-    rewrite_system_prompt = mock_llm.call_structured.call_args_list[1][0][0]
+    rewrite_call = mock_llm.call_structured.call_args_list[1]
+    rewrite_system_prompt = rewrite_call[0][0]
     assert "slug=`person-melanie`" in rewrite_system_prompt
     assert "page_type=`entity`" in rewrite_system_prompt
+    assert rewrite_call.kwargs["num_predict"] == 8192
+    assert rewrite_call.kwargs["dump_success"] is True
+    assert rewrite_call.kwargs["debug_label"] == "wiki-rewrite-person-melanie"
     assert saved_pages["person-melanie"].tags == ["person", "page-type-entity"]
 
 

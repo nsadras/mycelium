@@ -151,7 +151,14 @@ class DreamProcess:
                 is_create = True
             
             try:
-                rewritten = await self.llm.call_structured(system, user, WikiRewriteOutput)
+                rewritten = await self.llm.call_structured(
+                    system,
+                    user,
+                    WikiRewriteOutput,
+                    num_predict=8192,
+                    dump_success=True,
+                    debug_label=f"wiki-rewrite-{page_slug}",
+                )
             except Exception as exc:
                 logger.warning("Skipping dream rewrite for %s after structured output failure: %s", page_slug, exc)
                 continue

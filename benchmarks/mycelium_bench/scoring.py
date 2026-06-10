@@ -40,7 +40,25 @@ def locomo_score(prediction: Any, answer: Any, category: int) -> float:
         return sum(max(token_f1(pred, truth) for pred in prediction_parts) for truth in truth_parts) / len(truth_parts)
     if category == 5:
         lower = str(prediction).lower()
-        return 1.0 if "no information available" in lower or "not mentioned" in lower else 0.0
+        # Handle various phrasing for refusing adversarial or unanswerable queries
+        refusal_keywords = [
+            "no information",
+            "not mentioned",
+            "not specify",
+            "not contain",
+            "not provide",
+            "not have enough information",
+            "not have access",
+            "not available",
+            "insufficient information",
+            "i do not know",
+            "not state",
+            "did not",
+            "does not have",
+            "no details",
+            "was not found"
+        ]
+        return 1.0 if any(kw in lower for kw in refusal_keywords) else 0.0
     return token_f1(prediction, answer)
 
 

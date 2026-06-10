@@ -57,8 +57,11 @@ class OllamaQaClient:
 
     async def answer(self, question: str, context: str, instruction: str | None = None) -> BenchmarkAnswer:
         system = instruction or (
-            "You answer benchmark questions. Use the supplied memory context when it is relevant. "
-            "Answer concisely and include only the answer."
+            "Answer the question using ONLY the memory context provided. Be maximally concise — "
+            "use the fewest words possible. Do not explain, elaborate, or add context beyond "
+            "what is directly asked. If the answer is a date, give only the date. If the answer "
+            "is a name, give only the name. If you cannot answer from the context, say exactly: "
+            "\"I do not have enough information to answer this question.\""
         )
         context_text = context.strip() or "No memory context is available."
         user = f"MEMORY CONTEXT:\n{context_text}\n\nQUESTION:\n{question}"

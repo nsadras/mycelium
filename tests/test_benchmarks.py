@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -85,6 +86,44 @@ async def test_run_locomo_writes_predictions(tmp_path):
     assert (tmp_path / "predictions.json").exists()
     assert (tmp_path / "predictions.jsonl").exists()
     assert (tmp_path / "summary.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_run_locomo_sample_index_selects_one_based_sample(tmp_path):
+    data_path = tmp_path / "locomo_two_samples.json"
+    data_path.write_text(
+        json.dumps(
+            [
+                {
+                    "sample_id": "tiny-1",
+                    "conversation": {
+                        "session_1": [{"dia_id": "D1:1", "speaker": "A", "text": "First sample."}],
+                    },
+                    "qa": [{"question": "First?", "answer": "Pixel", "category": 1}],
+                },
+                {
+                    "sample_id": "tiny-2",
+                    "conversation": {
+                        "session_1": [{"dia_id": "D1:1", "speaker": "B", "text": "Second sample."}],
+                    },
+                    "qa": [{"question": "Second?", "answer": "Pixel", "category": 1}],
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    system = FakeMemorySystem()
+
+    await run_locomo(
+        data_path=data_path,
+        output_dir=tmp_path / "run",
+        system=system,
+        prediction_key="fake_prediction",
+        sample_index=2,
+    )
+
+    predictions = json.loads((tmp_path / "run" / "predictions.json").read_text(encoding="utf-8"))
+    assert [sample["sample_id"] for sample in predictions] == ["tiny-2"]
 
 
 def test_memory_profile_none_skips_seed_profile(tmp_path):

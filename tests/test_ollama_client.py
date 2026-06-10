@@ -233,6 +233,44 @@ async def test_call_structured_accepts_pydantic_root_model():
 
 
 @pytest.mark.asyncio
+async def test_call_structured_accepts_custom_num_predict():
+    client = OllamaClient("http://localhost:11434", "test-model")
+    fake_sdk = FakeSdkClient('{"answer": "yes"}')
+    client.client = fake_sdk
+
+    response = await client.call_structured("system prompt", "user prompt", AnswerOutput, num_predict=8192)
+
+    assert response == {"answer": "yes"}
+    assert fake_sdk.chat_calls[0]["options"]["num_predict"] == 8192
+
+
+@pytest.mark.asyncio
+async def test_call_structured_debug_dumps_successful_response(tmp_path, monkeypatch):
+    client = OllamaClient("http://localhost:11434", "test-model")
+    fake_sdk = FakeSdkClient('{"answer": "yes"}', done_reason="length", eval_count=8192)
+    client.client = fake_sdk
+    monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path))
+
+    response = await client.call_structured(
+        "system prompt",
+        "user prompt",
+        AnswerOutput,
+        num_predict=8192,
+        dump_success=True,
+        debug_label="wiki-rewrite-person-jon",
+    )
+
+    assert response == {"answer": "yes"}
+    dump_path = next(tmp_path.glob("structured-success-wiki-rewrite-person-jon-*-attempt-1.json"))
+    dump = json.loads(dump_path.read_text(encoding="utf-8"))
+    assert dump["metadata"]["done_reason"] == "length"
+    assert dump["metadata"]["eval_count"] == 8192
+    assert dump["options"]["num_predict"] == 8192
+    assert dump["response"] == '{"answer": "yes"}'
+    assert dump["parsed"] == {"answer": "yes"}
+
+
+@pytest.mark.asyncio
 async def test_call_structured_debug_dumps_failed_partial_response(tmp_path, monkeypatch):
     schema = {
         "type": "object",

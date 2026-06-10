@@ -18,9 +18,14 @@ async def run_locomo(
     prediction_key: str,
     max_samples: int | None = None,
     max_questions: int | None = None,
+    sample_index: int | None = None,
 ) -> dict[str, Any]:
     samples = json.loads(data_path.read_text(encoding="utf-8"))
-    if max_samples is not None:
+    if sample_index is not None:
+        if sample_index < 1 or sample_index > len(samples):
+            raise ValueError(f"--sample-index must be between 1 and {len(samples)}")
+        samples = [samples[sample_index - 1]]
+    elif max_samples is not None:
         samples = samples[:max_samples]
 
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -72,6 +72,12 @@ uv run python -m benchmarks.mycelium_bench locomo \
   --max-questions 3
 ```
 
+Run the second LoCoMo conversation as a quick initial test:
+
+```bash
+scripts/benchmark-locomo-convo2.sh
+```
+
 Compare with no persistent memory:
 
 ```bash

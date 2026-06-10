@@ -424,13 +424,16 @@ class OllamaClient:
         user: str,
         schema: Union[dict, type[BaseModel]],
         max_retries: int = 3,
+        num_predict: int = 4096,
+        dump_success: bool = False,
+        debug_label: str | None = None,
     ) -> Union[dict, list]:
         """
         Uses Ollama's chat API with native JSON Schema support.
         """
         call_id = str(uuid.uuid4())[:8]
         output_format, response_model = self._structured_format(schema)
-        options = {"temperature": 0.0, "num_ctx": 32768, "num_predict": 4096}
+        options = {"temperature": 0.0, "num_ctx": 32768, "num_predict": num_predict}
         endpoint = f"{self.url}/api/chat"
         messages = [
             {"role": "system", "content": system},
@@ -466,6 +469,22 @@ class OllamaClient:
                 try:
                     parsed = self._parse_structured_response(content, response_model)
                     self._log_call(call_id, attempt + 1, system, user, content, latency_ms, True, metadata)
+                    if dump_success:
+                        self._dump_structured_success(
+                            call_id=call_id,
+                            attempt=attempt + 1,
+                            max_retries=max_retries,
+                            endpoint=endpoint,
+                            model=self.model,
+                            messages=messages,
+                            output_format=output_format,
+                            options=options,
+                            assistant_message=assistant_message,
+                            response=content,
+                            parsed=parsed,
+                            metadata=metadata,
+                            debug_label=debug_label,
+                        )
                     return parsed
                 except (json.JSONDecodeError, ValidationError, ValueError) as parse_exc:
                     self._log_call(call_id, attempt + 1, system, user, content, latency_ms, False, metadata)
@@ -559,6 +578,60 @@ class OllamaClient:
         except Exception as dump_exc:
             logger.warning("Failed to write structured LLM debug dump: %s", dump_exc)
             return None
+
+    def _dump_structured_success(
+        self,
+        *,
+        call_id: str,
+        attempt: int,
+        max_retries: int,
+        endpoint: str,
+        model: str,
+        messages: list[dict[str, Any]],
+        output_format: Union[str, dict[str, Any]],
+        options: dict[str, Any],
+        assistant_message: dict[str, Any],
+        response: str,
+        parsed: Union[dict, list],
+        metadata: dict[str, Any],
+        debug_label: str | None = None,
+    ) -> str | None:
+        debug_dir = os.getenv(LLM_DEBUG_DIR_ENV)
+        if not debug_dir:
+            return None
+
+        payload = {
+            "call_id": call_id,
+            "attempt": attempt,
+            "max_retries": max_retries,
+            "endpoint": endpoint,
+            "model": model,
+            "messages": messages,
+            "format": output_format,
+            "options": options,
+            "metadata": metadata,
+            "assistant_message": assistant_message,
+            "response": response,
+            "response_chars": len(response),
+            "parsed": parsed,
+            "debug_label": debug_label,
+        }
+
+        try:
+            path = Path(debug_dir).expanduser()
+            path.mkdir(parents=True, exist_ok=True)
+            label = self._debug_filename_part(debug_label or "structured")
+            filename = f"structured-success-{label}-{call_id}-attempt-{attempt}.json"
+            dump_path = path / filename
+            dump_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+            return str(dump_path)
+        except Exception as dump_exc:
+            logger.warning("Failed to write structured LLM debug dump: %s", dump_exc)
+            return None
+
+    def _debug_filename_part(self, value: str) -> str:
+        normalized = re.sub(r"[^a-zA-Z0-9_.-]+", "-", value).strip("-._")
+        return normalized[:80] or "structured"
 
     def _generate_response_content(self, response: Any) -> str:
         content = getattr(response, "response", "")

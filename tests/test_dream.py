@@ -51,6 +51,15 @@ async def test_dream_process_run(dream_process, mock_llm, mock_wiki, mock_logs):
         {"title": "New Title", "content": "New content", "confidence": 0.8, "importance": 0.7},
         # Rewrite existing
         {"title": "Existing Title", "content": "Updated content", "confidence": 0.9, "importance": 0.8},
+        # Append existing (additive update)
+        {
+            "new_facts": [
+                {"fact": "Updated content fact", "section": "key_facts", "source": "2026-05-10#Entry1"}
+            ],
+            "new_tags": ["new_tag"],
+            "confidence_adjustment": 0.1,
+            "importance_adjustment": 0.1,
+        }
     ]
     
     mock_wiki.exists.side_effect = lambda slug: slug == "existing-page"
@@ -313,6 +322,8 @@ async def test_dream_process_override_on_non_contradiction(dream_process, mock_l
         [{"page": "existing-page", "action": "update"}],
         {"title": "Existing Title", "content": "Updated additive content", "confidence": 0.9, "importance": 0.8},
         {"conflict_type": "additive", "discrepancy_score": 0.2, "explanation": "Compatible additive update", "suggested_update": None},
+        # Append response returning empty to trigger fallback to rewrite
+        {"new_facts": [], "new_tags": [], "confidence_adjustment": 0.0, "importance_adjustment": 0.0}
     ]
 
     report = await dream_process.run(strategy="full", conflict_policy="fork")
@@ -600,3 +611,39 @@ async def test_dream_process_skips_session_durability_entries(dream_process, moc
     assert report.entries_consolidated == 1
     mock_llm.call_structured.assert_not_called()
     mock_logs.mark_consolidated.assert_called_once_with(["2026-05-10#Entry1"])
+
+
+@pytest.mark.asyncio
+async def test_dream_process_compact(dream_process, mock_llm, mock_wiki, mock_logs):
+    # Setup wiki pages
+    page = WikiPage(
+        slug="existing-page", title="Existing", content="Original content",
+        created=datetime.now(), last_updated=datetime.now(),
+        version=1, confidence=0.8, importance=0.5,
+        source_log_entries=["2026-05-10#Entry1"]
+    )
+    mock_wiki.list_all.return_value = [page]
+    mock_wiki.exists.return_value = True
+
+    # Mock log retrieval
+    entry = LogEntry(
+        entry_id="2026-05-10#Entry1",
+        session_id="ses-123",
+        timestamp=datetime.now(),
+        content="Original content",
+        importance=0.8,
+        status="consolidated"
+    )
+    mock_logs.get_many.return_value = [entry]
+
+    # Mock LLM compact response
+    mock_llm.call_structured.side_effect = [
+        {"title": "Existing Title", "content": "Compacted content", "confidence": 0.9, "importance": 0.8}
+    ]
+
+    report = await dream_process.compact()
+
+    assert report.pages_updated == 1
+    assert page.content == "Compacted content"
+    assert page.confidence == 0.9
+    assert page.version == 2

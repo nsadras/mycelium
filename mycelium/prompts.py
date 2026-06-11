@@ -159,6 +159,49 @@ NEW LOG ENTRIES:
 {log_entries}"""
     return system, user
 
+def consolidation_append_prompt(
+    existing_page: str,
+    log_entries: str,
+    page_slug: str = "",
+    page_type: str = "topic",
+) -> tuple[str, str]:
+    system = f"""You are a memory consolidation agent performing an ADDITIVE update to an existing wiki page.
+
+TARGET PAGE: slug=`{page_slug or "unknown"}`, page_type=`{page_type}`.
+
+Your job is to extract ONLY NEW facts from the log entries that are NOT already present on the existing page. Do not repeat, rephrase, or duplicate any information already on the page.
+
+Rules:
+- Read the existing page carefully. If a fact is already captured (even in different words), do NOT include it.
+- Extract only facts relevant to this specific page's topic/entity.
+- For each new fact, specify whether it belongs in "key_facts" (a bullet point) or "event_timeline" (a dated event row).
+- For event_timeline facts, include the date (absolute if possible, or relative with anchor), people/entities involved, and source log ID.
+- For key_facts, write a concise standalone bullet that includes names, dates, and source references.
+- Preserve exact names, dates, relative time expressions, locations, quantities, and source IDs.
+- If no genuinely new facts exist in the log entries, return an empty new_facts list.
+- Provide confidence_adjustment (positive if new evidence strengthens the page, negative if it weakens, 0.0 if neutral). Range: -0.1 to +0.1.
+- Provide importance_adjustment similarly. Range: -0.1 to +0.1.
+- Include any new tags that should be added (not already on the page).
+
+Return JSON with fields:
+- "new_facts": list of objects, each with:
+  - "fact": string (the fact text, formatted as a bullet for key_facts or a description for event_timeline)
+  - "section": "key_facts" or "event_timeline"
+  - "date": string or null (for event_timeline entries: the date or relative time expression)
+  - "people": string or null (for event_timeline entries: comma-separated people/entities)
+  - "source": string or null (the source log entry ID)
+- "new_tags": list of strings (only genuinely new tags)
+- "confidence_adjustment": float
+- "importance_adjustment": float
+
+Respond with valid JSON only. No markdown code fences, no explanation, no preamble."""
+    user = f"""EXISTING PAGE CONTENT:
+{existing_page}
+
+NEW LOG ENTRIES:
+{log_entries}"""
+    return system, user
+
 def canonicalization_prompt(existing_pages: str, proposed_targets: str) -> tuple[str, str]:
     system = """You are a wiki page canonicalization agent. Your job is to prevent duplicate or near-duplicate memory pages before they are written.
 

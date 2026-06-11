@@ -189,6 +189,24 @@ class Mycelium:
                 page_slug = page_slug.replace(".md", "").strip().lower()
                 selections.append((priority, page_slug))
                 
+        # Entity-aware fallback: if a known entity/page matches the query, load it
+        import re
+        query_words = set(re.findall(r'\b\w+\b', query.lower()))
+        exclude_words = {"person", "place", "event", "topic", "project", "meeting", "convo", "chat", "page", "new"}
+        
+        existing_slugs = {p.slug: p for p in self.wiki.list_all()}
+        selected_slugs = {slug for _, slug in selections}
+        
+        for slug, p in existing_slugs.items():
+            if slug in selected_slugs:
+                continue
+            slug_parts = set(slug.split("-")) - exclude_words
+            title_words = set(re.findall(r'\b\w+\b', p.title.lower())) - exclude_words
+            
+            # Match if slug parts or title words are in the query
+            if (slug_parts & query_words) or (title_words & query_words):
+                selections.append((8, slug))
+
         selections.sort(key=lambda x: x[0])
         
         loaded_pages = []
@@ -313,6 +331,10 @@ class Mycelium:
     async def dream(self, **kwargs) -> DreamReport:
         kwargs.setdefault('conflict_policy', self.config.dream.conflict_policy)
         return await self.dream_process.run(**kwargs)
+
+    async def compact(self, slugs: list[str] | None = None, **kwargs) -> DreamReport:
+        """Run a compaction pass that fully rewrites wiki pages to deduplicate and reorganize."""
+        return await self.dream_process.compact(slugs=slugs, **kwargs)
 
     async def encode(self, content: str, **kwargs) -> LogEntry:
         return await self.encoder.encode(content, **kwargs)

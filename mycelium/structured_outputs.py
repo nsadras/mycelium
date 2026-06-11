@@ -76,6 +76,21 @@ class WikiRewriteOutput(BaseModel):
     related: list[RelatedEdgeOutput] = Field(default_factory=list, max_length=12)
 
 
+class WikiAppendFactOutput(BaseModel):
+    fact: str
+    section: Literal["key_facts", "event_timeline"] = "key_facts"
+    date: str | None = None
+    people: str | None = None
+    source: str | None = None
+
+
+class WikiAppendOutput(BaseModel):
+    new_facts: list[WikiAppendFactOutput] = Field(default_factory=list, max_length=20)
+    new_tags: list[str] = Field(default_factory=list, max_length=8)
+    confidence_adjustment: float = 0.0
+    importance_adjustment: float = 0.0
+
+
 class WikiMergeOutput(BaseModel):
     content: str
 

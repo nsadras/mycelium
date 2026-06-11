@@ -19,6 +19,7 @@ from mycelium.structured_outputs import (
     WikiMergeOutput,
     WikiRewriteOutput,
     PredictionErrorOutput,
+    WikiAppendOutput,
 )
 
 logger = logging.getLogger(__name__)
@@ -267,32 +268,83 @@ class DreamProcess:
                         reason = f"Dream consolidation: in-place update (policy was fork, but prediction error check failed: {e})"
                 
                 if conflict_policy == "override" or (conflict_policy == "fork" and not should_fork):
-                    if self._is_noop_update(existing_page, title, content, tags, related_edges, page_source_ids):
+                    # Additive update: extract only new facts and append them
+                    append_system, append_user = prompts.consolidation_append_prompt(
+                        existing_page.content,
+                        page_entries_str,
+                        page_slug=page_slug,
+                        page_type=page_type,
+                    )
+                    try:
+                        append_data = await self.llm.call_structured(
+                            append_system,
+                            append_user,
+                            WikiAppendOutput,
+                            num_predict=4096,
+                            debug_label=f"wiki-append-{page_slug}",
+                        )
+                    except Exception as exc:
+                        logger.warning("Additive append failed for %s, skipping: %s", page_slug, exc)
                         continue
 
-                    existing_page.title = title
-                    existing_page.content = content
-                    existing_page.tags = tags
-                    existing_page.related = related_edges
-                    existing_page.source_log_entries = self._merge_sources(existing_page.source_log_entries, page_source_ids)
-                    existing_page.version += 1
-                    existing_page.last_updated = now
-                    
-                    log = UpdateLogEntry(
-                        existing_page.version,
-                        now,
-                        "system",
-                        "dream",
-                        discrepancy_score,
-                        reason,
-                        existing_page.confidence,
-                        confidence,
-                    )
-                    existing_page.confidence = confidence
-                    existing_page.importance = importance
-                    existing_page.update_log.append(log)
+                    if not isinstance(append_data, dict):
+                        continue
+
+                    facts_added = self._append_facts_to_page(existing_page, append_data)
+
+                    if not facts_added:
+                        # Fallback to full rewrite if no facts were appended
+                        if self._is_noop_update(existing_page, title, content, tags, related_edges, page_source_ids):
+                            continue
+
+                        existing_page.title = title
+                        existing_page.content = content
+                        existing_page.tags = tags
+                        existing_page.related = related_edges
+                        existing_page.source_log_entries = self._merge_sources(existing_page.source_log_entries, page_source_ids)
+                        existing_page.version += 1
+                        existing_page.last_updated = now
+
+                        log = UpdateLogEntry(
+                            existing_page.version,
+                            now,
+                            "system",
+                            "dream",
+                            discrepancy_score,
+                            reason + " (Fallback to full rewrite)",
+                            existing_page.confidence,
+                            confidence,
+                        )
+                        existing_page.confidence = confidence
+                        existing_page.importance = importance
+                        existing_page.update_log.append(log)
+                    else:
+                        existing_page.source_log_entries = self._merge_sources(existing_page.source_log_entries, page_source_ids)
+                        existing_page.version += 1
+                        existing_page.last_updated = now
+
+                        conf_adj = float(append_data.get("confidence_adjustment", 0.0))
+                        imp_adj = float(append_data.get("importance_adjustment", 0.0))
+                        new_confidence = max(0.0, min(1.0, existing_page.confidence + conf_adj))
+                        new_importance = max(0.0, min(1.0, existing_page.importance + imp_adj))
+
+                        n_facts = len(append_data.get("new_facts", []))
+                        log = UpdateLogEntry(
+                            existing_page.version,
+                            now,
+                            "system",
+                            "dream",
+                            discrepancy_score,
+                            f"Additive dream update: {n_facts} new fact(s) appended",
+                            existing_page.confidence,
+                            new_confidence,
+                        )
+                        existing_page.confidence = new_confidence
+                        existing_page.importance = new_importance
+                        existing_page.update_log.append(log)
+
                     record_memory_event(existing_page, "dream_updated", now=now)
-                    
+
                     if not dry_run:
                         self.wiki.save(existing_page)
                     changed_pages[existing_page.slug] = existing_page
@@ -399,6 +451,108 @@ class DreamProcess:
             conflicts_found=conflicts_found,
             conflicts_resolved=conflicts_resolved,
             git_commit_sha=commit_sha
+        )
+
+    async def compact(
+        self,
+        slugs: list[str] | None = None,
+        dry_run: bool = False,
+    ) -> DreamReport:
+        """Compact wiki pages by doing a full rewrite to deduplicate and reorganize accumulated facts."""
+        pages = self.wiki.list_all()
+        if slugs:
+            pages = [p for p in pages if p.slug in slugs]
+
+        pages_updated = 0
+        changed_pages: dict[str, WikiPage] = {}
+        now = datetime.now()
+
+        for page in pages:
+            if self._is_placeholder_slug(page.slug):
+                continue
+
+            page_type = self._page_type_for_slug(page.slug, page.tags)
+            # Gather all source logs for this page
+            source_entries = []
+            if page.source_log_entries:
+                try:
+                    source_entries = self.logs.get_many(page.source_log_entries)
+                except Exception:
+                    pass
+
+            source_str = self._format_entries_for_prompt(
+                source_entries,
+                max_chars_per_entry=2500,
+                max_total_chars=12000,
+            ) if source_entries else ""
+
+            system, user = prompts.consolidation_rewrite_prompt(
+                page.content,
+                source_str,
+                page_slug=page.slug,
+                page_type=page_type,
+            )
+
+            try:
+                rewritten = await self.llm.call_structured(
+                    system,
+                    user,
+                    WikiRewriteOutput,
+                    num_predict=8192,
+                    debug_label=f"wiki-compact-{page.slug}",
+                )
+            except Exception as exc:
+                logger.warning("Skipping compaction for %s: %s", page.slug, exc)
+                continue
+
+            if not isinstance(rewritten, dict):
+                continue
+
+            title = rewritten.get("title", page.slug)
+            content = rewritten.get("content", "")
+            if self._is_low_quality_rewrite(page.slug, title, content):
+                continue
+            if self._normalized_text(content) == self._normalized_text(page.content):
+                continue
+
+            page.title = title
+            page.content = content
+            page.tags = rewritten.get("tags", page.tags)
+            page.version += 1
+            page.last_updated = now
+
+            confidence = float(rewritten.get("confidence", page.confidence))
+            importance = float(rewritten.get("importance", page.importance))
+            log = UpdateLogEntry(
+                page.version,
+                now,
+                "system",
+                "dream",
+                0.0,
+                "Compaction: full rewrite to deduplicate and reorganize",
+                page.confidence,
+                confidence,
+            )
+            page.confidence = confidence
+            page.importance = importance
+            page.update_log.append(log)
+            record_memory_event(page, "dream_updated", now=now)
+
+            if not dry_run:
+                self.wiki.save(page)
+            changed_pages[page.slug] = page
+            pages_updated += 1
+
+        if changed_pages and not dry_run:
+            self._save_deterministic_index(changed_pages, dry_run=False, now=now)
+
+        return DreamReport(
+            pages_updated=pages_updated,
+            pages_created=0,
+            entries_consolidated=0,
+            conflicts_found=[],
+            conflicts_resolved=0,
+            git_commit_sha=None,
         )
 
     async def _identify_targets_for_chunk(
@@ -977,6 +1131,86 @@ class DreamProcess:
             and [(e.target, e.relation, e.weight) for e in page.related]
             == [(e.target, e.relation, e.weight) for e in related_edges]
         )
+
+    def _append_facts_to_page(self, page: WikiPage, append_data: dict) -> bool:
+        """Append new facts to an existing page's content sections. Returns True if any facts were added."""
+        new_facts = append_data.get("new_facts", [])
+        if not new_facts:
+            return False
+
+        key_fact_lines = []
+        timeline_rows = []
+        for fact in new_facts:
+            if not isinstance(fact, dict):
+                continue
+            fact_text = str(fact.get("fact", "")).strip()
+            if not fact_text:
+                continue
+            section = fact.get("section", "key_facts")
+            if section == "event_timeline":
+                date = fact.get("date") or "Unknown"
+                people = fact.get("people") or ""
+                source = fact.get("source") or ""
+                timeline_rows.append(f"| {date} | {fact_text} | {people} | {source} |")
+            else:
+                source = fact.get("source")
+                if source:
+                    key_fact_lines.append(f"- {fact_text} [[log:{source}]]")
+                else:
+                    key_fact_lines.append(f"- {fact_text}")
+
+        if not key_fact_lines and not timeline_rows:
+            return False
+
+        content = page.content
+
+        # Append key facts
+        if key_fact_lines:
+            key_facts_block = "\n".join(key_fact_lines)
+            # Try to find ## Key Facts section and append after it
+            import re
+            kf_match = re.search(r"(## Key Facts\b.*?)(?=\n## |\Z)", content, re.DOTALL)
+            if kf_match:
+                insert_pos = kf_match.end()
+                content = content[:insert_pos].rstrip() + "\n" + key_facts_block + "\n" + content[insert_pos:]
+            else:
+                # No Key Facts section exists, add one before Source Logs or at end
+                sl_match = re.search(r"\n## Source Logs\b", content)
+                rp_match = re.search(r"\n## Related Pages\b", content)
+                insert_before = sl_match or rp_match
+                if insert_before:
+                    pos = insert_before.start()
+                    content = content[:pos] + "\n\n## Key Facts\n" + key_facts_block + "\n" + content[pos:]
+                else:
+                    content = content.rstrip() + "\n\n## Key Facts\n" + key_facts_block + "\n"
+
+        # Append timeline rows
+        if timeline_rows:
+            timeline_block = "\n".join(timeline_rows)
+            import re
+            et_match = re.search(r"(## Event Timeline\b.*?)(?=\n## |\Z)", content, re.DOTALL)
+            if et_match:
+                insert_pos = et_match.end()
+                content = content[:insert_pos].rstrip() + "\n" + timeline_block + "\n" + content[insert_pos:]
+            else:
+                sl_match = re.search(r"\n## Source Logs\b", content)
+                rp_match = re.search(r"\n## Related Pages\b", content)
+                insert_before = sl_match or rp_match
+                if insert_before:
+                    pos = insert_before.start()
+                    content = content[:pos] + "\n\n## Event Timeline\n| Date / Relative Time | Event | People / Entities | Source |\n| :--- | :--- | :--- | :--- |\n" + timeline_block + "\n" + content[pos:]
+                else:
+                    content = content.rstrip() + "\n\n## Event Timeline\n| Date / Relative Time | Event | People / Entities | Source |\n| :--- | :--- | :--- | :--- |\n" + timeline_block + "\n"
+
+        page.content = content
+
+        # Apply tag additions
+        new_tags = append_data.get("new_tags", [])
+        for tag in new_tags:
+            if isinstance(tag, str) and tag.strip() and tag not in page.tags:
+                page.tags.append(tag)
+
+        return True
 
     def _save_deterministic_index(
         self,

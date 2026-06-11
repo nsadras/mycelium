@@ -145,6 +145,31 @@ async def test_call_messages_disables_thinking_when_tools_disabled():
 
 
 @pytest.mark.asyncio
+async def test_call_messages_passes_generation_options():
+    client = OllamaClient("http://localhost:11434", "test-model", temperature=0.3)
+    fake_sdk = FakeSdkClient("hello", done_reason="stop", eval_count=12)
+    client.client = fake_sdk
+
+    response = await client.call_messages(
+        [{"role": "user", "content": "question"}],
+        enable_tools=False,
+        num_ctx=32768,
+        num_predict=512,
+        think=False,
+    )
+
+    assert response.content == "hello"
+    assert response.metadata["done_reason"] == "stop"
+    assert response.metadata["eval_count"] == 12
+    assert fake_sdk.chat_calls[0]["options"] == {
+        "temperature": 0.3,
+        "num_ctx": 32768,
+        "num_predict": 512,
+    }
+    assert fake_sdk.chat_calls[0]["think"] is False
+
+
+@pytest.mark.asyncio
 async def test_call_messages_executes_web_tools(monkeypatch):
     client = OllamaClient("http://localhost:11434", "test-model")
     fake_sdk = FakeToolSdkClient()

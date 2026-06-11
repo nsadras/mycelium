@@ -73,14 +73,14 @@ def main() -> None:
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--system", choices=["mycelium", "null", "full_context"], default="mycelium")
+    parser.add_argument("--system", choices=["mycelium", "null", "full_context", "full_wiki"], default="mycelium")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--output-root", type=Path, default=Path("benchmark_runs"))
     parser.add_argument("--qa-model", default="gemma4:latest")
     parser.add_argument("--memory-model", default=None)
     parser.add_argument("--ollama-url", default="http://localhost:11434")
     parser.add_argument("--config-path", type=Path, default=None)
-    parser.add_argument("--context-budget-tokens", type=int, default=8192)
+    parser.add_argument("--context-budget-tokens", type=int, default=32768)
     parser.add_argument("--dream-policy", choices=["none", "per-batch", "per-case"], default="per-batch")
     parser.add_argument("--reconsolidate", action="store_true")
     parser.add_argument("--prediction-key", default=None)

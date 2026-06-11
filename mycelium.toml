@@ -8,4 +8,4 @@ url = "http://localhost:11434"
 temperature = 0.2
 
 [session]
-context_budget_tokens = 8192
+context_budget_tokens = 32768

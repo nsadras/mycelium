@@ -24,7 +24,7 @@ class Mycelium:
         store_path: str | Path,
         ollama_model: str = 'gemma3:12b',
         ollama_url: str = 'http://localhost:11434',
-        context_budget_tokens: int = 8192,
+        context_budget_tokens: int = 32768,
         lability_threshold: float = 0.35,
         dream_schedule: Literal['post_session', 'cron', 'manual'] = 'post_session',
         decay_interval_hours: int = 6,
@@ -183,7 +183,11 @@ class Mycelium:
         for item in response:
             if isinstance(item, dict) and "page" in item:
                 priority = int(item.get("priority", 5))
-                selections.append((priority, item["page"]))
+                page_slug = item["page"].strip()
+                if page_slug.startswith("[[") and page_slug.endswith("]]"):
+                    page_slug = page_slug[2:-2]
+                page_slug = page_slug.replace(".md", "").strip().lower()
+                selections.append((priority, page_slug))
                 
         selections.sort(key=lambda x: x[0])
         

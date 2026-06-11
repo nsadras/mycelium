@@ -46,7 +46,7 @@ from typing import Optional
 class Config:
     store_path: Path = Path('./mycelium_store')
     git_commits: bool = False
-    context_budget_tokens: int = 8192
+    context_budget_tokens: int = 32768
     llm: Optional[LLMConfig] = None
     reconsolidation: Optional[ReconsolidationConfig] = None
     dream: Optional[DreamConfig] = None
@@ -73,7 +73,7 @@ class Config:
             
         store_path = Path(data.get('store', {}).get('path', './mycelium_store'))
         git_commits = data.get('store', {}).get('git_commits', False)
-        context_budget_tokens = data.get('session', {}).get('context_budget_tokens', 8192)
+        context_budget_tokens = data.get('session', {}).get('context_budget_tokens', 32768)
         
         llm_data = data.get('llm', {})
         llm = LLMConfig(

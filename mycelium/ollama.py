@@ -29,6 +29,7 @@ class ToolEvent:
 class ChatResponse:
     content: str
     tool_events: list[ToolEvent] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class OllamaClient:
@@ -160,6 +161,9 @@ class OllamaClient:
         enable_tools: bool = True,
         max_tool_rounds: int = 5,
         tool_result_chars: int = 8000,
+        num_ctx: int | None = None,
+        num_predict: int | None = None,
+        think: bool | None = None,
     ) -> ChatResponse:
         """
         Makes a chat completion call using an explicit message history.
@@ -167,6 +171,10 @@ class OllamaClient:
         call_id = str(uuid.uuid4())[:8]
         temp = temperature if temperature is not None else self.temperature
         options = {"temperature": temp}
+        if num_ctx is not None:
+            options["num_ctx"] = num_ctx
+        if num_predict is not None:
+            options["num_predict"] = num_predict
         endpoint = f"{self.url}/api/chat"
         working_messages = list(messages)
         tool_events: list[ToolEvent] = []
@@ -184,7 +192,7 @@ class OllamaClient:
                 options=options,
             )
             try:
-                content = await self._chat_with_optional_tools(
+                content, metadata = await self._chat_with_optional_tools(
                     call_id=call_id,
                     messages=working_messages,
                     options=options,
@@ -192,6 +200,7 @@ class OllamaClient:
                     max_tool_rounds=max_tool_rounds,
                     tool_result_chars=tool_result_chars,
                     tool_events=tool_events,
+                    think=think,
                 )
                 latency_ms = int((time.time() - start_time) * 1000)
                 self._log_call(
@@ -202,8 +211,9 @@ class OllamaClient:
                     content,
                     latency_ms,
                     True,
+                    metadata,
                 )
-                return ChatResponse(content=content, tool_events=tool_events)
+                return ChatResponse(content=content, tool_events=tool_events, metadata=metadata)
 
             except (RequestError, ResponseError) as e:
                 latency_ms = int((time.time() - start_time) * 1000)
@@ -230,18 +240,21 @@ class OllamaClient:
         max_tool_rounds: int,
         tool_result_chars: int,
         tool_events: list[ToolEvent],
-    ) -> str:
+        think: bool | None,
+    ) -> tuple[str, dict[str, Any]]:
         tools = [web_search, web_fetch] if enable_tools else None
+        think_enabled = think if think is not None else bool(enable_tools)
         for round_idx in range(max_tool_rounds + 1):
             response = await self.client.chat(
                 model=self.model,
                 messages=messages,
                 tools=tools,
-                think=True if enable_tools else False,
+                think=think_enabled,
                 stream=False,
                 format=None,
                 options=options,
             )
+            metadata = self._response_metadata(response)
             assistant_message = self._assistant_message_dict(response)
             content = assistant_message.get("content", "").strip()
             tool_calls = assistant_message.get("tool_calls", [])
@@ -249,9 +262,9 @@ class OllamaClient:
                 logger.info("LLM assistant content during tool loop\n%s", content)
             messages.append(assistant_message)
             if not tool_calls:
-                return content
+                return content, metadata
             if round_idx >= max_tool_rounds:
-                return content
+                return content, metadata
             for tool_call in tool_calls:
                 tool_name, tool_args = self._tool_call_name_args(tool_call)
                 result = self._run_tool(tool_name, tool_args)
@@ -282,7 +295,7 @@ class OllamaClient:
                     ),
                 )
                 messages.append({"role": "tool", "content": truncated, "tool_name": tool_name})
-        return ""
+        return "", {}
 
     def _assistant_message_dict(self, response: Any) -> dict[str, Any]:
         message = getattr(response, "message", None)

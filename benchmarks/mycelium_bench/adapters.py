@@ -67,7 +67,14 @@ class OllamaQaClient:
         user = f"MEMORY CONTEXT:\n{context_text}\n\nQUESTION:\n{question}"
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         start = time.time()
-        response = await self.llm.call_messages(messages, temperature=0.0, enable_tools=False)
+        response = await self.llm.call_messages(
+            messages,
+            temperature=0.0,
+            enable_tools=False,
+            num_ctx=32768,
+            num_predict=512,
+            think=False,
+        )
         elapsed = time.time() - start
         return BenchmarkAnswer(
             output=response.content.strip(),
@@ -75,6 +82,7 @@ class OllamaQaClient:
             output_len=count_tokens(response.content),
             memory_construction_time=0.0,
             query_time_len=elapsed,
+            metadata={"llm_metadata": response.metadata},
         )
 
 
@@ -135,7 +143,7 @@ class MyceliumMemorySystem:
         memory_model: str,
         ollama_url: str,
         config_path: Path | None = None,
-        context_budget_tokens: int = 8192,
+        context_budget_tokens: int = 32768,
         dream_policy: str = "per-batch",
         reconsolidate: bool = False,
     ) -> None:
@@ -274,6 +282,48 @@ class MyceliumMemorySystem:
         return self.mem
 
 
+class FullWikiMemorySystem(MyceliumMemorySystem):
+    name = "full_wiki"
+
+    async def answer(self, question: str, metadata: dict[str, Any] | None = None) -> BenchmarkAnswer:
+        mem = self._require_mem()
+        
+        # Load all pages in the wiki store
+        all_pages = mem.wiki.list_all()
+        # Sort by slug to be deterministic
+        all_pages.sort(key=lambda p: p.slug)
+        
+        # Format all pages into one single context
+        context_parts = []
+        for page in all_pages:
+            context_parts.append(
+                f"=== MEMORY: {page.title} ({page.slug}) ===\n{format_page_for_prompt(page)}"
+            )
+        context = "\n\n".join(context_parts)
+        
+        start = time.time()
+        answer = await self.qa_client.answer(question, context)
+        query_time = time.time() - start
+        
+        answer.memory_construction_time = 0.0
+        answer.query_time_len = query_time
+        answer.metadata.update(
+            {
+                "loaded_pages": [
+                    {
+                        "slug": page.slug,
+                        "title": page.title,
+                        "confidence": page.confidence,
+                        "importance": page.importance,
+                        "retrievability": page.retrievability,
+                    }
+                    for page in all_pages
+                ],
+            }
+        )
+        return answer
+
+
 def build_memory_system(
     *,
     system_name: str,
@@ -289,6 +339,17 @@ def build_memory_system(
     qa_client = OllamaQaClient(model=qa_model, url=ollama_url)
     if system_name == "mycelium":
         return MyceliumMemorySystem(
+            run_dir=run_dir,
+            qa_client=qa_client,
+            memory_model=memory_model,
+            ollama_url=ollama_url,
+            config_path=config_path,
+            context_budget_tokens=context_budget_tokens,
+            dream_policy=dream_policy,
+            reconsolidate=reconsolidate,
+        )
+    if system_name == "full_wiki":
+        return FullWikiMemorySystem(
             run_dir=run_dir,
             qa_client=qa_client,
             memory_model=memory_model,

@@ -1,8 +1,47 @@
 from types import SimpleNamespace
 
+import pytest
+
+from mycelium.openai_compatible import OpenAICompatibleClient
 from mycelium.store import LogStore
 from server import runtime
 from server.runtime import append_tool_event_logs, ensure_session_record
+
+
+class FakeHttpResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.payload
+
+
+class FakeAsyncClient:
+    requests = []
+
+    def __init__(self, timeout):
+        self.timeout = timeout
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def get(self, url):
+        self.requests.append(url)
+        return FakeHttpResponse(
+            {
+                "models": [
+                    {"name": "gemma4:12b"},
+                    {"name": "llama3.2:latest"},
+                    {"digest": "missing-name"},
+                ]
+            }
+        )
 
 
 def test_ensure_session_record_initializes_episode():
@@ -65,3 +104,60 @@ def test_append_tool_event_logs_creates_unconsolidated_entries(tmp_path, monkeyp
     assert "- tool_name: web_search" in entries[0].content
     assert '"query": "local llm news"' in entries[0].content
     assert "Useful new information." in entries[0].content
+
+
+def test_update_llm_settings_persists_config_and_rebuilds_client(tmp_path, monkeypatch):
+    store_path = tmp_path / "store"
+    config_path = tmp_path / "mycelium.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[store]",
+                f'path = "{store_path}"',
+                "git_commits = false",
+                "",
+                "[llm]",
+                'provider = "ollama"',
+                'model = "gemma4:12b"',
+                'url = "http://localhost:11434"',
+                "temperature = 0.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runtime, "CONFIG_FILE", config_path)
+    monkeypatch.setattr(runtime, "_mem", None)
+
+    settings = runtime.update_llm_settings(
+        provider="vllm",
+        model="google/diffusiongemma-26B-A4B-it",
+        url="http://localhost:8000/v1",
+        temperature=0.1,
+    )
+
+    assert settings["provider"] == "vllm"
+    assert settings["model"] == "google/diffusiongemma-26B-A4B-it"
+    assert isinstance(runtime.get_mem().llm, OpenAICompatibleClient)
+    saved = config_path.read_text(encoding="utf-8")
+    assert 'provider = "vllm"' in saved
+    assert 'model = "google/diffusiongemma-26B-A4B-it"' in saved
+    assert 'url = "http://localhost:8000/v1"' in saved
+
+
+@pytest.mark.asyncio
+async def test_list_llm_models_reads_installed_ollama_models(monkeypatch):
+    FakeAsyncClient.requests = []
+    monkeypatch.setattr(runtime.httpx, "AsyncClient", FakeAsyncClient)
+
+    result = await runtime.list_llm_models(provider="ollama", url="http://ollama.test")
+
+    assert FakeAsyncClient.requests == ["http://ollama.test/api/tags"]
+    assert result == {
+        "provider": "ollama",
+        "url": "http://ollama.test",
+        "models": [
+            {"id": "gemma4:12b", "label": "gemma4:12b"},
+            {"id": "llama3.2:latest", "label": "llama3.2:latest"},
+        ],
+        "error": None,
+    }

@@ -3,6 +3,7 @@ path = "./mycelium_store"
 git_commits = false
 
 [llm]
+provider = "ollama"
 model = "gemma4:12b"
 url = "http://localhost:11434"
 temperature = 0.2

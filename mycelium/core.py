@@ -7,6 +7,7 @@ from mycelium.models import WikiPage, LogEntry, DreamReport
 from mycelium.store import WikiStore, LogStore
 from mycelium.config import Config
 from mycelium.ollama import OllamaClient
+from mycelium.openai_compatible import OpenAICompatibleClient
 from mycelium.encoder import Encoder
 from mycelium.budget import ContextBudget
 from mycelium.session import Session
@@ -54,18 +55,32 @@ class Mycelium:
         self._wiki = WikiStore(self.store_path / "wiki")
         self._log_store = LogStore(self.store_path / "logs")
         self._ensure_seed_profile(memory_profile)
-        self.llm = OllamaClient(
-            url=self.config.llm.url,
-            model=self.config.llm.model,
-            temperature=self.config.llm.temperature,
-            timeout=self.config.timeout_seconds if hasattr(self.config, 'timeout_seconds') else self.config.llm.timeout_seconds
-        )
+        self.llm = self._build_llm_client()
         from mycelium.reconsolidation import ReconsolidationEngine
         self.reconsolidation_engine = ReconsolidationEngine(self.llm, self._wiki, self.config)
         self.encoder = Encoder(self.llm, self._wiki, self._log_store, self.config)
         
         from mycelium.dream import DreamProcess
         self.dream_process = DreamProcess(self.llm, self._wiki, self._log_store, self.config)
+
+    def _build_llm_client(self):
+        timeout = self.config.timeout_seconds if hasattr(self.config, 'timeout_seconds') else self.config.llm.timeout_seconds
+        provider = (self.config.llm.provider or "ollama").lower().replace("_", "-")
+        if provider == "ollama":
+            return OllamaClient(
+                url=self.config.llm.url,
+                model=self.config.llm.model,
+                temperature=self.config.llm.temperature,
+                timeout=timeout,
+            )
+        if provider in {"openai", "openai-compatible", "vllm", "sglang", "llama-cpp"}:
+            return OpenAICompatibleClient(
+                url=self.config.llm.url,
+                model=self.config.llm.model,
+                temperature=self.config.llm.temperature,
+                timeout=timeout,
+            )
+        raise ValueError(f"Unsupported LLM provider: {self.config.llm.provider}")
 
     def _ensure_seed_profile(self, memory_profile: Literal["user", "scenario", "none"]) -> None:
         if memory_profile == "none":

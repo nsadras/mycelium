@@ -40,6 +40,28 @@ export interface Session {
   transcript?: Message[];
 }
 
+export interface LlmSettings {
+  provider: string;
+  model: string;
+  url: string;
+  temperature: number;
+  timeout_seconds: number;
+  max_retries: number;
+}
+
+export interface LlmPreset {
+  id: string;
+  label: string;
+  provider: string;
+  url: string;
+  model: string;
+}
+
+export interface LlmModelOption {
+  id: string;
+  label: string;
+}
+
 export interface WikiPage {
   slug: string;
   title: string;

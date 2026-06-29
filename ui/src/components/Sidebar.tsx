@@ -3,6 +3,7 @@ import { Archive, Book, BrainCircuit, FileText, Loader2, MessageSquare, Moon, Re
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import Avatar from './Avatar';
+import ModelSelector from './ModelSelector';
 import type { AssistantStatus } from '../lib/assistantStatus';
 
 function cn(...inputs: ClassValue[]) {
@@ -152,6 +153,8 @@ export default function Sidebar({
       </nav>
 
       <div className="p-4 mt-auto border-t border-slate-800 flex flex-col">
+        <ModelSelector />
+
         <button
           type="button"
           onClick={() => setMemoryExpanded(!memoryExpanded)}

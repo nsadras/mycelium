@@ -202,7 +202,7 @@ Results are written under `benchmark_runs/<run-id>/` as JSON predictions, JSONL 
 
 - Python 3.11+
 - Node.js and npm
-- [Ollama](https://ollama.com/) running locally
+- [Ollama](https://ollama.com/) running locally, or an OpenAI-compatible local server such as vLLM/SGLang
 - A local model configured in `mycelium.toml` (currently `gemma4:latest`)
 
 For web search and fetch tools, place an Ollama API key in the project-root `.env` file:
@@ -413,6 +413,7 @@ path = "./mycelium_store"
 git_commits = false
 
 [llm]
+provider = "ollama"
 model = "gemma4:latest"
 url = "http://localhost:11434"
 temperature = 0.2
@@ -420,6 +421,18 @@ temperature = 0.2
 [session]
 context_budget_tokens = 8192
 ```
+
+To use an OpenAI-compatible local server, set `provider` to `openai-compatible`, `vllm`, `sglang`, or `llama-cpp`, and point `url` at the server's `/v1` base URL:
+
+```toml
+[llm]
+provider = "vllm"
+model = "google/diffusiongemma-26B-A4B-it"
+url = "http://localhost:8001/v1"
+temperature = 0.2
+```
+
+Mycelium's FastAPI backend uses port 8000 by default, so run vLLM on a different host port, for example by passing `--port 8001` to the vLLM server command.
 
 Additional defaults for reconsolidation, dream, and decay live in `mycelium/config.py`.
 

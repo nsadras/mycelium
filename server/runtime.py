@@ -6,10 +6,13 @@ from pathlib import Path
 from typing import Any
 import uuid
 
+import httpx
 import mycelium
+from mycelium.config import Config
 from mycelium.models import LogEntry
 
 SESSIONS_FILE = Path("mycelium_store/sessions_meta.json")
+CONFIG_FILE = Path("mycelium.toml")
 DEFAULT_IDLE_MINUTES = 20
 DEFAULT_MAX_TURNS = 25
 
@@ -27,10 +30,195 @@ def iso_now() -> str:
 def get_mem() -> mycelium.Mycelium:
     global _mem
     if _mem is None:
-        _mem = mycelium.Mycelium(store_path="./mycelium_store", config_path="mycelium.toml")
+        _mem = mycelium.Mycelium(store_path="./mycelium_store", config_path=CONFIG_FILE)
         # The web app owns episode flushing, so don't dream after every message.
         _mem.config.dream.schedule = "manual"
     return _mem
+
+
+def llm_settings() -> dict[str, Any]:
+    config = get_mem().config
+    return {
+        "provider": config.llm.provider,
+        "model": config.llm.model,
+        "url": config.llm.url,
+        "temperature": config.llm.temperature,
+        "timeout_seconds": config.llm.timeout_seconds,
+        "max_retries": config.llm.max_retries,
+    }
+
+
+async def llm_presets() -> list[dict[str, str]]:
+    settings = llm_settings()
+    endpoint_options = [("ollama", "http://localhost:11434", "Ollama")]
+    if settings["provider"] != "ollama":
+        endpoint_options.append((settings["provider"], settings["url"], provider_label(settings["provider"])))
+
+    presets: list[dict[str, str]] = []
+    for provider, url, label in endpoint_options:
+        result = await list_llm_models(provider=provider, url=url)
+        for model in result["models"]:
+            model_id = model["id"]
+            presets.append(
+                {
+                    "id": f"{provider}:{url}:{model_id}",
+                    "label": f"{label} · {model_id}",
+                    "provider": provider,
+                    "url": url,
+                    "model": model_id,
+                }
+            )
+    return presets
+
+
+def provider_label(provider: str) -> str:
+    labels = {
+        "ollama": "Ollama",
+        "vllm": "vLLM",
+        "sglang": "SGLang",
+        "llama-cpp": "llama.cpp",
+        "openai-compatible": "OpenAI-compatible",
+    }
+    return labels.get(provider, provider)
+
+
+async def list_llm_models(provider: str | None = None, url: str | None = None) -> dict[str, Any]:
+    settings = llm_settings() if provider is None or url is None else {}
+    selected_provider = normalize_llm_provider(provider or settings["provider"])
+    selected_url = (url or settings["url"]).rstrip("/")
+
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            if selected_provider == "ollama":
+                response = await client.get(f"{selected_url}/api/tags")
+                response.raise_for_status()
+                data = response.json()
+                models = [
+                    {"id": item.get("name", ""), "label": item.get("name", "")}
+                    for item in data.get("models", [])
+                    if item.get("name")
+                ]
+            else:
+                base_url = selected_url[:-3] if selected_url.endswith("/v1") else selected_url
+                response = await client.get(f"{base_url}/v1/models")
+                response.raise_for_status()
+                data = response.json()
+                models = [
+                    {"id": item.get("id", ""), "label": item.get("id", "")}
+                    for item in data.get("data", [])
+                    if item.get("id")
+                ]
+        return {"provider": selected_provider, "url": selected_url, "models": models, "error": None}
+    except Exception as exc:
+        return {"provider": selected_provider, "url": selected_url, "models": [], "error": str(exc)}
+
+
+def update_llm_settings(
+    *,
+    provider: str,
+    model: str,
+    url: str,
+    temperature: float | None = None,
+    timeout_seconds: int | None = None,
+    max_retries: int | None = None,
+) -> dict[str, Any]:
+    global _mem
+
+    normalized_provider = normalize_llm_provider(provider)
+    normalized_model = model.strip()
+    normalized_url = url.strip().rstrip("/")
+    if not normalized_model:
+        raise ValueError("model is required")
+    if not normalized_url:
+        raise ValueError("url is required")
+
+    config = Config.from_toml(CONFIG_FILE) if CONFIG_FILE.exists() else Config.defaults()
+    config.llm.provider = normalized_provider
+    config.llm.model = normalized_model
+    config.llm.url = normalized_url
+    if temperature is not None:
+        config.llm.temperature = max(0.0, min(2.0, temperature))
+    if timeout_seconds is not None:
+        config.llm.timeout_seconds = max(1, timeout_seconds)
+    if max_retries is not None:
+        config.llm.max_retries = max(1, max_retries)
+
+    write_config(config)
+    _mem = mycelium.Mycelium(store_path=config.store_path, config_path=CONFIG_FILE)
+    _mem.config.dream.schedule = "manual"
+    return llm_settings()
+
+
+def normalize_llm_provider(provider: str) -> str:
+    normalized = provider.strip().lower().replace("_", "-")
+    aliases = {
+        "openai-compatible": "openai-compatible",
+        "openai": "openai-compatible",
+        "vllm": "vllm",
+        "sglang": "sglang",
+        "llama-cpp": "llama-cpp",
+        "llamacpp": "llama-cpp",
+        "ollama": "ollama",
+    }
+    if normalized not in aliases:
+        raise ValueError(f"Unsupported LLM provider: {provider}")
+    return aliases[normalized]
+
+
+def write_config(config: Config) -> None:
+    sections = {
+        "store": {
+            "path": str(config.store_path),
+            "git_commits": config.git_commits,
+        },
+        "llm": {
+            "provider": config.llm.provider,
+            "model": config.llm.model,
+            "url": config.llm.url,
+            "temperature": config.llm.temperature,
+            "timeout_seconds": config.llm.timeout_seconds,
+            "max_retries": config.llm.max_retries,
+        },
+        "session": {
+            "context_budget_tokens": config.context_budget_tokens,
+        },
+        "reconsolidation": {
+            "enabled": config.reconsolidation.enabled,
+            "lability_threshold": config.reconsolidation.lability_threshold,
+            "lability_window": config.reconsolidation.lability_window,
+            "check_on_load": config.reconsolidation.check_on_load,
+        },
+        "dream": {
+            "schedule": config.dream.schedule,
+            "cron_expression": config.dream.cron_expression,
+            "strategy": config.dream.strategy,
+            "conflict_policy": config.dream.conflict_policy,
+            "max_pages_per_run": config.dream.max_pages_per_run,
+        },
+        "decay": {
+            "interval_hours": config.decay.interval_hours,
+            "archive_threshold": config.decay.archive_threshold,
+            "log_threshold": config.decay.log_threshold,
+            "half_life_hours": config.decay.half_life_hours,
+        },
+    }
+
+    lines: list[str] = []
+    for section, values in sections.items():
+        lines.append(f"[{section}]")
+        for key, value in values.items():
+            lines.append(f"{key} = {toml_value(value)}")
+        lines.append("")
+    CONFIG_FILE.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def load_meta() -> dict[str, Any]:

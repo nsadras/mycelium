@@ -9,3 +9,21 @@ temperature = 0.2
 
 [session]
 context_budget_tokens = 32768
+
+[engram]
+store_path = "./mycelium_store/engram"
+audio_dir = "./mycelium_store/engram/audio"
+
+[engram.whisper]
+model = "large-v3"
+device = "auto"
+compute_type = "auto"
+batch_size = 8
+
+[engram.diarization]
+model = "pyannote/speaker-diarization-3.1"
+
+[engram.summary]
+model = "gemma4:12b"
+url = "http://localhost:11434"
+temperature = 0.1

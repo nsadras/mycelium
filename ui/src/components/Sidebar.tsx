@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Archive, Book, BrainCircuit, FileText, Loader2, MessageSquare, Moon, RefreshCw, Save, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Archive, Book, BrainCircuit, FileText, Loader2, MessageSquare, Mic, Moon, RefreshCw, Save, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import Avatar from './Avatar';
@@ -10,8 +10,8 @@ function cn(...inputs: ClassValue[]) {
 }
 
 interface SidebarProps {
-  activeTab: 'chat' | 'wiki' | 'logs';
-  setActiveTab: (tab: 'chat' | 'wiki' | 'logs') => void;
+  activeTab: 'chat' | 'engram' | 'wiki' | 'logs';
+  setActiveTab: (tab: 'chat' | 'engram' | 'wiki' | 'logs') => void;
   onDream: () => void;
   onMemoryOperation: (
     operation: 'flush-current' | 'flush-idle' | 'flush-all' | 'reconsolidate-current' | 'dream' | 'decay' | 'clear-memory' | 'clear-wiki'
@@ -38,6 +38,7 @@ export default function Sidebar({
   const showMemory = memoryExpanded || runningMemoryOperation !== null;
   const tabs = [
     { id: 'chat', label: 'Chat', icon: MessageSquare },
+    { id: 'engram', label: 'Engram', icon: Mic },
     { id: 'wiki', label: 'Wiki', icon: Book },
     { id: 'logs', label: 'Logs', icon: FileText },
   ] as const;

@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+import json
+import uuid
+from datetime import datetime
+
+from engram.models import Meeting, MeetingSummary, TranscriptSegment
+from engram.store import EngramStore
+from mycelium.models import LogEntry
+
+
+def meeting_transcript_text(segments: list[TranscriptSegment]) -> str:
+    lines = []
+    for segment in segments:
+        speaker = segment.speaker or "Speaker ?"
+        lines.append(
+            f"[{_fmt_time(segment.start_seconds)}-{_fmt_time(segment.end_seconds)}] "
+            f"{speaker}: {segment.text}"
+        )
+    return "\n".join(lines)
+
+
+def format_meeting_log(meeting: Meeting, segments: list[TranscriptSegment]) -> str:
+    summary = meeting.summary or MeetingSummary(summary="No summary generated.")
+    summary_json = json.dumps(
+        {
+            "summary": summary.summary,
+            "decisions": summary.decisions,
+            "action_items": summary.action_items,
+            "open_questions": summary.open_questions,
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    transcript = meeting_transcript_text(segments) or "(no transcript segments)"
+    return "\n".join(
+        [
+            "Raw Engram meeting transcript. Treat this as canonical source evidence during dream consolidation and retrieval.",
+            "",
+            f"- meeting_id: {meeting.id}",
+            f"- title: {meeting.title}",
+            f"- started_at: {meeting.started_at.isoformat() if meeting.started_at else 'unknown'}",
+            f"- ended_at: {meeting.ended_at.isoformat() if meeting.ended_at else 'unknown'}",
+            f"- duration_seconds: {meeting.duration_seconds if meeting.duration_seconds is not None else 'unknown'}",
+            f"- audio_path: {meeting.audio_path or 'not recorded'}",
+            "",
+            "Structured summary:",
+            "```json",
+            summary_json,
+            "```",
+            "",
+            "Speaker-labeled transcript:",
+            transcript,
+        ]
+    )
+
+
+def ingest_meeting_into_memory(mem, store: EngramStore, meeting_id: str) -> LogEntry:
+    meeting = store.get_meeting(meeting_id)
+    if meeting.memory_log_entry_id:
+        return mem.log_store.get(meeting.memory_log_entry_id)
+
+    segments = store.list_segments(meeting_id)
+    timestamp = meeting.ended_at or meeting.started_at or datetime.now()
+    date_str = timestamp.strftime("%Y-%m-%d")
+    short_id = str(uuid.uuid4())[:8]
+    entry = LogEntry(
+        entry_id=f"{date_str}#meeting-{short_id}",
+        session_id=f"meeting-{meeting.id}",
+        timestamp=timestamp,
+        content=format_meeting_log(meeting, segments),
+        importance=0.9,
+        status="raw",
+        durability="durable",
+        consolidated=False,
+        decay_score=1.0,
+    )
+    mem.log_store.append(entry)
+    store.update_meeting(meeting_id, memory_log_entry_id=entry.entry_id)
+    return entry
+
+
+def _fmt_time(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+    return f"{minutes:02d}:{sec:02d}"

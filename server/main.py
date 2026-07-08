@@ -7,7 +7,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from server.api import sessions, memory
+from server.api import sessions, memory, engram
 from server.runtime import flush_idle_episodes, get_mem, run_decay, run_dream
 
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +27,7 @@ app.add_middleware(
 # Include routers
 app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
 app.include_router(memory.router, prefix="/api/memory", tags=["memory"])
+app.include_router(engram.router, prefix="/api/engram", tags=["engram"])
 
 
 @app.on_event("startup")

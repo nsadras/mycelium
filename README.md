@@ -14,6 +14,7 @@ The project includes a Python memory library, a FastAPI backend, and a React web
 - **Multi-session chat UI:** Create, rename, resume, and continue multiple chat sessions without treating each individual message as a full session.
 - **Long-term memory retrieval:** Each chat turn routes against the wiki index and loads relevant pages into the assistant's system context.
 - **Source-grounded episodic logs:** Active chat episodes flush into raw durable logs that remain the canonical source evidence.
+- **Engram meeting uploads:** Upload raw meeting recordings, post-process diarized speaker labels, and ingest completed meetings as raw episodic logs.
 - **Tool-aware chat:** The assistant can call Ollama `web_search` and `web_fetch`; tool calls are shown in the UI and stored as separate raw log entries using the truncated result seen by the model.
 - **Dream consolidation:** Raw logs are consolidated into readable semantic wiki pages with source tracking, `[[log:<entry-id>]]` backlinks, and Obsidian-style `[[page-slug]]` cross-links.
 - **Reconsolidation:** Retrieved pages can be flagged as labile when current context appears to contradict or extend them, then resolved into updated wiki pages.
@@ -27,6 +28,7 @@ The project includes a Python memory library, a FastAPI backend, and a React web
 
 ```text
 mycelium/
+├── engram/             # Local meeting recorder, transcription, diarization, and memory ingestion
 ├── mycelium/           # Core memory library
 │   ├── core.py         # Mycelium facade, retrieval, sessions, dream entrypoint
 │   ├── encoder.py      # Raw transcript-to-log persistence
@@ -44,6 +46,7 @@ mycelium/
 │   └── src/components/ # Chat, Wiki, Logs, Sidebar controls
 ├── tests/              # Python test suite
 ├── examples/           # Library usage examples
+├── scripts/            # Helper scripts
 ├── mycelium.toml       # Local runtime configuration
 ├── start.sh            # Starts backend and frontend together
 └── pyproject.toml      # Python package and uv configuration
@@ -245,6 +248,33 @@ VITE_API_ORIGIN=http://localhost:8000 npm run dev
 
 Keep Ollama bound to localhost; the backend talks to it locally.
 
+### Engram Meeting Notetaker Setup
+
+Engram is optional. The base Mycelium install can run without the speech stack, but uploaded meeting audio needs the optional Engram dependency group before it can be processed:
+
+```bash
+uv sync --group engram
+```
+
+If the speech stack has trouble resolving for Python 3.13, use Python 3.11:
+
+```bash
+uv python install 3.11
+uv sync --python 3.11 --group engram
+```
+
+Engram stores uploaded raw meeting audio first, then processes it later when you click **Process** in the UI. Processing uses `faster-whisper` for transcription, WhisperX and pyannote for speaker diarization, and Ollama for structured meeting summaries.
+
+Record meetings with a tool of your choice, such as Audacity, OBS, a phone recorder, or the meeting app's built-in recorder. In the Engram tab, use the upload button, select the audio file, then click **Process** after it appears as a `ready` recording.
+
+For diarization, set a Hugging Face token after accepting the pyannote model terms:
+
+```bash
+export HF_TOKEN=your_hugging_face_token
+```
+
+Uploaded recordings are copied to `mycelium_store/engram/audio/` and appear as raw `ready` recordings in the Engram tab. Click **Process** to transcribe, diarize, summarize, and ingest them into the normal daily raw log store as durable unconsolidated meeting entries.
+
 ### WSL on Windows
 
 If you run Mycelium inside WSL, use WSL mirrored networking so other devices can reach the WSL dev servers through the Windows LAN or Tailscale IP. In Windows, create or edit:
@@ -286,9 +316,10 @@ uv run python -m server.main
 
 ## Web UI
 
-The web UI has three main tabs:
+The web UI has four main tabs:
 
 - **Chat:** Create and rename sessions, continue conversations, view loaded memory pages, and expand tool calls/results.
+- **Engram:** Upload raw meeting recordings, review unprocessed recordings, manually process them into diarized transcripts and structured summaries, and ingest meeting logs into memory.
 - **Wiki:** Browse semantic memory pages, inspect source log references and update history, and edit page content.
 - **Logs:** Browse daily raw episodic log files.
 

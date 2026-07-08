@@ -8,12 +8,14 @@ import uuid
 
 import mycelium
 from mycelium.models import LogEntry
+from engram import EngramConfig, EngramService, EngramStore
 
 SESSIONS_FILE = Path("mycelium_store/sessions_meta.json")
 DEFAULT_IDLE_MINUTES = 20
 DEFAULT_MAX_TURNS = 25
 
 _mem: mycelium.Mycelium | None = None
+_engram: EngramService | None = None
 
 
 def utc_now() -> datetime:
@@ -31,6 +33,15 @@ def get_mem() -> mycelium.Mycelium:
         # The web app owns episode flushing, so don't dream after every message.
         _mem.config.dream.schedule = "manual"
     return _mem
+
+
+def get_engram() -> EngramService:
+    global _engram
+    if _engram is None:
+        config = EngramConfig.from_toml("mycelium.toml")
+        config.ensure_dirs()
+        _engram = EngramService(config, EngramStore(config.db_path), get_mem)
+    return _engram
 
 
 def load_meta() -> dict[str, Any]:

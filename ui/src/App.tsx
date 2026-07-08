@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Menu, History } from 'lucide-react';
 import api, { type Session } from './lib/api';
 import Chat from './components/Chat';
+import Engram from './components/Engram';
 import WikiExplorer from './components/WikiExplorer';
 import LogExplorer from './components/LogExplorer';
 import Sidebar from './components/Sidebar';
@@ -27,7 +28,7 @@ function isMemoryActivity(activity: AssistantActivity) {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'chat' | 'wiki' | 'logs'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'engram' | 'wiki' | 'logs'>('chat');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [runningMemoryOperation, setRunningMemoryOperation] = useState<string | null>(null);
@@ -203,6 +204,7 @@ function App() {
             onCloseSessionsMobile={() => setSessionsOpen(false)}
           />
         )}
+        {activeTab === 'engram' && <Engram setAssistantStatus={setAssistantStatus} />}
         {activeTab === 'wiki' && <WikiExplorer />}
         {activeTab === 'logs' && <LogExplorer />}
       </main>

@@ -22,11 +22,10 @@ class FasterWhisperTranscriber:
         except ImportError as exc:
             raise RuntimeError("faster-whisper is not installed. Install Engram speech dependencies.") from exc
 
-        device = None if config.whisper_device == "auto" else config.whisper_device
-        compute_type = "default" if config.whisper_compute_type == "auto" else config.whisper_compute_type
+        device = config.resolved_whisper_device()
+        compute_type = config.resolved_whisper_compute_type(device)
         kwargs = {"compute_type": compute_type}
-        if device:
-            kwargs["device"] = device
+        kwargs["device"] = device
         self.model = WhisperModel(config.whisper_model, **kwargs)
         self.sample_rate = 16000
 

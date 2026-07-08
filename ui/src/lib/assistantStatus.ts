@@ -14,6 +14,7 @@ export type AssistantActivity =
   | 'clicked-right'
   | 'wiki'
   | 'logs'
+  | 'engram'
   | 'chat';
 
 export interface AssistantStatus {

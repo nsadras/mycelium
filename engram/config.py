@@ -19,7 +19,7 @@ class EngramConfig:
     whisper_device: str = "auto"
     whisper_compute_type: str = "auto"
     whisper_batch_size: int = 8
-    pyannote_model: str = "pyannote/speaker-diarization-3.1"
+    pyannote_model: str = "pyannote/speaker-diarization-community-1"
     hf_token: str | None = None
     ollama_model: str = "gemma4:12b"
     ollama_url: str = "http://localhost:11434"
@@ -28,6 +28,24 @@ class EngramConfig:
     @property
     def db_path(self) -> Path:
         return self.store_path / "engram.sqlite"
+
+    def resolved_whisper_device(self) -> str:
+        if self.whisper_device != "auto":
+            return self.whisper_device
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                return "cuda"
+        except Exception:
+            pass
+        return "cpu"
+
+    def resolved_whisper_compute_type(self, device: str | None = None) -> str:
+        if self.whisper_compute_type != "auto":
+            return self.whisper_compute_type
+        resolved_device = device or self.resolved_whisper_device()
+        return "float16" if resolved_device == "cuda" else "int8"
 
     @classmethod
     def from_toml(cls, path: str | Path = "mycelium.toml") -> "EngramConfig":
@@ -52,7 +70,7 @@ class EngramConfig:
             whisper_device=whisper_data.get("device", "auto"),
             whisper_compute_type=whisper_data.get("compute_type", "auto"),
             whisper_batch_size=int(whisper_data.get("batch_size", 8)),
-            pyannote_model=diarization_data.get("model", "pyannote/speaker-diarization-3.1"),
+            pyannote_model=diarization_data.get("model", "pyannote/speaker-diarization-community-1"),
             hf_token=os.getenv("HF_TOKEN") or diarization_data.get("hf_token"),
             ollama_model=summary_data.get("model", llm_data.get("model", "gemma4:12b")),
             ollama_url=summary_data.get("url", llm_data.get("url", "http://localhost:11434")),

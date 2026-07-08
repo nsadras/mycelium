@@ -88,6 +88,7 @@ export interface EngramSegment {
   end_seconds: number;
   text: string;
   speaker?: string | null;
+  display_speaker?: string | null;
   status: 'live' | 'final' | 'diarized';
   created_at: string | null;
 }
@@ -95,7 +96,7 @@ export interface EngramSegment {
 export interface EngramMeeting {
   id: string;
   title: string;
-  status: 'ready' | 'transcribing' | 'processing' | 'completed' | 'failed';
+  status: 'ready' | 'transcribing' | 'processing' | 'reviewing' | 'completed' | 'failed';
   created_at: string | null;
   started_at: string | null;
   ended_at: string | null;
@@ -104,6 +105,7 @@ export interface EngramMeeting {
   error?: string | null;
   memory_log_entry_id?: string | null;
   summary?: EngramSummary | null;
+  speaker_names: Record<string, string>;
   segment_count: number;
   segments?: EngramSegment[];
 }

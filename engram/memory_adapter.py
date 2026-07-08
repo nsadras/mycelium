@@ -9,10 +9,18 @@ from engram.store import EngramStore
 from mycelium.models import LogEntry
 
 
-def meeting_transcript_text(segments: list[TranscriptSegment]) -> str:
+def resolved_speaker_name(speaker: str | None, speaker_names: dict[str, str] | None = None) -> str:
+    if not speaker:
+        return "Speaker ?"
+    if speaker_names and speaker_names.get(speaker):
+        return speaker_names[speaker]
+    return speaker
+
+
+def meeting_transcript_text(segments: list[TranscriptSegment], speaker_names: dict[str, str] | None = None) -> str:
     lines = []
     for segment in segments:
-        speaker = segment.speaker or "Speaker ?"
+        speaker = resolved_speaker_name(segment.speaker, speaker_names)
         lines.append(
             f"[{_fmt_time(segment.start_seconds)}-{_fmt_time(segment.end_seconds)}] "
             f"{speaker}: {segment.text}"
@@ -32,7 +40,7 @@ def format_meeting_log(meeting: Meeting, segments: list[TranscriptSegment]) -> s
         indent=2,
         sort_keys=True,
     )
-    transcript = meeting_transcript_text(segments) or "(no transcript segments)"
+    transcript = meeting_transcript_text(segments, meeting.speaker_names) or "(no transcript segments)"
     return "\n".join(
         [
             "Raw Engram meeting transcript. Treat this as canonical source evidence during dream consolidation and retrieval.",

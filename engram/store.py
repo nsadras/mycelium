@@ -46,10 +46,14 @@ class EngramStore:
                     audio_path TEXT,
                     error TEXT,
                     summary_json TEXT,
+                    speaker_names_json TEXT,
                     memory_log_entry_id TEXT
                 )
                 """
             )
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(meetings)").fetchall()}
+            if "speaker_names_json" not in columns:
+                conn.execute("ALTER TABLE meetings ADD COLUMN speaker_names_json TEXT")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS transcript_segments (
@@ -142,6 +146,21 @@ class EngramStore:
         values.append(meeting_id)
         with self._connect() as conn:
             cur = conn.execute(f"UPDATE meetings SET {', '.join(assignments)} WHERE id = ?", values)
+            if cur.rowcount == 0:
+                raise FileNotFoundError(f"Meeting {meeting_id} not found.")
+        return self.get_meeting(meeting_id)
+
+    def save_speaker_names(self, meeting_id: str, speaker_names: dict[str, str]) -> Meeting:
+        normalized = {
+            str(label).strip(): str(name).strip()
+            for label, name in speaker_names.items()
+            if str(label).strip() and str(name).strip()
+        }
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE meetings SET speaker_names_json = ? WHERE id = ?",
+                (json.dumps(normalized, sort_keys=True), meeting_id),
+            )
             if cur.rowcount == 0:
                 raise FileNotFoundError(f"Meeting {meeting_id} not found.")
         return self.get_meeting(meeting_id)
@@ -253,6 +272,7 @@ class EngramStore:
 
     def _meeting_from_row(self, row: sqlite3.Row) -> Meeting:
         summary_json = row["summary_json"]
+        speaker_names_json = row["speaker_names_json"] if "speaker_names_json" in row.keys() else None
         summary = None
         if summary_json:
             data = json.loads(summary_json)
@@ -274,6 +294,7 @@ class EngramStore:
             error=row["error"],
             memory_log_entry_id=row["memory_log_entry_id"],
             summary=summary,
+            speaker_names=json.loads(speaker_names_json) if speaker_names_json else {},
             segment_count=int(row["segment_count"]) if "segment_count" in row.keys() else 0,
         )
 

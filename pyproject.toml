@@ -28,6 +28,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["mycelium"]
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: slow or external-resource integration tests",
+]
+
 [dependency-groups]
 benchmark = [
     "datasets>=5.0.0",
@@ -44,9 +49,9 @@ dev = [
     "ruff>=0.15.12",
 ]
 engram = [
-    "faster-whisper>=1.1.1",
+    "faster-whisper>=1.2.1",
     "numpy>=2.0",
-    "pyannote.audio>=3.3.2",
+    "pyannote.audio>=4.0.5",
     "torch>=2.4",
-    "whisperx>=3.3.1",
+    "whisperx>=3.8.6",
 ]

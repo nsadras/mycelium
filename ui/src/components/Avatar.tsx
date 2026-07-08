@@ -25,10 +25,11 @@ const activityCopy: Record<AssistantActivity, { label: string; detail: string }>
   'clicked-right': { label: 'Hello', detail: 'Interacting' },
   wiki: { label: 'Wiki', detail: 'Browsing memory' },
   logs: { label: 'Logs', detail: 'Inspecting episodes' },
+  engram: { label: 'Engram', detail: 'Meeting memory' },
   chat: { label: 'Chat', detail: 'Ready' },
 };
 
-export default function Avatar({ status, activeTab }: { status: AssistantStatus; activeTab?: 'chat' | 'wiki' | 'logs' }) {
+export default function Avatar({ status, activeTab }: { status: AssistantStatus; activeTab?: 'chat' | 'engram' | 'wiki' | 'logs' }) {
   const [selectedAvatarId, setSelectedAvatarId] = useState<string>(() => {
     try {
       return localStorage.getItem('mycellium_avatar') || 'myco';

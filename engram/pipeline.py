@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from engram.config import EngramConfig
 from engram.diarize import WhisperXDiarizer
-from engram.memory_adapter import ingest_meeting_into_memory, meeting_transcript_text
+from engram.memory_adapter import ingest_meeting_into_memory, meeting_transcript_text, resolved_speaker_name
 from engram.models import Meeting, TranscriptSegment, iso_or_none
 from engram.store import EngramStore
 from engram.summarize import EngramSummarizer
@@ -95,14 +95,9 @@ class EngramService:
                 # Diarization is valuable but should not block summary or memory ingestion.
                 await self.publish(meeting_id, {"type": "warning", "message": f"Diarization skipped: {exc}"})
 
-            transcript = meeting_transcript_text(segments)
-            summary = await self.summarizer_factory().summarize(meeting.title, transcript)
-            meeting = self.store.save_summary(meeting_id, summary)
-            entry = await asyncio.to_thread(ingest_meeting_into_memory, self.get_mem(), self.store, meeting_id)
             meeting = self.store.update_meeting(
                 meeting_id,
-                status="completed",
-                memory_log_entry_id=entry.entry_id,
+                status="reviewing",
                 error=None,
             )
             await self.publish(
@@ -117,6 +112,44 @@ class EngramService:
                 {"type": "error", "message": str(exc), "meeting": meeting_response(meeting, self.store.list_segments(meeting_id))},
             )
             return meeting
+
+    async def update_speaker_names(self, meeting_id: str, speaker_names: dict[str, str]) -> Meeting:
+        meeting = self.store.save_speaker_names(meeting_id, speaker_names)
+        segments = self.store.list_segments(meeting_id)
+        await self.publish(meeting_id, {"type": "meeting", "meeting": meeting_response(meeting, segments)})
+        return meeting
+
+    async def finalize_meeting(self, meeting_id: str) -> Meeting:
+        meeting = self.store.get_meeting(meeting_id)
+        if meeting.status == "completed":
+            return meeting
+        if meeting.status != "reviewing":
+            raise ValueError("Meeting must be ready for review before finalization.")
+
+        segments = self.store.list_segments(meeting_id)
+        if not segments:
+            raise ValueError("Meeting has no transcript segments to finalize.")
+
+        meeting = self.store.update_meeting(meeting_id, status="processing", error=None)
+        await self.publish(meeting_id, {"type": "meeting", "meeting": meeting_response(meeting, segments)})
+
+        try:
+            transcript = meeting_transcript_text(segments, meeting.speaker_names)
+            summary = await self.summarizer_factory().summarize(meeting.title, transcript)
+            meeting = self.store.save_summary(meeting_id, summary)
+            entry = await asyncio.to_thread(ingest_meeting_into_memory, self.get_mem(), self.store, meeting_id)
+            meeting = self.store.update_meeting(
+                meeting_id,
+                status="completed",
+                memory_log_entry_id=entry.entry_id,
+                error=None,
+            )
+            await self.publish(meeting_id, {"type": "meeting", "meeting": meeting_response(meeting, self.store.list_segments(meeting_id))})
+            return meeting
+        except Exception as exc:
+            meeting = self.store.update_meeting(meeting_id, status="reviewing", error=str(exc))
+            await self.publish(meeting_id, {"type": "error", "message": str(exc), "meeting": meeting_response(meeting, segments)})
+            raise
 
     async def subscribe(self, meeting_id: str) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -176,11 +209,12 @@ def meeting_response(meeting: Meeting, segments: list[TranscriptSegment]) -> dic
         "error": meeting.error,
         "memory_log_entry_id": meeting.memory_log_entry_id,
         "summary": asdict(meeting.summary) if meeting.summary else None,
+        "speaker_names": meeting.speaker_names,
         "segment_count": len(segments) if segments else meeting.segment_count,
     }
 
 
-def segment_response(segment: TranscriptSegment) -> dict[str, Any]:
+def segment_response(segment: TranscriptSegment, speaker_names: dict[str, str] | None = None) -> dict[str, Any]:
     return {
         "id": segment.id,
         "meeting_id": segment.meeting_id,
@@ -189,6 +223,7 @@ def segment_response(segment: TranscriptSegment) -> dict[str, Any]:
         "end_seconds": segment.end_seconds,
         "text": segment.text,
         "speaker": segment.speaker,
+        "display_speaker": resolved_speaker_name(segment.speaker, speaker_names),
         "status": segment.status,
         "created_at": iso_or_none(segment.created_at),
     }

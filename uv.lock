@@ -1729,11 +1729,11 @@ dev = [
     { name = "ruff", specifier = ">=0.15.12" },
 ]
 engram = [
-    { name = "faster-whisper", specifier = ">=1.1.1" },
+    { name = "faster-whisper", specifier = ">=1.2.1" },
     { name = "numpy", specifier = ">=2.0" },
-    { name = "pyannote-audio", specifier = ">=3.3.2" },
+    { name = "pyannote-audio", specifier = ">=4.0.5" },
     { name = "torch", specifier = ">=2.4" },
-    { name = "whisperx", specifier = ">=3.3.1" },
+    { name = "whisperx", specifier = ">=3.8.6" },
 ]
 
 [[package]]

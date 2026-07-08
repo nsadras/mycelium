@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
-MeetingStatus = Literal["ready", "transcribing", "processing", "completed", "failed"]
+MeetingStatus = Literal["ready", "transcribing", "processing", "reviewing", "completed", "failed"]
 SegmentStatus = Literal["live", "final", "diarized"]
 
 
@@ -42,6 +42,7 @@ class Meeting:
     error: str | None = None
     memory_log_entry_id: str | None = None
     summary: MeetingSummary | None = None
+    speaker_names: dict[str, str] = field(default_factory=dict)
     segment_count: int = 0
 
 

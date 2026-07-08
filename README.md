@@ -28,7 +28,7 @@ The project includes a Python memory library, a FastAPI backend, and a React web
 
 ```text
 mycelium/
-├── engram/             # Local meeting recorder, transcription, diarization, and memory ingestion
+├── engram/             # Local meeting uploads, transcription, diarization, and memory ingestion
 ├── mycelium/           # Core memory library
 │   ├── core.py         # Mycelium facade, retrieval, sessions, dream entrypoint
 │   ├── encoder.py      # Raw transcript-to-log persistence
@@ -267,13 +267,53 @@ Engram stores uploaded raw meeting audio first, then processes it later when you
 
 Record meetings with a tool of your choice, such as Audacity, OBS, a phone recorder, or the meeting app's built-in recorder. In the Engram tab, use the upload button, select the audio file, then click **Process** after it appears as a `ready` recording.
 
-For diarization, set a Hugging Face token after accepting the pyannote model terms:
+By default, Engram uses `device = "auto"` and `compute_type = "auto"` in `mycelium.toml`. With a CUDA-visible NVIDIA GPU, this resolves to CUDA with `float16` inference; otherwise it falls back to CPU with `int8` inference. You can force a path in `[engram.whisper]`:
+
+```toml
+[engram.whisper]
+device = "cuda"
+compute_type = "float16"
+```
+
+For diarization, set a Hugging Face token after accepting the `pyannote/speaker-diarization-community-1` model terms:
 
 ```bash
 export HF_TOKEN=your_hugging_face_token
 ```
 
 Uploaded recordings are copied to `mycelium_store/engram/audio/` and appear as raw `ready` recordings in the Engram tab. Click **Process** to transcribe, diarize, summarize, and ingest them into the normal daily raw log store as durable unconsolidated meeting entries.
+
+If you have the AMI meeting subset under `AMI/`, you can run a slow transcription smoke test over the four ES2002 meetings and write outputs for manual comparison:
+
+```bash
+ENGRAM_RUN_AMI_TRANSCRIPTION=1 uv run pytest tests/test_engram_transcribe_ami.py
+```
+
+Optional overrides:
+
+```bash
+ENGRAM_AMI_MEETINGS=ES2002a \
+ENGRAM_AMI_WHISPER_MODEL=base.en \
+ENGRAM_AMI_OUTPUT_DIR=test_outputs/ami_transcripts \
+ENGRAM_RUN_AMI_TRANSCRIPTION=1 \
+uv run pytest tests/test_engram_transcribe_ami.py
+```
+
+The test writes `*.whisper.txt`, `*.reference.txt`, and `*.segments.json` files under `test_outputs/ami_transcripts/`.
+
+To run the 5-minute WhisperX/pyannote diarization comparison for `ES2002a`, set `HF_TOKEN` after accepting the pyannote model terms and run:
+
+```bash
+HF_TOKEN=your_hugging_face_token \
+ENGRAM_RUN_AMI_DIARIZATION=1 \
+ENGRAM_AMI_DIARIZATION_MEETING=ES2002a \
+ENGRAM_AMI_WHISPER_MODEL=base.en \
+uv run pytest tests/test_engram_transcribe_ami.py::test_diarize_ami_first_five_minutes_with_whisperx_for_manual_comparison -s
+```
+
+Add `ENGRAM_AMI_WHISPER_DEVICE=cpu ENGRAM_AMI_WHISPER_COMPUTE_TYPE=int8` to force the CPU path.
+
+The diarization test writes `*.diarized.txt`, `*.diarized_segments.json`, `*.reference_words.json`, and `*.diarization_metrics.json` for manual review.
 
 ### WSL on Windows
 

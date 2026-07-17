@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { AlertTriangle, CheckCircle2, CircleHelp, Clock, FileAudio, Gavel, ListChecks, Loader2, RotateCw, Save, Trash2, Upload, UserRound } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CircleHelp, Clock, FileAudio, Gavel, ListChecks, Loader2, RotateCw, Save, Trash2, Upload } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import api, { type EngramMeeting, type EngramSegment } from '../lib/api';
@@ -35,6 +35,76 @@ function processingLabel(meeting: EngramMeeting, isFinalizing: boolean) {
   return 'Processing';
 }
 
+interface TranscriptTurn {
+  key: string;
+  speaker: string | null;
+  speakerName: string | null;
+  startSeconds: number;
+  endSeconds: number;
+  text: string;
+}
+
+const SPEAKER_STYLES = [
+  { avatar: 'border-cyan-400/30 bg-cyan-500/15 text-cyan-100', swatch: 'bg-cyan-400' },
+  { avatar: 'border-amber-400/30 bg-amber-500/15 text-amber-100', swatch: 'bg-amber-400' },
+  { avatar: 'border-violet-400/30 bg-violet-500/15 text-violet-100', swatch: 'bg-violet-400' },
+  { avatar: 'border-rose-400/30 bg-rose-500/15 text-rose-100', swatch: 'bg-rose-400' },
+  { avatar: 'border-sky-400/30 bg-sky-500/15 text-sky-100', swatch: 'bg-sky-400' },
+] as const;
+
+function speakerStyle(speaker: string) {
+  let hash = 0;
+  for (const char of speaker) hash = ((hash * 31) + char.charCodeAt(0)) >>> 0;
+  return SPEAKER_STYLES[hash % SPEAKER_STYLES.length];
+}
+
+function speakerInitials(name: string) {
+  const rawSpeaker = name.trim().match(/^SPEAKER[_\s-]*(\d+)$/i);
+  if (rawSpeaker) return rawSpeaker[1];
+  const words = name.trim().split(/[\s_]+/).filter(Boolean);
+  if (words.length > 1) return `${words[0][0]}${words.at(-1)?.[0] ?? ''}`.toUpperCase();
+  return name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
+}
+
+function transcriptTurns(segments: EngramSegment[], speakerNames: Record<string, string>): TranscriptTurn[] {
+  const hasDiarizedSpeakers = segments.some(
+    segment => segment.status === 'diarized' && segment.speaker && segment.speaker !== 'Speaker ?'
+  );
+
+  if (!hasDiarizedSpeakers) {
+    return segments.map(segment => ({
+      key: String(segment.id ?? `${segment.segment_index}-${segment.start_seconds}`),
+      speaker: null,
+      speakerName: null,
+      startSeconds: segment.start_seconds,
+      endSeconds: segment.end_seconds,
+      text: segment.text,
+    }));
+  }
+
+  const turns: TranscriptTurn[] = [];
+  for (const segment of segments) {
+    const speaker = segment.status === 'diarized' && segment.speaker && segment.speaker !== 'Speaker ?'
+      ? segment.speaker
+      : null;
+    const previous = turns.at(-1);
+    if (speaker && previous?.speaker === speaker) {
+      previous.endSeconds = segment.end_seconds;
+      previous.text = `${previous.text} ${segment.text}`.trim();
+      continue;
+    }
+    turns.push({
+      key: String(segment.id ?? `${segment.segment_index}-${segment.start_seconds}`),
+      speaker,
+      speakerName: speaker ? speakerNames[speaker]?.trim() || segment.display_speaker || speaker : null,
+      startSeconds: segment.start_seconds,
+      endSeconds: segment.end_seconds,
+      text: segment.text,
+    });
+  }
+  return turns;
+}
+
 interface EngramProps {
   setAssistantStatus: Dispatch<SetStateAction<AssistantStatus>>;
 }
@@ -54,6 +124,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   const segments = useMemo(() => meeting?.segments ?? [], [meeting]);
+  const turns = useMemo(() => transcriptTurns(segments, speakerNames), [segments, speakerNames]);
   const speakerStats = useMemo(() => {
     const stats = new Map<string, { label: string; count: number; seconds: number }>();
     for (const segment of segments) {
@@ -393,7 +464,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                 <div className="shrink-0 border-b border-slate-200 px-5 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
                   Transcript
                 </div>
-                <div ref={transcriptRef} className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-3">
+                <div ref={transcriptRef} className="flex-1 min-h-0 overflow-y-auto px-5 py-2">
                   {segments.length === 0 ? (
                     <div className="h-full flex items-center justify-center text-slate-500">
                       {meeting.status === 'ready'
@@ -403,15 +474,8 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                           : 'No transcript segments.'}
                     </div>
                   ) : (
-                    segments.map((segment) => (
-                      <div key={segment.id ?? `${segment.segment_index}-${segment.start_seconds}`} className="rounded-md border border-slate-200 bg-slate-950/20 px-3 py-2">
-                        <div className="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wide text-slate-500">
-                          <span className="font-mono">{formatTime(segment.start_seconds)}-{formatTime(segment.end_seconds)}</span>
-                          <span className="inline-flex items-center gap-1 text-emerald-300"><UserRound size={12} /> {displaySpeaker(segment, speakerNames)}</span>
-                          <span className="ml-auto">{segment.status}</span>
-                        </div>
-                        <p className="text-sm leading-relaxed text-slate-200">{segment.text}</p>
-                      </div>
+                    turns.map((turn) => (
+                      <TranscriptTurnRow key={turn.key} turn={turn} />
                     ))
                   )}
                 </div>
@@ -435,7 +499,10 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                       {speakerStats.map((speaker) => (
                         <div key={speaker.label} className="rounded-md border border-slate-200 px-3 py-2">
                           <div className="mb-2 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-slate-500">
-                            <span className="font-mono">{speaker.label}</span>
+                            <span className="inline-flex items-center gap-2 font-mono">
+                              <span className={cn('h-2 w-2 shrink-0 rounded-full', speakerStyle(speaker.label).swatch)} />
+                              {speaker.label}
+                            </span>
                             <span>{speaker.count} lines · {formatTime(speaker.seconds)}</span>
                           </div>
                           <input
@@ -510,9 +577,34 @@ function ProcessingIndicator({ label, compact = false }: { label: string; compac
   );
 }
 
-function displaySpeaker(segment: EngramSegment, speakerNames: Record<string, string>) {
-  const raw = segment.speaker || 'Speaker ?';
-  return speakerNames[raw]?.trim() || segment.display_speaker || raw;
+function TranscriptTurnRow({ turn }: { turn: TranscriptTurn }) {
+  const style = turn.speaker ? speakerStyle(turn.speaker) : null;
+  return (
+    <div className="grid grid-cols-1 gap-2 border-b border-slate-200/70 py-4 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4">
+      <div className="flex min-w-0 items-center gap-2 sm:items-start">
+        {turn.speaker && turn.speakerName && style ? (
+          <>
+            <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold', style.avatar)}>
+              {speakerInitials(turn.speakerName)}
+            </span>
+            <div className="min-w-0 pt-0.5">
+              <div className="truncate text-xs font-semibold text-slate-200">{turn.speakerName}</div>
+              <div className="mt-0.5 font-mono text-[10px] text-slate-500">
+                {formatTime(turn.startSeconds)}-{formatTime(turn.endSeconds)}
+              </div>
+            </div>
+          </>
+        ) : (
+          <span className="font-mono text-[10px] text-slate-500">
+            {formatTime(turn.startSeconds)}-{formatTime(turn.endSeconds)}
+          </span>
+        )}
+      </div>
+      <div className="min-w-0 border-l-2 border-slate-700/70 py-1 pl-4 pr-2">
+        <p className="text-sm leading-7 text-slate-200">{turn.text}</p>
+      </div>
+    </div>
+  );
 }
 
 function List({ values, empty }: { values: string[]; empty: string }) {

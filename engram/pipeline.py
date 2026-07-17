@@ -42,7 +42,35 @@ class EngramService:
                 temperature=self.config.summary_temperature,
             )
         )
-        self._subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
+        self._processing_tasks: dict[str, asyncio.Task[Meeting]] = {}
+
+    def start_processing(self, meeting_id: str) -> asyncio.Task[Meeting]:
+        existing = self._processing_tasks.get(meeting_id)
+        if existing and not existing.done():
+            return existing
+
+        task = asyncio.create_task(self.process_meeting(meeting_id))
+        self._processing_tasks[meeting_id] = task
+
+        def remove_completed(completed: asyncio.Task[Meeting]) -> None:
+            if self._processing_tasks.get(meeting_id) is completed:
+                self._processing_tasks.pop(meeting_id, None)
+
+        task.add_done_callback(remove_completed)
+        return task
+
+    def recover_interrupted_meetings(self) -> list[Meeting]:
+        recovered = []
+        for meeting in self.store.list_meetings():
+            if meeting.status in {"transcribing", "processing"}:
+                recovered.append(
+                    self.store.update_meeting(
+                        meeting.id,
+                        status="failed",
+                        error="Processing was interrupted by a server restart. Retry the meeting to continue.",
+                    )
+                )
+        return recovered
 
     async def process_meeting(self, meeting_id: str) -> Meeting:
         meeting = self.store.get_meeting(meeting_id)
@@ -50,11 +78,9 @@ class EngramService:
             return meeting
         if not meeting.audio_path or not Path(meeting.audio_path).exists():
             meeting = self.store.update_meeting(meeting_id, status="failed", error="No raw audio file is available for processing.")
-            await self.publish(meeting_id, {"type": "error", "message": meeting.error, "meeting": meeting_response(meeting, [])})
             return meeting
 
         meeting = self.store.update_meeting(meeting_id, status="transcribing", error=None)
-        await self.publish(meeting_id, {"type": "meeting", "meeting": meeting_response(meeting, self.store.list_segments(meeting_id))})
 
         try:
             transcribed = await asyncio.to_thread(
@@ -76,10 +102,6 @@ class EngramService:
             self.store.replace_segments(meeting_id, transcript_segments)
             segments = self.store.list_segments(meeting_id)
             meeting = self.store.update_meeting(meeting_id, status="processing")
-            await self.publish(
-                meeting_id,
-                {"type": "meeting", "meeting": meeting_response(meeting, segments)},
-            )
 
             try:
                 diarized = await asyncio.to_thread(
@@ -91,33 +113,34 @@ class EngramService:
                     segment.meeting_id = meeting_id
                 self.store.replace_segments(meeting_id, diarized)
                 segments = self.store.list_segments(meeting_id)
-            except Exception as exc:
+            except Exception:
                 # Diarization is valuable but should not block summary or memory ingestion.
-                await self.publish(meeting_id, {"type": "warning", "message": f"Diarization skipped: {exc}"})
+                pass
 
             meeting = self.store.update_meeting(
                 meeting_id,
                 status="reviewing",
                 error=None,
             )
-            await self.publish(
-                meeting_id,
-                {"type": "meeting", "meeting": meeting_response(meeting, self.store.list_segments(meeting_id))},
-            )
             return meeting
         except Exception as exc:
             meeting = self.store.update_meeting(meeting_id, status="failed", error=str(exc))
-            await self.publish(
-                meeting_id,
-                {"type": "error", "message": str(exc), "meeting": meeting_response(meeting, self.store.list_segments(meeting_id))},
-            )
             return meeting
 
     async def update_speaker_names(self, meeting_id: str, speaker_names: dict[str, str]) -> Meeting:
         meeting = self.store.save_speaker_names(meeting_id, speaker_names)
-        segments = self.store.list_segments(meeting_id)
-        await self.publish(meeting_id, {"type": "meeting", "meeting": meeting_response(meeting, segments)})
         return meeting
+
+    async def delete_meeting(self, meeting_id: str) -> None:
+        meeting = self.store.get_meeting(meeting_id)
+        self.store.delete_meeting(meeting_id)
+        if meeting.audio_path:
+            audio_path = Path(meeting.audio_path)
+            try:
+                if audio_path.exists() and audio_path.is_file():
+                    audio_path.unlink()
+            except OSError:
+                pass
 
     async def finalize_meeting(self, meeting_id: str) -> Meeting:
         meeting = self.store.get_meeting(meeting_id)
@@ -131,7 +154,6 @@ class EngramService:
             raise ValueError("Meeting has no transcript segments to finalize.")
 
         meeting = self.store.update_meeting(meeting_id, status="processing", error=None)
-        await self.publish(meeting_id, {"type": "meeting", "meeting": meeting_response(meeting, segments)})
 
         try:
             transcript = meeting_transcript_text(segments, meeting.speaker_names)
@@ -144,31 +166,10 @@ class EngramService:
                 memory_log_entry_id=entry.entry_id,
                 error=None,
             )
-            await self.publish(meeting_id, {"type": "meeting", "meeting": meeting_response(meeting, self.store.list_segments(meeting_id))})
             return meeting
         except Exception as exc:
             meeting = self.store.update_meeting(meeting_id, status="reviewing", error=str(exc))
-            await self.publish(meeting_id, {"type": "error", "message": str(exc), "meeting": meeting_response(meeting, segments)})
             raise
-
-    async def subscribe(self, meeting_id: str) -> asyncio.Queue[dict[str, Any]]:
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._subscribers.setdefault(meeting_id, set()).add(queue)
-        meeting = self.store.get_meeting(meeting_id)
-        await queue.put({"type": "meeting", "meeting": meeting_response(meeting, self.store.list_segments(meeting_id))})
-        return queue
-
-    def unsubscribe(self, meeting_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
-        subscribers = self._subscribers.get(meeting_id)
-        if not subscribers:
-            return
-        subscribers.discard(queue)
-        if not subscribers:
-            self._subscribers.pop(meeting_id, None)
-
-    async def publish(self, meeting_id: str, event: dict[str, Any]) -> None:
-        for queue in list(self._subscribers.get(meeting_id, set())):
-            await queue.put(event)
 
     async def create_uploaded_meeting(
         self,
@@ -192,12 +193,11 @@ class EngramService:
             audio_path=str(audio_path),
             error=None,
         )
-        await self.publish(meeting.id, {"type": "meeting", "meeting": meeting_response(meeting, [])})
         return meeting
 
 
 def meeting_response(meeting: Meeting, segments: list[TranscriptSegment]) -> dict[str, Any]:
-    return {
+    response = {
         "id": meeting.id,
         "title": meeting.title,
         "status": meeting.status,
@@ -211,7 +211,9 @@ def meeting_response(meeting: Meeting, segments: list[TranscriptSegment]) -> dic
         "summary": asdict(meeting.summary) if meeting.summary else None,
         "speaker_names": meeting.speaker_names,
         "segment_count": len(segments) if segments else meeting.segment_count,
+        "segments": [segment_response(segment, meeting.speaker_names) for segment in segments],
     }
+    return response
 
 
 def segment_response(segment: TranscriptSegment, speaker_names: dict[str, str] | None = None) -> dict[str, Any]:

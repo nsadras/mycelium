@@ -182,6 +182,19 @@ select:focus {
   color: rgba(148, 163, 184, 0.45) !important;
 }
 
+@keyframes engram-progress {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+.engram-progress-bar {
+  animation: engram-progress 1.35s ease-in-out infinite;
+}
+
 /* Markdown prose restyling */
 .prose-chat h1, .prose-chat h2, .prose-chat h3, .prose-chat h4 {
   color: #ffffff !important;

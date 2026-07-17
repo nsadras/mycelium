@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { AlertTriangle, CheckCircle2, CircleHelp, Clock, FileAudio, Gavel, ListChecks, Loader2, RotateCw, Save, Upload, UserRound } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CircleHelp, Clock, FileAudio, Gavel, ListChecks, Loader2, RotateCw, Save, Trash2, Upload, UserRound } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import api, { engramStreamUrl, type EngramMeeting, type EngramSegment } from '../lib/api';
+import api, { type EngramMeeting, type EngramSegment } from '../lib/api';
 import type { AssistantStatus } from '../lib/assistantStatus';
 
 function cn(...inputs: ClassValue[]) {
@@ -24,6 +24,17 @@ function statusTone(status: EngramMeeting['status']) {
   return 'bg-amber-500/15 text-amber-100 border-amber-500/25';
 }
 
+function isBusyStatus(status: EngramMeeting['status']) {
+  return status === 'transcribing' || status === 'processing';
+}
+
+function processingLabel(meeting: EngramMeeting, isFinalizing: boolean) {
+  if (isFinalizing) return 'Finalizing meeting';
+  if (meeting.status === 'transcribing') return 'Transcribing audio';
+  if (meeting.status === 'processing') return meeting.segments?.length ? 'Diarizing speakers' : 'Processing audio';
+  return 'Processing';
+}
+
 interface EngramProps {
   setAssistantStatus: Dispatch<SetStateAction<AssistantStatus>>;
 }
@@ -37,6 +48,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   const [isUploading, setIsUploading] = useState(false);
   const [isSavingSpeakers, setIsSavingSpeakers] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({});
   const uploadRef = useRef<HTMLInputElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -45,7 +57,8 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   const speakerStats = useMemo(() => {
     const stats = new Map<string, { label: string; count: number; seconds: number }>();
     for (const segment of segments) {
-      const label = segment.speaker || 'Speaker ?';
+      if (segment.status !== 'diarized' || !segment.speaker || segment.speaker === 'Speaker ?') continue;
+      const label = segment.speaker;
       const current = stats.get(label) ?? { label, count: 0, seconds: 0 };
       current.count += 1;
       current.seconds += Math.max(0, segment.end_seconds - segment.start_seconds);
@@ -72,39 +85,37 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   }, [meeting?.id, JSON.stringify(meeting?.speaker_names ?? {})]);
 
   useEffect(() => {
-    if (!selectedId) return;
-    const ws = new WebSocket(engramStreamUrl(selectedId));
-    ws.onmessage = (event) => {
-      const payload = JSON.parse(event.data);
-      if (payload.type === 'segment') {
-        setMeeting(prev => {
-          if (!prev) return prev;
-          const nextSegments = [...(prev.segments ?? [])];
-          const segment = payload.segment as EngramSegment;
-          const existingIndex = nextSegments.findIndex(item => item.id === segment.id && segment.id !== null);
-          if (existingIndex >= 0) nextSegments[existingIndex] = segment;
-          else nextSegments.push(segment);
-          return { ...prev, segments: nextSegments, segment_count: nextSegments.length };
-        });
-      } else if (payload.meeting) {
-        const next = payload.meeting as EngramMeeting;
-        setMeeting(prev => ({ ...next, segments: next.segments ?? prev?.segments ?? [] }));
+    if (!selectedId || meeting?.id !== selectedId || !isBusyStatus(meeting.status)) return;
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const pollMeeting = async () => {
+      try {
+        const res = await api.get(`/engram/meetings/${selectedId}`);
+        if (cancelled) return;
+        const next = res.data as EngramMeeting;
+        setMeeting(next);
         setMeetings(prev => prev.map(item => item.id === next.id ? { ...item, ...next } : item));
-        if (next.status === 'processing' || next.status === 'transcribing') {
-          setAssistantStatus({ activity: 'thinking', label: 'Processing meeting', detail: next.title });
-        } else if (next.status === 'ready') {
-          setAssistantStatus({ activity: 'engram', label: 'Raw recording ready', detail: next.title });
-        } else if (next.status === 'failed') {
+        if (next.status === 'failed') {
           setAssistantStatus({ activity: 'error', label: 'Engram failed', detail: 'Check meeting detail' });
         } else if (next.status === 'reviewing') {
           setAssistantStatus({ activity: 'engram', label: 'Review speakers', detail: next.title });
         } else if (next.status === 'completed') {
           setAssistantStatus({ activity: 'engram', label: 'Meeting complete', detail: 'Ready' });
         }
+      } catch (err) {
+        console.error('Failed to poll meeting', err);
+      } finally {
+        if (!cancelled) pollTimer = setTimeout(pollMeeting, 1500);
       }
     };
-    return () => ws.close();
-  }, [selectedId]);
+
+    pollTimer = setTimeout(pollMeeting, 1500);
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [selectedId, meeting?.id, meeting?.status, setAssistantStatus]);
 
   useEffect(() => {
     if (transcriptRef.current) {
@@ -128,6 +139,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     try {
       const res = await api.get(`/engram/meetings/${id}`);
       setMeeting(res.data);
+      setMeetings(prev => prev.map(item => item.id === id ? { ...item, ...res.data } : item));
     } catch (err) {
       console.error('Failed to fetch meeting', err);
     }
@@ -139,7 +151,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     setAssistantStatus({ activity: 'thinking', label: 'Processing meeting', detail: meeting.title });
     try {
       const res = await api.post(`/engram/meetings/${meeting.id}/process`);
-      await fetchMeeting(meeting.id);
+      setMeeting(res.data);
       setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
     } catch (err) {
       console.error('Failed to process meeting', err);
@@ -182,6 +194,31 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
       setAssistantStatus({ activity: 'error', label: 'Finalize failed', detail: 'Check backend logs' });
     } finally {
       setIsFinalizing(false);
+    }
+  };
+
+  const deleteMeeting = async (target: EngramMeeting) => {
+    if (deletingId) return;
+    const ok = window.confirm(`Delete "${target.title}" and its uploaded recording/transcript?`);
+    if (!ok) return;
+    setDeletingId(target.id);
+    setAssistantStatus({ activity: 'engram', label: 'Deleting recording', detail: target.title });
+    try {
+      await api.delete(`/engram/meetings/${target.id}`);
+      setMeetings(prev => {
+        const next = prev.filter(item => item.id !== target.id);
+        if (selectedId === target.id) {
+          setSelectedId(next[0]?.id ?? null);
+          setMeeting(null);
+        }
+        return next;
+      });
+      setAssistantStatus({ activity: 'engram', label: 'Recording deleted', detail: 'Ready' });
+    } catch (err) {
+      console.error('Failed to delete meeting', err);
+      setAssistantStatus({ activity: 'error', label: 'Delete failed', detail: 'Check backend logs' });
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -257,6 +294,25 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
             >
               <div className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    deleteMeeting(item);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      deleteMeeting(item);
+                    }
+                  }}
+                  title="Delete recording"
+                  className="inline-flex shrink-0 items-center justify-center rounded-md p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                >
+                  {deletingId === item.id ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                </span>
               </div>
               <div className="mt-1 flex items-center gap-2 text-[10px] uppercase tracking-wide text-slate-500">
                 <span>{item.status}</span>
@@ -285,6 +341,23 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => deleteMeeting(meeting)}
+                  disabled={deletingId === meeting.id || isBusyStatus(meeting.status)}
+                  className="inline-flex items-center gap-2 rounded-md border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                >
+                  {deletingId === meeting.id ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                  Delete
+                </button>
+                {isBusyStatus(meeting.status) && (
+                  <button
+                    disabled
+                    className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white opacity-80"
+                  >
+                    <Loader2 size={16} className="animate-spin" />
+                    {processingLabel(meeting, isFinalizing)}
+                  </button>
+                )}
                 {(meeting.status === 'ready' || meeting.status === 'failed') && (
                   <button
                     onClick={processMeeting}
@@ -326,7 +399,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                       {meeting.status === 'ready'
                         ? 'Raw audio is ready. Click Process to transcribe, diarize, summarize, and ingest it.'
                         : meeting.status === 'processing' || meeting.status === 'transcribing'
-                          ? 'Processing raw audio...'
+                          ? <ProcessingIndicator label={processingLabel(meeting, isFinalizing)} compact />
                           : 'No transcript segments.'}
                     </div>
                   ) : (
@@ -345,7 +418,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
               </div>
 
               <aside className="min-h-0 border-t xl:border-t-0 xl:border-l border-slate-200 overflow-y-auto p-5 space-y-5">
-                {speakerStats.length > 0 && (
+                {(meeting.status === 'reviewing' || meeting.status === 'completed') && speakerStats.length > 0 && (
                   <section>
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">Speakers</h2>
@@ -415,6 +488,23 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
             Upload or select a recording.
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function ProcessingIndicator({ label, compact = false }: { label: string; compact?: boolean }) {
+  return (
+    <div className={cn(
+      "shrink-0 border-b border-emerald-500/15 bg-emerald-950/20",
+      compact ? "w-full max-w-md rounded-md border px-4 py-3" : "px-5 py-3"
+    )}>
+      <div className="mb-2 flex items-center gap-2 text-sm font-medium text-emerald-100">
+        <Loader2 size={16} className="animate-spin text-emerald-300" />
+        <span>{label}</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-emerald-950/80">
+        <div className="engram-progress-bar h-full w-1/3 rounded-full bg-emerald-400" />
       </div>
     </div>
   );

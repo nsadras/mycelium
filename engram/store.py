@@ -262,6 +262,13 @@ class EngramStore:
             ).fetchall()
         return [self._segment_from_row(row) for row in rows]
 
+    def delete_meeting(self, meeting_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM transcript_segments WHERE meeting_id = ?", (meeting_id,))
+            cur = conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
+            if cur.rowcount == 0:
+                raise FileNotFoundError(f"Meeting {meeting_id} not found.")
+
     def next_segment_index(self, meeting_id: str) -> int:
         with self._connect() as conn:
             row = conn.execute(

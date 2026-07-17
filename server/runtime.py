@@ -41,6 +41,7 @@ def get_engram() -> EngramService:
         config = EngramConfig.from_toml("mycelium.toml")
         config.ensure_dirs()
         _engram = EngramService(config, EngramStore(config.db_path), get_mem)
+        _engram.recover_interrupted_meetings()
     return _engram
 
 

@@ -3,13 +3,16 @@ import sys
 import wave
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from engram.config import EngramConfig
 from engram.memory_adapter import ingest_meeting_into_memory
 from engram.models import MeetingSummary
-from engram.pipeline import EngramService
+from engram.pipeline import EngramService, meeting_response
 from engram.store import EngramStore
 from mycelium.store import LogStore
+from server.api import engram as engram_api
 
 
 def test_engram_config_prefers_cuda_for_auto_device(monkeypatch):
@@ -118,12 +121,47 @@ async def test_engram_service_creates_ready_meeting_from_uploaded_audio(tmp_path
         audio_bytes=audio.read_bytes(),
         original_filename="phone.wav",
     )
+    response = meeting_response(meeting, [])
 
     assert meeting.status == "ready"
+    assert response["segments"] == []
     assert meeting.audio_path is not None
     assert meeting.audio_path.endswith(".wav")
     assert meeting.duration_seconds == 0.5
     assert store.get_meeting(meeting.id).title == "Phone recording"
+
+
+@pytest.mark.asyncio
+async def test_engram_service_deletes_meeting_segments_and_audio(tmp_path):
+    store = EngramStore(tmp_path / "engram.sqlite")
+    config = EngramConfig(store_path=tmp_path / "engram", audio_dir=tmp_path / "audio")
+    service = EngramService(config, store, lambda: SimpleNamespace(log_store=LogStore(tmp_path / "logs")))
+
+    audio_path = tmp_path / "audio" / "delete-me.wav"
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(audio_path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"\x00\x00" * 16000)
+
+    meeting = store.create_meeting("Delete me")
+    store.update_meeting(meeting.id, status="reviewing", audio_path=str(audio_path))
+    store.add_segment(
+        meeting.id,
+        start_seconds=0.0,
+        end_seconds=1.0,
+        text="This should be deleted.",
+        speaker="SPEAKER_00",
+        status="diarized",
+    )
+
+    await service.delete_meeting(meeting.id)
+
+    with pytest.raises(FileNotFoundError):
+        store.get_meeting(meeting.id)
+    assert store.list_segments(meeting.id) == []
+    assert not audio_path.exists()
 
 
 @pytest.mark.asyncio
@@ -177,10 +215,13 @@ async def test_engram_service_processes_then_finalizes_meeting_with_speaker_name
 
     meeting = store.create_meeting("Architecture review")
     store.update_meeting(meeting.id, status="ready", audio_path=str(audio_path))
-
     processed = await service.process_meeting(meeting.id)
+    processed_segments = store.list_segments(meeting.id)
+    event_payload = meeting_response(processed, processed_segments)
 
     assert processed.status == "reviewing"
+    assert event_payload["segments"][0]["text"] == "Use local-only models for Engram."
+    assert event_payload["segments"][0]["speaker"] == "SPEAKER_00"
     assert not processed.memory_log_entry_id
     assert store.get_meeting(meeting.id).summary is None
     assert len(log_store.get_unconsolidated(days=None)) == 0
@@ -193,3 +234,39 @@ async def test_engram_service_processes_then_finalizes_meeting_with_speaker_name
     assert store.get_meeting(meeting.id).summary.decisions == ["Use local-only models."]
     assert "Alice: Use local-only models for Engram." in captured_transcripts[0]
     assert len(log_store.get_unconsolidated(days=None)) == 1
+
+
+def test_engram_service_recovers_interrupted_processing(tmp_path):
+    store = EngramStore(tmp_path / "engram.sqlite")
+    config = EngramConfig(store_path=tmp_path / "engram", audio_dir=tmp_path / "audio")
+    service = EngramService(config, store, lambda: SimpleNamespace(log_store=LogStore(tmp_path / "logs")))
+    transcribing = store.create_meeting("Interrupted transcription")
+    processing = store.create_meeting("Interrupted diarization")
+    completed = store.create_meeting("Already completed")
+    store.update_meeting(transcribing.id, status="transcribing")
+    store.update_meeting(processing.id, status="processing")
+    store.update_meeting(completed.id, status="completed")
+
+    recovered = service.recover_interrupted_meetings()
+
+    assert {meeting.id for meeting in recovered} == {transcribing.id, processing.id}
+    assert store.get_meeting(transcribing.id).status == "failed"
+    assert "server restart" in store.get_meeting(processing.id).error
+    assert store.get_meeting(completed.id).status == "completed"
+
+
+def test_process_meeting_api_returns_accepted_and_starts_background_task(tmp_path, monkeypatch):
+    store = EngramStore(tmp_path / "engram.sqlite")
+    meeting = store.create_meeting("Async processing")
+    started = []
+    service = SimpleNamespace(store=store, start_processing=started.append)
+    monkeypatch.setattr(engram_api, "get_engram", lambda: service)
+    app = FastAPI()
+    app.include_router(engram_api.router, prefix="/api/engram")
+
+    with TestClient(app) as client:
+        response = client.post(f"/api/engram/meetings/{meeting.id}/process")
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "processing"
+    assert started == [meeting.id]

@@ -109,8 +109,3 @@ export interface EngramMeeting {
   segment_count: number;
   segments?: EngramSegment[];
 }
-
-export function engramStreamUrl(meetingId: string) {
-  const wsOrigin = apiOrigin.replace(/^http/, 'ws');
-  return `${wsOrigin}/api/engram/meetings/${meetingId}/stream`;
-}

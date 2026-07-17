@@ -1,17 +1,57 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from pydantic import BaseModel
 
-from engram.pipeline import meeting_response, segment_response
+from engram.models import MeetingStatus, SegmentStatus
+from engram.pipeline import meeting_response
 from server.runtime import get_engram
 
 router = APIRouter()
 
 
-@router.get("/meetings")
+class EngramSegmentResponse(BaseModel):
+    id: int | None
+    meeting_id: str
+    segment_index: int
+    start_seconds: float
+    end_seconds: float
+    text: str
+    speaker: str | None
+    display_speaker: str | None
+    status: SegmentStatus
+    created_at: str | None
+
+
+class EngramMeetingResponse(BaseModel):
+    id: str
+    title: str
+    status: MeetingStatus
+    created_at: str | None
+    started_at: str | None
+    ended_at: str | None
+    duration_seconds: float | None
+    audio_path: str | None
+    error: str | None
+    memory_log_entry_id: str | None
+    summary: dict[str, Any] | None
+    speaker_names: dict[str, str]
+    segment_count: int
+    segments: list[EngramSegmentResponse]
+
+
+class SpeakerNamesUpdate(BaseModel):
+    speaker_names: dict[str, str]
+
+
+class DeleteMeetingResponse(BaseModel):
+    deleted: bool
+    meeting_id: str
+
+
+@router.get("/meetings", response_model=list[EngramMeetingResponse])
 async def list_meetings():
     service = get_engram()
     return [
@@ -20,7 +60,7 @@ async def list_meetings():
     ]
 
 
-@router.post("/meetings/upload")
+@router.post("/meetings/upload", response_model=EngramMeetingResponse)
 async def upload_meeting_audio(
     title: str | None = Form(default=None),
     file: UploadFile = File(...),
@@ -37,7 +77,7 @@ async def upload_meeting_audio(
     return meeting_response(meeting, [])
 
 
-@router.get("/meetings/{meeting_id}")
+@router.get("/meetings/{meeting_id}", response_model=EngramMeetingResponse)
 async def get_meeting(meeting_id: str):
     service = get_engram()
     try:
@@ -45,44 +85,56 @@ async def get_meeting(meeting_id: str):
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Meeting not found")
     segments = service.store.list_segments(meeting_id)
-    data = meeting_response(meeting, segments)
-    data["segments"] = [segment_response(segment, meeting.speaker_names) for segment in segments]
-    return data
+    return meeting_response(meeting, segments)
 
 
-@router.post("/meetings/{meeting_id}/process")
+@router.post(
+    "/meetings/{meeting_id}/process",
+    response_model=EngramMeetingResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def process_meeting(meeting_id: str):
     service = get_engram()
     try:
         meeting = service.store.get_meeting(meeting_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Meeting not found")
-    if meeting.status not in {"ready", "failed"}:
+    if meeting.status in {"transcribing", "processing"}:
         segments = service.store.list_segments(meeting_id)
         return meeting_response(meeting, segments)
+    if meeting.status not in {"ready", "failed"}:
+        raise HTTPException(status_code=409, detail="Meeting is not available for processing")
     meeting = service.store.update_meeting(meeting_id, status="processing", error=None)
-    asyncio.create_task(service.process_meeting(meeting_id))
+    service.start_processing(meeting_id)
     segments = service.store.list_segments(meeting_id)
     return meeting_response(meeting, segments)
 
 
-@router.put("/meetings/{meeting_id}/speakers")
-async def update_meeting_speakers(meeting_id: str, payload: dict[str, Any] = Body(...)):
+@router.delete("/meetings/{meeting_id}", response_model=DeleteMeetingResponse)
+async def delete_meeting(meeting_id: str):
     service = get_engram()
-    speaker_names = payload.get("speaker_names")
-    if not isinstance(speaker_names, dict):
-        raise HTTPException(status_code=400, detail="speaker_names must be an object")
     try:
-        meeting = await service.update_speaker_names(meeting_id, {str(k): str(v) for k, v in speaker_names.items()})
+        await service.delete_meeting(meeting_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    return {"deleted": True, "meeting_id": meeting_id}
+
+
+@router.put("/meetings/{meeting_id}/speakers", response_model=EngramMeetingResponse)
+async def update_meeting_speakers(meeting_id: str, payload: SpeakerNamesUpdate):
+    service = get_engram()
+    try:
+        meeting = await service.update_speaker_names(
+            meeting_id,
+            {str(k): str(v) for k, v in payload.speaker_names.items()},
+        )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Meeting not found")
     segments = service.store.list_segments(meeting_id)
-    data = meeting_response(meeting, segments)
-    data["segments"] = [segment_response(segment, meeting.speaker_names) for segment in segments]
-    return data
+    return meeting_response(meeting, segments)
 
 
-@router.post("/meetings/{meeting_id}/finalize")
+@router.post("/meetings/{meeting_id}/finalize", response_model=EngramMeetingResponse)
 async def finalize_meeting(meeting_id: str):
     service = get_engram()
     try:
@@ -94,27 +146,4 @@ async def finalize_meeting(meeting_id: str):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     segments = service.store.list_segments(meeting_id)
-    data = meeting_response(meeting, segments)
-    data["segments"] = [segment_response(segment, meeting.speaker_names) for segment in segments]
-    return data
-
-
-@router.websocket("/meetings/{meeting_id}/stream")
-async def stream_meeting(websocket: WebSocket, meeting_id: str):
-    service = get_engram()
-    try:
-        service.store.get_meeting(meeting_id)
-    except FileNotFoundError:
-        await websocket.close(code=4404)
-        return
-
-    await websocket.accept()
-    queue = await service.subscribe(meeting_id)
-    try:
-        while True:
-            event = await queue.get()
-            await websocket.send_json(event)
-    except WebSocketDisconnect:
-        pass
-    finally:
-        service.unsubscribe(meeting_id, queue)
+    return meeting_response(meeting, segments)

@@ -743,7 +743,7 @@ function TranscriptTurnRow({
   };
   return (
     <div
-      className="grid grid-cols-1 gap-2 border-b border-slate-200/70 py-4 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4"
+      className="grid grid-cols-1 gap-2 py-4 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4"
       onClick={seekFromMessage}
     >
       <button

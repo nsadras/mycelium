@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { AlertTriangle, CheckCircle2, CircleHelp, Clock, FileAudio, Gavel, ListChecks, Loader2, RotateCw, Save, Trash2, Upload } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type Dispatch, type MouseEvent, type SetStateAction } from 'react';
+import { AlertTriangle, CheckCircle2, CircleHelp, Clock, FileAudio, Gavel, ListChecks, Loader2, Pause, Play, RotateCw, Save, Trash2, Upload, Volume2, VolumeX } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import api, { type EngramMeeting, type EngramSegment } from '../lib/api';
+import api, { engramAudioUrl, type EngramMeeting, type EngramSegment } from '../lib/api';
 import type { AssistantStatus } from '../lib/assistantStatus';
 
 function cn(...inputs: ClassValue[]) {
@@ -122,9 +122,23 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({});
   const uploadRef = useRef<HTMLInputElement>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const pendingSeekRef = useRef<number | null>(null);
+  const playbackAttemptedRef = useRef(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
 
   const segments = useMemo(() => meeting?.segments ?? [], [meeting]);
   const turns = useMemo(() => transcriptTurns(segments, speakerNames), [segments, speakerNames]);
+  const activeTurnKey = useMemo(
+    () => turns.find(turn => currentTime >= turn.startSeconds && currentTime < turn.endSeconds)?.key ?? null,
+    [currentTime, turns]
+  );
   const speakerStats = useMemo(() => {
     const stats = new Map<string, { label: string; count: number; seconds: number }>();
     for (const segment of segments) {
@@ -154,6 +168,17 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   useEffect(() => {
     setSpeakerNames(meeting?.speaker_names ?? {});
   }, [meeting?.id, JSON.stringify(meeting?.speaker_names ?? {})]);
+
+  useEffect(() => {
+    pendingSeekRef.current = null;
+    playbackAttemptedRef.current = false;
+    audioRef.current?.pause();
+    setIsPlaying(false);
+    setIsBuffering(false);
+    setCurrentTime(0);
+    setAudioDuration(0);
+    setPlaybackError(null);
+  }, [selectedId]);
 
   useEffect(() => {
     if (!selectedId || meeting?.id !== selectedId || !isBusyStatus(meeting.status)) return;
@@ -230,6 +255,58 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const togglePlayback = async () => {
+    const audio = audioRef.current;
+    if (!audio || !meeting?.audio_path) return;
+    if (!audio.paused) {
+      audio.pause();
+      return;
+    }
+
+    playbackAttemptedRef.current = true;
+    setPlaybackError(null);
+    setIsBuffering(true);
+    try {
+      if (audioDuration > 0 && audio.currentTime >= audioDuration - 0.05) audio.currentTime = 0;
+      await audio.play();
+    } catch (err) {
+      console.error('Failed to play meeting audio', err);
+      setIsPlaying(false);
+      setIsBuffering(false);
+      setPlaybackError('This recording could not be played in the browser.');
+    }
+  };
+
+  const seekPlayback = (seconds: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const nextTime = Math.max(0, Math.min(seconds, audioDuration || seconds));
+    setPlaybackError(null);
+    if (audio.readyState < 1) {
+      pendingSeekRef.current = nextTime;
+      audio.load();
+      return;
+    }
+    audio.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  };
+
+  const setPlaybackVolume = (nextVolume: number) => {
+    const normalized = Math.max(0, Math.min(1, nextVolume));
+    setVolume(normalized);
+    if (audioRef.current) audioRef.current.volume = normalized;
+    if (normalized > 0 && isMuted) {
+      setIsMuted(false);
+      if (audioRef.current) audioRef.current.muted = false;
+    }
+  };
+
+  const toggleMute = () => {
+    const nextMuted = !isMuted;
+    setIsMuted(nextMuted);
+    if (audioRef.current) audioRef.current.muted = nextMuted;
   };
 
   const saveSpeakerNames = async () => {
@@ -319,6 +396,50 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
 
   return (
     <div className="flex flex-col md:flex-row flex-1 min-h-0 min-w-0">
+      {meeting?.audio_path && (
+        <audio
+          ref={audioRef}
+          src={engramAudioUrl(meeting.id)}
+          preload="metadata"
+          className="hidden"
+          onLoadedMetadata={(event) => {
+            const audio = event.currentTarget;
+            setAudioDuration(Number.isFinite(audio.duration) ? audio.duration : 0);
+            audio.volume = volume;
+            audio.muted = isMuted;
+            if (pendingSeekRef.current !== null) {
+              audio.currentTime = pendingSeekRef.current;
+              setCurrentTime(pendingSeekRef.current);
+              pendingSeekRef.current = null;
+            }
+          }}
+          onDurationChange={(event) => {
+            const nextDuration = event.currentTarget.duration;
+            if (Number.isFinite(nextDuration)) setAudioDuration(nextDuration);
+          }}
+          onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => {
+            setIsPlaying(false);
+            setIsBuffering(false);
+          }}
+          onPlaying={() => setIsBuffering(false)}
+          onWaiting={(event) => {
+            if (!event.currentTarget.paused) setIsBuffering(true);
+          }}
+          onCanPlay={() => setIsBuffering(false)}
+          onEnded={() => {
+            setIsPlaying(false);
+            setIsBuffering(false);
+          }}
+          onError={() => {
+            if (!playbackAttemptedRef.current) return;
+            setIsPlaying(false);
+            setIsBuffering(false);
+            setPlaybackError('This recording could not be played in the browser.');
+          }}
+        />
+      )}
       <div className="w-full md:w-72 h-64 md:h-full bg-white border-b md:border-b-0 md:border-r border-slate-200 flex flex-col shrink-0">
         <div className="p-4 border-b border-slate-200 space-y-3">
           <div className="flex items-center justify-between">
@@ -475,10 +596,31 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                     </div>
                   ) : (
                     turns.map((turn) => (
-                      <TranscriptTurnRow key={turn.key} turn={turn} />
+                      <TranscriptTurnRow
+                        key={turn.key}
+                        turn={turn}
+                        canPlay={Boolean(meeting.audio_path)}
+                        isActive={activeTurnKey === turn.key}
+                        onSeek={seekPlayback}
+                      />
                     ))
                   )}
                 </div>
+                {meeting.audio_path && (
+                  <AudioTransport
+                    currentTime={currentTime}
+                    duration={audioDuration}
+                    volume={volume}
+                    isMuted={isMuted}
+                    isPlaying={isPlaying}
+                    isBuffering={isBuffering}
+                    error={playbackError}
+                    onTogglePlayback={togglePlayback}
+                    onSeek={seekPlayback}
+                    onToggleMute={toggleMute}
+                    onVolumeChange={setPlaybackVolume}
+                  />
+                )}
               </div>
 
               <aside className="min-h-0 border-t xl:border-t-0 xl:border-l border-slate-200 overflow-y-auto p-5 space-y-5">
@@ -577,11 +719,42 @@ function ProcessingIndicator({ label, compact = false }: { label: string; compac
   );
 }
 
-function TranscriptTurnRow({ turn }: { turn: TranscriptTurn }) {
+function TranscriptTurnRow({
+  turn,
+  canPlay,
+  isActive,
+  onSeek,
+}: {
+  turn: TranscriptTurn;
+  canPlay: boolean;
+  isActive: boolean;
+  onSeek: (seconds: number) => void;
+}) {
   const style = turn.speaker ? speakerStyle(turn.speaker) : null;
+  const seekToTurn = () => {
+    if (canPlay) onSeek(turn.startSeconds);
+  };
+  const seekFromMessage = (event: MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest('button, input, textarea, select, a, [contenteditable="true"]')) return;
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) return;
+    seekToTurn();
+  };
   return (
-    <div className="grid grid-cols-1 gap-2 border-b border-slate-200/70 py-4 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4">
-      <div className="flex min-w-0 items-center gap-2 sm:items-start">
+    <div
+      className="grid grid-cols-1 gap-2 border-b border-slate-200/70 py-4 sm:grid-cols-[8rem_minmax(0,1fr)] sm:gap-4"
+      onClick={seekFromMessage}
+    >
+      <button
+        type="button"
+        onClick={seekToTurn}
+        disabled={!canPlay}
+        aria-label={`Seek to ${formatTime(turn.startSeconds)}`}
+        aria-current={isActive ? 'true' : undefined}
+        className="relative flex min-w-0 items-center gap-2 text-left disabled:cursor-default sm:items-start"
+      >
+        {isActive && <span className="absolute -left-3 top-1 h-6 w-0.5 rounded-full bg-slate-300" />}
         {turn.speaker && turn.speakerName && style ? (
           <>
             <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold', style.avatar)}>
@@ -599,10 +772,86 @@ function TranscriptTurnRow({ turn }: { turn: TranscriptTurn }) {
             {formatTime(turn.startSeconds)}-{formatTime(turn.endSeconds)}
           </span>
         )}
-      </div>
+      </button>
       <div className="min-w-0 border-l-2 border-slate-700/70 py-1 pl-4 pr-2">
         <p className="text-sm leading-7 text-slate-200">{turn.text}</p>
       </div>
+    </div>
+  );
+}
+
+function AudioTransport({
+  currentTime,
+  duration,
+  volume,
+  isMuted,
+  isPlaying,
+  isBuffering,
+  error,
+  onTogglePlayback,
+  onSeek,
+  onToggleMute,
+  onVolumeChange,
+}: {
+  currentTime: number;
+  duration: number;
+  volume: number;
+  isMuted: boolean;
+  isPlaying: boolean;
+  isBuffering: boolean;
+  error: string | null;
+  onTogglePlayback: () => void;
+  onSeek: (seconds: number) => void;
+  onToggleMute: () => void;
+  onVolumeChange: (volume: number) => void;
+}) {
+  return (
+    <div className="shrink-0 border-t border-slate-200 bg-slate-950/55 px-4 py-3 backdrop-blur-md">
+      <div className="flex min-w-0 items-center gap-3">
+        <button
+          type="button"
+          onClick={onTogglePlayback}
+          title={isPlaying ? 'Pause' : 'Play'}
+          aria-label={isPlaying ? 'Pause' : 'Play'}
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white hover:bg-emerald-700"
+        >
+          {isBuffering ? <Loader2 size={16} className="animate-spin" /> : isPlaying ? <Pause size={16} /> : <Play size={16} />}
+        </button>
+        <span className="w-24 shrink-0 font-mono text-[11px] text-slate-400">
+          {formatTime(currentTime)} / {formatTime(duration)}
+        </span>
+        <input
+          type="range"
+          min="0"
+          max={Math.max(duration, 0)}
+          step="0.05"
+          value={Math.min(currentTime, duration || 0)}
+          onChange={(event) => onSeek(Number(event.target.value))}
+          disabled={duration <= 0}
+          aria-label="Recording position"
+          className="engram-audio-slider min-w-0 flex-1"
+        />
+        <button
+          type="button"
+          onClick={onToggleMute}
+          title={isMuted ? 'Unmute' : 'Mute'}
+          aria-label={isMuted ? 'Unmute' : 'Mute'}
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center text-slate-300 hover:text-emerald-300"
+        >
+          {isMuted || volume === 0 ? <VolumeX size={17} /> : <Volume2 size={17} />}
+        </button>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.05"
+          value={volume}
+          onChange={(event) => onVolumeChange(Number(event.target.value))}
+          aria-label="Volume"
+          className="engram-audio-slider hidden w-20 shrink-0 sm:block"
+        />
+      </div>
+      {error && <div className="mt-1 pl-12 text-xs text-rose-300">{error}</div>}
     </div>
   );
 }

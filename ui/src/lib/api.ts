@@ -8,6 +8,10 @@ const api = axios.create({
 
 export default api;
 
+export function engramAudioUrl(meetingId: string) {
+  return `${apiOrigin}/api/engram/meetings/${encodeURIComponent(meetingId)}/audio`;
+}
+
 export interface Message {
   role: string;
   content: string;

@@ -1,15 +1,27 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
+from starlette.responses import FileResponse
 
 from engram.models import MeetingStatus, SegmentStatus
 from engram.pipeline import meeting_response
 from server.runtime import get_engram
 
 router = APIRouter()
+
+AUDIO_MEDIA_TYPES = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".flac": "audio/flac",
+    ".ogg": "audio/ogg",
+    ".webm": "audio/webm",
+    ".aac": "audio/aac",
+}
 
 
 class EngramSegmentResponse(BaseModel):
@@ -86,6 +98,28 @@ async def get_meeting(meeting_id: str):
         raise HTTPException(status_code=404, detail="Meeting not found")
     segments = service.store.list_segments(meeting_id)
     return meeting_response(meeting, segments)
+
+
+@router.get("/meetings/{meeting_id}/audio", response_class=FileResponse)
+async def get_meeting_audio(meeting_id: str):
+    service = get_engram()
+    try:
+        meeting = service.store.get_meeting(meeting_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    if not meeting.audio_path:
+        raise HTTPException(status_code=404, detail="Meeting audio not found")
+    audio_path = Path(meeting.audio_path).resolve()
+    audio_root = service.config.audio_dir.resolve()
+    if not audio_path.is_relative_to(audio_root) or not audio_path.is_file():
+        raise HTTPException(status_code=404, detail="Meeting audio not found")
+
+    return FileResponse(
+        audio_path,
+        media_type=AUDIO_MEDIA_TYPES.get(audio_path.suffix.lower(), "application/octet-stream"),
+        content_disposition_type="inline",
+    )
 
 
 @router.post(

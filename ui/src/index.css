@@ -195,6 +195,41 @@ select:focus {
   animation: engram-progress 1.35s ease-in-out infinite;
 }
 
+input.engram-audio-slider {
+  appearance: none;
+  height: 4px;
+  padding: 0;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: rgba(148, 163, 184, 0.24) !important;
+  box-shadow: none !important;
+  cursor: pointer;
+}
+
+input.engram-audio-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: #d1fae5;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.16);
+}
+
+input.engram-audio-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: #d1fae5;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.16);
+}
+
+input.engram-audio-slider:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 /* Markdown prose restyling */
 .prose-chat h1, .prose-chat h2, .prose-chat h3, .prose-chat h4 {
   color: #ffffff !important;

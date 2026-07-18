@@ -270,3 +270,71 @@ def test_process_meeting_api_returns_accepted_and_starts_background_task(tmp_pat
     assert response.status_code == 202
     assert response.json()["status"] == "processing"
     assert started == [meeting.id]
+
+
+def test_meeting_audio_api_supports_range_requests(tmp_path, monkeypatch):
+    config = EngramConfig(store_path=tmp_path / "engram", audio_dir=tmp_path / "audio")
+    store = EngramStore(config.db_path)
+    service = EngramService(config, store, lambda: None)
+    audio_path = config.audio_dir / "meeting.wav"
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(audio_path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"\x00\x00" * 160)
+    meeting = store.create_meeting("Playback")
+    store.update_meeting(meeting.id, audio_path=str(audio_path))
+    monkeypatch.setattr(engram_api, "get_engram", lambda: service)
+    app = FastAPI()
+    app.include_router(engram_api.router, prefix="/api/engram")
+
+    with TestClient(app) as client:
+        full_response = client.get(f"/api/engram/meetings/{meeting.id}/audio")
+        response = client.get(
+            f"/api/engram/meetings/{meeting.id}/audio",
+            headers={"Range": "bytes=0-3"},
+        )
+
+    assert full_response.status_code == 200
+    assert full_response.headers["accept-ranges"] == "bytes"
+    assert full_response.headers["content-type"] == "audio/wav"
+    assert response.status_code == 206
+    assert response.content == b"RIFF"
+    assert response.headers["content-range"].startswith("bytes 0-3/")
+    assert response.headers["content-type"] == "audio/wav"
+
+
+def test_meeting_audio_api_rejects_files_outside_audio_directory(tmp_path, monkeypatch):
+    config = EngramConfig(store_path=tmp_path / "engram", audio_dir=tmp_path / "audio")
+    store = EngramStore(config.db_path)
+    service = EngramService(config, store, lambda: None)
+    outside_audio = tmp_path / "outside.wav"
+    outside_audio.write_bytes(b"not available through the API")
+    meeting = store.create_meeting("Invalid audio path")
+    store.update_meeting(meeting.id, audio_path=str(outside_audio))
+    monkeypatch.setattr(engram_api, "get_engram", lambda: service)
+    app = FastAPI()
+    app.include_router(engram_api.router, prefix="/api/engram")
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/engram/meetings/{meeting.id}/audio")
+
+    assert response.status_code == 404
+
+
+def test_meeting_audio_api_returns_not_found_without_recording(tmp_path, monkeypatch):
+    config = EngramConfig(store_path=tmp_path / "engram", audio_dir=tmp_path / "audio")
+    store = EngramStore(config.db_path)
+    service = EngramService(config, store, lambda: None)
+    meeting = store.create_meeting("No recording")
+    monkeypatch.setattr(engram_api, "get_engram", lambda: service)
+    app = FastAPI()
+    app.include_router(engram_api.router, prefix="/api/engram")
+
+    with TestClient(app) as client:
+        no_recording = client.get(f"/api/engram/meetings/{meeting.id}/audio")
+        missing_meeting = client.get("/api/engram/meetings/missing/audio")
+
+    assert no_recording.status_code == 404
+    assert missing_meeting.status_code == 404

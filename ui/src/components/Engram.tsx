@@ -752,9 +752,8 @@ function TranscriptTurnRow({
         disabled={!canPlay}
         aria-label={`Seek to ${formatTime(turn.startSeconds)}`}
         aria-current={isActive ? 'true' : undefined}
-        className="relative flex min-w-0 items-center gap-2 text-left disabled:cursor-default sm:items-start"
+        className="flex min-w-0 items-center gap-2 text-left disabled:cursor-default sm:items-start"
       >
-        {isActive && <span className="absolute -left-3 top-1 h-6 w-0.5 rounded-full bg-slate-300" />}
         {turn.speaker && turn.speakerName && style ? (
           <>
             <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold', style.avatar)}>
@@ -773,7 +772,8 @@ function TranscriptTurnRow({
           </span>
         )}
       </button>
-      <div className="min-w-0 border-l-2 border-slate-700/70 py-1 pl-4 pr-2">
+      <div className="relative min-w-0 border-l-2 border-slate-700/70 py-1 pl-4 pr-2">
+        {isActive && <span className="pointer-events-none absolute -left-3 inset-y-0 w-0.5 rounded-full bg-slate-300 sm:-left-[9.75rem]" />}
         <p className="text-sm leading-7 text-slate-200">{turn.text}</p>
       </div>
     </div>

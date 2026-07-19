@@ -262,13 +262,22 @@ class EngramStore:
             ).fetchall()
         return [self._segment_from_row(row) for row in rows]
 
-    def update_segment_texts(self, meeting_id: str, updates: dict[int, str]) -> list[TranscriptSegment]:
+    def update_segment_texts(
+        self,
+        meeting_id: str,
+        updates: dict[int, str],
+        *,
+        speaker: str | None = None,
+    ) -> list[TranscriptSegment]:
         if not updates:
             return self.list_segments(meeting_id)
 
         normalized = {segment_id: text.strip() for segment_id, text in updates.items()}
         if any(not text for text in normalized.values()):
             raise ValueError("Transcript segment text cannot be empty.")
+        normalized_speaker = speaker.strip() if speaker is not None else None
+        if speaker is not None and not normalized_speaker:
+            raise ValueError("Speaker label cannot be empty.")
 
         with self._connect() as conn:
             placeholders = ", ".join("?" for _ in normalized)
@@ -283,6 +292,11 @@ class EngramStore:
                 "UPDATE transcript_segments SET text = ? WHERE meeting_id = ? AND id = ?",
                 [(text, meeting_id, segment_id) for segment_id, text in normalized.items()],
             )
+            if normalized_speaker is not None:
+                conn.executemany(
+                    "UPDATE transcript_segments SET speaker = ?, status = 'diarized' WHERE meeting_id = ? AND id = ?",
+                    [(normalized_speaker, meeting_id, segment_id) for segment_id in normalized],
+                )
 
         return self.list_segments(meeting_id)
 

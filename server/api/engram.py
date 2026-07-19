@@ -65,6 +65,7 @@ class TranscriptSegmentUpdate(BaseModel):
 
 class TranscriptUpdate(BaseModel):
     segments: list[TranscriptSegmentUpdate]
+    speaker: str | None = None
 
 
 class DeleteMeetingResponse(BaseModel):
@@ -184,7 +185,7 @@ async def update_meeting_transcript(meeting_id: str, payload: TranscriptUpdate):
     if len(updates) != len(payload.segments):
         raise HTTPException(status_code=400, detail="Transcript segment IDs must be unique")
     try:
-        meeting = await service.update_transcript(meeting_id, updates)
+        meeting = await service.update_transcript(meeting_id, updates, payload.speaker)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Meeting not found")
     except ValueError as exc:

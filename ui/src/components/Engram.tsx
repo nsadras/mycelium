@@ -67,6 +67,21 @@ function speakerInitials(name: string) {
   return name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
 }
 
+function nextSpeakerLabel(labels: string[]) {
+  const used = new Set(labels);
+  const highest = labels.reduce((current, label) => {
+    const match = label.match(/^SPEAKER_(\d+)$/i);
+    return match ? Math.max(current, Number(match[1])) : current;
+  }, -1);
+  let next = highest + 1;
+  let label = `SPEAKER_${String(next).padStart(2, '0')}`;
+  while (used.has(label)) {
+    next += 1;
+    label = `SPEAKER_${String(next).padStart(2, '0')}`;
+  }
+  return label;
+}
+
 function transcriptTurns(segments: EngramSegment[], speakerNames: Record<string, string>): TranscriptTurn[] {
   const hasDiarizedSpeakers = segments.some(
     segment => segment.status === 'diarized' && segment.speaker && segment.speaker !== 'Speaker ?'
@@ -334,18 +349,26 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     }
   };
 
-  const saveTranscriptTurn = async (turn: TranscriptTurn, texts: string[]) => {
+  const saveTranscriptTurn = async (turn: TranscriptTurn, texts: string[], selectedSpeaker: string) => {
     if (!meeting || savingTranscriptTurn || texts.length !== turn.segments.length) return false;
+    const speaker = selectedSpeaker === '__new__'
+      ? nextSpeakerLabel(speakerStats.map(item => item.label))
+      : selectedSpeaker || null;
+    const speakerChanged = speaker !== turn.speaker;
+    const textChanged = turn.segments.some((segment, index) => texts[index].trim() !== segment.text);
+    if (!speakerChanged && !textChanged) return true;
+
     const updates = turn.segments.flatMap((segment, index) => (
-      segment.id !== null && texts[index].trim() !== segment.text
-        ? [{ id: segment.id, text: texts[index].trim() }]
-        : []
+      segment.id !== null ? [{ id: segment.id, text: texts[index].trim() }] : []
     ));
-    if (updates.length === 0) return true;
+    if (updates.length !== turn.segments.length) return false;
 
     setSavingTranscriptTurn(turn.key);
     try {
-      const res = await api.put(`/engram/meetings/${meeting.id}/transcript`, { segments: updates });
+      const res = await api.put(`/engram/meetings/${meeting.id}/transcript`, {
+        segments: updates,
+        speaker: speakerChanged ? speaker : undefined,
+      });
       setMeeting(res.data);
       setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
       return true;
@@ -636,9 +659,15 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                         canEdit={meeting.status === 'reviewing' && (!editingTranscriptTurn || editingTranscriptTurn === turn.key) && !savingTranscriptTurn}
                         isEditing={editingTranscriptTurn === turn.key}
                         isSaving={savingTranscriptTurn === turn.key}
+                        speakerOptions={speakerStats.map(speaker => ({
+                          value: speaker.label,
+                          label: speakerNames[speaker.label]?.trim()
+                            ? `${speakerNames[speaker.label].trim()} (${speaker.label})`
+                            : speaker.label,
+                        }))}
                         onSeek={seekPlayback}
                         onEditingChange={editing => setEditingTranscriptTurn(editing ? turn.key : null)}
-                        onSave={texts => saveTranscriptTurn(turn, texts)}
+                        onSave={(texts, speaker) => saveTranscriptTurn(turn, texts, speaker)}
                       />
                     ))
                   )}
@@ -763,6 +792,7 @@ function TranscriptTurnRow({
   isEditing,
   isActive,
   isSaving,
+  speakerOptions,
   onSeek,
   onEditingChange,
   onSave,
@@ -773,24 +803,28 @@ function TranscriptTurnRow({
   isEditing: boolean;
   isActive: boolean;
   isSaving: boolean;
+  speakerOptions: { value: string; label: string }[];
   onSeek: (seconds: number) => void;
   onEditingChange: (editing: boolean) => void;
-  onSave: (texts: string[]) => Promise<boolean>;
+  onSave: (texts: string[], speaker: string) => Promise<boolean>;
 }) {
   const [drafts, setDrafts] = useState(() => turn.segments.map(segment => segment.text));
+  const [draftSpeaker, setDraftSpeaker] = useState(turn.speaker ?? '');
   const style = turn.speaker ? speakerStyle(turn.speaker) : null;
   const hasEmptyDraft = drafts.some(text => !text.trim());
   const startEditing = () => {
     setDrafts(turn.segments.map(segment => segment.text));
+    setDraftSpeaker(turn.speaker ?? '');
     onEditingChange(true);
   };
   const cancelEditing = () => {
     setDrafts(turn.segments.map(segment => segment.text));
+    setDraftSpeaker(turn.speaker ?? '');
     onEditingChange(false);
   };
   const saveEditing = async () => {
     if (hasEmptyDraft || isSaving) return;
-    if (await onSave(drafts)) onEditingChange(false);
+    if (await onSave(drafts, draftSpeaker)) onEditingChange(false);
   };
   const seekToTurn = () => {
     if (canPlay) onSeek(turn.startSeconds);
@@ -838,6 +872,21 @@ function TranscriptTurnRow({
         {isActive && <span className="pointer-events-none absolute -left-3 inset-y-0 w-0.5 rounded-full bg-slate-300 sm:-left-[9.75rem]" />}
         {isEditing ? (
           <div className="space-y-3">
+            {turn.speaker && (
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-400">Speaker</span>
+                <select
+                  value={draftSpeaker}
+                  onChange={event => setDraftSpeaker(event.target.value)}
+                  className="w-full rounded-md border border-slate-600 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-500"
+                >
+                  {speakerOptions.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                  <option value="__new__">New speaker</option>
+                </select>
+              </label>
+            )}
             {turn.segments.map((segment, index) => (
               <label key={segment.id ?? segment.segment_index} className="block">
                 {turn.segments.length > 1 && (
@@ -850,8 +899,14 @@ function TranscriptTurnRow({
                   value={drafts[index]}
                   onChange={event => setDrafts(current => current.map((text, draftIndex) => draftIndex === index ? event.target.value : text))}
                   onKeyDown={event => {
-                    if (event.key === 'Escape') cancelEditing();
-                    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) saveEditing();
+                    if (event.key === 'Escape') {
+                      event.preventDefault();
+                      cancelEditing();
+                    }
+                    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                      event.preventDefault();
+                      saveEditing();
+                    }
                   }}
                   rows={Math.min(6, Math.max(2, Math.ceil(drafts[index].length / 80)))}
                   className="w-full resize-y rounded-md border border-slate-600 bg-slate-950/70 px-3 py-2 text-sm leading-6 text-slate-100 outline-none focus:border-emerald-500"

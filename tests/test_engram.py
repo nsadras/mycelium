@@ -85,6 +85,32 @@ def test_engram_store_updates_segment_texts_atomically(tmp_path):
     assert [segment.text for segment in store.list_segments(meeting.id)] == ["Corrected one", "Corrected two"]
 
 
+def test_engram_store_updates_text_and_speaker_atomically(tmp_path):
+    store = EngramStore(tmp_path / "engram.sqlite")
+    meeting = store.create_meeting("Speaker correction")
+    first = store.add_segment(meeting.id, start_seconds=0, end_seconds=1, text="One", speaker="SPEAKER_00")
+    second = store.add_segment(meeting.id, start_seconds=1, end_seconds=2, text="Two", speaker="SPEAKER_00")
+    other_meeting = store.create_meeting("Other meeting")
+    other = store.add_segment(other_meeting.id, start_seconds=0, end_seconds=1, text="Other")
+
+    updated = store.update_segment_texts(
+        meeting.id,
+        {first.id: "Corrected one", second.id: "Corrected two"},
+        speaker="SPEAKER_01",
+    )
+
+    assert [segment.text for segment in updated] == ["Corrected one", "Corrected two"]
+    assert [segment.speaker for segment in updated] == ["SPEAKER_01", "SPEAKER_01"]
+    assert all(segment.status == "diarized" for segment in updated)
+    with pytest.raises(ValueError):
+        store.update_segment_texts(
+            meeting.id,
+            {first.id: "Should not persist", other.id: "Wrong meeting"},
+            speaker="SPEAKER_02",
+        )
+    assert [segment.speaker for segment in store.list_segments(meeting.id)] == ["SPEAKER_01", "SPEAKER_01"]
+
+
 @pytest.mark.asyncio
 async def test_engram_service_only_updates_transcript_during_review(tmp_path):
     store = EngramStore(tmp_path / "engram.sqlite")
@@ -320,7 +346,10 @@ def test_update_meeting_transcript_api_persists_review_edits_and_locks_completed
     with TestClient(app) as client:
         response = client.put(
             f"/api/engram/meetings/{meeting.id}/transcript",
-            json={"segments": [{"id": segment.id, "text": "Correct wording"}]},
+            json={
+                "segments": [{"id": segment.id, "text": "Correct wording"}],
+                "speaker": "SPEAKER_01",
+            },
         )
         store.update_meeting(meeting.id, status="completed")
         locked_response = client.put(
@@ -330,6 +359,7 @@ def test_update_meeting_transcript_api_persists_review_edits_and_locks_completed
 
     assert response.status_code == 200
     assert response.json()["segments"][0]["text"] == "Correct wording"
+    assert response.json()["segments"][0]["speaker"] == "SPEAKER_01"
     assert locked_response.status_code == 409
     assert store.list_segments(meeting.id)[0].text == "Correct wording"
 

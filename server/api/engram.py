@@ -58,6 +58,15 @@ class SpeakerNamesUpdate(BaseModel):
     speaker_names: dict[str, str]
 
 
+class TranscriptSegmentUpdate(BaseModel):
+    id: int
+    text: str
+
+
+class TranscriptUpdate(BaseModel):
+    segments: list[TranscriptSegmentUpdate]
+
+
 class DeleteMeetingResponse(BaseModel):
     deleted: bool
     meeting_id: str
@@ -164,6 +173,22 @@ async def update_meeting_speakers(meeting_id: str, payload: SpeakerNamesUpdate):
         )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Meeting not found")
+    segments = service.store.list_segments(meeting_id)
+    return meeting_response(meeting, segments)
+
+
+@router.put("/meetings/{meeting_id}/transcript", response_model=EngramMeetingResponse)
+async def update_meeting_transcript(meeting_id: str, payload: TranscriptUpdate):
+    service = get_engram()
+    updates = {segment.id: segment.text for segment in payload.segments}
+    if len(updates) != len(payload.segments):
+        raise HTTPException(status_code=400, detail="Transcript segment IDs must be unique")
+    try:
+        meeting = await service.update_transcript(meeting_id, updates)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     segments = service.store.list_segments(meeting_id)
     return meeting_response(meeting, segments)
 

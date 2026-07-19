@@ -131,6 +131,13 @@ class EngramService:
         meeting = self.store.save_speaker_names(meeting_id, speaker_names)
         return meeting
 
+    async def update_transcript(self, meeting_id: str, updates: dict[int, str]) -> Meeting:
+        meeting = self.store.get_meeting(meeting_id)
+        if meeting.status != "reviewing":
+            raise ValueError("Transcript can only be edited while the meeting is awaiting review.")
+        self.store.update_segment_texts(meeting_id, updates)
+        return self.store.get_meeting(meeting_id)
+
     async def delete_meeting(self, meeting_id: str) -> None:
         meeting = self.store.get_meeting(meeting_id)
         self.store.delete_meeting(meeting_id)

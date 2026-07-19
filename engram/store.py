@@ -262,6 +262,30 @@ class EngramStore:
             ).fetchall()
         return [self._segment_from_row(row) for row in rows]
 
+    def update_segment_texts(self, meeting_id: str, updates: dict[int, str]) -> list[TranscriptSegment]:
+        if not updates:
+            return self.list_segments(meeting_id)
+
+        normalized = {segment_id: text.strip() for segment_id, text in updates.items()}
+        if any(not text for text in normalized.values()):
+            raise ValueError("Transcript segment text cannot be empty.")
+
+        with self._connect() as conn:
+            placeholders = ", ".join("?" for _ in normalized)
+            rows = conn.execute(
+                f"SELECT id FROM transcript_segments WHERE meeting_id = ? AND id IN ({placeholders})",
+                (meeting_id, *normalized),
+            ).fetchall()
+            found_ids = {int(row["id"]) for row in rows}
+            if found_ids != set(normalized):
+                raise ValueError("One or more transcript segments do not belong to this meeting.")
+            conn.executemany(
+                "UPDATE transcript_segments SET text = ? WHERE meeting_id = ? AND id = ?",
+                [(text, meeting_id, segment_id) for segment_id, text in normalized.items()],
+            )
+
+        return self.list_segments(meeting_id)
+
     def delete_meeting(self, meeting_id: str) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM transcript_segments WHERE meeting_id = ?", (meeting_id,))

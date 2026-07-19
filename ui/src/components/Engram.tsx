@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type MouseEvent, type SetStateAction } from 'react';
-import { AlertTriangle, CheckCircle2, CircleHelp, Clock, FileAudio, Gavel, ListChecks, Loader2, Pause, Play, RotateCw, Save, Trash2, Upload, Volume2, VolumeX } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, CircleHelp, Clock, FileAudio, Gavel, ListChecks, Loader2, Pause, Pencil, Play, RotateCw, Save, Trash2, Upload, Volume2, VolumeX, X } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import api, { engramAudioUrl, type EngramMeeting, type EngramSegment } from '../lib/api';
@@ -42,6 +42,7 @@ interface TranscriptTurn {
   startSeconds: number;
   endSeconds: number;
   text: string;
+  segments: EngramSegment[];
 }
 
 const SPEAKER_STYLES = [
@@ -79,6 +80,7 @@ function transcriptTurns(segments: EngramSegment[], speakerNames: Record<string,
       startSeconds: segment.start_seconds,
       endSeconds: segment.end_seconds,
       text: segment.text,
+      segments: [segment],
     }));
   }
 
@@ -91,6 +93,7 @@ function transcriptTurns(segments: EngramSegment[], speakerNames: Record<string,
     if (speaker && previous?.speaker === speaker) {
       previous.endSeconds = segment.end_seconds;
       previous.text = `${previous.text} ${segment.text}`.trim();
+      previous.segments.push(segment);
       continue;
     }
     turns.push({
@@ -100,6 +103,7 @@ function transcriptTurns(segments: EngramSegment[], speakerNames: Record<string,
       startSeconds: segment.start_seconds,
       endSeconds: segment.end_seconds,
       text: segment.text,
+      segments: [segment],
     });
   }
   return turns;
@@ -117,6 +121,8 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isSavingSpeakers, setIsSavingSpeakers] = useState(false);
+  const [editingTranscriptTurn, setEditingTranscriptTurn] = useState<string | null>(null);
+  const [savingTranscriptTurn, setSavingTranscriptTurn] = useState<string | null>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({});
@@ -170,6 +176,8 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   }, [meeting?.id, JSON.stringify(meeting?.speaker_names ?? {})]);
 
   useEffect(() => {
+    setEditingTranscriptTurn(null);
+    setSavingTranscriptTurn(null);
     pendingSeekRef.current = null;
     playbackAttemptedRef.current = false;
     audioRef.current?.pause();
@@ -323,6 +331,30 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
       return null;
     } finally {
       setIsSavingSpeakers(false);
+    }
+  };
+
+  const saveTranscriptTurn = async (turn: TranscriptTurn, texts: string[]) => {
+    if (!meeting || savingTranscriptTurn || texts.length !== turn.segments.length) return false;
+    const updates = turn.segments.flatMap((segment, index) => (
+      segment.id !== null && texts[index].trim() !== segment.text
+        ? [{ id: segment.id, text: texts[index].trim() }]
+        : []
+    ));
+    if (updates.length === 0) return true;
+
+    setSavingTranscriptTurn(turn.key);
+    try {
+      const res = await api.put(`/engram/meetings/${meeting.id}/transcript`, { segments: updates });
+      setMeeting(res.data);
+      setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
+      return true;
+    } catch (err) {
+      console.error('Failed to save transcript', err);
+      setAssistantStatus({ activity: 'error', label: 'Transcript save failed', detail: 'Review the edited text and try again' });
+      return false;
+    } finally {
+      setSavingTranscriptTurn(null);
     }
   };
 
@@ -563,7 +595,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                 {meeting.status === 'reviewing' && (
                   <button
                     onClick={finalizeMeeting}
-                    disabled={isFinalizing || isSavingSpeakers}
+                    disabled={isFinalizing || isSavingSpeakers || Boolean(editingTranscriptTurn) || Boolean(savingTranscriptTurn)}
                     className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                   >
                     {isFinalizing ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
@@ -601,7 +633,12 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                         turn={turn}
                         canPlay={Boolean(meeting.audio_path)}
                         isActive={activeTurnKey === turn.key}
+                        canEdit={meeting.status === 'reviewing' && (!editingTranscriptTurn || editingTranscriptTurn === turn.key) && !savingTranscriptTurn}
+                        isEditing={editingTranscriptTurn === turn.key}
+                        isSaving={savingTranscriptTurn === turn.key}
                         onSeek={seekPlayback}
+                        onEditingChange={editing => setEditingTranscriptTurn(editing ? turn.key : null)}
+                        onSave={texts => saveTranscriptTurn(turn, texts)}
                       />
                     ))
                   )}
@@ -722,19 +759,44 @@ function ProcessingIndicator({ label, compact = false }: { label: string; compac
 function TranscriptTurnRow({
   turn,
   canPlay,
+  canEdit,
+  isEditing,
   isActive,
+  isSaving,
   onSeek,
+  onEditingChange,
+  onSave,
 }: {
   turn: TranscriptTurn;
   canPlay: boolean;
+  canEdit: boolean;
+  isEditing: boolean;
   isActive: boolean;
+  isSaving: boolean;
   onSeek: (seconds: number) => void;
+  onEditingChange: (editing: boolean) => void;
+  onSave: (texts: string[]) => Promise<boolean>;
 }) {
+  const [drafts, setDrafts] = useState(() => turn.segments.map(segment => segment.text));
   const style = turn.speaker ? speakerStyle(turn.speaker) : null;
+  const hasEmptyDraft = drafts.some(text => !text.trim());
+  const startEditing = () => {
+    setDrafts(turn.segments.map(segment => segment.text));
+    onEditingChange(true);
+  };
+  const cancelEditing = () => {
+    setDrafts(turn.segments.map(segment => segment.text));
+    onEditingChange(false);
+  };
+  const saveEditing = async () => {
+    if (hasEmptyDraft || isSaving) return;
+    if (await onSave(drafts)) onEditingChange(false);
+  };
   const seekToTurn = () => {
     if (canPlay) onSeek(turn.startSeconds);
   };
   const seekFromMessage = (event: MouseEvent<HTMLDivElement>) => {
+    if (isEditing) return;
     const target = event.target as HTMLElement;
     if (target.closest('button, input, textarea, select, a, [contenteditable="true"]')) return;
     const selection = window.getSelection();
@@ -772,9 +834,70 @@ function TranscriptTurnRow({
           </span>
         )}
       </button>
-      <div className="relative min-w-0 border-l-2 border-slate-700/70 py-1 pl-4 pr-2">
+      <div className="group relative min-w-0 border-l-2 border-slate-700/70 py-1 pl-4 pr-2">
         {isActive && <span className="pointer-events-none absolute -left-3 inset-y-0 w-0.5 rounded-full bg-slate-300 sm:-left-[9.75rem]" />}
-        <p className="text-sm leading-7 text-slate-200">{turn.text}</p>
+        {isEditing ? (
+          <div className="space-y-3">
+            {turn.segments.map((segment, index) => (
+              <label key={segment.id ?? segment.segment_index} className="block">
+                {turn.segments.length > 1 && (
+                  <span className="mb-1 block font-mono text-[10px] text-slate-500">
+                    {formatTime(segment.start_seconds)}-{formatTime(segment.end_seconds)}
+                  </span>
+                )}
+                <textarea
+                  autoFocus={index === 0}
+                  value={drafts[index]}
+                  onChange={event => setDrafts(current => current.map((text, draftIndex) => draftIndex === index ? event.target.value : text))}
+                  onKeyDown={event => {
+                    if (event.key === 'Escape') cancelEditing();
+                    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) saveEditing();
+                  }}
+                  rows={Math.min(6, Math.max(2, Math.ceil(drafts[index].length / 80)))}
+                  className="w-full resize-y rounded-md border border-slate-600 bg-slate-950/70 px-3 py-2 text-sm leading-6 text-slate-100 outline-none focus:border-emerald-500"
+                />
+              </label>
+            ))}
+            {hasEmptyDraft && <p className="text-xs text-rose-300">Transcript text cannot be empty.</p>}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={cancelEditing}
+                disabled={isSaving}
+                title="Cancel editing"
+                aria-label="Cancel editing"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-800 hover:text-slate-100 disabled:opacity-50"
+              >
+                <X size={16} />
+              </button>
+              <button
+                type="button"
+                onClick={saveEditing}
+                disabled={hasEmptyDraft || isSaving}
+                title="Save transcript changes"
+                aria-label="Save transcript changes"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="pr-8 text-sm leading-7 text-slate-200">{turn.text}</p>
+            {canEdit && (
+              <button
+                type="button"
+                onClick={startEditing}
+                title="Edit transcript"
+                aria-label="Edit transcript"
+                className="absolute right-0 top-0 inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 opacity-100 transition-opacity hover:bg-slate-800 hover:text-slate-100 focus:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
+              >
+                <Pencil size={14} />
+              </button>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

@@ -69,6 +69,41 @@ def test_engram_store_persists_meeting_segments_and_summary(tmp_path):
     assert segments == [segment]
 
 
+def test_engram_store_updates_segment_texts_atomically(tmp_path):
+    store = EngramStore(tmp_path / "engram.sqlite")
+    meeting = store.create_meeting("Transcript corrections")
+    first = store.add_segment(meeting.id, start_seconds=0, end_seconds=1, text="Original one")
+    second = store.add_segment(meeting.id, start_seconds=1, end_seconds=2, text="Original two")
+    other_meeting = store.create_meeting("Other meeting")
+    other = store.add_segment(other_meeting.id, start_seconds=0, end_seconds=1, text="Untouched")
+
+    updated = store.update_segment_texts(meeting.id, {first.id: "Corrected one", second.id: "Corrected two"})
+
+    assert [segment.text for segment in updated] == ["Corrected one", "Corrected two"]
+    with pytest.raises(ValueError):
+        store.update_segment_texts(meeting.id, {first.id: "Should not persist", other.id: "Wrong meeting"})
+    assert [segment.text for segment in store.list_segments(meeting.id)] == ["Corrected one", "Corrected two"]
+
+
+@pytest.mark.asyncio
+async def test_engram_service_only_updates_transcript_during_review(tmp_path):
+    store = EngramStore(tmp_path / "engram.sqlite")
+    service = EngramService(EngramConfig(store_path=tmp_path / "engram"), store, lambda: None)
+    meeting = store.create_meeting("Editable transcript")
+    segment = store.add_segment(meeting.id, start_seconds=0, end_seconds=1, text="Before")
+
+    with pytest.raises(ValueError, match="awaiting review"):
+        await service.update_transcript(meeting.id, {segment.id: "Too early"})
+
+    store.update_meeting(meeting.id, status="reviewing")
+    await service.update_transcript(meeting.id, {segment.id: "After correction"})
+    assert store.list_segments(meeting.id)[0].text == "After correction"
+
+    store.update_meeting(meeting.id, status="completed")
+    with pytest.raises(ValueError, match="awaiting review"):
+        await service.update_transcript(meeting.id, {segment.id: "Too late"})
+
+
 def test_engram_memory_adapter_creates_raw_unconsolidated_log(tmp_path):
     store = EngramStore(tmp_path / "engram.sqlite")
     log_store = LogStore(tmp_path / "logs")
@@ -270,6 +305,33 @@ def test_process_meeting_api_returns_accepted_and_starts_background_task(tmp_pat
     assert response.status_code == 202
     assert response.json()["status"] == "processing"
     assert started == [meeting.id]
+
+
+def test_update_meeting_transcript_api_persists_review_edits_and_locks_completed_meetings(tmp_path, monkeypatch):
+    store = EngramStore(tmp_path / "engram.sqlite")
+    service = EngramService(EngramConfig(store_path=tmp_path / "engram"), store, lambda: None)
+    meeting = store.create_meeting("API transcript correction")
+    segment = store.add_segment(meeting.id, start_seconds=0, end_seconds=2, text="Incorrect wording")
+    store.update_meeting(meeting.id, status="reviewing")
+    monkeypatch.setattr(engram_api, "get_engram", lambda: service)
+    app = FastAPI()
+    app.include_router(engram_api.router, prefix="/api/engram")
+
+    with TestClient(app) as client:
+        response = client.put(
+            f"/api/engram/meetings/{meeting.id}/transcript",
+            json={"segments": [{"id": segment.id, "text": "Correct wording"}]},
+        )
+        store.update_meeting(meeting.id, status="completed")
+        locked_response = client.put(
+            f"/api/engram/meetings/{meeting.id}/transcript",
+            json={"segments": [{"id": segment.id, "text": "Too late"}]},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["segments"][0]["text"] == "Correct wording"
+    assert locked_response.status_code == 409
+    assert store.list_segments(meeting.id)[0].text == "Correct wording"
 
 
 def test_meeting_audio_api_supports_range_requests(tmp_path, monkeypatch):

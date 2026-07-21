@@ -24,6 +24,7 @@ class EngramConfig:
     ollama_model: str = "gemma4:12b"
     ollama_url: str = "http://localhost:11434"
     summary_temperature: float = 0.1
+    summary_context_window_tokens: int = 32768
 
     @property
     def db_path(self) -> Path:
@@ -75,6 +76,12 @@ class EngramConfig:
             ollama_model=summary_data.get("model", llm_data.get("model", "gemma4:12b")),
             ollama_url=summary_data.get("url", llm_data.get("url", "http://localhost:11434")),
             summary_temperature=float(summary_data.get("temperature", 0.1)),
+            summary_context_window_tokens=int(
+                summary_data.get(
+                    "context_window_tokens",
+                    llm_data.get("context_window_tokens", 32768),
+                )
+            ),
         )
 
     def ensure_dirs(self) -> None:

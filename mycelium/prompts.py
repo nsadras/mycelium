@@ -75,7 +75,8 @@ Return a JSON object with a single "targets" field containing a list of objects,
 - "page": the lowercase, hyphenated slug of the wiki page. You MUST use a descriptive slug name representing the specific topic. NEVER return a number, a single letter, or a placeholder like "1", "2", "Page A", or "New Page".
 - "action": one of "update", "create", or "none"
 - "page_type": one of "entity", "event", or "topic"
-- "log_entry_ids": a list of the exact raw string IDs of the specific log entries (e.g., ["2026-05-28#Prologue", "2026-05-28#entry-97bccd56"]) containing information relevant to this page. You must output the exact entry ID string as it appears in the log. Only map a log entry to a page if that log entry actually contains information relevant to that page.
+- "evidence_ids": a list of the exact EVIDENCE IDs containing information relevant to this page. Copy only IDs shown in the evidence headers; never invent an ID.
+- "log_entry_ids": a list of the parent log IDs shown beside those evidence IDs. This field is retained for source backlinks, but evidence_ids determines the exact text routed to the page.
 
 If a log entry is a full raw session transcript, include that session log entry ID once for each relevant page. Do not output dialogue turn IDs, speaker labels, utterance IDs, or duplicate copies of the same log entry ID.
 
@@ -86,12 +87,14 @@ Example response format:
       "page": "person-caroline",
       "action": "update",
       "page_type": "entity",
+      "evidence_ids": ["2026-05-28#entry-123::chunk-0001"],
       "log_entry_ids": ["2026-05-28#entry-123"]
     },
     {
       "page": "agent-harness-anatomy",
       "action": "create",
       "page_type": "topic",
+      "evidence_ids": ["2026-05-28#Prologue::chunk-0001", "2026-05-28#Chapter 1 · What Is a Harness::chunk-0001"],
       "log_entry_ids": ["2026-05-28#Prologue", "2026-05-28#Chapter 1 · What Is a Harness"]
     }
   ]

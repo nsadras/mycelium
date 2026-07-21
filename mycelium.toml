@@ -6,6 +6,7 @@ git_commits = false
 model = "gemma4:12b"
 url = "http://localhost:11434"
 temperature = 0.2
+context_window_tokens = 32768
 
 [session]
 context_budget_tokens = 32768

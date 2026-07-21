@@ -172,9 +172,72 @@ async def test_dream_identification_splits_failed_single_long_raw_log(dream_proc
     assert all(target["log_entry_ids"] == [entry.entry_id] for target in targets)
     assert mock_llm.call_structured.call_count >= 1
     first_prompt = mock_llm.call_structured.call_args_list[0][0][1]
-    assert "Excerpt 1/" in first_prompt
+    assert f"[EVIDENCE {entry.entry_id}::chunk-0001]" in first_prompt
     assert entry.entry_id in first_prompt
     assert "session-b7ce924b-1" not in first_prompt
+
+
+def test_dream_evidence_chunks_preserve_late_transcript_content(dream_process):
+    entry = LogEntry(
+        entry_id="2026-07-20#meeting-long",
+        session_id="meeting-1",
+        timestamp=datetime.now(),
+        content="FIRST FACT\n" + ("middle content " * 12000) + "\nLATE SENTINEL FACT",
+        importance=0.9,
+        status="raw",
+    )
+
+    evidence = dream_process._build_evidence([entry])
+
+    assert len(evidence) > 1
+    assert "FIRST FACT" in evidence[0].content
+    assert "LATE SENTINEL FACT" in evidence[-1].content
+    assert "".join(chunk.content for chunk in evidence) == entry.content
+    assert evidence[-1].evidence_id.endswith(f"chunk-{len(evidence):04d}")
+
+
+@pytest.mark.asyncio
+async def test_dream_discards_connected_staged_pages_when_a_rewrite_fails(
+    dream_process,
+    mock_llm,
+    mock_wiki,
+    mock_logs,
+):
+    entry = LogEntry(
+        entry_id="2026-07-20#meeting-1",
+        session_id="meeting-1",
+        timestamp=datetime.now(),
+        content="One meeting contains two durable topics.",
+        importance=0.9,
+        status="raw",
+    )
+    evidence_id = f"{entry.entry_id}::chunk-0001"
+    mock_logs.get_unconsolidated.return_value = [entry]
+    mock_wiki.get_index.return_value = "# Index"
+    mock_wiki.list_all.return_value = []
+    mock_wiki.exists.return_value = False
+    mock_llm.call_structured.side_effect = [
+        [
+            {"page": "topic-one", "action": "create", "evidence_ids": [evidence_id]},
+            {"page": "topic-two", "action": "create", "evidence_ids": [evidence_id]},
+        ],
+        {
+            "mappings": [
+                {"proposed_page": "topic-one", "action": "create_new", "canonical_page": "topic-one"},
+                {"proposed_page": "topic-two", "action": "create_new", "canonical_page": "topic-two"},
+            ]
+        },
+        {"title": "Topic One", "content": "First staged page", "confidence": 0.8, "importance": 0.7},
+        ValueError("second rewrite failed"),
+    ]
+
+    report = await dream_process.run()
+
+    mock_wiki.save.assert_not_called()
+    mock_logs.mark_consolidated.assert_not_called()
+    assert report.entries_consolidated == 0
+    assert report.pending_source_ids == [entry.entry_id]
+    assert report.failures[0]["stage"] == "rewrite"
 
 
 @pytest.mark.asyncio

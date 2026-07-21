@@ -1,15 +1,17 @@
 import json
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
-from typing import Literal, Optional
+from typing import Literal
 import uuid
 
 from mycelium.models import DreamReport, WikiPage, Edge, UpdateLogEntry, LogEntry
 from mycelium.store import WikiStore, LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.config import Config
+from mycelium.batching import batch_items, split_text_by_tokens, structured_input_budget
 from mycelium import prompts
 from mycelium.decay import DecayEngine, record_memory_event
 from mycelium.structured_outputs import (
@@ -36,9 +38,20 @@ VALID_EDGE_RELATIONS = {
 
 PLACEHOLDER_SLUG_RE = re.compile(r"^(page-slug|new-page|page|topic|untitled)(-\d+|-?[a-z])?$")
 PLACEHOLDER_TITLE_RE = re.compile(r"^(page|topic|new page|project documentation)$", re.IGNORECASE)
-IDENTIFICATION_MAX_CHARS_PER_ENTRY = 3500
-IDENTIFICATION_EXCERPT_CHARS = 3000
 PAGE_TYPES = {"entity", "event", "topic"}
+
+
+@dataclass(frozen=True)
+class EvidenceChunk:
+    evidence_id: str
+    entry_id: str
+    session_id: str
+    timestamp: datetime
+    content: str
+    importance: float
+    durability: str
+    chunk_index: int
+    chunk_count: int
 
 
 def _normalize_page_key(value: str) -> str:
@@ -66,6 +79,8 @@ class DreamProcess:
         self.logs = logs
         self.config = config
         self.decay_engine = DecayEngine(wiki, logs, config)
+        self._identification_failures: dict[str, str] = {}
+        self._preparation_failures: dict[str, str] = {}
 
     async def run(
         self,
@@ -75,31 +90,85 @@ class DreamProcess:
     ) -> DreamReport:
         
         raw_entries = self.logs.get_unconsolidated()
+        self._preparation_failures = {}
         entries = await self._prepare_entries(raw_entries)
+        evidence = self._build_evidence(entries)
+        self._identification_failures = {}
         
         if not entries and strategy != 'association_only':
-            if not dry_run and raw_entries:
-                self.logs.mark_consolidated([e.entry_id for e in raw_entries])
+            completed_source_ids = [
+                entry.entry_id
+                for entry in raw_entries
+                if entry.entry_id not in self._preparation_failures
+            ]
+            pending_source_ids = [
+                entry.entry_id
+                for entry in raw_entries
+                if entry.entry_id in self._preparation_failures
+            ]
+            if not dry_run and completed_source_ids:
+                self.logs.mark_consolidated(completed_source_ids)
                 await self.decay_engine.run_pass()
             if not dry_run and self._index_needs_rebuild():
                 self._save_deterministic_index({}, dry_run=False, now=datetime.now())
-            return DreamReport(0, 0, len(raw_entries), [], 0, None)
+            return DreamReport(
+                0,
+                0,
+                len(completed_source_ids),
+                [],
+                0,
+                None,
+                completed_source_ids=completed_source_ids,
+                pending_source_ids=pending_source_ids,
+                failures=[
+                    {"stage": "preparation", "source_id": source_id, "reason": reason}
+                    for source_id, reason in self._preparation_failures.items()
+                ],
+            )
             
         index_content = self.wiki.get_index()
         
         all_targets = []
-        for chunk in self._entry_chunks(entries):
+        identify_batches = self._evidence_batches(
+            evidence,
+            lambda text: prompts.consolidation_identify_prompt(index_content, text),
+            num_predict=2048,
+        )
+        for chunk in identify_batches:
             all_targets.extend(await self._identify_targets_for_chunk(index_content, chunk))
             
         identification = self._dedupe_identification(all_targets)
-        identification = await self._canonicalize_identification(identification, entries)
+        identification = await self._canonicalize_identification(identification, evidence)
+        evidence_by_id = {chunk.evidence_id: chunk for chunk in evidence}
+        failed_source_ids = {
+            evidence_by_id[evidence_id].entry_id
+            for evidence_id in self._identification_failures
+            if evidence_id in evidence_by_id
+        }
+        failed_source_ids.update(self._preparation_failures)
+        failures = [
+            {
+                "stage": "identification",
+                "source_id": evidence_by_id[evidence_id].entry_id,
+                "reason": reason,
+            }
+            for evidence_id, reason in self._identification_failures.items()
+            if evidence_id in evidence_by_id
+        ]
+        failures.extend(
+            {"stage": "preparation", "source_id": source_id, "reason": reason}
+            for source_id, reason in self._preparation_failures.items()
+        )
             
         pages_updated = 0
         pages_created = 0
+        updated_operations: dict[str, int] = {}
+        created_operations: dict[str, int] = {}
         conflicts_found = []
         conflicts_resolved = 0
         title_to_slug = self._existing_title_index()
         changed_pages: dict[str, WikiPage] = {}
+        changed_page_sources: dict[str, set[str]] = {}
         
         for item in identification:
             if not isinstance(item, dict):
@@ -114,56 +183,36 @@ class DreamProcess:
             if self._is_placeholder_slug(page_slug):
                 continue
 
-            # Determine relevant logs for this specific page
-            log_entry_ids = item.get("log_entry_ids", [])
-            if log_entry_ids and isinstance(log_entry_ids, list):
-                page_entries = [e for e in entries if e.entry_id in log_entry_ids]
-                # Fall back to all unconsolidated logs if none are found in the filtered list
-                if not page_entries:
-                    page_entries = entries
-            else:
-                page_entries = entries
-
-            page_entries_str = self._format_entries_for_prompt(
-                page_entries,
-                max_chars_per_entry=2500,
-                max_total_chars=12000,
-            )
-            page_source_ids = [e.entry_id for e in page_entries]
+            evidence_ids = set(item.get("evidence_ids", []))
+            page_evidence = [chunk for chunk in evidence if chunk.evidence_id in evidence_ids]
+            if not page_evidence:
+                continue
+            page_source_ids = list(dict.fromkeys(chunk.entry_id for chunk in page_evidence))
 
             page_exists = self.wiki.exists(page_slug)
             if page_exists:
                 existing_page = self.wiki.get(page_slug)
-                system, user = prompts.consolidation_rewrite_prompt(
-                    existing_page.content,
-                    page_entries_str,
-                    page_slug=page_slug,
-                    page_type=page_type,
-                )
+                existing_content = existing_page.content
                 is_create = False
             else:
                 existing_page = None
-                system, user = prompts.consolidation_rewrite_prompt(
-                    "",
-                    page_entries_str,
-                    page_slug=page_slug,
-                    page_type=page_type,
-                )
+                existing_content = ""
                 is_create = True
             
             try:
-                rewritten = await self.llm.call_structured(
-                    system,
-                    user,
-                    WikiRewriteOutput,
-                    num_predict=8192,
-                    dump_success=True,
-                    debug_label=f"wiki-rewrite-{page_slug}",
+                rewritten, rewrite_batches = await self._rewrite_evidence_batches(
+                    page_slug,
+                    page_type,
+                    existing_content,
+                    page_evidence,
                 )
             except Exception as exc:
                 logger.warning("Skipping dream rewrite for %s after structured output failure: %s", page_slug, exc)
+                failed_source_ids.update(page_source_ids)
+                failures.append({"stage": "rewrite", "source_id": ",".join(page_source_ids), "reason": str(exc)})
                 continue
             if not isinstance(rewritten, dict):
+                failed_source_ids.update(page_source_ids)
                 continue
                 
             # Parse response
@@ -175,6 +224,8 @@ class DreamProcess:
             importance = float(rewritten.get("importance", 0.5))
             title_key = _normalize_page_key(title)
             if self._is_low_quality_rewrite(page_slug, title, content):
+                failed_source_ids.update(page_source_ids)
+                failures.append({"stage": "rewrite", "source_id": ",".join(page_source_ids), "reason": "low-quality rewrite"})
                 continue
             
             raw_related = rewritten.get("related", [])
@@ -193,8 +244,12 @@ class DreamProcess:
             
             if is_create:
                 duplicate_slug = title_to_slug.get(title_key)
-                if duplicate_slug and duplicate_slug != page_slug and self.wiki.exists(duplicate_slug):
-                    existing_page = self.wiki.get(duplicate_slug)
+                if (
+                    duplicate_slug
+                    and duplicate_slug != page_slug
+                    and (duplicate_slug in changed_pages or self.wiki.exists(duplicate_slug))
+                ):
+                    existing_page = changed_pages.get(duplicate_slug) or self.wiki.get(duplicate_slug)
                     existing_page.title = title
                     existing_page.content = content
                     existing_page.tags = tags
@@ -216,10 +271,10 @@ class DreamProcess:
                     existing_page.importance = importance
                     existing_page.update_log.append(log)
                     record_memory_event(existing_page, "dream_updated", now=now)
-                    if not dry_run:
-                        self.wiki.save(existing_page)
                     changed_pages[existing_page.slug] = existing_page
+                    changed_page_sources.setdefault(existing_page.slug, set()).update(page_source_ids)
                     pages_updated += 1
+                    updated_operations[existing_page.slug] = updated_operations.get(existing_page.slug, 0) + 1
                     continue
 
                 new_page = WikiPage(
@@ -237,11 +292,11 @@ class DreamProcess:
                     update_log=[UpdateLogEntry(1, now, "system", "dream", 0.0, "Initial creation", 0.0, confidence)]
                 )
                 record_memory_event(new_page, "dream_created", now=now)
-                if not dry_run:
-                    self.wiki.save(new_page)
                 changed_pages[new_page.slug] = new_page
+                changed_page_sources.setdefault(new_page.slug, set()).update(page_source_ids)
                 title_to_slug[title_key] = page_slug
                 pages_created += 1
+                created_operations[new_page.slug] = created_operations.get(new_page.slug, 0) + 1
             else:
                 # Handle conflict
                 # If policy is 'fork', we only fork if there is an actual semantic contradiction/prediction error.
@@ -252,16 +307,21 @@ class DreamProcess:
                 
                 if conflict_policy == "fork":
                     try:
-                        system_pe, user_pe = prompts.prediction_error_prompt(existing_page.content, page_entries_str)
-                        pe = await self.llm.call_structured(system_pe, user_pe, PredictionErrorOutput)
-                        if isinstance(pe, dict):
+                        for page_entries_str in rewrite_batches:
+                            system_pe, user_pe = prompts.prediction_error_prompt(existing_page.content, page_entries_str)
+                            pe = await self.llm.call_structured(system_pe, user_pe, PredictionErrorOutput)
+                            if not isinstance(pe, dict):
+                                continue
                             conflict_type = pe.get("conflict_type", "none")
-                            discrepancy_score = float(pe.get("discrepancy_score", 0.0))
+                            discrepancy_score = max(
+                                discrepancy_score,
+                                float(pe.get("discrepancy_score", 0.0)),
+                            )
                             if conflict_type in ("partial", "major") or discrepancy_score >= 0.5:
                                 should_fork = True
                                 reason = f"Forked during dream due to {conflict_type} conflict: {pe.get('explanation', '')}"
-                            else:
-                                reason = f"Dream consolidation: in-place update (policy was fork, but no contradiction found: conflict_type={conflict_type})"
+                                break
+                            reason = f"Dream consolidation: in-place update (policy was fork, but no contradiction found: conflict_type={conflict_type})"
                     except Exception as e:
                         # Fallback: if check fails, do not fork, default to in-place override to prevent fork pollution
                         should_fork = False
@@ -269,28 +329,21 @@ class DreamProcess:
                 
                 if conflict_policy == "override" or (conflict_policy == "fork" and not should_fork):
                     # Additive update: extract only new facts and append them
-                    append_system, append_user = prompts.consolidation_append_prompt(
-                        existing_page.content,
-                        page_entries_str,
-                        page_slug=page_slug,
-                        page_type=page_type,
-                    )
                     try:
-                        append_data = await self.llm.call_structured(
-                            append_system,
-                            append_user,
-                            WikiAppendOutput,
-                            num_predict=4096,
-                            debug_label=f"wiki-append-{page_slug}",
+                        append_outputs = await self._append_evidence_batches(
+                            existing_page,
+                            page_slug,
+                            page_type,
+                            page_evidence,
                         )
                     except Exception as exc:
                         logger.warning("Additive append failed for %s, skipping: %s", page_slug, exc)
+                        failed_source_ids.update(page_source_ids)
+                        failures.append({"stage": "append", "source_id": ",".join(page_source_ids), "reason": str(exc)})
                         continue
 
-                    if not isinstance(append_data, dict):
-                        continue
-
-                    facts_added = self._append_facts_to_page(existing_page, append_data)
+                    facts_added = any(output[1] for output in append_outputs)
+                    append_data = self._merge_append_outputs([output[0] for output in append_outputs])
 
                     if not facts_added:
                         # Fallback to full rewrite if no facts were appended
@@ -345,10 +398,10 @@ class DreamProcess:
 
                     record_memory_event(existing_page, "dream_updated", now=now)
 
-                    if not dry_run:
-                        self.wiki.save(existing_page)
                     changed_pages[existing_page.slug] = existing_page
+                    changed_page_sources.setdefault(existing_page.slug, set()).update(page_source_ids)
                     pages_updated += 1
+                    updated_operations[existing_page.slug] = updated_operations.get(existing_page.slug, 0) + 1
                 elif conflict_policy == "fork" and should_fork:
                     fork_slug = f"{page_slug}-fork-{str(uuid.uuid4())[:4]}"
                     fork_page = WikiPage(
@@ -383,14 +436,15 @@ class DreamProcess:
                     conflicts_found.append(page_slug)
                     conflicts_resolved += 1
                     
-                    if not dry_run:
-                        self.wiki.save(fork_page)
-                        self.wiki.save(existing_page)
                     changed_pages[fork_page.slug] = fork_page
                     changed_pages[existing_page.slug] = existing_page
+                    changed_page_sources.setdefault(fork_page.slug, set()).update(page_source_ids)
+                    changed_page_sources.setdefault(existing_page.slug, set()).update(page_source_ids)
                         
                     pages_created += 1
                     pages_updated += 1
+                    created_operations[fork_page.slug] = created_operations.get(fork_page.slug, 0) + 1
+                    updated_operations[existing_page.slug] = updated_operations.get(existing_page.slug, 0) + 1
                 elif conflict_policy == "merge":
                     existing_page = self.wiki.get(page_slug)
                     # Simple merge prompt: synthesis
@@ -401,6 +455,8 @@ class DreamProcess:
                         merged = await self.llm.call_structured(system, user, WikiMergeOutput)
                     except Exception as exc:
                         logger.warning("Skipping dream merge for %s after structured output failure: %s", page_slug, exc)
+                        failed_source_ids.update(page_source_ids)
+                        failures.append({"stage": "merge", "source_id": ",".join(page_source_ids), "reason": str(exc)})
                         continue
                     if isinstance(merged, dict):
                         merged_content = self._sanitize_wiki_links(merged.get("content", existing_page.content), self._valid_slugs(extra=[page_slug]))
@@ -413,19 +469,46 @@ class DreamProcess:
                         log = UpdateLogEntry(existing_page.version, now, "system", "dream", 0.0, "Merged during dream", existing_page.confidence, confidence)
                         existing_page.update_log.append(log)
                         record_memory_event(existing_page, "dream_updated", now=now)
-                        if not dry_run:
-                            self.wiki.save(existing_page)
                         changed_pages[existing_page.slug] = existing_page
+                        changed_page_sources.setdefault(existing_page.slug, set()).update(page_source_ids)
                         pages_updated += 1
+                        updated_operations[existing_page.slug] = updated_operations.get(existing_page.slug, 0) + 1
                         conflicts_resolved += 1
 
+        # A failed source invalidates every staged page in its connected source/page group.
+        changed = True
+        while changed:
+            changed = False
+            for source_ids in changed_page_sources.values():
+                if source_ids & failed_source_ids and not source_ids <= failed_source_ids:
+                    failed_source_ids.update(source_ids)
+                    changed = True
+
+        changed_pages = {
+            slug: page
+            for slug, page in changed_pages.items()
+            if not (changed_page_sources.get(slug, set()) & failed_source_ids)
+        }
+        pages_created = sum(created_operations.get(slug, 0) for slug in changed_pages)
+        pages_updated = sum(updated_operations.get(slug, 0) for slug in changed_pages)
+
+        if not dry_run:
+            for page in changed_pages.values():
+                self.wiki.save(page)
+
         # 6. Update index
-        if pages_updated > 0 or pages_created > 0:
+        if changed_pages:
             self._save_deterministic_index(changed_pages, dry_run=dry_run, now=datetime.now())
 
         # 7. Mark consolidated
-        if not dry_run and raw_entries:
-            self.logs.mark_consolidated([e.entry_id for e in raw_entries])
+        completed_source_ids = [
+            entry.entry_id for entry in raw_entries if entry.entry_id not in failed_source_ids
+        ]
+        pending_source_ids = [
+            entry.entry_id for entry in raw_entries if entry.entry_id in failed_source_ids
+        ]
+        if not dry_run and completed_source_ids:
+            self.logs.mark_consolidated(completed_source_ids)
 
         # 8. Run decay pass
         if not dry_run:
@@ -441,16 +524,19 @@ class DreamProcess:
                 commit_sha = commit.hexsha
             except ImportError:
                 pass
-            except Exception as e:
+            except Exception:
                 pass
 
         return DreamReport(
             pages_updated=pages_updated,
             pages_created=pages_created,
-            entries_consolidated=len(raw_entries),
+            entries_consolidated=len(completed_source_ids),
             conflicts_found=conflicts_found,
             conflicts_resolved=conflicts_resolved,
-            git_commit_sha=commit_sha
+            git_commit_sha=commit_sha,
+            completed_source_ids=completed_source_ids,
+            pending_source_ids=pending_source_ids,
+            failures=failures,
         )
 
     async def compact(
@@ -480,27 +566,29 @@ class DreamProcess:
                 except Exception:
                     pass
 
-            source_str = self._format_entries_for_prompt(
-                source_entries,
-                max_chars_per_entry=2500,
-                max_total_chars=12000,
-            ) if source_entries else ""
-
-            system, user = prompts.consolidation_rewrite_prompt(
-                page.content,
-                source_str,
-                page_slug=page.slug,
-                page_type=page_type,
-            )
-
             try:
-                rewritten = await self.llm.call_structured(
-                    system,
-                    user,
-                    WikiRewriteOutput,
-                    num_predict=8192,
-                    debug_label=f"wiki-compact-{page.slug}",
-                )
+                source_evidence = self._build_evidence(source_entries)
+                if source_evidence:
+                    rewritten, _ = await self._rewrite_evidence_batches(
+                        page.slug,
+                        page_type,
+                        page.content,
+                        source_evidence,
+                    )
+                else:
+                    system, user = prompts.consolidation_rewrite_prompt(
+                        page.content,
+                        "",
+                        page_slug=page.slug,
+                        page_type=page_type,
+                    )
+                    rewritten = await self.llm.call_structured(
+                        system,
+                        user,
+                        WikiRewriteOutput,
+                        num_predict=8192,
+                        debug_label=f"wiki-compact-{page.slug}",
+                    )
             except Exception as exc:
                 logger.warning("Skipping compaction for %s: %s", page.slug, exc)
                 continue
@@ -558,146 +646,236 @@ class DreamProcess:
     async def _identify_targets_for_chunk(
         self,
         index_content: str,
-        entries: list[LogEntry],
+        evidence: list[EvidenceChunk] | list[LogEntry],
     ) -> list:
-        if not entries:
+        if not evidence:
             return []
-        if len(entries) == 1:
-            excerpt_entries = self._split_entry_for_identification(entries[0])
-            if len(excerpt_entries) > 1:
-                all_targets = []
-                for excerpt_chunk in self._entry_chunks(excerpt_entries, max_chars=9000):
-                    all_targets.extend(await self._identify_targets_for_chunk(index_content, excerpt_chunk))
-                return all_targets
-
-        chunk_str = self._format_entries_for_prompt(
-            entries,
-            max_chars_per_entry=IDENTIFICATION_MAX_CHARS_PER_ENTRY,
-        )
+        if isinstance(evidence[0], LogEntry):
+            evidence = self._build_evidence(evidence)
+        chunk_str = self._format_evidence_for_prompt(evidence)
         system, user = prompts.consolidation_identify_prompt(index_content, chunk_str)
         try:
-            identification_res = await self.llm.call_structured(system, user, ConsolidationIdentifyOutput)
+            identification_res = await self.llm.call_structured(
+                system,
+                user,
+                ConsolidationIdentifyOutput,
+                num_predict=2048,
+            )
         except Exception as exc:
-            if len(entries) <= 1:
+            if len(evidence) <= 1:
+                evidence_id = evidence[0].evidence_id
                 logger.warning(
                     "Skipping dream identification for %s after structured output failure: %s",
-                    entries[0].entry_id,
+                    evidence_id,
                     exc,
                 )
+                self._identification_failures[evidence_id] = str(exc)
                 return []
 
-            midpoint = max(1, len(entries) // 2)
+            midpoint = max(1, len(evidence) // 2)
             return [
-                *await self._identify_targets_for_chunk(index_content, entries[:midpoint]),
-                *await self._identify_targets_for_chunk(index_content, entries[midpoint:]),
+                *await self._identify_targets_for_chunk(index_content, evidence[:midpoint]),
+                *await self._identify_targets_for_chunk(index_content, evidence[midpoint:]),
             ]
 
         if isinstance(identification_res, dict):
-            return identification_res.get("targets", [])
-        if isinstance(identification_res, list):
-            return identification_res
-        if hasattr(identification_res, "targets"):
-            return identification_res.targets
-        return []
+            targets = identification_res.get("targets", [])
+        elif isinstance(identification_res, list):
+            targets = identification_res
+        elif hasattr(identification_res, "targets"):
+            targets = identification_res.targets
+        else:
+            targets = []
 
-    def _split_entry_for_identification(self, entry: LogEntry) -> list[LogEntry]:
-        content = entry.content.strip()
-        if len(content) <= IDENTIFICATION_MAX_CHARS_PER_ENTRY:
-            return [entry]
-
-        chunks = self._split_text_for_prompt(content, IDENTIFICATION_EXCERPT_CHARS)
-        if len(chunks) <= 1:
-            return [entry]
-
-        return [
-            LogEntry(
-                entry_id=entry.entry_id,
-                session_id=entry.session_id,
-                timestamp=entry.timestamp,
-                content=(
-                    f"Excerpt {index + 1}/{len(chunks)} from original log entry {entry.entry_id}. "
-                    "When citing this excerpt, use the original log entry ID only.\n\n"
-                    f"{chunk}"
-                ),
-                importance=entry.importance,
-                status=entry.status,
-                durability=entry.durability,
-                consolidated=entry.consolidated,
-                decay_score=entry.decay_score,
+        allowed_ids = {item.evidence_id for item in evidence}
+        evidence_by_entry: dict[str, list[str]] = {}
+        for item in evidence:
+            evidence_by_entry.setdefault(item.entry_id, []).append(item.evidence_id)
+        validated = []
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            evidence_ids = [
+                evidence_id
+                for evidence_id in target.get("evidence_ids", [])
+                if evidence_id in allowed_ids
+            ]
+            if not evidence_ids:
+                for entry_id in self._clean_log_entry_ids(target.get("log_entry_ids", [])):
+                    evidence_ids.extend(evidence_by_entry.get(entry_id, []))
+            if not evidence_ids and target.get("action") in ("update", "create"):
+                evidence_ids = [item.evidence_id for item in evidence]
+            target = dict(target)
+            target["evidence_ids"] = list(dict.fromkeys(evidence_ids))
+            target["log_entry_ids"] = list(
+                dict.fromkeys(
+                    item.entry_id for item in evidence if item.evidence_id in target["evidence_ids"]
+                )
             )
-            for index, chunk in enumerate(chunks)
-        ]
+            if target["evidence_ids"] or target.get("action") == "none":
+                validated.append(target)
+        return validated
 
-    def _split_text_for_prompt(self, text: str, max_chars: int) -> list[str]:
-        if len(text) <= max_chars:
-            return [text]
-
-        chunks: list[str] = []
-        current: list[str] = []
-        current_chars = 0
-        paragraphs = re.split(r"\n{2,}", text)
-
-        for paragraph in paragraphs:
-            paragraph = paragraph.strip()
-            if not paragraph:
-                continue
-
-            if len(paragraph) > max_chars:
-                if current:
-                    chunks.append("\n\n".join(current))
-                    current = []
-                    current_chars = 0
-                chunks.extend(self._split_long_paragraph(paragraph, max_chars))
-                continue
-
-            separator_chars = 2 if current else 0
-            if current and current_chars + separator_chars + len(paragraph) > max_chars:
-                chunks.append("\n\n".join(current))
-                current = []
-                current_chars = 0
-
-            current.append(paragraph)
-            current_chars += separator_chars + len(paragraph)
-
-        if current:
-            chunks.append("\n\n".join(current))
-
-        return chunks or [text[:max_chars]]
-
-    def _split_long_paragraph(self, text: str, max_chars: int) -> list[str]:
-        chunks = []
-        start = 0
-        while start < len(text):
-            end = min(start + max_chars, len(text))
-            if end < len(text):
-                split_at = text.rfind("\n", start, end)
-                if split_at <= start:
-                    split_at = text.rfind(" ", start, end)
-                if split_at > start:
-                    end = split_at
-            chunks.append(text[start:end].strip())
-            start = end
-            while start < len(text) and text[start].isspace():
-                start += 1
-        return [chunk for chunk in chunks if chunk]
-
-    def _entry_chunks(self, entries: list[LogEntry], *, max_chars: int = 12000) -> list[list[LogEntry]]:
-        chunks: list[list[LogEntry]] = []
-        current: list[LogEntry] = []
-        current_chars = 0
-
+    def _build_evidence(self, entries: list[LogEntry]) -> list[EvidenceChunk]:
+        input_budget = structured_input_budget(
+            self.config.llm.context_window_tokens,
+            num_predict=4096,
+        )
+        chunk_tokens = max(256, min(4096, input_budget // 3))
+        evidence: list[EvidenceChunk] = []
         for entry in entries:
-            formatted_len = len(self._format_entry_for_prompt(entry))
-            if current and current_chars + formatted_len > max_chars:
-                chunks.append(current)
-                current = []
-                current_chars = 0
-            current.append(entry)
-            current_chars += formatted_len
+            chunks = split_text_by_tokens(entry.content, chunk_tokens)
+            for index, content in enumerate(chunks, start=1):
+                evidence.append(
+                    EvidenceChunk(
+                        evidence_id=f"{entry.entry_id}::chunk-{index:04d}",
+                        entry_id=entry.entry_id,
+                        session_id=entry.session_id,
+                        timestamp=entry.timestamp,
+                        content=content,
+                        importance=entry.importance,
+                        durability=entry.durability,
+                        chunk_index=index,
+                        chunk_count=len(chunks),
+                    )
+                )
+        return evidence
 
-        if current:
-            chunks.append(current)
-        return chunks
+    def _evidence_batches(
+        self,
+        evidence: list[EvidenceChunk],
+        prompt_factory,
+        *,
+        num_predict: int,
+    ) -> list[list[EvidenceChunk]]:
+        max_tokens = structured_input_budget(
+            self.config.llm.context_window_tokens,
+            num_predict=num_predict,
+        )
+
+        def render(items: list[EvidenceChunk]) -> str:
+            system, user = prompt_factory(self._format_evidence_for_prompt(items))
+            return f"{system}\n{user}"
+
+        return batch_items(evidence, render, max_tokens)
+
+    def _format_evidence_for_prompt(self, evidence: list[EvidenceChunk]) -> str:
+        return "\n\n".join(
+            (
+                f"[EVIDENCE {item.evidence_id}] parent_log={item.entry_id}; "
+                f"chunk={item.chunk_index}/{item.chunk_count}; durability={item.durability}; "
+                f"importance={item.importance:.2f}\n{item.content}"
+            )
+            for item in evidence
+        )
+
+    async def _rewrite_evidence_batches(
+        self,
+        page_slug: str,
+        page_type: str,
+        existing_content: str,
+        evidence: list[EvidenceChunk],
+    ) -> tuple[dict, list[str]]:
+        remaining = list(evidence)
+        working_content = existing_content
+        rendered_batches: list[str] = []
+        latest: dict = {}
+        while remaining:
+            def prompt_factory(text: str) -> tuple[str, str]:
+                return prompts.consolidation_rewrite_prompt(
+                    working_content,
+                    text,
+                    page_slug=page_slug,
+                    page_type=page_type,
+                )
+
+            batch = self._next_fitting_evidence_batch(
+                remaining,
+                prompt_factory,
+                num_predict=8192,
+            )
+            rendered = self._format_evidence_for_prompt(batch)
+            system, user = prompt_factory(rendered)
+            response = await self.llm.call_structured(
+                system,
+                user,
+                WikiRewriteOutput,
+                num_predict=8192,
+                dump_success=True,
+                debug_label=f"wiki-rewrite-{page_slug}",
+            )
+            if not isinstance(response, dict):
+                raise ValueError(f"wiki rewrite for {page_slug} did not return an object")
+            latest = response
+            working_content = str(response.get("content", working_content))
+            rendered_batches.append(rendered)
+            del remaining[: len(batch)]
+        return latest, rendered_batches
+
+    async def _append_evidence_batches(
+        self,
+        page: WikiPage,
+        page_slug: str,
+        page_type: str,
+        evidence: list[EvidenceChunk],
+    ) -> list[tuple[dict, bool]]:
+        remaining = list(evidence)
+        outputs: list[tuple[dict, bool]] = []
+        while remaining:
+            def prompt_factory(text: str) -> tuple[str, str]:
+                return prompts.consolidation_append_prompt(
+                    page.content,
+                    text,
+                    page_slug=page_slug,
+                    page_type=page_type,
+                )
+
+            batch = self._next_fitting_evidence_batch(
+                remaining,
+                prompt_factory,
+                num_predict=4096,
+            )
+            system, user = prompt_factory(self._format_evidence_for_prompt(batch))
+            response = await self.llm.call_structured(
+                system,
+                user,
+                WikiAppendOutput,
+                num_predict=4096,
+                debug_label=f"wiki-append-{page_slug}",
+            )
+            if not isinstance(response, dict):
+                raise ValueError(f"wiki append for {page_slug} did not return an object")
+            outputs.append((response, self._append_facts_to_page(page, response)))
+            del remaining[: len(batch)]
+        return outputs
+
+    def _next_fitting_evidence_batch(
+        self,
+        evidence: list[EvidenceChunk],
+        prompt_factory,
+        *,
+        num_predict: int,
+    ) -> list[EvidenceChunk]:
+        batches = self._evidence_batches(
+            evidence,
+            prompt_factory,
+            num_predict=num_predict,
+        )
+        return batches[0]
+
+    def _merge_append_outputs(self, outputs: list[dict]) -> dict:
+        return {
+            "new_facts": [fact for output in outputs for fact in output.get("new_facts", [])],
+            "new_tags": list(
+                dict.fromkeys(tag for output in outputs for tag in output.get("new_tags", []))
+            ),
+            "confidence_adjustment": sum(
+                float(output.get("confidence_adjustment", 0.0)) for output in outputs
+            ),
+            "importance_adjustment": sum(
+                float(output.get("importance_adjustment", 0.0)) for output in outputs
+            ),
+        }
 
     def _format_entries_for_prompt(
         self,
@@ -706,23 +884,12 @@ class DreamProcess:
         max_chars_per_entry: int | None = None,
         max_total_chars: int | None = None,
     ) -> str:
-        formatted_entries = []
-        total_chars = 0
-        for entry in entries:
-            formatted = self._format_entry_for_prompt(entry, max_chars=max_chars_per_entry)
-            if max_total_chars is not None and formatted_entries and total_chars + len(formatted) > max_total_chars:
-                break
-            formatted_entries.append(formatted)
-            total_chars += len(formatted)
-        return "\n".join(formatted_entries)
+        return "\n".join(self._format_entry_for_prompt(entry) for entry in entries)
 
     def _format_entry_for_prompt(self, entry: LogEntry, *, max_chars: int | None = None) -> str:
-        content = entry.content
-        if max_chars is not None and len(content) > max_chars:
-            content = content[: max_chars - 32].rstrip() + "\n[entry truncated for prompt]"
         return (
             f"[{entry.entry_id}] "
-            f"durability={entry.durability}; importance={entry.importance:.2f}\n{content}"
+            f"durability={entry.durability}; importance={entry.importance:.2f}\n{entry.content}"
         )
 
     def _page_type_for_target(self, item: dict, fallback: str = "topic") -> str:
@@ -785,6 +952,11 @@ class DreamProcess:
                     cleaned = cleaned.strip()
                     if cleaned and cleaned not in log_entry_ids:
                         log_entry_ids.append(cleaned)
+            evidence_ids = [
+                evidence_id.strip()
+                for evidence_id in item.get("evidence_ids", [])
+                if isinstance(evidence_id, str) and evidence_id.strip()
+            ]
                         
             existing = deduped.get(slug)
             if existing is None:
@@ -792,7 +964,8 @@ class DreamProcess:
                     "page": slug,
                     "action": action,
                     "page_type": self._page_type_for_target(item),
-                    "log_entry_ids": log_entry_ids
+                    "log_entry_ids": log_entry_ids,
+                    "evidence_ids": list(dict.fromkeys(evidence_ids)),
                 }
             else:
                 if existing["action"] == "create" and action == "update":
@@ -806,12 +979,16 @@ class DreamProcess:
                 for entry_id in log_entry_ids:
                     if entry_id not in existing_ids:
                         existing_ids.append(entry_id)
+                existing_evidence_ids = existing.setdefault("evidence_ids", [])
+                for evidence_id in evidence_ids:
+                    if evidence_id not in existing_evidence_ids:
+                        existing_evidence_ids.append(evidence_id)
         return list(deduped.values())
 
     async def _canonicalize_identification(
         self,
         identification: list[dict],
-        entries: list[LogEntry],
+        evidence: list[EvidenceChunk],
     ) -> list[dict]:
         if not identification:
             return []
@@ -820,7 +997,7 @@ class DreamProcess:
         if len(identification) < 2 and not existing_pages:
             return identification
 
-        proposed_targets = self._canonicalization_target_catalog(identification, entries)
+        proposed_targets = self._canonicalization_target_catalog(identification, evidence)
         if not proposed_targets:
             return identification
 
@@ -865,9 +1042,8 @@ class DreamProcess:
             if not canonical_slug or self._is_placeholder_slug(canonical_slug):
                 continue
 
-            log_entry_ids = self._clean_log_entry_ids(mapping.get("log_entry_ids", []))
-            if not log_entry_ids:
-                log_entry_ids = list(original.get("log_entry_ids", []))
+            log_entry_ids = list(original.get("log_entry_ids", []))
+            evidence_ids = list(original.get("evidence_ids", []))
             page_type = self._page_type_for_target(mapping, fallback=self._page_type_for_target(original))
             lexical_match = self._lexical_existing_match(canonical_slug, existing_pages)
             if lexical_match:
@@ -890,6 +1066,7 @@ class DreamProcess:
                     "action": canonical_action,
                     "page_type": page_type,
                     "log_entry_ids": log_entry_ids,
+                    "evidence_ids": evidence_ids,
                 }
             )
 
@@ -909,7 +1086,6 @@ class DreamProcess:
         for page in pages:
             if self._is_placeholder_slug(page.slug):
                 continue
-            body = self._normalized_text(page.content)
             catalog.append(
                 {
                     "slug": page.slug,
@@ -917,7 +1093,6 @@ class DreamProcess:
                     "tags": page.tags,
                     "page_type": self._page_type_for_slug(page.slug, page.tags),
                     "summary": self._index_summary(page),
-                    "content_preview": body[:500],
                     "confidence": page.confidence,
                     "importance": page.importance,
                     "source_count": len(page.source_log_entries),
@@ -928,9 +1103,9 @@ class DreamProcess:
     def _canonicalization_target_catalog(
         self,
         identification: list[dict],
-        entries: list[LogEntry],
+        evidence: list[EvidenceChunk],
     ) -> list[dict]:
-        entries_by_id = {entry.entry_id: entry for entry in entries}
+        evidence_by_id = {item.evidence_id: item for item in evidence}
         catalog = []
         for item in identification:
             if not isinstance(item, dict):
@@ -940,9 +1115,12 @@ class DreamProcess:
                 continue
 
             log_entry_ids = list(item.get("log_entry_ids", []))
-            target_entries = [entries_by_id[eid] for eid in log_entry_ids if eid in entries_by_id]
-            if not target_entries:
-                target_entries = entries[:6]
+            evidence_ids = list(item.get("evidence_ids", []))
+            target_evidence = [
+                evidence_by_id[evidence_id]
+                for evidence_id in evidence_ids
+                if evidence_id in evidence_by_id
+            ]
 
             catalog.append(
                 {
@@ -950,13 +1128,15 @@ class DreamProcess:
                     "action": item.get("action"),
                     "page_type": self._page_type_for_target(item),
                     "log_entry_ids": log_entry_ids,
+                    "evidence_ids": evidence_ids,
                     "source_snippets": [
                         {
-                            "entry_id": entry.entry_id,
-                            "importance": entry.importance,
-                            "content": self._normalized_text(entry.content)[:500],
+                            "evidence_id": chunk.evidence_id,
+                            "entry_id": chunk.entry_id,
+                            "importance": chunk.importance,
+                            "content": chunk.content,
                         }
-                        for entry in target_entries[:6]
+                        for chunk in target_evidence
                     ],
                 }
             )
@@ -980,7 +1160,8 @@ class DreamProcess:
         system, user = prompts.tool_observation_extract_prompt(entry.entry_id, entry.content)
         try:
             response = await self.llm.call_structured(system, user, ToolObservationExtractionOutput)
-        except Exception:
+        except Exception as exc:
+            self._preparation_failures[entry.entry_id] = str(exc)
             return []
 
         facts = response.get("facts", []) if isinstance(response, dict) else []

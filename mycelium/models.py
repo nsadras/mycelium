@@ -81,6 +81,9 @@ class DreamReport:
     conflicts_found: list[str]           # page slugs
     conflicts_resolved: int
     git_commit_sha: Optional[str]
+    completed_source_ids: list[str] = field(default_factory=list)
+    pending_source_ids: list[str] = field(default_factory=list)
+    failures: list[dict[str, str]] = field(default_factory=list)
 
 @dataclass
 class MemoryResult:

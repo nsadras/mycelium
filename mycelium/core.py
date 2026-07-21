@@ -58,7 +58,8 @@ class Mycelium:
             url=self.config.llm.url,
             model=self.config.llm.model,
             temperature=self.config.llm.temperature,
-            timeout=self.config.timeout_seconds if hasattr(self.config, 'timeout_seconds') else self.config.llm.timeout_seconds
+            timeout=self.config.timeout_seconds if hasattr(self.config, 'timeout_seconds') else self.config.llm.timeout_seconds,
+            context_window_tokens=self.config.llm.context_window_tokens,
         )
         from mycelium.reconsolidation import ReconsolidationEngine
         self.reconsolidation_engine = ReconsolidationEngine(self.llm, self._wiki, self.config)

@@ -33,12 +33,20 @@ class ChatResponse:
 
 
 class OllamaClient:
-    def __init__(self, url: str, model: str, temperature: float = 0.1, timeout: int = 120) -> None:
+    def __init__(
+        self,
+        url: str,
+        model: str,
+        temperature: float = 0.1,
+        timeout: int = 120,
+        context_window_tokens: int = 32768,
+    ) -> None:
         load_dotenv()
         self.url = url.rstrip('/')
         self.model = model
         self.temperature = temperature
         self.timeout = timeout
+        self.context_window_tokens = context_window_tokens
         self.client = AsyncClient(host=self.url, timeout=self.timeout)
         self.web_client = Client()
         self._call_log: list[dict] = []
@@ -403,10 +411,10 @@ class OllamaClient:
             "eval_duration",
         )
         metadata: dict[str, Any] = {}
-        for field in fields:
-            value = self._field(response, field)
+        for metadata_field in fields:
+            value = self._field(response, metadata_field)
             if value is not None:
-                metadata[field] = value
+                metadata[metadata_field] = value
         return metadata
 
     def _parse_structured_response(
@@ -446,7 +454,11 @@ class OllamaClient:
         """
         call_id = str(uuid.uuid4())[:8]
         output_format, response_model = self._structured_format(schema)
-        options = {"temperature": 0.0, "num_ctx": 32768, "num_predict": num_predict}
+        options = {
+            "temperature": 0.0,
+            "num_ctx": self.context_window_tokens,
+            "num_predict": num_predict,
+        }
         endpoint = f"{self.url}/api/chat"
         messages = [
             {"role": "system", "content": system},

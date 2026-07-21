@@ -42,6 +42,7 @@ class ConsolidationTargetOutput(BaseModel):
     action: Literal["update", "create", "none"]
     page_type: Literal["entity", "event", "topic"] = "topic"
     log_entry_ids: list[str] = Field(default_factory=list, max_length=20)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=20)
 
 
 class ConsolidationIdentifyOutput(BaseModel):

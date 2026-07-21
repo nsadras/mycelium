@@ -270,6 +270,21 @@ async def test_call_structured_accepts_custom_num_predict():
 
 
 @pytest.mark.asyncio
+async def test_call_structured_uses_configured_context_window():
+    client = OllamaClient(
+        "http://localhost:11434",
+        "test-model",
+        context_window_tokens=65536,
+    )
+    fake_sdk = FakeSdkClient('{"answer": "yes"}')
+    client.client = fake_sdk
+
+    await client.call_structured("system prompt", "user prompt", AnswerOutput)
+
+    assert fake_sdk.chat_calls[0]["options"]["num_ctx"] == 65536
+
+
+@pytest.mark.asyncio
 async def test_call_structured_debug_dumps_successful_response(tmp_path, monkeypatch):
     client = OllamaClient("http://localhost:11434", "test-model")
     fake_sdk = FakeSdkClient('{"answer": "yes"}', done_reason="length", eval_count=8192)

@@ -322,6 +322,9 @@ async def run_dream() -> dict[str, Any]:
         "conflicts_found": report.conflicts_found,
         "conflicts_resolved": report.conflicts_resolved,
         "git_commit_sha": report.git_commit_sha,
+        "completed_source_ids": report.completed_source_ids,
+        "pending_source_ids": report.pending_source_ids,
+        "failures": report.failures,
     }
 
 

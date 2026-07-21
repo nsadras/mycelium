@@ -40,6 +40,7 @@ class EngramService:
                 ollama_url=self.config.ollama_url,
                 model=self.config.ollama_model,
                 temperature=self.config.summary_temperature,
+                context_window_tokens=self.config.summary_context_window_tokens,
             )
         )
         self._processing_tasks: dict[str, asyncio.Task[Meeting]] = {}

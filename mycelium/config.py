@@ -1,6 +1,7 @@
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 # Use tomllib from standard library in Python 3.11+
 if sys.version_info >= (3, 11):
@@ -17,6 +18,7 @@ class LLMConfig:
     temperature: float = 0.1
     timeout_seconds: int = 120
     max_retries: int = 3
+    context_window_tokens: int = 32768
 
 @dataclass
 class ReconsolidationConfig:
@@ -39,8 +41,6 @@ class DecayConfig:
     archive_threshold: float = 0.10
     log_threshold: float = 0.05
     half_life_hours: int = 168
-
-from typing import Optional
 
 @dataclass
 class Config:
@@ -82,7 +82,8 @@ class Config:
             model=llm_data.get('model', 'gemma3:12b'),
             temperature=llm_data.get('temperature', 0.2),
             timeout_seconds=llm_data.get('timeout_seconds', 120),
-            max_retries=llm_data.get('max_retries', 3)
+            max_retries=llm_data.get('max_retries', 3),
+            context_window_tokens=int(llm_data.get('context_window_tokens', 32768)),
         )
         
         recon_data = data.get('reconsolidation', {})

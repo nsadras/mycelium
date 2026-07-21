@@ -487,10 +487,14 @@ git_commits = false
 model = "gemma4:latest"
 url = "http://localhost:11434"
 temperature = 0.2
+context_window_tokens = 32768
 
 [session]
 context_budget_tokens = 8192
 ```
+
+`llm.context_window_tokens` controls token-aware ingestion batching. It is separate from
+`session.context_budget_tokens`, which limits how much retrieved memory is loaded into chats.
 
 Additional defaults for reconsolidation, dream, and decay live in `mycelium/config.py`.
 

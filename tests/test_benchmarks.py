@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from benchmarks.mycelium_bench.adapters import BenchmarkAnswer, BenchmarkMessage, format_messages_for_memory
+from benchmarks.mycelium_bench.adapters import (
+    BenchmarkAnswer,
+    BenchmarkMessage,
+    OllamaQaClient,
+    format_messages_for_memory,
+)
 from benchmarks.mycelium_bench.adapters import MyceliumMemorySystem
 from benchmarks.mycelium_bench.locomo import iter_locomo_sessions, run_locomo
 from benchmarks.mycelium_bench.scoring import locomo_score
@@ -130,6 +135,37 @@ def test_memory_profile_none_skips_seed_profile(tmp_path):
     mem = Mycelium(tmp_path / "store", memory_profile="none")
 
     assert not mem.wiki.exists("user-profile")
+
+
+@pytest.mark.asyncio
+async def test_qa_client_uses_grounded_structured_answer():
+    client = OllamaQaClient("test", "http://localhost:11434")
+    client.llm.call_structured = AsyncMock(
+        return_value={"answerable": True, "answer": "19 January, 2023", "evidence": "D1:2"}
+    )
+
+    answer = await client.answer(
+        "When did Jon lose his job?",
+        "conversation_time=20 January, 2023\n[D1:2] Jon: Lost my job yesterday.",
+    )
+
+    assert answer.output == "19 January, 2023"
+    assert answer.metadata["grounding"]["evidence"] == "D1:2"
+
+
+@pytest.mark.asyncio
+async def test_qa_client_returns_consistent_refusal_for_unsupported_premise():
+    client = OllamaQaClient("test", "http://localhost:11434")
+    client.llm.call_structured = AsyncMock(
+        return_value={"answerable": False, "answer": "", "evidence": None}
+    )
+
+    answer = await client.answer(
+        "Why did Gina close her bank account?",
+        "[D8:1] Jon: I had to shut down my bank account.",
+    )
+
+    assert answer.output == "I do not have enough information to answer this question."
 
 
 @pytest.mark.asyncio

@@ -41,6 +41,7 @@ def main() -> None:
         context_budget_tokens=args.context_budget_tokens,
         dream_policy=args.dream_policy,
         reconsolidate=args.reconsolidate,
+        evidence_mode=args.evidence_mode,
     )
 
     if args.benchmark == "locomo":
@@ -83,6 +84,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--context-budget-tokens", type=int, default=32768)
     parser.add_argument("--dream-policy", choices=["none", "per-batch", "per-case"], default="per-batch")
     parser.add_argument("--reconsolidate", action="store_true")
+    parser.add_argument("--evidence-mode", choices=["raw", "claims", "hybrid"], default="hybrid")
     parser.add_argument("--prediction-key", default=None)
 
 

@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from mycelium.core import Mycelium
 from mycelium.facts import page_recall_context
 from mycelium.ollama import OllamaClient
+from mycelium.structured_outputs import GroundedAnswerOutput
 
 
 @dataclass
@@ -57,32 +58,38 @@ class OllamaQaClient:
 
     async def answer(self, question: str, context: str, instruction: str | None = None) -> BenchmarkAnswer:
         system = instruction or (
-            "Answer the question using ONLY the memory context provided. Be maximally concise — "
-            "use the fewest words possible. Do not explain, elaborate, or add context beyond "
-            "what is directly asked. If the answer is a date, give only the date. If the answer "
-            "is a name, give only the name. If you cannot answer from the context, say exactly: "
-            "\"I do not have enough information to answer this question.\""
+            "Answer using only the supplied memory evidence. Raw CANONICAL SOURCE LOG SNIPPETS "
+            "outrank synthesized wiki summaries when they disagree. Ground every relation in the "
+            "exact named subject: never transfer an action, possession, preference, or event from "
+            "one person to another. A question whose premise assigns another person's fact to the "
+            "named subject is unanswerable. Resolve relative dates such as yesterday, last week, "
+            "or next month against the source's conversation_time when possible.\n\n"
+            "Return the shortest exact answer span that satisfies the question. Preserve source "
+            "wording; do not explain or restate the question. For a date, return only the resolved "
+            "date. For yes/no, return only Yes or No. Set answerable=false when the evidence does "
+            "not explicitly support the exact subject-relation-object asked about."
         )
         context_text = context.strip() or "No memory context is available."
         user = f"MEMORY CONTEXT:\n{context_text}\n\nQUESTION:\n{question}"
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         start = time.time()
-        response = await self.llm.call_messages(
-            messages,
-            temperature=0.0,
-            enable_tools=False,
-            num_ctx=32768,
-            num_predict=512,
-            think=False,
+        response = await self.llm.call_structured(
+            system,
+            user,
+            GroundedAnswerOutput,
+            num_predict=256,
         )
         elapsed = time.time() - start
+        answerable = isinstance(response, dict) and bool(response.get("answerable"))
+        output = str(response.get("answer", "")).strip() if isinstance(response, dict) else ""
+        if not answerable or not output:
+            output = "I do not have enough information to answer this question."
         return BenchmarkAnswer(
-            output=response.content.strip(),
+            output=output,
             input_len=count_tokens(user),
-            output_len=count_tokens(response.content),
+            output_len=count_tokens(output),
             memory_construction_time=0.0,
             query_time_len=elapsed,
-            metadata={"llm_metadata": response.metadata},
+            metadata={"grounding": response},
         )
 
 
@@ -146,6 +153,7 @@ class MyceliumMemorySystem:
         context_budget_tokens: int = 32768,
         dream_policy: str = "per-batch",
         reconsolidate: bool = False,
+        evidence_mode: str = "hybrid",
     ) -> None:
         self.run_dir = run_dir
         self.qa_client = qa_client
@@ -155,12 +163,14 @@ class MyceliumMemorySystem:
         self.context_budget_tokens = context_budget_tokens
         self.dream_policy = dream_policy
         self.reconsolidate = reconsolidate
+        self.evidence_mode = evidence_mode
         self.case_id = "uninitialized"
         self.mem: Mycelium | None = None
         self._encoded_batches = 0
         self._dream_runs = 0
         self._memory_construction_seconds = 0.0
         self._errors: list[dict[str, Any]] = []
+        self._dream_failures: list[dict[str, Any]] = []
 
     async def reset(self, case_id: str) -> None:
         self.case_id = sanitize_path_part(case_id)
@@ -174,6 +184,7 @@ class MyceliumMemorySystem:
             dream_schedule="manual",
             config_path=self.config_path,
             memory_profile="none",
+            evidence_mode=self.evidence_mode,
         )
         self.mem.config.dream.schedule = "manual"
         self.mem.config.reconsolidation.check_on_load = self.reconsolidate
@@ -181,6 +192,7 @@ class MyceliumMemorySystem:
         self._dream_runs = 0
         self._memory_construction_seconds = 0.0
         self._errors = []
+        self._dream_failures = []
 
     async def memorize(self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None) -> None:
         if not messages:
@@ -191,7 +203,12 @@ class MyceliumMemorySystem:
         transcript = format_messages_for_memory(messages, metadata)
         start = time.time()
         try:
-            await mem.encoder.encode_session(transcript, session_id)
+            await mem.encoder.encode_session(
+                transcript, session_id,
+                source_type="benchmark_conversation",
+                occurred_at=metadata.get("timestamp"),
+                metadata={key: value for key, value in metadata.items() if value is not None},
+            )
         except Exception as exc:
             self._errors.append({"stage": "encode_session", "session_id": session_id, "error": str(exc)})
             await mem.encoder.encode(
@@ -207,7 +224,8 @@ class MyceliumMemorySystem:
         self._encoded_batches += 1
         if self.dream_policy == "per-batch":
             try:
-                await mem.dream()
+                report = await mem.dream()
+                self._record_dream_report(report, session_id=session_id)
                 self._dream_runs += 1
             except Exception as exc:
                 self._errors.append({"stage": "dream", "session_id": session_id, "error": str(exc)})
@@ -228,10 +246,19 @@ class MyceliumMemorySystem:
             self._errors.append({"stage": "load_context", "question": question, "error": str(exc)})
             loaded_pages = []
         memory_construction_time = time.time() - start
-        context = "\n\n".join(
+        wiki_context = "\n\n".join(
             f"=== MEMORY: {page.title} ({page.slug}) ===\n{format_page_for_prompt(page)}"
             for page in loaded_pages
         )
+        source_context = "\n\n".join(
+            page.source_context for page in loaded_pages if page.source_context
+        )
+        context = wiki_context
+        if source_context:
+            context = (
+                f"SYNTHESIZED MEMORY PAGES:\n{wiki_context}\n\n"
+                f"CANONICAL SOURCE EVIDENCE:\n{source_context}"
+            )
         answer = await self.qa_client.answer(question, context)
         answer.memory_construction_time = memory_construction_time
         answer.metadata.update(
@@ -254,7 +281,8 @@ class MyceliumMemorySystem:
         if self.dream_policy == "per-case" and self.mem is not None:
             start = time.time()
             try:
-                await self.mem.dream()
+                report = await self.mem.dream()
+                self._record_dream_report(report, session_id=self.case_id)
                 self._dream_runs += 1
             except Exception as exc:
                 self._errors.append({"stage": "dream", "case_id": self.case_id, "error": str(exc)})
@@ -266,6 +294,7 @@ class MyceliumMemorySystem:
         if self.mem is not None:
             page_count = len(self.mem.wiki.list_all())
             log_count = len(self.mem.log_store.get_unconsolidated())
+        coverage = self.mem.artifacts.coverage_report() if self.mem is not None else {}
         return {
             "system": self.name,
             "encoded_batches": self._encoded_batches,
@@ -274,7 +303,14 @@ class MyceliumMemorySystem:
             "unconsolidated_logs": log_count,
             "memory_construction_seconds": self._memory_construction_seconds,
             "errors": self._errors,
+            "dream_failures": self._dream_failures,
+            "evidence_mode": self.evidence_mode,
+            "artifact_coverage": coverage,
         }
+
+    def _record_dream_report(self, report: Any, *, session_id: str) -> None:
+        for failure in getattr(report, "failures", []) or []:
+            self._dream_failures.append({"session_id": session_id, **failure})
 
     def _require_mem(self) -> Mycelium:
         if self.mem is None:
@@ -335,6 +371,7 @@ def build_memory_system(
     context_budget_tokens: int,
     dream_policy: str,
     reconsolidate: bool = False,
+    evidence_mode: str = "hybrid",
 ) -> MemorySystem:
     qa_client = OllamaQaClient(model=qa_model, url=ollama_url)
     if system_name == "mycelium":
@@ -347,6 +384,7 @@ def build_memory_system(
             context_budget_tokens=context_budget_tokens,
             dream_policy=dream_policy,
             reconsolidate=reconsolidate,
+            evidence_mode=evidence_mode,
         )
     if system_name == "full_wiki":
         return FullWikiMemorySystem(
@@ -358,6 +396,7 @@ def build_memory_system(
             context_budget_tokens=context_budget_tokens,
             dream_policy=dream_policy,
             reconsolidate=reconsolidate,
+            evidence_mode=evidence_mode,
         )
     if system_name == "null":
         return NullMemorySystem(qa_client)
@@ -389,10 +428,10 @@ def format_messages_for_memory(messages: list[BenchmarkMessage], metadata: dict[
     return "\n".join([*prefix_lines, *body_lines]).strip()
 
 
-def format_page_for_prompt(page: Any) -> str:
+def format_page_for_prompt(page: Any, *, include_source: bool = False) -> str:
     recall_context = page_recall_context(page)
     body = f"{recall_context}\n\n{page.content}" if recall_context else page.content
-    source_context = getattr(page, "source_context", "")
+    source_context = getattr(page, "source_context", "") if include_source else ""
     if source_context:
         return f"{body}\n\n{source_context}"
     return body

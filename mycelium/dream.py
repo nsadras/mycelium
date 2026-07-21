@@ -23,6 +23,7 @@ from mycelium.structured_outputs import (
     PredictionErrorOutput,
     WikiAppendOutput,
 )
+from mycelium.artifacts import ArtifactStore, MemoryClaim, parse_source_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,9 @@ class EvidenceChunk:
     durability: str
     chunk_index: int
     chunk_count: int
+    claim_ids: tuple[str, ...] = ()
+    segment_ids: tuple[str, ...] = ()
+    source_id: str | None = None
 
 
 def _normalize_page_key(value: str) -> str:
@@ -73,14 +77,18 @@ def _is_tool_entry(entry: LogEntry) -> bool:
     return name.startswith("tool-")
 
 class DreamProcess:
-    def __init__(self, llm: OllamaClient, wiki: WikiStore, logs: LogStore, config: Config):
+    def __init__(self, llm: OllamaClient, wiki: WikiStore, logs: LogStore, config: Config, artifacts: ArtifactStore | None = None):
         self.llm = llm
         self.wiki = wiki
         self.logs = logs
         self.config = config
+        self.artifacts = artifacts
         self.decay_engine = DecayEngine(wiki, logs, config)
         self._identification_failures: dict[str, str] = {}
         self._preparation_failures: dict[str, str] = {}
+
+    def _uses_claim_evidence(self) -> bool:
+        return self.artifacts is not None and self.config.dream.evidence_mode != "raw"
 
     async def run(
         self,
@@ -91,8 +99,9 @@ class DreamProcess:
         
         raw_entries = self.logs.get_unconsolidated()
         self._preparation_failures = {}
+        self._pending_page_claim_ids: dict[str, set[str]] = {}
         entries = await self._prepare_entries(raw_entries)
-        evidence = self._build_evidence(entries)
+        evidence = self._build_run_evidence(entries)
         self._identification_failures = {}
         
         if not entries and strategy != 'association_only':
@@ -128,14 +137,17 @@ class DreamProcess:
             
         index_content = self.wiki.get_index()
         
-        all_targets = []
-        identify_batches = self._evidence_batches(
-            evidence,
-            lambda text: prompts.consolidation_identify_prompt(index_content, text),
-            num_predict=2048,
-        )
-        for chunk in identify_batches:
-            all_targets.extend(await self._identify_targets_for_chunk(index_content, chunk))
+        if self._uses_claim_evidence() and self._is_multi_party_evidence(evidence):
+            all_targets = self._identify_multi_party_claim_targets(evidence)
+        else:
+            all_targets = []
+            identify_batches = self._evidence_batches(
+                evidence,
+                lambda text: prompts.consolidation_identify_prompt(index_content, text),
+                num_predict=2048,
+            )
+            for chunk in identify_batches:
+                all_targets.extend(await self._identify_targets_for_chunk(index_content, chunk))
             
         identification = self._dedupe_identification(all_targets)
         identification = await self._canonicalize_identification(identification, evidence)
@@ -199,6 +211,10 @@ class DreamProcess:
                 existing_content = ""
                 is_create = True
             
+            if self._uses_claim_evidence():
+                page_evidence = self._materialization_evidence(page_slug, page_evidence)
+                page_source_ids = list(dict.fromkeys(chunk.entry_id for chunk in page_evidence))
+
             try:
                 rewritten, rewrite_batches = await self._rewrite_evidence_batches(
                     page_slug,
@@ -239,6 +255,10 @@ class DreamProcess:
                         related_edges.append(Edge(target=target, relation=relation, weight=float(r.get("weight", 1.0))))
 
             content = self._sanitize_wiki_links(content, valid_slugs)
+            if self._uses_claim_evidence():
+                content = self._strip_internal_artifact_ids(content)
+                content = self._dedupe_repeated_lines(content)
+                content = self._with_claim_ledger(page_slug, content)
             
             now = datetime.now()
             
@@ -329,18 +349,22 @@ class DreamProcess:
                 
                 if conflict_policy == "override" or (conflict_policy == "fork" and not should_fork):
                     # Additive update: extract only new facts and append them
-                    try:
-                        append_outputs = await self._append_evidence_batches(
-                            existing_page,
-                            page_slug,
-                            page_type,
-                            page_evidence,
-                        )
-                    except Exception as exc:
-                        logger.warning("Additive append failed for %s, skipping: %s", page_slug, exc)
-                        failed_source_ids.update(page_source_ids)
-                        failures.append({"stage": "append", "source_id": ",".join(page_source_ids), "reason": str(exc)})
-                        continue
+                    if not self._uses_claim_evidence():
+                        try:
+                            append_outputs = await self._append_evidence_batches(
+                                existing_page,
+                                page_slug,
+                                page_type,
+                                page_evidence,
+                            )
+                        except Exception as exc:
+                            logger.warning("Additive append failed for %s, skipping: %s", page_slug, exc)
+                            failed_source_ids.update(page_source_ids)
+                            failures.append({"stage": "append", "source_id": ",".join(page_source_ids), "reason": str(exc)})
+                            continue
+                    else:
+                        # Claims/hybrid pages are regenerated from their canonical evidence set.
+                        append_outputs = []
 
                     facts_added = any(output[1] for output in append_outputs)
                     append_data = self._merge_append_outputs([output[0] for output in append_outputs])
@@ -495,6 +519,10 @@ class DreamProcess:
         if not dry_run:
             for page in changed_pages.values():
                 self.wiki.save(page)
+                if self.artifacts is not None:
+                    self.artifacts.assign_pages(
+                        self._pending_page_claim_ids.get(page.slug, set()), page.slug
+                    )
 
         # 6. Update index
         if changed_pages:
@@ -706,6 +734,10 @@ class DreamProcess:
             if not evidence_ids and target.get("action") in ("update", "create"):
                 evidence_ids = [item.evidence_id for item in evidence]
             target = dict(target)
+            target_slug = _slugify(str(target.get("page", "")))
+            if target_slug == "user-profile" and self._benchmark_evidence(evidence):
+                # Multi-party benchmark/meeting participants are not implicitly the system user.
+                continue
             target["evidence_ids"] = list(dict.fromkeys(evidence_ids))
             target["log_entry_ids"] = list(
                 dict.fromkeys(
@@ -715,6 +747,18 @@ class DreamProcess:
             if target["evidence_ids"] or target.get("action") == "none":
                 validated.append(target)
         return validated
+
+    def _benchmark_evidence(self, evidence: list[EvidenceChunk]) -> bool:
+        if self.artifacts is None:
+            return False
+        source_ids = {chunk.source_id for chunk in evidence if chunk.source_id}
+        for source_id in source_ids:
+            try:
+                if self.artifacts.get_source(source_id).source_type in {"benchmark_conversation", "meeting_transcript"}:
+                    return True
+            except FileNotFoundError:
+                continue
+        return False
 
     def _build_evidence(self, entries: list[LogEntry]) -> list[EvidenceChunk]:
         input_budget = structured_input_budget(
@@ -740,6 +784,252 @@ class DreamProcess:
                     )
                 )
         return evidence
+
+    def _build_run_evidence(self, entries: list[LogEntry]) -> list[EvidenceChunk]:
+        mode = self.config.dream.evidence_mode
+        if mode == "raw" or self.artifacts is None:
+            return self._build_evidence(entries)
+        entry_ids = {entry.entry_id for entry in entries}
+        source_by_id = {source.source_id: source for source in self.artifacts.list_sources()}
+        for episode in self.artifacts.list_episodes():
+            source = source_by_id.get(episode.source_id)
+            if mode == "claims" and source and source.raw_log_entry_id in entry_ids and episode.extraction_status == "failed":
+                self._preparation_failures[source.raw_log_entry_id] = (
+                    episode.extraction_error or "claim extraction failed"
+                )
+        claims = [
+            claim for claim in self.artifacts.list_claims(status="active")
+            if any(prov.raw_log_entry_id in entry_ids for prov in claim.provenance)
+        ]
+        evidence = [self._claim_evidence(claim, include_spans=mode == "hybrid") for claim in claims]
+        if mode == "hybrid":
+            claimed_segments = {
+                segment_id for claim in claims for prov in claim.provenance for segment_id in prov.segment_ids
+            }
+            for source in self.artifacts.list_sources():
+                if source.raw_log_entry_id not in entry_ids:
+                    continue
+                for segment in source.segments:
+                    if segment.segment_id in claimed_segments or not segment.content.strip():
+                        continue
+                    evidence.append(EvidenceChunk(
+                        evidence_id=f"{segment.segment_id}::unassigned",
+                        entry_id=source.raw_log_entry_id or source.source_id,
+                        session_id=source.session_id,
+                        timestamp=self._source_timestamp(source.recorded_at),
+                        content=(
+                            "UNASSIGNED SOURCE SPAN (no extracted claim; retain if useful)\n"
+                            f"speaker={segment.speaker or 'unknown'}; time={segment.timestamp or 'unknown'}\n"
+                            f"{segment.content}"
+                        ),
+                        importance=0.65, durability="durable", chunk_index=1, chunk_count=1,
+                        segment_ids=(segment.segment_id,), source_id=source.source_id,
+                    ))
+        # If extraction failed, hybrid must degrade visibly and losslessly to raw evidence.
+        covered_entries = {
+            prov.raw_log_entry_id for claim in claims for prov in claim.provenance if prov.raw_log_entry_id
+        }
+        sources_with_segments = {source.raw_log_entry_id for source in source_by_id.values() if source.segments}
+        missing_entries = entry_ids - covered_entries - sources_with_segments
+        if mode == "hybrid" and missing_entries:
+            evidence.extend(self._build_evidence([entry for entry in entries if entry.entry_id in missing_entries]))
+        return evidence
+
+    @staticmethod
+    def _source_timestamp(value: str) -> datetime:
+        return parse_source_datetime(value) or datetime.now()
+
+    def _is_multi_party_evidence(self, evidence: list[EvidenceChunk]) -> bool:
+        if self.artifacts is None:
+            return False
+        source_ids = {chunk.source_id for chunk in evidence if chunk.source_id}
+        if not source_ids:
+            return False
+        for source_id in source_ids:
+            try:
+                if self.artifacts.get_source(source_id).source_type != "benchmark_conversation":
+                    return False
+            except FileNotFoundError:
+                return False
+        return True
+
+    def _identify_multi_party_claim_targets(self, evidence: list[EvidenceChunk]) -> list[dict]:
+        """Route social-conversation facts to stable speaker pages, not transient themes."""
+        if self.artifacts is None:
+            return []
+        targets: dict[str, dict] = {}
+        for chunk in evidence:
+            speaker = None
+            for claim_id in chunk.claim_ids:
+                try:
+                    claim = self.artifacts.get_claim(claim_id)
+                except FileNotFoundError:
+                    continue
+                speaker = next((prov.speaker for prov in claim.provenance if prov.speaker), None)
+                if not speaker:
+                    speaker = next((item.get("entity") for item in claim.about if item.get("entity")), None)
+                if speaker:
+                    break
+            if not speaker and chunk.source_id and chunk.segment_ids:
+                try:
+                    source = self.artifacts.get_source(chunk.source_id)
+                    wanted = set(chunk.segment_ids)
+                    speaker = next((seg.speaker for seg in source.segments if seg.segment_id in wanted and seg.speaker), None)
+                except FileNotFoundError:
+                    pass
+            if not speaker or speaker.strip().lower() in {"user", "assistant", "system", "unknown"}:
+                continue
+            slug = f"person-{_slugify(speaker)}"
+            target = targets.setdefault(slug, {
+                "page": slug,
+                "action": "update" if self.wiki.exists(slug) else "create",
+                "page_type": "entity", "log_entry_ids": [], "evidence_ids": [],
+            })
+            if chunk.entry_id not in target["log_entry_ids"]:
+                target["log_entry_ids"].append(chunk.entry_id)
+            if chunk.evidence_id not in target["evidence_ids"]:
+                target["evidence_ids"].append(chunk.evidence_id)
+        return list(targets.values())
+
+    @staticmethod
+    def _dedupe_repeated_lines(content: str) -> str:
+        seen: set[str] = set()
+        result = []
+        for line in content.splitlines():
+            normalized = re.sub(r"\s+", " ", line.strip()).lower()
+            is_content = len(normalized) >= 24 and not normalized.startswith(("#", "|", "---"))
+            if is_content and normalized in seen:
+                continue
+            if is_content:
+                seen.add(normalized)
+            result.append(line)
+        return "\n".join(result).strip()
+
+    @staticmethod
+    def _strip_internal_artifact_ids(content: str) -> str:
+        content = re.sub(r"\[+\s*claim-[a-f0-9-]+\s*\]+", "", content, flags=re.I)
+        content = re.sub(r"\bclaim-[a-f0-9-]+\b", "", content, flags=re.I)
+        content = re.sub(r"[ \t]+([,.;])", r"\1", content)
+        content = re.sub(r"[ \t]{2,}", " ", content)
+        return content.strip()
+
+    def _claim_evidence(self, claim: MemoryClaim, *, include_spans: bool) -> EvidenceChunk:
+        provenance = claim.provenance[0]
+        source = self.artifacts.get_source(provenance.source_id) if self.artifacts else None
+        about = ", ".join(
+            f"{item.get('entity')} ({item.get('role')})" if item.get("role") else str(item.get("entity"))
+            for item in claim.about if item.get("entity")
+        ) or "unspecified"
+        lines = [
+            f"CANONICAL CLAIM: {claim.text}",
+            f"kind={claim.kind}; about={about}; confidence={claim.confidence:.2f}; "
+            f"status={claim.status}; facets={json.dumps(claim.facets, ensure_ascii=False, sort_keys=True)}",
+        ]
+        if include_spans and source is not None:
+            wanted = {segment_id for prov in claim.provenance for segment_id in prov.segment_ids}
+            spans = [segment for segment in source.segments if segment.segment_id in wanted]
+            if spans:
+                lines.append("EXACT SUPPORTING SPANS:")
+                lines.extend(
+                    f"[{segment.segment_id}] {segment.speaker or segment.role or 'unknown'}"
+                    f" ({segment.timestamp or 'time unknown'}): {segment.content}"
+                    for segment in spans
+                )
+        raw_entry = provenance.raw_log_entry_id or provenance.source_id
+        return EvidenceChunk(
+            evidence_id=f"{claim.claim_id}::claim",
+            entry_id=raw_entry,
+            session_id=source.session_id if source else "",
+            timestamp=self._source_timestamp(source.recorded_at) if source else datetime.now(),
+            content="\n".join(lines), importance=max(0.5, claim.confidence), durability="durable",
+            chunk_index=1, chunk_count=1, claim_ids=(claim.claim_id,),
+            segment_ids=tuple(segment_id for prov in claim.provenance for segment_id in prov.segment_ids),
+            source_id=provenance.source_id,
+        )
+
+    def _materialization_evidence(self, page_slug: str, current: list[EvidenceChunk]) -> list[EvidenceChunk]:
+        if self.artifacts is None:
+            return current
+        current_claim_ids = {claim_id for chunk in current for claim_id in chunk.claim_ids}
+        existing_claims = self.artifacts.claims_for_page(page_slug)
+        # Exact spans validate/expose extraction and unclaimed spans stay lossless, but
+        # repeating every quote during final materialization wastes the context window.
+        merged = []
+        for chunk in current:
+            if chunk.claim_ids:
+                for claim_id in chunk.claim_ids:
+                    try:
+                        merged.append(self._claim_evidence(self.artifacts.get_claim(claim_id), include_spans=False))
+                    except FileNotFoundError:
+                        continue
+            else:
+                merged.append(chunk)
+        present_ids = {chunk.evidence_id for chunk in merged}
+        for claim in existing_claims:
+            chunk = self._claim_evidence(claim, include_spans=False)
+            if chunk.evidence_id not in present_ids:
+                merged.append(chunk); present_ids.add(chunk.evidence_id)
+        # Persist assignment only after identification; failed rewrites remain auditable as unmaterialized.
+        self._pending_page_claim_ids = getattr(self, "_pending_page_claim_ids", {})
+        self._pending_page_claim_ids.setdefault(page_slug, set()).update(current_claim_ids)
+        return merged
+
+    def _with_claim_ledger(self, page_slug: str, overview: str) -> str:
+        """Project every canonical claim into the page without relying on LLM recall."""
+        if self.artifacts is None:
+            return overview
+        claim_ids = set(getattr(self, "_pending_page_claim_ids", {}).get(page_slug, set()))
+        claims = {claim.claim_id: claim for claim in self.artifacts.claims_for_page(page_slug)}
+        for claim_id in claim_ids:
+            try:
+                claims[claim_id] = self.artifacts.get_claim(claim_id)
+            except FileNotFoundError:
+                continue
+        active = [claim for claim in claims.values() if claim.status == "active"]
+        if not active:
+            return overview
+        groups: dict[str, list[MemoryClaim]] = {}
+        for claim in active:
+            label = claim.kind.replace("_", " ").strip().title() or "Facts"
+            groups.setdefault(label, []).append(claim)
+        lines = [overview.rstrip(), "", "## Evidence-Backed Facts"]
+        for label in sorted(groups):
+            lines.extend(["", f"### {label}"])
+            ordered = sorted(groups[label], key=lambda claim: (
+                str(claim.facets.get("normalized_date") or claim.facets.get("observed_at") or claim.recorded_at),
+                claim.text.lower(),
+            ))
+            seen_text: set[str] = set()
+            for claim in ordered:
+                normalized_text = self._normalized_text(claim.text)
+                if normalized_text in seen_text:
+                    continue
+                seen_text.add(normalized_text)
+                qualifiers = self._claim_ledger_qualifiers(claim)
+                suffix = f" _({'; '.join(qualifiers)})_" if qualifiers else ""
+                lines.append(f"- {claim.text}{suffix}")
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _claim_ledger_qualifiers(claim: MemoryClaim) -> list[str]:
+        facets = claim.facets
+        qualifiers = []
+        observed = facets.get("observed_at")
+        normalized = facets.get("normalized_date")
+        when = facets.get("when") or facets.get("time_expression")
+        if observed:
+            qualifiers.append(f"observed {observed}")
+        if when:
+            qualifiers.append(f"stated time: {when}")
+        if normalized:
+            qualifiers.append(f"resolved date: {normalized}")
+        for key in ("location", "reason", "deadline", "owner", "value", "quantity"):
+            value = facets.get(key)
+            if isinstance(value, (str, int, float)) and str(value).strip():
+                qualifiers.append(f"{key}: {value}")
+        if claim.inferred:
+            qualifiers.append("inferred")
+        return qualifiers
 
     def _evidence_batches(
         self,
@@ -777,16 +1067,19 @@ class DreamProcess:
         evidence: list[EvidenceChunk],
     ) -> tuple[dict, list[str]]:
         remaining = list(evidence)
-        working_content = existing_content
+        # Claims-mode pages are projections of canonical evidence. Starting from old
+        # prose both consumes context and lets stale/duplicated prose survive.
+        working_content = "" if self._uses_claim_evidence() else existing_content
         rendered_batches: list[str] = []
         latest: dict = {}
         while remaining:
             def prompt_factory(text: str) -> tuple[str, str]:
+                if self._uses_claim_evidence():
+                    return prompts.claim_materialization_prompt(
+                        working_content, text, page_slug=page_slug, page_type=page_type,
+                    )
                 return prompts.consolidation_rewrite_prompt(
-                    working_content,
-                    text,
-                    page_slug=page_slug,
-                    page_type=page_type,
+                    working_content, text, page_slug=page_slug, page_type=page_type,
                 )
 
             batch = self._next_fitting_evidence_batch(

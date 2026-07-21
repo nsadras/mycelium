@@ -13,8 +13,36 @@ class EncodedSessionOutput(BaseModel):
     entries: list[EncodedEntryOutput] = Field(default_factory=list, max_length=20)
 
 
+class ExtractedEntityOutput(BaseModel):
+    entity: str
+    role: str | None = None
+
+
+class ExtractedClaimOutput(BaseModel):
+    text: str
+    kind: str = "fact"
+    about: list[ExtractedEntityOutput] = Field(default_factory=list, max_length=12)
+    segment_ids: list[str] = Field(default_factory=list, max_length=32)
+    speaker: str | None = None
+    evidence_type: Literal["explicit", "inferred"] = "explicit"
+    confidence: float = 0.8
+    slot: str | None = None
+    facets: dict = Field(default_factory=dict)
+
+
+class ExtractedEpisodeOutput(BaseModel):
+    summary: str = ""
+    claims: list[ExtractedClaimOutput] = Field(default_factory=list, max_length=128)
+
+
 class ImportanceRatingOutput(BaseModel):
     importance: float
+
+
+class GroundedAnswerOutput(BaseModel):
+    answerable: bool
+    answer: str
+    evidence: str | None = None
 
 
 class RoutingSelectionOutput(BaseModel):

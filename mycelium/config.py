@@ -34,6 +34,7 @@ class DreamConfig:
     strategy: str = 'full'
     conflict_policy: str = 'override'
     max_pages_per_run: int = 20
+    evidence_mode: str = 'hybrid'
 
 @dataclass
 class DecayConfig:
@@ -100,7 +101,8 @@ class Config:
             cron_expression=dream_data.get('cron_expression', '0 2 * * *'),
             strategy=dream_data.get('strategy', 'full'),
             conflict_policy=dream_data.get('conflict_policy', 'override'),
-            max_pages_per_run=dream_data.get('max_pages_per_run', 20)
+            max_pages_per_run=dream_data.get('max_pages_per_run', 20),
+            evidence_mode=dream_data.get('evidence_mode', 'hybrid'),
         )
         
         decay_data = data.get('decay', {})

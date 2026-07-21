@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from engram.config import EngramConfig
 from engram.diarize import WhisperXDiarizer
-from engram.memory_adapter import ingest_meeting_into_memory, meeting_transcript_text, resolved_speaker_name
+from engram.memory_adapter import encode_meeting_into_memory, meeting_transcript_text, resolved_speaker_name
 from engram.models import Meeting, TranscriptSegment, iso_or_none
 from engram.store import EngramStore
 from engram.summarize import EngramSummarizer
@@ -172,7 +172,7 @@ class EngramService:
             transcript = meeting_transcript_text(segments, meeting.speaker_names)
             summary = await self.summarizer_factory().summarize(meeting.title, transcript)
             meeting = self.store.save_summary(meeting_id, summary)
-            entry = await asyncio.to_thread(ingest_meeting_into_memory, self.get_mem(), self.store, meeting_id)
+            entry = await encode_meeting_into_memory(self.get_mem(), self.store, meeting_id)
             meeting = self.store.update_meeting(
                 meeting_id,
                 status="completed",

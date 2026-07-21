@@ -13,8 +13,9 @@ from mycelium.session import Session
 from mycelium import prompts
 from mycelium.decay import initialize_memory_state, record_memory_event
 from mycelium.facts import page_recall_context, routing_recall_index
-from mycelium.sources import source_context_for_page
+from mycelium.sources import source_contexts_for_pages
 from mycelium.structured_outputs import MemoryUsageOutput, RoutingOutput
+from mycelium.artifacts import ArtifactStore
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class Mycelium:
         git_commits: bool = False,
         config_path: str | Path | None = None,
         memory_profile: Literal["user", "scenario", "none"] = "user",
+        evidence_mode: Literal["raw", "claims", "hybrid"] | None = None,
     ):
         self.store_path = Path(store_path)
         
@@ -49,10 +51,14 @@ class Mycelium:
             self.config.dream.conflict_policy = conflict_policy
             self.config.git_commits = git_commits
 
+        if evidence_mode is not None:
+            self.config.dream.evidence_mode = evidence_mode
+
         self._init_store()
             
         self._wiki = WikiStore(self.store_path / "wiki")
         self._log_store = LogStore(self.store_path / "logs")
+        self.artifacts = ArtifactStore(self.store_path / "artifacts")
         self._ensure_seed_profile(memory_profile)
         self.llm = OllamaClient(
             url=self.config.llm.url,
@@ -63,10 +69,10 @@ class Mycelium:
         )
         from mycelium.reconsolidation import ReconsolidationEngine
         self.reconsolidation_engine = ReconsolidationEngine(self.llm, self._wiki, self.config)
-        self.encoder = Encoder(self.llm, self._wiki, self._log_store, self.config)
+        self.encoder = Encoder(self.llm, self._wiki, self._log_store, self.config, self.artifacts)
         
         from mycelium.dream import DreamProcess
-        self.dream_process = DreamProcess(self.llm, self._wiki, self._log_store, self.config)
+        self.dream_process = DreamProcess(self.llm, self._wiki, self._log_store, self.config, self.artifacts)
 
     def _ensure_seed_profile(self, memory_profile: Literal["user", "scenario", "none"]) -> None:
         if memory_profile == "none":
@@ -140,6 +146,7 @@ class Mycelium:
         (self.store_path / "wiki").mkdir(exist_ok=True)
         (self.store_path / "logs").mkdir(exist_ok=True)
         (self.store_path / "labile").mkdir(exist_ok=True)
+        (self.store_path / "artifacts").mkdir(exist_ok=True)
         (self.store_path / "wiki" / "_archive").mkdir(exist_ok=True)
         
         index_path = self.store_path / "wiki" / "_index.md"
@@ -218,12 +225,10 @@ class Mycelium:
             page = self.wiki.get(slug)
             recall_context = page_recall_context(page)
             recall_block = f"{recall_context}\n\n" if recall_context else ""
-            page.source_context = source_context_for_page(page, self.log_store, query)
-            source_block = f"\n\n{page.source_context}" if page.source_context else ""
             content = (
                 f"=== MEMORY: {page.title} "
                 f"(confidence: {page.confidence:.2f}, retrievability: {page.retrievability:.2f}, v{page.version}) ===\n"
-                f"{recall_block}{page.content}{source_block}\n=== END MEMORY ==="
+                f"{recall_block}{page.content}\n=== END MEMORY ==="
             )
             
             if budget.fits(content):
@@ -242,6 +247,13 @@ class Mycelium:
                             await self.reconsolidation_engine.accumulate_signal(page.slug, session_id, error)
                             
                 loaded_pages.append(page)
+
+        source_contexts = source_contexts_for_pages(loaded_pages, self.log_store, query)
+        for page in loaded_pages:
+            source_context = source_contexts.get(page.slug, "")
+            if source_context and budget.fits(source_context):
+                budget.consume(source_context)
+                page.source_context = source_context
                 
         return loaded_pages
 

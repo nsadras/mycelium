@@ -54,7 +54,10 @@ Use a fact-first page model with three page types:
 
 Entity pages are the backbone when logs mention named people. If a conversation includes named participants or salient named third parties, create or update one entity page for each salient person/entity even when you also create topic or event pages. Topic pages do not replace entity pages.
 
+Speaker labels are canonical identity evidence. Attribute a statement, action, possession, preference, and experience only to the speaker who states or performs it. A reply that merely acknowledges another person's fact is not evidence that the fact also applies to the replying speaker. In multi-party transcripts with named speakers, route personal facts to their named entity pages; do not create or update `user-profile` unless the transcript explicitly identifies one participant as the system's user.
+
 Event pages should be created for important facts with exact dates, relative dates, or benchmark-answerable temporal expressions. Preserve both the absolute conversation date and the relative expression in the eventual page. Do not create one event page for every turn; create event pages only for salient, future-answerable events.
+The conversation itself is not an event worth a page. Never create generic pages like `event-conversation-*`, `event-chat-*`, or `event-*-conversation-*`. A session timestamp is the observation time for its facts, not proof that every mentioned event occurred then. Create an event page for the real-world event (for example a trip, opening, performance, or job change), or put the dated fact on the relevant entity/topic page.
 
 Topic pages should group related log entries into distinct, highly focused semantic pages. Each topic page should target a single specific concept, project, tool, or area of user interest (e.g. `react-agent-loop`, `user-profile`, `typescript-port`). Do not create one topic page per log entry, but also do not over-merge unrelated logs.
 
@@ -122,7 +125,9 @@ Rules:
 - CAPTURE TOOL FACTS: Log entries with IDs starting with 'tool-' contain pre-extracted, source-grounded tool facts. Integrate durable factual discoveries, library version numbers, specific API specifications, or technical details where they directly fit this page. Do not preserve page furniture, search ranking labels, navigation text, or citation widgets.
 - ABSTRACT EVENTS, PRESERVE DETAILS: When processing logs, abstract the specific chat turn, but do NOT strip away crucial actionable details like custom file names, custom directories, variable names, or hardware models. Preserve these specifics, but write them as durable facts rather than episodic stories (e.g. write 'The BCI project uses a custom POMDP loop' rather than 'The user said they want to use POMDP').
 - PRESERVE ANSWERABLE FACTS: Do NOT drop exact names, dates, relative time expressions, locations, quantities, source/dialog IDs, or relationships. If the page summary abstracts them, preserve the concrete details in `## Key Facts` or `## Event Timeline`.
-- RELATIVE DATES: If a log says "yesterday", "last year", "next month", "last Friday", or similar, preserve that exact expression and the anchor conversation date. If the absolute date can be inferred, include it too.
+- SPEAKER OWNERSHIP: Speaker labels are canonical. On an entity page, include facts owned by the target entity and relationship facts directly involving it. Do not copy the other speaker's personal actions, possessions, preferences, or experiences merely because the target heard, acknowledged, advised, or encouraged them. Never swap similarly named people.
+- OBSERVATION VS EVENT TIME: A session Timestamp is when a statement was observed, not automatically when the described event occurred. For each temporal fact distinguish `observed_at` (the conversation timestamp) from `occurred_at` (the event time stated in the message).
+- RELATIVE DATES: If a log says "yesterday", "last year", "next month", "last Friday", or similar, preserve that exact expression and its anchor conversation timestamp. Also compute and store the absolute date or range when calendar arithmetic makes that possible. Never replace the relative event time with the conversation date.
 - HIERARCHICAL MEMORY: Write readable parent/topic pages, but include links to focused child pages when the logs naturally split into subtopics. A broad profile page may summarize; a focused topic page must retain concrete details.
 - AVOID EPISODIC STORIES: Do not write pages as a chronological diary of your chats (e.g. skip 'On May 28, the user asked...'). Write them as structured technical documents or profile cards describing the current status, configurations, and design specifications of the user's project.
 - FOCUS ON THE SPECIFIC TOPIC: Extract and integrate ONLY the facts from the log entries that are directly relevant to the specific title, slug, and theme of this page. Ignore log entries that belong to other, unrelated wiki topics.
@@ -177,6 +182,8 @@ Your job is to extract ONLY NEW facts from the log entries that are NOT already 
 Rules:
 - Read the existing page carefully. If a fact is already captured (even in different words), do NOT include it.
 - Extract only facts relevant to this specific page's topic/entity.
+- Treat speaker labels as canonical identity evidence. For an entity page, add only facts owned by the target entity or relationship facts directly involving it. Do not add the other speaker's personal facts just because the target entity heard, acknowledged, advised, or encouraged them.
+- A session Timestamp is observation time, not necessarily event time. Preserve `observed_at`, the original relative expression, and the resolved `occurred_at` date/range when it can be computed. Never turn "yesterday", "last week", "next month", or "a few years ago" into the conversation date.
 - For each new fact, specify whether it belongs in "key_facts" (a bullet point) or "event_timeline" (a dated event row).
 - For event_timeline facts, include the date (absolute if possible, or relative with anchor), people/entities involved, and source log ID.
 - For key_facts, write a concise standalone bullet that includes names, dates, and source references.
@@ -388,4 +395,62 @@ Return JSON with fields:
 Respond with valid JSON only. No markdown code fences, no explanation, no preamble."""
     user = f"""CONTENT:
 {content}"""
+    return system, user
+
+
+def claim_extraction_prompt(source_type: str, source_id: str, occurred_at: str | None, segments: str) -> tuple[str, str]:
+    policies = {
+        "agent_conversation": """Prioritize user facts, preferences, constraints, commitments, corrections, and accepted decisions. Record assistant proposals or claims only as interaction history unless the user accepts them. Treat tool output as observations, not user beliefs.""",
+        "meeting_transcript": """Prioritize decisions, proposals, action items, owners, deadlines, objections, commitments, reported events, and changes of status. Preserve who held each stance; do not turn one participant's statement into group consensus.""",
+        "benchmark_conversation": """Capture explicit personal facts, preferences, plans, relationships, activities, events, changes, and temporal details for every speaker. Preserve the speaker and do not merge facts belonging to different people.""",
+    }
+    policy = policies.get(source_type, policies["agent_conversation"])
+    system = f"""You extract durable, atomic claims from source conversation segments.
+
+Source type: {source_type}
+Policy: {policy}
+
+Requirements:
+- Each claim must express exactly one independently useful assertion in natural language.
+- Be loss-conscious: retain names, dates, quantities, reasons, locations, relationships, preferences, plans, and changes when stated.
+- Copy only segment ids from the supplied input. Include every segment that directly supports the claim.
+- Do not reconstruct dialogue, summarize several unrelated facts into one claim, or invent missing context.
+- Set evidence_type=inferred only when the assertion is a strong implication; use lower confidence and make the inference explicit.
+- `kind` is an open descriptive label such as preference, event, plan, decision, relationship, biographical_fact, action_item, or interaction. It is not a fixed ontology.
+- `about` contains entities and optional roles. Use the actual person's name when available.
+- `facets` is an open object for useful qualifiers such as when, location, reason, object, value, owner, deadline, or polarity.
+- `slot` is optional. Use it only for genuinely replaceable state (for example current_city, current_employer, dietary_preference). Do not assign slots to ordinary events or goals.
+- Do not omit a supported claim merely because it seems unimportant to the current benchmark.
+
+Return JSON with `summary` and `claims`. Each claim contains text, kind, about, segment_ids, speaker, evidence_type, confidence, slot, and facets. Respond with JSON only."""
+    user = f"""SOURCE ID: {source_id}
+OCCURRED AT: {occurred_at or 'unknown'}
+
+SEGMENTS:
+{segments}"""
+    return system, user
+
+
+def claim_materialization_prompt(existing_page: str, evidence: str, *, page_slug: str, page_type: str) -> tuple[str, str]:
+    system = f"""You materialize a high-quality wiki page from canonical memory claims and their exact source spans.
+
+Target slug: {page_slug}
+Page type: {page_type}
+
+The evidence bundle is authoritative. Regenerate the full page; do not append a diary dump. The old page, when supplied, is only a naming hint and must not preserve unsupported statements.
+
+Requirements:
+- Include every relevant supported detail, especially names, relationships, dates, quantities, reasons, preferences, plans, decisions, changes, and current status.
+- Distinguish facts about different people and attribute opinions or proposals to their speakers.
+- Reconcile duplicates. Preserve meaningful temporal changes instead of flattening them into contradictions.
+- Prefer precise factual prose and compact sections over vague summaries.
+- Never mention claim ids, evidence ids, extraction, or the benchmark in page prose.
+- Use Obsidian [[page-slug]] links only when a linked page is supported by the page catalog/context.
+
+Return JSON fields title, content, confidence, importance, tags, and related. Respond with JSON only."""
+    user = f"""OLD PAGE (non-authoritative):
+{existing_page or '(none)'}
+
+CANONICAL EVIDENCE BUNDLE:
+{evidence}"""
     return system, user

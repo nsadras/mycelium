@@ -4,7 +4,7 @@
 
 # Mycelium
 
-Mycelium gives local AI agents a memory that lasts beyond a single chat. It keeps the original conversation as a durable record, turns useful information into an organized Markdown wiki, and brings the relevant parts back when they are needed later.
+Mycelium is a plaintext memory system for local AI agents. It keeps the original conversation as a durable record, turns useful information into an organized Markdown wiki, and brings the relevant parts back when they are needed later.
 
 It is designed for users who want a local assistant that can build context over time without hiding its memory in an opaque database. You can chat with it through the included web app, inspect what it remembers, edit its knowledge directly, or add the Python library to another agent.
 

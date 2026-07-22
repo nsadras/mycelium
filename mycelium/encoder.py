@@ -1,14 +1,13 @@
 import datetime
 import re
-from typing import Any, List, Optional
+from typing import Any, List
 import uuid
 
 from mycelium.models import LogEntry
-from mycelium.store import WikiStore, LogStore
+from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.config import Config
 from mycelium import prompts
-from mycelium.structured_outputs import ImportanceRatingOutput
 from mycelium.structured_outputs import ExtractedEpisodeOutput
 from mycelium.artifacts import (
     ArtifactStore,
@@ -22,28 +21,15 @@ from mycelium.artifacts import (
     segment_transcript,
 )
 
-IMPORTANCE_LABELS = {
-    "low": 0.25,
-    "medium": 0.6,
-    "high": 0.9,
-}
-
-
-def normalize_importance(value, default: float = 0.5) -> float:
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in IMPORTANCE_LABELS:
-            return IMPORTANCE_LABELS[normalized]
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
 class Encoder:
-    def __init__(self, llm: OllamaClient, wiki_store: WikiStore, log_store: LogStore, config: Config, artifacts: ArtifactStore | None = None):
+    def __init__(
+        self,
+        llm: OllamaClient,
+        log_store: LogStore,
+        config: Config,
+        artifacts: ArtifactStore,
+    ):
         self.llm = llm
-        self.wiki_store = wiki_store
         self.log_store = log_store
         self.config = config
         self.artifacts = artifacts
@@ -84,35 +70,34 @@ class Encoder:
         )
 
         self.log_store.append(entry)
-        if self.artifacts is not None:
-            source_id = f"source-{short_id}"
-            normalized_segments = self._normalize_segments(
-                segments, content, source_id, source_type
-            )
-            participant_names = participants or list(dict.fromkeys(
-                segment.speaker for segment in normalized_segments if segment.speaker
-            ))
-            occurred = occurred_at.isoformat() if isinstance(occurred_at, datetime.datetime) else occurred_at
-            source = SourceDocument(
-                source_id=source_id,
-                source_type=source_type,
-                session_id=session_id,
-                recorded_at=now.isoformat(),
-                occurred_at=occurred,
-                participants=participant_names,
-                segments=normalized_segments,
-                raw_log_entry_id=entry_id,
-                metadata=metadata or {},
-            )
-            episode = EpisodeManifest(
-                episode_id=f"episode-{short_id}", source_id=source_id, source_type=source_type,
-                occurred_at=occurred, participants=participant_names,
-                segment_ids=[segment.segment_id for segment in normalized_segments],
-            )
-            self.artifacts.save_source(source)
-            self.artifacts.save_episode(episode)
-            if self.config.dream.evidence_mode != "raw":
-                await self._extract_claims(source, episode)
+        source_id = f"source-{short_id}"
+        normalized_segments = self._normalize_segments(
+            segments, content, source_id, source_type
+        )
+        participant_names = participants or list(dict.fromkeys(
+            segment.speaker for segment in normalized_segments if segment.speaker
+        ))
+        occurred = occurred_at.isoformat() if isinstance(occurred_at, datetime.datetime) else occurred_at
+        source = SourceDocument(
+            source_id=source_id,
+            source_type=source_type,
+            session_id=session_id,
+            recorded_at=now.isoformat(),
+            occurred_at=occurred,
+            participants=participant_names,
+            segments=normalized_segments,
+            raw_log_entry_id=entry_id,
+            metadata=metadata or {},
+        )
+        episode = EpisodeManifest(
+            episode_id=f"episode-{short_id}", source_id=source_id, source_type=source_type,
+            occurred_at=occurred, participants=participant_names,
+            segment_ids=[segment.segment_id for segment in normalized_segments],
+        )
+        self.artifacts.save_source(source)
+        self.artifacts.save_episode(episode)
+        if self.config.dream.evidence_mode != "raw":
+            await self._extract_claims(source, episode)
         return [entry]
 
     def _normalize_segments(
@@ -192,7 +177,6 @@ class Encoder:
             claim_ids: list[str] = []
             covered_ids: set[str] = set()
             ignored_ids = set(programmatic_ignored_ids)
-            summaries: list[str] = []
             extraction_errors: list[str] = []
 
             for batch_index, batch in enumerate(
@@ -224,9 +208,6 @@ class Encoder:
                         value for value in response.get("ignored_segment_ids", [])
                         if value in batch_ids
                     )
-                    summary = str(response.get("summary", "")).strip()
-                    if summary and summary not in summaries:
-                        summaries.append(summary)
                 except Exception as exc:
                     extraction_errors.append(f"batch {batch_index}: {exc}")
 
@@ -311,7 +292,6 @@ class Encoder:
             remaining_ids = allowed_ids - covered_ids
             substantive_remaining = remaining_ids - ignored_ids
             episode.ignored_segment_ids = sorted((ignored_ids & allowed_ids) - covered_ids)
-            episode.summary = " ".join(summaries)
             episode.extraction_status = "partial" if substantive_remaining else "complete"
             if substantive_remaining:
                 errors = [*extraction_errors, *repair_errors, *final_errors]
@@ -565,45 +545,3 @@ class Encoder:
         if not cls._has_explicit_subject(attributed, normalized_about):
             return None
         return attributed, normalized_about
-
-    async def encode(
-        self,
-        content: str,
-        session_id: str,
-        importance: Optional[float] = None,
-        durability: str = "durable",
-    ) -> LogEntry:
-        
-        final_importance = importance
-        
-        if importance is None:
-            system, user = prompts.importance_rating_prompt(content)
-            response = await self.llm.call_structured(system, user, ImportanceRatingOutput)
-            
-            if isinstance(response, dict):
-                final_importance = float(response.get("importance", 0.5))
-            else:
-                final_importance = 0.5
-                
-        if final_importance is None:
-            final_importance = 0.5
-            
-        now = datetime.datetime.now()
-        date_str = now.strftime("%Y-%m-%d")
-        short_id = str(uuid.uuid4())[:8]
-        entry_id = f"{date_str}#entry-{short_id}"
-        
-        entry = LogEntry(
-            entry_id=entry_id,
-            session_id=session_id,
-            timestamp=now,
-            content=content,
-            importance=final_importance,
-            status="raw",
-            durability=durability,  # type: ignore[arg-type]
-            consolidated=False,
-            decay_score=1.0
-        )
-        
-        self.log_store.append(entry)
-        return entry

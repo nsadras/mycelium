@@ -3,7 +3,7 @@ from typing import List, Optional, Literal
 import uuid
 import logging
 
-from mycelium.models import WikiPage, LogEntry, DreamReport
+from mycelium.models import WikiPage, DreamReport
 from mycelium.store import WikiStore, LogStore
 from mycelium.config import Config
 from mycelium.ollama import OllamaClient
@@ -69,7 +69,7 @@ class Mycelium:
         )
         from mycelium.reconsolidation import ReconsolidationEngine
         self.reconsolidation_engine = ReconsolidationEngine(self.llm, self._wiki, self.config)
-        self.encoder = Encoder(self.llm, self._wiki, self._log_store, self.config, self.artifacts)
+        self.encoder = Encoder(self.llm, self._log_store, self.config, self.artifacts)
         
         from mycelium.dream import DreamProcess
         self.dream_process = DreamProcess(self.llm, self._wiki, self._log_store, self.config, self.artifacts)
@@ -353,6 +353,3 @@ class Mycelium:
     async def compact(self, slugs: list[str] | None = None, **kwargs) -> DreamReport:
         """Run a compaction pass that fully rewrites wiki pages to deduplicate and reorganize."""
         return await self.dream_process.compact(slugs=slugs, **kwargs)
-
-    async def encode(self, content: str, **kwargs) -> LogEntry:
-        return await self.encoder.encode(content, **kwargs)

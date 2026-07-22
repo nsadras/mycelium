@@ -204,25 +204,12 @@ class MyceliumMemorySystem:
         session_id = str(metadata.get("session_id") or f"{self.case_id}-batch-{self._encoded_batches + 1}")
         transcript = format_messages_for_memory(messages, metadata)
         start = time.perf_counter()
-        try:
-            await mem.encoder.encode_session(
-                transcript, session_id,
-                source_type="benchmark_conversation",
-                occurred_at=metadata.get("timestamp"),
-                metadata={key: value for key, value in metadata.items() if value is not None},
-            )
-        except Exception as exc:
-            self._errors.append({"stage": "encode_session", "session_id": session_id, "error": str(exc)})
-            await mem.encoder.encode(
-                content=(
-                    "Raw benchmark session transcript preserved after structured encoding failed.\n"
-                    "Dream consolidation should extract durable facts, exact dates, people, and source IDs from this transcript.\n\n"
-                    f"{transcript}"
-                ),
-                session_id=session_id,
-                importance=0.6,
-                durability="durable",
-            )
+        await mem.encoder.encode_session(
+            transcript, session_id,
+            source_type="benchmark_conversation",
+            occurred_at=metadata.get("timestamp"),
+            metadata={key: value for key, value in metadata.items() if value is not None},
+        )
         self._encoded_batches += 1
         if self.dream_policy == "per-batch":
             try:

@@ -30,36 +30,6 @@ DERIVATION_OPERATIONS = {
     "cross_fact_relationship",
 }
 
-_LEGACY_CLAIM_TYPES = {
-    "biographical fact": "identity", "identity": "identity", "background": "identity",
-    "current state": "state", "state": "state", "status": "state",
-    "status update": "state", "status change": "state", "change": "state",
-    "event": "event", "activity": "event", "action": "event",
-    "achievement": "event", "experience": "event", "purchase": "event",
-    "sharing event": "event",
-    "preference": "preference", "interest": "preference",
-    "plan": "plan", "goal": "plan", "intent": "plan",
-    "belief": "belief", "opinion": "belief", "value": "belief",
-    "relationship": "relationship", "decision": "decision",
-    "commitment": "commitment", "action item": "commitment",
-    "interaction": "interaction", "question": "interaction", "inquiry": "interaction",
-    "acknowledgement": "interaction", "acknowledgment": "interaction",
-    "compliment": "interaction", "encouragement": "interaction", "farewell": "interaction",
-    "greeting": "interaction", "gratitude": "interaction", "reaction": "interaction",
-    "reinforcement": "interaction", "sentiment": "interaction", "support": "interaction",
-    "description": "observation", "fact": "observation",
-    "image description": "observation", "image caption": "observation",
-    "visual": "observation", "photo description": "observation",
-}
-
-_DEFAULT_TEMPORAL_STATUS = {
-    "identity": "atemporal", "state": "current", "event": "past",
-    "preference": "atemporal", "plan": "future", "belief": "atemporal",
-    "relationship": "current", "decision": "current", "commitment": "future",
-    "interaction": "past", "observation": "unknown", "unknown": "unknown",
-}
-
-
 def _normalized_label(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
@@ -115,21 +85,17 @@ class MemoryClaim:
     links: list[dict[str, str]] = field(default_factory=list)
     page_slugs: list[str] = field(default_factory=list)
     salience: float = 0.5
-    display_scope: str = "main"
     claim_type: str = "unknown"
     predicate: str | None = None
     evidence_modality: str = "unknown"
     temporal_status: str = "unknown"
     derivation_operation: str | None = None
-    schema_version: int = 2
 
     def __post_init__(self) -> None:
-        """Normalize the compact semantic envelope, including legacy stored claims."""
+        """Normalize the compact semantic envelope without inferring it from prose or labels."""
         normalized_type = _normalized_label(self.claim_type)
         if normalized_type not in CLAIM_TYPES:
             normalized_type = "unknown"
-        if self.schema_version < 2 and normalized_type == "unknown":
-            normalized_type = _LEGACY_CLAIM_TYPES.get(_normalized_label(self.kind), "unknown")
         self.claim_type = normalized_type
 
         modality = _normalized_label(self.evidence_modality)
@@ -137,20 +103,11 @@ class MemoryClaim:
             modality = "inference"
         elif modality not in EVIDENCE_MODALITIES:
             modality = "unknown"
-        if self.schema_version < 2 and modality == "unknown":
-            legacy_kind = _normalized_label(self.kind)
-            modality = (
-                "visual" if legacy_kind in {
-                    "image description", "image caption", "visual", "photo description"
-                } else "speech"
-            )
         self.evidence_modality = modality
 
         temporal = _normalized_label(self.temporal_status)
         if temporal not in TEMPORAL_STATUSES:
             temporal = "unknown"
-        if self.schema_version < 2 and temporal == "unknown":
-            temporal = _DEFAULT_TEMPORAL_STATUS[self.claim_type]
         self.temporal_status = temporal
 
         if self.predicate is not None:
@@ -169,7 +126,6 @@ class EpisodeManifest:
     segment_ids: list[str]
     claim_ids: list[str] = field(default_factory=list)
     ignored_segment_ids: list[str] = field(default_factory=list)
-    summary: str = ""
     extraction_status: str = "pending"
     extraction_error: str | None = None
 
@@ -225,9 +181,21 @@ class ArtifactStore:
 
     def get_claim(self, claim_id: str) -> MemoryClaim:
         data = self._read(self.claims_dir / f"{_safe_id(claim_id)}.json")
-        data.setdefault("schema_version", 1)
         data["provenance"] = [ClaimProvenance(**item) for item in data.get("provenance", [])]
         return MemoryClaim(**data)
+
+    def clear(self) -> dict[str, int]:
+        """Delete all derived artifacts while leaving canonical UI conversations untouched."""
+        counts = {"sources": 0, "episodes": 0, "claims": 0}
+        for label, directory in (
+            ("sources", self.sources_dir),
+            ("episodes", self.episodes_dir),
+            ("claims", self.claims_dir),
+        ):
+            for path in directory.glob("*.json"):
+                path.unlink()
+                counts[label] += 1
+        return counts
 
     def list_claims(self, *, status: str | None = None) -> list[MemoryClaim]:
         claims = [self.get_claim(path.stem) for path in sorted(self.claims_dir.glob("*.json"))]
@@ -451,11 +419,7 @@ class ClaimReconciler:
                 and existing.claim_type == incoming.claim_type
                 and predicates_compatible
             )
-            legacy_shape = (
-                (existing.schema_version < 2 or incoming.schema_version < 2)
-                and existing.kind == incoming.kind
-            )
-            same_semantic_shape = (structured_shape or legacy_shape) and similarity >= 0.92
+            same_semantic_shape = structured_shape and similarity >= 0.92
             effectively_identical = similarity >= 0.98
             if incoming_entities == self._entities(existing) and (
                 same_semantic_shape or effectively_identical
@@ -463,26 +427,23 @@ class ClaimReconciler:
                 existing.provenance = self._merge_provenance(existing.provenance, incoming.provenance)
                 existing.confidence = max(existing.confidence, incoming.confidence)
                 existing.salience = max(existing.salience, incoming.salience)
-                if existing.display_scope == "main" and incoming.display_scope != "main":
-                    existing.display_scope = incoming.display_scope
                 if incoming.claim_type != "unknown" and (
-                    existing.claim_type == "unknown" or existing.schema_version < 2
+                    existing.claim_type == "unknown"
                 ):
                     existing.claim_type = incoming.claim_type
                 if incoming.predicate and not existing.predicate:
                     existing.predicate = incoming.predicate
                 if incoming.evidence_modality != "unknown":
-                    if existing.evidence_modality == "unknown" or existing.schema_version < 2:
+                    if existing.evidence_modality == "unknown":
                         existing.evidence_modality = incoming.evidence_modality
                     elif existing.evidence_modality != incoming.evidence_modality:
                         existing.evidence_modality = "mixed"
                 if incoming.temporal_status != "unknown" and (
-                    existing.temporal_status == "unknown" or existing.schema_version < 2
+                    existing.temporal_status == "unknown"
                 ):
                     existing.temporal_status = incoming.temporal_status
                 if incoming.derivation_operation and not existing.derivation_operation:
                     existing.derivation_operation = incoming.derivation_operation
-                existing.schema_version = max(existing.schema_version, incoming.schema_version)
                 existing.facets.update(incoming.facets)
                 self.store.save_claim(existing)
                 return existing

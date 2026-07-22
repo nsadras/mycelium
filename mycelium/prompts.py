@@ -1,49 +1,3 @@
-def encoding_prompt(index_content: str, transcript: str) -> tuple[str, str]:
-    system = """You are a memory encoder for an AI agent. You encode raw chat transcripts into an episodic memory format.
-"""
-    user = f"""
-
-The following is a transcript of a conversation that the agent had with the user:
--- TRANSCRIPT --
-
-{transcript}
-
----END OF TRANSCRIPT--
-
-INSTRUCTIONS:
-Extract information from the transcript that may be relevant to future interactions with the user. Capture generously — a separate consolidation process will edit, abstract, and prune. Your job is to be a journalist, not an editor.
-
-Treat user messages as the primary source of factual memory. Agent messages provide context for understanding what the user was responding to. Tool calls, tool results, file edits, test results, search results, and other system observations are also valid memory sources.
-
-Always capture:
-- User identity, background, expertise, constraints, preferences, goals, and long-running plans
-- Project facts, implementation decisions, architecture choices, bugs, and open questions
-- Commitments, task state, unresolved follow-ups, and facts supplied by the user
-- Stable concepts or abstractions that emerged from the interaction
-- Recommendations or plans you gave that were tailored to this user's specific context
-- How the user responded to agent suggestions — whether they accepted, pushed back, modified, or ignored them
-- Anything the agent would want to know to pick up this conversation coherently, without the full conversation transcript
-- Concrete answerable facts: exact names, dates, relative times, locations, titles, quantities, relationships, preferences, and source/dialog IDs when present
-- Event facts that may later answer who/what/when/where questions. Preserve the original temporal expression even when it is relative, such as "the week before 9 June 2023".
-
-For assistant-originated content:
-- Capture recommendations, plans, and explanations that were personalized to this user — but write them as interaction memory, not universal fact
-- Use phrasing like "Agent recommended..." or "A proposed plan for the user is..." rather than asserting advice as objective truth
-
-Examples:
-- Skip: "RLHF uses reward models and PPO." (generic knowledge, already in weights)
-- Keep (unconfirmed): "Agent proposed model-based RL and POMDPs as project directions given the user's computational neuroscience background. User has not yet confirmed this direction."
-- Keep (confirmed): "The user confirmed they will pursue a POMDP-based approach for their BCI project, building on the agent's recommendation."
-
-For each entry, output a json object with the following fields:
-- "content": one concise standalone memory fact written so a future agent can use it without the transcript. Include subject/person, action/event, object/topic, date or relative time, location, and source ID when available. Always include what makes this specific to this user or scenario, not just the bare fact.
-- "durability": one of "ephemeral" (single session relevance only), "session" (relevant for days), "durable" (stable until explicitly updated)
-- "importance": "low", "medium", or "high"
-
-Return a JSON object with a single "entries" field containing a list of these objects. Respond with valid JSON only. No markdown code fences, no explanation, no preamble.
-"""
-    return system, user
-
 def consolidation_identify_prompt(index_content: str, log_entries: str) -> tuple[str, str]:
     system = """You are a memory consolidation agent. Given recent log entries, identify which existing wiki pages are affected by new information, and whether any new pages need to be created.
 
@@ -248,22 +202,6 @@ PROPOSED TARGETS FROM CURRENT DREAM PASS:
 {proposed_targets}"""
     return system, user
 
-def consolidation_index_prompt(current_index: str, changes_summary: str) -> tuple[str, str]:
-    system = """You are updating the wiki index based on recent consolidation changes.
-Update the index to reflect new pages, updated descriptions, and new cross-links. Keep it concise.
-Make the index compatible with Obsidian by linking pages with [[page-slug]] syntax. Use wiki-style links for page entries and cross-links; do not use markdown file links like [page](page.md).
-Use only real page slugs from the current index or changes. Never invent placeholder links such as [[Page 1]], [[Topic A]], [[New Page]], [[Getting Started]], or [[Glossary]] unless those are actual page slugs.
-
-Return the completely rewritten index markdown as a string inside a JSON object with a single "index" field.
-
-Respond with valid JSON only. No markdown code fences, no explanation, no preamble."""
-    user = f"""CURRENT INDEX:
-{current_index}
-
-CHANGES:
-{changes_summary}"""
-    return system, user
-
 def tool_observation_extract_prompt(entry_id: str, tool_observation: str) -> tuple[str, str]:
     system = """You are a memory ingestion filter for tool results. Extract only specific facts from a raw tool observation that may be useful to remember later.
 
@@ -386,18 +324,6 @@ LOADED MEMORY PAGES:
 {loaded_pages}"""
     return system, user
 
-def importance_rating_prompt(content: str) -> tuple[str, str]:
-    system = """You are a memory importance rater. Given a piece of information, rate its long-term importance for an AI agent on a scale from 0.0 to 1.0.
-
-Return JSON with fields:
-- "importance": float
-
-Respond with valid JSON only. No markdown code fences, no explanation, no preamble."""
-    user = f"""CONTENT:
-{content}"""
-    return system, user
-
-
 def claim_extraction_prompt(source_type: str, source_id: str, occurred_at: str | None, segments: str) -> tuple[str, str]:
     policies = {
         "agent_conversation": """Prioritize user facts, preferences, constraints, commitments, corrections, and accepted decisions. Record assistant proposals or claims only as interaction history unless the user accepts them. Treat tool output as observations, not user beliefs.""",
@@ -439,7 +365,7 @@ Requirements:
 - Do not omit a supported claim merely because it seems unimportant to the current benchmark.
 - Account for every supplied segment id. A segment containing a personal fact, preference, plan, decision, event, relationship, reason, location, quantity, temporal detail, meaningful reaction, or image description must support at least one claim. Put routine conversational scaffolding—including greetings, thanks, generic praise/support, content-free questions, filler, and exact repetitions—in `ignored_segment_ids`. Do not ignore a whole segment when it also contains a useful assertion.
 
-Return JSON with `summary`, `claims`, and `ignored_segment_ids`. Each claim contains text, kind,
+Return JSON with `claims` and `ignored_segment_ids`. Each claim contains text, kind,
 claim_type, predicate, evidence_modality, temporal_status, about, segment_ids, speaker,
 evidence_type, confidence, slot, and facets. Respond with JSON only."""
     user = f"""SOURCE ID: {source_id}
@@ -470,8 +396,8 @@ only TARGET ids in `segment_ids`; never cite a CONTEXT id. Whenever time is stat
 phrase into `facets.when`.
 Ignore routine conversational scaffolding such as greetings, thanks, generic praise/support,
 content-free questions, filler, or exact repetitions, but retain any specific assertion in the same
-segment. Do not rank or filter substantive claims by importance. Return JSON with `summary`,
-`claims`, and `ignored_segment_ids`. Respond with JSON only."""
+segment. Do not rank or filter substantive claims by importance. Return JSON with `claims` and
+`ignored_segment_ids`. Respond with JSON only."""
     user = f"""SOURCE ID: {source_id}
 OCCURRED AT: {occurred_at or 'unknown'}
 

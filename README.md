@@ -10,7 +10,7 @@ The project includes a Python memory library, a FastAPI backend, and a React web
 
 ## Core Features
 
-- **Plain-text memory store:** Wiki pages and episodic logs are Markdown files under `mycelium_store/`.
+- **Plain-text memory store:** Wiki pages and episodic logs are Markdown, while source documents, episode manifests, and atomic claims are inspectable JSON under `mycelium_store/`.
 - **Multi-session chat UI:** Create, rename, resume, and continue multiple chat sessions without treating each individual message as a full session.
 - **Long-term memory retrieval:** Each chat turn routes against the wiki index and loads relevant pages into the assistant's system context.
 - **Source-grounded episodic logs:** Active chat episodes flush into raw durable logs that remain the canonical source evidence.
@@ -31,8 +31,9 @@ mycelium/
 ├── engram/             # Local meeting uploads, transcription, diarization, and memory ingestion
 ├── mycelium/           # Core memory library
 │   ├── core.py         # Mycelium facade, retrieval, sessions, dream entrypoint
-│   ├── encoder.py      # Raw transcript-to-log persistence
-│   ├── dream.py        # Log-to-wiki consolidation
+│   ├── encoder.py      # Transcript-to-log/source/episode/claim ingestion
+│   ├── artifacts.py    # Structured source, episode, claim storage and reconciliation
+│   ├── dream.py        # Claim/source evidence-to-wiki materialization
 │   ├── reconsolidation.py
 │   ├── decay.py
 │   ├── ollama.py       # Internal adapter around the official Ollama SDK
@@ -371,7 +372,7 @@ The sidebar exposes manual memory operations:
 - **Resolve Current:** Apply pending reconsolidation updates for the selected session.
 - **Decay Pass:** Refresh wiki-page retrievability and archive weak, low-confidence memories.
 - **Dream Pass:** Consolidate raw logs into wiki pages.
-- **Clear Memory:** Development-only reset for wiki pages, logs, labile files, and encoded episode markers. Existing chat transcripts are preserved and made re-encodable.
+- **Clear Memory:** Development-only reset for wiki pages, logs, labile files, source/episode/claim artifacts, and encoded episode markers. Existing chat transcripts are preserved and made re-encodable through the current structured-claim pipeline.
 
 Memory operation buttons show a spinner while a request is in progress and return the backend result in a browser alert.
 
@@ -484,6 +485,7 @@ The default store is `./mycelium_store`:
 mycelium_store/
 ├── sessions_meta.json  # Chat sessions, transcripts, active episodes, encoded episode markers
 ├── logs/               # Daily raw episodic logs
+├── artifacts/          # Source documents, episode manifests, and atomic claims (JSON)
 ├── wiki/               # Semantic memory pages and _index.md
 │   └── _archive/       # Archived wiki pages
 └── labile/             # Pending reconsolidation drafts/signals

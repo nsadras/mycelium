@@ -7,20 +7,21 @@ from mycelium.artifacts import (
     ArtifactStore,
     ClaimProvenance,
     ClaimReconciler,
+    EpisodeManifest,
     MemoryClaim,
+    SourceDocument,
     SourceSegment,
     normalize_temporal_facets,
 )
 from mycelium.config import Config
 from mycelium.encoder import Encoder
-from mycelium.store import LogStore, WikiStore
+from mycelium.store import LogStore
 
 
 @pytest.mark.asyncio
 async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
     llm = AsyncMock()
     llm.call_structured.return_value = {
-        "summary": "Ava described a preference and a plan.",
         "claims": [
             {
                 "text": "Ava prefers tea.", "kind": "preference",
@@ -33,7 +34,7 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
         ],
     }
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    encoder = Encoder(llm, WikiStore(tmp_path / "wiki"), LogStore(tmp_path / "logs"), Config.defaults(), artifacts)
+    encoder = Encoder(llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts)
 
     # Make the mock use the generated segment id returned in the extraction prompt.
     async def response(system, user, output_type, **kwargs):
@@ -83,8 +84,7 @@ async def test_encoder_persists_general_semantics_across_source_types(
     llm = AsyncMock()
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
-        llm, WikiStore(tmp_path / "wiki"), LogStore(tmp_path / "logs"),
-        Config.defaults(), artifacts,
+        llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts,
     )
 
     async def response(system, user, output_type, **kwargs):
@@ -94,7 +94,6 @@ async def test_encoder_persists_general_semantics_across_source_types(
             if part.startswith("source-")
         )
         return {
-            "summary": "",
             "claims": [{
                 "text": text,
                 "kind": "open subtype",
@@ -128,7 +127,6 @@ async def test_encoder_fills_missing_about_and_requires_inference_basis(tmp_path
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
         llm,
-        WikiStore(tmp_path / "wiki"),
         LogStore(tmp_path / "logs"),
         Config.defaults(),
         artifacts,
@@ -141,7 +139,6 @@ async def test_encoder_fills_missing_about_and_requires_inference_basis(tmp_path
             if not part.startswith(("TARGET ", "CONTEXT "))
         ]
         return {
-            "summary": "",
             "claims": [{
                 "text": "Ava enjoys teaching dance.",
                 "kind": "preference",
@@ -174,7 +171,6 @@ async def test_encoder_repairs_substantive_unclaimed_segments(tmp_path):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
         llm,
-        WikiStore(tmp_path / "wiki"),
         LogStore(tmp_path / "logs"),
         Config.defaults(),
         artifacts,
@@ -192,7 +188,6 @@ async def test_encoder_repairs_substantive_unclaimed_segments(tmp_path):
             segment_ids = [part.split("]", 1)[0] for part in user.split("[")[1:]]
         if repairing:
             return {
-                "summary": "",
                 "claims": [{
                     "text": "Ava visited Paris yesterday.",
                     "kind": "event",
@@ -203,7 +198,6 @@ async def test_encoder_repairs_substantive_unclaimed_segments(tmp_path):
                 "ignored_segment_ids": [],
             }
         return {
-            "summary": "Ava likes tea.",
             "claims": [{
                 "text": "Ava likes tea.",
                 "kind": "preference",
@@ -284,7 +278,6 @@ def test_subjectless_visual_attribution_repairs_description_grammar_and_ids():
 def test_benchmark_turns_are_split_for_atomic_coverage(tmp_path):
     encoder = Encoder(
         AsyncMock(),
-        WikiStore(tmp_path / "wiki"),
         LogStore(tmp_path / "logs"),
         Config.defaults(),
         ArtifactStore(tmp_path / "artifacts"),
@@ -314,7 +307,6 @@ async def test_encoder_repairs_dialogue_shaped_claim_as_atomic_fact(tmp_path):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
         llm,
-        WikiStore(tmp_path / "wiki"),
         LogStore(tmp_path / "logs"),
         Config.defaults(),
         artifacts,
@@ -329,7 +321,6 @@ async def test_encoder_repairs_dialogue_shaped_claim_as_atomic_fact(tmp_path):
         else:
             text = "I prefer tea."
         return {
-            "summary": "",
             "claims": [{
                 "text": text,
                 "kind": "preference",
@@ -359,7 +350,6 @@ async def test_encoder_runs_bounded_final_normalization_for_rejected_repair(tmp_
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
         llm,
-        WikiStore(tmp_path / "wiki"),
         LogStore(tmp_path / "logs"),
         Config.defaults(),
         artifacts,
@@ -375,7 +365,6 @@ async def test_encoder_runs_bounded_final_normalization_for_rejected_repair(tmp_
             else "My store is doing great!"
         )
         return {
-            "summary": "",
             "claims": [{
                 "text": text,
                 "kind": "state",
@@ -404,14 +393,12 @@ async def test_encoder_runs_bounded_final_normalization_for_rejected_repair(tmp_
 @pytest.mark.asyncio
 async def test_encoder_honors_explicitly_ignored_scaffolding(tmp_path):
     llm = AsyncMock(return_value={
-        "summary": "",
         "claims": [],
         "ignored_segment_ids": [],
     })
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
         llm,
-        WikiStore(tmp_path / "wiki"),
         LogStore(tmp_path / "logs"),
         Config.defaults(),
         artifacts,
@@ -419,7 +406,7 @@ async def test_encoder_honors_explicitly_ignored_scaffolding(tmp_path):
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return {"summary": "", "claims": [], "ignored_segment_ids": [segment_id]}
+        return {"claims": [], "ignored_segment_ids": [segment_id]}
 
     llm.call_structured.side_effect = response
     await encoder.encode_session(
@@ -442,7 +429,6 @@ async def test_encoder_programmatically_ignores_image_urls(tmp_path):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
         llm,
-        WikiStore(tmp_path / "wiki"),
         LogStore(tmp_path / "logs"),
         Config.defaults(),
         artifacts,
@@ -456,7 +442,6 @@ async def test_encoder_programmatically_ignores_image_urls(tmp_path):
             if not part.startswith(("TARGET ", "CONTEXT "))
         ]
         return {
-            "summary": "",
             "claims": [{
                 "text": "Ava shared a painting.",
                 "kind": "event",
@@ -496,7 +481,6 @@ async def test_encoder_batches_large_initial_extractions(tmp_path):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
         llm,
-        WikiStore(tmp_path / "wiki"),
         LogStore(tmp_path / "logs"),
         Config.defaults(),
         artifacts,
@@ -510,7 +494,6 @@ async def test_encoder_batches_large_initial_extractions(tmp_path):
         segment_ids = [part.split("]", 1)[0] for part in user.split("[")[1:]]
         assert len(segment_ids) <= 48
         return {
-            "summary": "",
             "claims": [],
             "ignored_segment_ids": segment_ids,
         }
@@ -544,23 +527,16 @@ def test_reconciler_merges_duplicates_and_supersedes_slots(tmp_path):
     assert replacement.links[0]["relation"] == "supersedes"
 
 
-def test_semantic_envelope_migrates_legacy_kinds_without_classifying_new_prose():
+def test_semantic_envelope_does_not_infer_from_kind_or_prose():
     provenance = [ClaimProvenance("source-1", ["source-1#seg-0001"])]
-    legacy = MemoryClaim(
-        "legacy", "Any wording at all.", "action_item", [{"entity": "Ava"}],
-        provenance, "2024-01-01", schema_version=1,
-    )
-    modern_unknown = MemoryClaim(
-        "modern", "Ava bought a book.", "event", [{"entity": "Ava"}],
+    unknown = MemoryClaim(
+        "unknown", "Ava bought a book.", "event", [{"entity": "Ava"}],
         provenance, "2024-01-01",
     )
 
-    assert legacy.claim_type == "commitment"
-    assert legacy.evidence_modality == "speech"
-    assert legacy.temporal_status == "future"
-    assert modern_unknown.claim_type == "unknown"
-    assert modern_unknown.evidence_modality == "unknown"
-    assert modern_unknown.temporal_status == "unknown"
+    assert unknown.claim_type == "unknown"
+    assert unknown.evidence_modality == "unknown"
+    assert unknown.temporal_status == "unknown"
 
 
 def test_locomo_style_timestamp_anchors_relative_dates():
@@ -618,12 +594,11 @@ def test_reconciler_merges_identical_text_despite_kind_label_drift(tmp_path):
     assert {item.source_id for item in merged.provenance} == {"source-1", "source-2"}
 
 
-def test_reconciler_upgrades_legacy_semantics_from_structured_duplicate(tmp_path):
+def test_reconciler_upgrades_unknown_semantics_from_structured_duplicate(tmp_path):
     store = ArtifactStore(tmp_path / "artifacts")
-    legacy = MemoryClaim(
-        "legacy", "Ava will send the report.", "action_item", [{"entity": "Ava"}],
+    unknown = MemoryClaim(
+        "unknown", "Ava will send the report.", "action_item", [{"entity": "Ava"}],
         [ClaimProvenance("source-1", ["segment-1"])], "2024-01-01",
-        schema_version=1,
     )
     structured = MemoryClaim(
         "structured", "Ava will send the report.", "open subtype", [{"entity": "Ava"}],
@@ -633,14 +608,40 @@ def test_reconciler_upgrades_legacy_semantics_from_structured_duplicate(tmp_path
     )
 
     reconciler = ClaimReconciler(store)
-    reconciler.reconcile(legacy)
+    reconciler.reconcile(unknown)
     merged = reconciler.reconcile(structured)
 
-    assert merged.claim_id == "legacy"
-    assert merged.schema_version == 2
+    assert merged.claim_id == "unknown"
     assert merged.claim_type == "commitment"
     assert merged.predicate == "send_report"
     assert merged.temporal_status == "future"
+
+
+def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
+    store = ArtifactStore(tmp_path / "artifacts")
+    store.save_source(SourceDocument(
+        source_id="source-1", source_type="agent_conversation",
+        session_id="session-1", recorded_at="2024-01-01", occurred_at=None,
+        participants=["user"],
+        segments=[SourceSegment("source-1#seg-0001", 0, "Hello")],
+    ))
+    store.save_episode(EpisodeManifest(
+        episode_id="episode-1", source_id="source-1",
+        source_type="agent_conversation", occurred_at=None,
+        participants=["user"], segment_ids=["source-1#seg-0001"],
+    ))
+    store.save_claim(MemoryClaim(
+        "claim-1", "The user greeted the assistant.", "interaction",
+        [{"entity": "user"}],
+        [ClaimProvenance("source-1", ["source-1#seg-0001"])],
+        "2024-01-01", claim_type="interaction", evidence_modality="speech",
+        temporal_status="past",
+    ))
+
+    assert store.clear() == {"sources": 1, "episodes": 1, "claims": 1}
+    assert store.list_sources() == []
+    assert store.list_episodes() == []
+    assert store.list_claims() == []
 
 
 def test_reconciler_uses_structured_relation_across_open_kind_drift(tmp_path):

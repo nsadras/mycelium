@@ -1,6 +1,5 @@
 import pytest
 from datetime import datetime
-from pathlib import Path
 from mycelium.models import WikiPage, LogEntry, Edge, UpdateLogEntry
 from mycelium.store import WikiStore, LogStore
 
@@ -307,6 +306,69 @@ def test_clear_wiki_store(tmp_path, monkeypatch):
     unconsolidated = myc.log_store.get_unconsolidated()
     assert len(unconsolidated) == 1
     assert not unconsolidated[0].consolidated
+
+
+def test_clear_memory_store_removes_artifacts_and_preserves_conversations(tmp_path, monkeypatch):
+    from mycelium.artifacts import (
+        ClaimProvenance,
+        EpisodeManifest,
+        MemoryClaim,
+        SourceDocument,
+        SourceSegment,
+    )
+    from mycelium.core import Mycelium
+    from server import runtime
+
+    myc = Mycelium(store_path=tmp_path / "store")
+    sessions_file = tmp_path / "sessions_meta.json"
+    monkeypatch.setattr(runtime, "get_mem", lambda: myc)
+    monkeypatch.setattr(runtime, "SESSIONS_FILE", sessions_file)
+    transcript = [
+        {"role": "user", "content": "Remember tea."},
+        {"role": "assistant", "content": "I will."},
+    ]
+    runtime.save_meta({
+        "session-1": {
+            "query": "Tea",
+            "transcript": transcript,
+            "episode_seq": 2,
+            "encoded_episodes": ["session-1-ep-1"],
+            "active_episode": {
+                "id": "session-1-ep-2", "buffer": [], "turn_count": 0,
+            },
+        }
+    })
+    myc.artifacts.save_source(SourceDocument(
+        source_id="source-1", source_type="agent_conversation",
+        session_id="session-1", recorded_at="2026-07-22", occurred_at=None,
+        participants=["user"],
+        segments=[SourceSegment("source-1#seg-0001", 0, "Remember tea.")],
+    ))
+    myc.artifacts.save_episode(EpisodeManifest(
+        episode_id="episode-1", source_id="source-1",
+        source_type="agent_conversation", occurred_at=None,
+        participants=["user"], segment_ids=["source-1#seg-0001"],
+    ))
+    myc.artifacts.save_claim(MemoryClaim(
+        "claim-1", "The user wants tea remembered.", "preference",
+        [{"entity": "user"}],
+        [ClaimProvenance("source-1", ["source-1#seg-0001"])],
+        "2026-07-22", claim_type="preference", evidence_modality="speech",
+        temporal_status="current",
+    ))
+
+    counts = runtime.clear_memory_store()
+
+    assert counts["artifact_sources_deleted"] == 1
+    assert counts["artifact_episodes_deleted"] == 1
+    assert counts["artifact_claims_deleted"] == 1
+    assert myc.artifacts.list_sources() == []
+    assert myc.artifacts.list_episodes() == []
+    assert myc.artifacts.list_claims() == []
+    session = runtime.load_meta()["session-1"]
+    assert session["transcript"] == transcript
+    assert session["encoded_episodes"] == []
+    assert session["active_episode"]["buffer"] == transcript
 
 @pytest.mark.asyncio
 async def test_delete_individual_wiki_page_api(tmp_path, monkeypatch):

@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from mycelium.dream import DreamProcess
+from mycelium.artifacts import ArtifactStore
 from mycelium.models import LogEntry, WikiPage
 from mycelium.config import Config
 from datetime import datetime
@@ -18,9 +19,16 @@ def mock_logs():
     return MagicMock()
 
 @pytest.fixture
-def dream_process(mock_llm, mock_wiki, mock_logs):
+def dream_process(tmp_path, mock_llm, mock_wiki, mock_logs):
     config = Config.defaults()
-    return DreamProcess(mock_llm, mock_wiki, mock_logs, config)
+    config.dream.evidence_mode = "raw"
+    return DreamProcess(
+        mock_llm,
+        mock_wiki,
+        mock_logs,
+        config,
+        ArtifactStore(tmp_path / "artifacts"),
+    )
 
 @pytest.mark.asyncio
 async def test_dream_process_run(dream_process, mock_llm, mock_wiki, mock_logs):

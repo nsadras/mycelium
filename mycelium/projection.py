@@ -73,9 +73,6 @@ def claim_date_key(claim: MemoryClaim) -> str:
 
 
 def project_claim(claim: MemoryClaim) -> ProjectedClaim:
-    scope_hint = claim.display_scope if claim.display_scope in {
-        "main", "timeline", "details", "insights", "interaction_archive"
-    } else "details"
     claim_type = claim.claim_type
     is_main = claim_type in MAIN_CLAIM_TYPES
     is_timeline = claim_type == "event" or (
@@ -109,10 +106,6 @@ def project_claim(claim: MemoryClaim) -> ProjectedClaim:
     elif is_interaction:
         scope = "interaction_archive"
     elif is_timeline:
-        scope = "timeline"
-    elif scope_hint == "interaction_archive":
-        scope = "interaction_archive"
-    elif scope_hint == "timeline":
         scope = "timeline"
     elif is_main:
         scope = "main"

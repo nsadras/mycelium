@@ -343,6 +343,9 @@ def clear_memory_store() -> dict[str, int]:
         "archived_pages_deleted": 0,
         "logs_deleted": 0,
         "labile_files_deleted": 0,
+        "artifact_sources_deleted": 0,
+        "artifact_episodes_deleted": 0,
+        "artifact_claims_deleted": 0,
         "sessions_reset": 0,
     }
 
@@ -368,6 +371,11 @@ def clear_memory_store() -> dict[str, int]:
     for path in labile_dir.glob("*.md"):
         path.unlink()
         counts["labile_files_deleted"] += 1
+
+    artifact_counts = mem.artifacts.clear()
+    counts["artifact_sources_deleted"] = artifact_counts["sources"]
+    counts["artifact_episodes_deleted"] = artifact_counts["episodes"]
+    counts["artifact_claims_deleted"] = artifact_counts["claims"]
 
     mem.wiki.save_index("# Wiki Index\n\n_last updated: never_\n\n## Pages\n")
     meta = load_meta()

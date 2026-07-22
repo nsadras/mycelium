@@ -32,12 +32,22 @@ def claim(
     *,
     salience: float = 0.5,
     facets=None,
-    claim_type: str = "unknown",
+    claim_type: str | None = None,
     evidence_modality: str = "unknown",
     temporal_status: str = "unknown",
     predicate: str | None = None,
     derivation_operation: str | None = None,
 ):
+    normalized_kind = kind.replace("_", " ").lower()
+    semantic_type = claim_type or {
+        "preference": "preference",
+        "event": "event",
+        "interaction": "interaction",
+        "description": "observation",
+        "biographical fact": "identity",
+        "plan": "plan",
+        "commitment": "commitment",
+    }.get(normalized_kind, "observation")
     return MemoryClaim(
         claim_id=claim_id,
         text=text,
@@ -47,12 +57,11 @@ def claim(
         recorded_at="2024-01-10T12:00:00",
         salience=salience,
         facets=facets or {"observed_at": "4:24 pm on 10 January, 2024"},
-        claim_type=claim_type,
+        claim_type=semantic_type,
         evidence_modality=evidence_modality,
         temporal_status=temporal_status,
         predicate=predicate,
         derivation_operation=derivation_operation,
-        schema_version=1,
     )
 
 
@@ -77,10 +86,10 @@ def test_projection_keeps_traceable_inferences_in_separate_insights_scope():
         "Ava completed the project in four months.",
         "derived duration",
         facets={
-            "derivation_method": "cross_claim_synthesis",
             "basis_claim_ids": ["started", "finished"],
             "inference_basis": "The recorded start and finish dates are four months apart.",
         },
+        claim_type="event",
         derivation_operation="temporal_arithmetic",
     )
     item.inferred = True
@@ -298,8 +307,11 @@ def test_multi_party_routing_uses_real_about_entities_not_synthetic_speakers(tmp
     assert {target["page"] for target in targets} == {"person-john", "person-tim"}
 
 
-def test_projection_shards_have_stable_bounded_names():
-    dream = DreamProcess(MagicMock(), MagicMock(), MagicMock(), Config.defaults())
+def test_projection_shards_have_stable_bounded_names(tmp_path):
+    dream = DreamProcess(
+        MagicMock(), MagicMock(), MagicMock(), Config.defaults(),
+        ArtifactStore(tmp_path / "artifacts"),
+    )
     parent = WikiPage(
         slug="person-ava", title="Ava", content="Overview",
         created=datetime.now(), last_updated=datetime.now(),
@@ -319,8 +331,11 @@ def test_projection_shards_have_stable_bounded_names():
     assert "[[person-ava-timeline-2]]" in shards[0][2]
 
 
-def test_projection_shards_cap_record_count():
-    dream = DreamProcess(MagicMock(), MagicMock(), MagicMock(), Config.defaults())
+def test_projection_shards_cap_record_count(tmp_path):
+    dream = DreamProcess(
+        MagicMock(), MagicMock(), MagicMock(), Config.defaults(),
+        ArtifactStore(tmp_path / "artifacts"),
+    )
     parent = WikiPage(
         slug="person-ava", title="Ava", content="Overview",
         created=datetime.now(), last_updated=datetime.now(),

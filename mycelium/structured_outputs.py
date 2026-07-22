@@ -3,16 +3,6 @@ from typing import Literal
 from pydantic import BaseModel, Field, RootModel
 
 
-class EncodedEntryOutput(BaseModel):
-    content: str
-    durability: Literal["ephemeral", "session", "durable"]
-    importance: Literal["low", "medium", "high"]
-
-
-class EncodedSessionOutput(BaseModel):
-    entries: list[EncodedEntryOutput] = Field(default_factory=list, max_length=20)
-
-
 class ExtractedEntityOutput(BaseModel):
     entity: str
     role: str | None = None
@@ -43,7 +33,6 @@ class ExtractedClaimOutput(BaseModel):
 
 
 class ExtractedEpisodeOutput(BaseModel):
-    summary: str = ""
     claims: list[ExtractedClaimOutput] = Field(default_factory=list, max_length=128)
     ignored_segment_ids: list[str] = Field(default_factory=list, max_length=128)
 
@@ -68,10 +57,6 @@ class DerivedClaimOutput(BaseModel):
 
 class DerivedClaimsOutput(BaseModel):
     claims: list[DerivedClaimOutput] = Field(default_factory=list, max_length=64)
-
-
-class ImportanceRatingOutput(BaseModel):
-    importance: float
 
 
 class GroundedAnswerOutput(BaseModel):
@@ -157,10 +142,6 @@ class WikiAppendOutput(BaseModel):
 
 class WikiMergeOutput(BaseModel):
     content: str
-
-
-class WikiIndexOutput(BaseModel):
-    index: str
 
 
 class ToolExtractedFactOutput(BaseModel):

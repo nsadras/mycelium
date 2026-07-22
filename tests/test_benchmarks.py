@@ -169,7 +169,7 @@ async def test_qa_client_returns_consistent_refusal_for_unsupported_premise():
 
 
 @pytest.mark.asyncio
-async def test_mycelium_benchmark_adapter_preserves_raw_transcript_on_encode_failure(tmp_path):
+async def test_mycelium_benchmark_adapter_surfaces_encode_failure_without_fallback(tmp_path):
     class FakeQa:
         pass
 
@@ -182,12 +182,13 @@ async def test_mycelium_benchmark_adapter_preserves_raw_transcript_on_encode_fai
     )
     await system.reset("case-1")
     system.mem.encoder.encode_session = AsyncMock(side_effect=ValueError("bad json"))
-    system.mem.encoder.encode = AsyncMock()
 
-    await system.memorize([BenchmarkMessage(role="user", content="Caroline researched adoption agencies.")])
+    with pytest.raises(ValueError, match="bad json"):
+        await system.memorize([
+            BenchmarkMessage(
+                role="user", content="Caroline researched adoption agencies."
+            )
+        ])
 
-    system.mem.encoder.encode.assert_called_once()
-    kwargs = system.mem.encoder.encode.call_args.kwargs
-    assert "Raw benchmark session transcript preserved" in kwargs["content"]
-    assert "Caroline researched adoption agencies." in kwargs["content"]
-    assert system.stats()["encoded_batches"] == 1
+    system.mem.encoder.encode_session.assert_awaited_once()
+    assert system.stats()["encoded_batches"] == 0

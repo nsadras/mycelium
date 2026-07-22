@@ -1,6 +1,5 @@
 from langgraph.graph import StateGraph
 from typing import TypedDict
-import asyncio
 import mycelium
 
 class AgentState(TypedDict):
@@ -30,9 +29,10 @@ async def memory_node(state: AgentState) -> AgentState:
 
 async def record_node(state: AgentState) -> AgentState:
     """Record session output to episodic log."""
-    await mem.encode(
-        content=f"Q: {state['input']}\nA: {state['output']}",
+    await mem.encoder.encode_session(
+        transcript=f"USER: {state['input']}\nASSISTANT: {state['output']}",
         session_id=state['session_id'],
+        source_type="agent_conversation",
     )
     return state
 

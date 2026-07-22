@@ -90,8 +90,16 @@ def _is_tool_entry(entry: LogEntry) -> bool:
     name = entry.entry_id.split("#", 1)[1] if "#" in entry.entry_id else entry.entry_id
     return name.startswith("tool-")
 
+
 class DreamProcess:
-    def __init__(self, llm: OllamaClient, wiki: WikiStore, logs: LogStore, config: Config, artifacts: ArtifactStore | None = None):
+    def __init__(
+        self,
+        llm: OllamaClient,
+        wiki: WikiStore,
+        logs: LogStore,
+        config: Config,
+        artifacts: ArtifactStore,
+    ):
         self.llm = llm
         self.wiki = wiki
         self.logs = logs
@@ -104,7 +112,7 @@ class DreamProcess:
         self._stale_projection_slugs: set[str] = set()
 
     def _uses_claim_evidence(self) -> bool:
-        return self.artifacts is not None and self.config.dream.evidence_mode != "raw"
+        return self.config.dream.evidence_mode != "raw"
 
     async def run(
         self,
@@ -549,10 +557,9 @@ class DreamProcess:
         if not dry_run:
             for page in changed_pages.values():
                 self.wiki.save(page)
-                if self.artifacts is not None:
-                    self.artifacts.assign_pages(
-                        self._pending_page_claim_ids.get(page.slug, set()), page.slug
-                    )
+                self.artifacts.assign_pages(
+                    self._pending_page_claim_ids.get(page.slug, set()), page.slug
+                )
             for stale_slug in sorted(self._stale_projection_slugs):
                 self.wiki.archive(stale_slug)
 
@@ -827,8 +834,6 @@ class DreamProcess:
         return validated
 
     def _benchmark_evidence(self, evidence: list[EvidenceChunk]) -> bool:
-        if self.artifacts is None:
-            return False
         source_ids = {chunk.source_id for chunk in evidence if chunk.source_id}
         for source_id in source_ids:
             try:
@@ -865,7 +870,7 @@ class DreamProcess:
 
     def _build_run_evidence(self, entries: list[LogEntry]) -> list[EvidenceChunk]:
         mode = self.config.dream.evidence_mode
-        if mode == "raw" or self.artifacts is None:
+        if mode == "raw":
             return self._build_evidence(entries)
         entry_ids = {entry.entry_id for entry in entries}
         source_by_id = {source.source_id: source for source in self.artifacts.list_sources()}
@@ -923,8 +928,6 @@ class DreamProcess:
         return parse_source_datetime(value) or datetime.now()
 
     def _is_multi_party_evidence(self, evidence: list[EvidenceChunk]) -> bool:
-        if self.artifacts is None:
-            return False
         source_ids = {chunk.source_id for chunk in evidence if chunk.source_id}
         if not source_ids:
             return False
@@ -938,8 +941,6 @@ class DreamProcess:
 
     def _identify_multi_party_claim_targets(self, evidence: list[EvidenceChunk]) -> list[dict]:
         """Route conversation facts to real participant pages, never synthetic speaker labels."""
-        if self.artifacts is None:
-            return []
         targets: dict[str, dict] = {}
         for chunk in evidence:
             source = None
@@ -1019,7 +1020,7 @@ class DreamProcess:
 
     def _claim_evidence(self, claim: MemoryClaim, *, include_spans: bool) -> EvidenceChunk:
         provenance = claim.provenance[0]
-        source = self.artifacts.get_source(provenance.source_id) if self.artifacts else None
+        source = self.artifacts.get_source(provenance.source_id)
         about = ", ".join(
             f"{item.get('entity')} ({item.get('role')})" if item.get("role") else str(item.get("entity"))
             for item in claim.about if item.get("entity")
@@ -1031,7 +1032,7 @@ class DreamProcess:
             f"kind={claim.kind}; about={about}; confidence={claim.confidence:.2f}; "
             f"status={claim.status}; facets={json.dumps(claim.facets, ensure_ascii=False, sort_keys=True)}",
         ]
-        if include_spans and source is not None:
+        if include_spans:
             wanted = {segment_id for prov in claim.provenance for segment_id in prov.segment_ids}
             spans = [segment for segment in source.segments if segment.segment_id in wanted]
             if spans:
@@ -1045,8 +1046,8 @@ class DreamProcess:
         return EvidenceChunk(
             evidence_id=f"{claim.claim_id}::claim",
             entry_id=raw_entry,
-            session_id=source.session_id if source else "",
-            timestamp=self._source_timestamp(source.recorded_at) if source else datetime.now(),
+            session_id=source.session_id,
+            timestamp=self._source_timestamp(source.recorded_at),
             content="\n".join(lines), importance=max(0.5, claim.confidence), durability="durable",
             chunk_index=1, chunk_count=1, claim_ids=(claim.claim_id,),
             segment_ids=tuple(segment_id for prov in claim.provenance for segment_id in prov.segment_ids),
@@ -1054,8 +1055,6 @@ class DreamProcess:
         )
 
     def _materialization_evidence(self, page_slug: str, current: list[EvidenceChunk]) -> list[EvidenceChunk]:
-        if self.artifacts is None:
-            return current
         current_claim_ids = {claim_id for chunk in current for claim_id in chunk.claim_ids}
         existing_claims = self.artifacts.claims_for_page(page_slug)
         # Exact spans validate/expose extraction and unclaimed spans stay lossless, but
@@ -1082,8 +1081,6 @@ class DreamProcess:
         return merged
 
     def _claims_for_projection(self, page_slug: str) -> list[MemoryClaim]:
-        if self.artifacts is None:
-            return []
         claim_ids = set(getattr(self, "_pending_page_claim_ids", {}).get(page_slug, set()))
         claims = {claim.claim_id: claim for claim in self.artifacts.claims_for_page(page_slug)}
         for claim_id in claim_ids:
@@ -1287,8 +1284,6 @@ class DreamProcess:
 
     async def _refresh_derived_insights(self, page_slug: str) -> list[MemoryClaim]:
         """Replace cross-claim conclusions only after a successful, grounded synthesis."""
-        if self.artifacts is None:
-            return []
         page_claims = self.artifacts.claims_for_page(page_slug)
         explicit = [claim for claim in page_claims if claim.status == "active" and not claim.inferred]
         if len(explicit) < 2:
@@ -1418,8 +1413,6 @@ class DreamProcess:
             facets.update({
                 "inference_basis": inference_basis,
                 "basis_claim_ids": basis_ids,
-                "derivation_method": "cross_claim_synthesis",
-                "derivation_operation": operation,
             })
             incoming = MemoryClaim(
                 claim_id=f"claim-{uuid.uuid4().hex[:12]}",
@@ -1433,7 +1426,6 @@ class DreamProcess:
                 facets=facets,
                 page_slugs=[page_slug],
                 salience=0.65,
-                display_scope="details",
                 claim_type="state",
                 predicate=str(raw["predicate"]) if raw.get("predicate") else None,
                 evidence_modality="inference",
@@ -1451,7 +1443,7 @@ class DreamProcess:
             if (
                 claim.status == "active"
                 and claim.inferred
-                and claim.facets.get("derivation_method") == "cross_claim_synthesis"
+                and claim.derivation_operation is not None
                 and claim.claim_id not in refreshed_ids
             ):
                 claim.status = "superseded"

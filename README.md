@@ -6,30 +6,25 @@
 
 Mycelium gives local AI agents a memory that lasts beyond a single chat. It keeps the original conversation as a durable record, turns useful information into an organized Markdown wiki, and brings the relevant parts back when they are needed later.
 
-It is designed for people who want a local assistant that can build context over time without hiding its memory in an opaque database. You can chat with it through the included web app, inspect what it remembers, edit its knowledge directly, or add the Python library to another agent.
+It is designed for users who want a local assistant that can build context over time without hiding its memory in an opaque database. You can chat with it through the included web app, inspect what it remembers, edit its knowledge directly, or add the Python library to another agent.
 
 ## Why use it?
 
 Most chat assistants either forget everything between sessions or require the entire conversation history to be sent again. Mycelium takes a different approach:
 
-- **Memory persists across conversations.** Projects, preferences, decisions, and prior discussions can carry into a new session.
+- **Memory persists across conversations.** Projects, preferences, decisions, research, and prior discussions can carry into a new session.
 - **Everything stays inspectable.** Raw experiences and consolidated knowledge are stored as ordinary Markdown files.
 - **Local models do the work.** Chat, retrieval, and memory consolidation run through Ollama on your machine.
 - **You stay in control.** The UI shows the memories used for a response and lets you browse or edit the wiki and source logs.
-- **Memory changes with new evidence.** Existing pages can be reinforced, updated, or archived instead of growing into an endless transcript.
 
 ## Features
 
 - Multi-session chat with a local Ollama model
 - Automatic retrieval of relevant long-term memories
 - Plain-text episodic logs and an Obsidian-compatible Markdown wiki
-- Source links from consolidated knowledge back to the conversations that produced it
-- “Dream” passes that organize new experiences into durable knowledge
 - Reconsolidation when a conversation contradicts or extends an existing memory
 - Memory reinforcement and decay based on use, confidence, and importance
-- Built-in wiki editor and raw-log explorer
-- Optional web search and page-fetching tools
-- Optional Engram workflow for transcribing, reviewing, and remembering meetings
+- Meeting ingestion pipeline - upload meeting audio to have it transcribed, diarized, and consolidated into the memory system
 - A Python API for adding Mycelium memory to other agents and frameworks
 
 ## Quick start
@@ -41,7 +36,7 @@ Most chat assistants either forget everything between sessions or require the en
 - Node.js and npm
 - [Ollama](https://ollama.com/) running locally
 
-Clone the repository and install the Python and frontend dependencies:
+Clone and install dependencies:
 
 ```bash
 git clone https://github.com/nsadras/mycelium.git
@@ -66,7 +61,6 @@ With Ollama running, start the backend and frontend together:
 
 Open [http://localhost:5173](http://localhost:5173) to use the app. The FastAPI backend is available at [http://localhost:8000](http://localhost:8000).
 
-> Mycelium is currently a local development project rather than a hardened multi-user service. Keep it on a trusted machine or network.
 
 ## Using the app
 
@@ -171,10 +165,3 @@ context_budget_tokens = 32768
 
 The default memory store is `./mycelium_store`. Because it consists primarily of Markdown and JSON, it can be inspected with normal text tools or opened as a wiki outside the app. For ordinary edits, the UI is preferable because it also maintains version and memory-state metadata.
 
-## Learn more
-
-- [Design and internals](DESIGN.md) — architecture, memory lifecycle, storage, scheduling, Engram internals, and benchmarks
-- [Basic library example](examples/basic_session.py)
-- [LangGraph integration example](examples/langgraph_integration.py)
-
-For development, run the Python tests with `uv run pytest` and build the frontend with `cd ui && npm run build`.

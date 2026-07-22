@@ -402,7 +402,7 @@ def claim_extraction_prompt(source_type: str, source_id: str, occurred_at: str |
     policies = {
         "agent_conversation": """Prioritize user facts, preferences, constraints, commitments, corrections, and accepted decisions. Record assistant proposals or claims only as interaction history unless the user accepts them. Treat tool output as observations, not user beliefs.""",
         "meeting_transcript": """Prioritize decisions, proposals, action items, owners, deadlines, objections, commitments, reported events, and changes of status. Preserve who held each stance; do not turn one participant's statement into group consensus.""",
-        "benchmark_conversation": """Capture explicit personal facts, preferences, plans, relationships, activities, events, changes, and temporal details for every speaker. Preserve the speaker and do not merge facts belonging to different people.""",
+        "benchmark_conversation": """Capture explicit personal facts, preferences, plans, relationships, activities, events, changes, and temporal details for every speaker. Preserve the speaker and do not merge facts belonging to different people. Treat routine greetings, thanks, generic praise, generic encouragement, and questions that introduce no independently useful information as conversational scaffolding; preserve specific commitments, advice, relationship changes, and reactions that reveal a belief or preference.""",
     }
     policy = policies.get(source_type, policies["agent_conversation"])
     system = f"""You extract durable, atomic claims from source conversation segments.
@@ -412,22 +412,69 @@ Policy: {policy}
 
 Requirements:
 - Each claim must express exactly one independently useful assertion in natural language.
+- Write claims directly as subject–predicate assertions. Avoid wrappers such as "X stated that", "X mentioned that", or "X informed Y that" unless the speech act itself is the durable fact.
+- Write in third person using explicit names. Never copy raw first-/second-person dialogue containing I, my, we, our, you, your, or let's into `text`; resolve those references to their named speakers and recipients.
+- Keep qualifiers such as dates, reasons, locations, values, and ownership in `facets` when the claim remains clear without repeating them in prose.
 - Be loss-conscious: retain names, dates, quantities, reasons, locations, relationships, preferences, plans, and changes when stated.
 - Copy only segment ids from the supplied input. Include every segment that directly supports the claim.
 - Do not reconstruct dialogue, summarize several unrelated facts into one claim, or invent missing context.
-- Set evidence_type=inferred only when the assertion is a strong implication; use lower confidence and make the inference explicit.
+- Treat raw image URLs, attachment identifiers, and transport metadata as source furniture, not memory claims. Preserve meaningful image captions and what the speaker says the image represents.
+- Use evidence_type=explicit when a claim directly paraphrases the speaker, including resolving I/my/you to names. Use evidence_type=inferred only when the source does not state the assertion and it is instead a strong implication. Every inferred claim must include a concise `facets.inference_basis` explaining the reasoning and confidence must be at most 0.7; otherwise use explicit.
 - `kind` is an open descriptive label such as preference, event, plan, decision, relationship, biographical_fact, action_item, or interaction. It is not a fixed ontology.
 - `about` contains entities and optional roles. Use the actual person's name when available.
-- `facets` is an open object for useful qualifiers such as when, location, reason, object, value, owner, deadline, or polarity.
+- `facets` is an open object for useful qualifiers such as when, location, reason, object, value, owner, deadline, or polarity. Whenever a claim contains an absolute or relative time expression, put the exact source phrase in `facets.when` (for example yesterday, last Friday, this month, a few years ago, or 12 March 2025). Do not silently replace relative wording with the conversation date.
 - `slot` is optional. Use it only for genuinely replaceable state (for example current_city, current_employer, dietary_preference). Do not assign slots to ordinary events or goals.
 - Do not omit a supported claim merely because it seems unimportant to the current benchmark.
+- Account for every supplied segment id. A segment containing a personal fact, preference, plan, decision, event, relationship, reason, location, quantity, temporal detail, meaningful reaction, or image description must support at least one claim. Put routine conversational scaffolding—including greetings, thanks, generic praise/support, content-free questions, filler, and exact repetitions—in `ignored_segment_ids`. Do not ignore a whole segment when it also contains a useful assertion.
 
-Return JSON with `summary` and `claims`. Each claim contains text, kind, about, segment_ids, speaker, evidence_type, confidence, slot, and facets. Respond with JSON only."""
+Return JSON with `summary`, `claims`, and `ignored_segment_ids`. Each claim contains text, kind, about, segment_ids, speaker, evidence_type, confidence, slot, and facets. Respond with JSON only."""
     user = f"""SOURCE ID: {source_id}
 OCCURRED AT: {occurred_at or 'unknown'}
 
 SEGMENTS:
 {segments}"""
+    return system, user
+
+
+def claim_coverage_repair_prompt(
+    source_type: str, source_id: str, occurred_at: str | None, segments: str
+) -> tuple[str, str]:
+    system = f"""You repair gaps in atomic memory extraction for a {source_type}.
+
+Extract every independently useful assertion from the supplied previously-unaccounted segments.
+Preserve exact subjects, temporal phrases, reasons, locations, quantities, and image descriptions.
+Use direct subject–predicate wording without dialogue-reporting wrappers unless the speech act matters.
+Write in third person with explicit names; never copy I/my/we/our/you/your/let's dialogue into claim text.
+Lines marked TARGET are the gaps to repair. Lines marked CONTEXT are neighboring dialogue supplied
+only to resolve pronouns, short answers, and references. Extract claims only for TARGET lines and put
+only TARGET ids in `segment_ids`; never cite a CONTEXT id. Whenever time is stated, copy the exact
+phrase into `facets.when`.
+Ignore routine conversational scaffolding such as greetings, thanks, generic praise/support,
+content-free questions, filler, or exact repetitions, but retain any specific assertion in the same
+segment. Do not rank or filter substantive claims by importance. Return JSON with `summary`,
+`claims`, and `ignored_segment_ids`. Respond with JSON only."""
+    user = f"""SOURCE ID: {source_id}
+OCCURRED AT: {occurred_at or 'unknown'}
+
+UNACCOUNTED SEGMENTS:
+{segments}"""
+    return system, user
+
+
+def claim_final_repair_prompt(
+    source_type: str, source_id: str, occurred_at: str | None, segments: str
+) -> tuple[str, str]:
+    system, user = claim_coverage_repair_prompt(
+        source_type, source_id, occurred_at, segments
+    )
+    system += """
+
+FINAL NORMALIZATION PASS:
+A prior extraction attempt left these TARGET lines unaccounted, usually because it copied raw
+first-/second-person dialogue or a deictic fragment. For every substantive TARGET, resolve I/my/we/
+our/you/your/it/this to explicit named people and objects using the neighboring CONTEXT. Return a
+standalone third-person subject–predicate assertion. Use `ignored_segment_ids` only when the TARGET
+is genuinely content-free social scaffolding. Never return the raw utterance as claim text."""
     return system, user
 
 
@@ -437,14 +484,15 @@ def claim_materialization_prompt(existing_page: str, evidence: str, *, page_slug
 Target slug: {page_slug}
 Page type: {page_type}
 
-The evidence bundle is authoritative. Regenerate the full page; do not append a diary dump. The old page, when supplied, is only a naming hint and must not preserve unsupported statements.
+The evidence bundle is authoritative. Regenerate a concise overview page; do not append a diary dump. A deterministic renderer will place complete claims into curated sections and linked timeline/detail/archive pages after your response. The old page, when supplied, is only a naming hint and must not preserve unsupported statements.
 
 Requirements:
-- Include every relevant supported detail, especially names, relationships, dates, quantities, reasons, preferences, plans, decisions, changes, and current status.
+- Prioritize stable identity, relationships, preferences, current state, important plans, decisions, and major changes. Do not exhaustively repeat routine interactions.
 - Distinguish facts about different people and attribute opinions or proposals to their speakers.
 - Reconcile duplicates. Preserve meaningful temporal changes instead of flattening them into contradictions.
 - Prefer precise factual prose and compact sections over vague summaries.
 - Never mention claim ids, evidence ids, extraction, or the benchmark in page prose.
+- Keep the overview under 700 words. Do not create an exhaustive evidence ledger; deterministic projection handles completeness.
 - Use Obsidian [[page-slug]] links only when a linked page is supported by the page catalog/context.
 
 Return JSON fields title, content, confidence, importance, tags, and related. Respond with JSON only."""

@@ -33,6 +33,7 @@ class ExtractedClaimOutput(BaseModel):
 class ExtractedEpisodeOutput(BaseModel):
     summary: str = ""
     claims: list[ExtractedClaimOutput] = Field(default_factory=list, max_length=128)
+    ignored_segment_ids: list[str] = Field(default_factory=list, max_length=128)
 
 
 class ImportanceRatingOutput(BaseModel):

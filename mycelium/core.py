@@ -208,6 +208,11 @@ class Mycelium:
         for slug, p in existing_slugs.items():
             if slug in selected_slugs:
                 continue
+            # Derived timeline/detail/archive pages should be selected explicitly
+            # by the router. Loading every child merely because its parent entity
+            # appears in the query recreates the original monolithic context.
+            if "derived-memory" in p.tags:
+                continue
             slug_parts = set(slug.split("-")) - exclude_words
             title_words = set(re.findall(r'\b\w+\b', p.title.lower())) - exclude_words
             

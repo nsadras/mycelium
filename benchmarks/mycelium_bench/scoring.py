@@ -6,11 +6,42 @@ from collections import Counter, defaultdict
 from typing import Any
 
 
+MONTHS = [
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+]
+
+
+def _expand_iso_dates(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        year, month, day = match.groups()
+        month_index = int(month)
+        if not 1 <= month_index <= 12:
+            return match.group(0)
+        return f"{int(day)} {MONTHS[month_index - 1]} {year}"
+
+    return re.sub(r"\b(\d{4})-(\d{2})-(\d{2})\b", replace, value)
+
+
+def _light_stem(token: str) -> str:
+    if token.endswith("ies") and len(token) > 4:
+        return token[:-3] + "y"
+    for suffix in ("ement", "ments", "ment", "ing", "ed"):
+        if token.endswith(suffix) and len(token) - len(suffix) >= 4:
+            token = token[:-len(suffix)]
+            break
+    if token.endswith("s") and not token.endswith(("ss", "us", "is")) and len(token) > 4:
+        token = token[:-1]
+    if token.endswith("e") and len(token) >= 5:
+        token = token[:-1]
+    return token
+
+
 def normalize_answer(text: Any) -> str:
-    value = str(text).replace(",", "").lower()
+    value = _expand_iso_dates(str(text).lower()).replace(",", "")
     value = "".join(ch for ch in value if ch not in string.punctuation)
     value = re.sub(r"\b(a|an|the|and)\b", " ", value)
-    return " ".join(value.split())
+    return " ".join(_light_stem(token) for token in value.split())
 
 
 def token_f1(prediction: Any, ground_truth: Any) -> float:

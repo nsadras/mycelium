@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock
 from mycelium.core import Mycelium
 from mycelium.models import WikiPage
 from datetime import datetime
@@ -48,3 +48,24 @@ async def test_entity_aware_retrieval_fallback(temp_mycelium):
     loaded_slugs = [p.slug for p in loaded]
     assert "person-gina" in loaded_slugs
     assert "person-jon" not in loaded_slugs
+
+
+@pytest.mark.asyncio
+async def test_entity_fallback_does_not_expand_every_derived_page(temp_mycelium):
+    now = datetime.now()
+    temp_mycelium.wiki.save(WikiPage(
+        slug="person-gina", title="Gina", content="Gina is a dancer.",
+        created=now, last_updated=now, version=1, confidence=0.8, importance=0.5,
+    ))
+    temp_mycelium.wiki.save(WikiPage(
+        slug="person-gina-timeline", title="Gina: Timeline", content="A dated event.",
+        created=now, last_updated=now, version=1, confidence=1.0, importance=0.4,
+        tags=["derived-memory", "timeline", "parent:person-gina"],
+    ))
+    temp_mycelium.llm.call_structured.return_value = []
+
+    loaded = await temp_mycelium.load_context(
+        query="What does Gina enjoy?", reconsolidate=False
+    )
+
+    assert [page.slug for page in loaded] == ["person-gina"]

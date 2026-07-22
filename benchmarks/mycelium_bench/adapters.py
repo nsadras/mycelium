@@ -71,14 +71,14 @@ class OllamaQaClient:
         )
         context_text = context.strip() or "No memory context is available."
         user = f"MEMORY CONTEXT:\n{context_text}\n\nQUESTION:\n{question}"
-        start = time.time()
+        start = time.perf_counter()
         response = await self.llm.call_structured(
             system,
             user,
             GroundedAnswerOutput,
             num_predict=256,
         )
-        elapsed = time.time() - start
+        elapsed = time.perf_counter() - start
         answerable = isinstance(response, dict) and bool(response.get("answerable"))
         output = str(response.get("answer", "")).strip() if isinstance(response, dict) else ""
         if not answerable or not output:
@@ -201,7 +201,7 @@ class MyceliumMemorySystem:
         metadata = metadata or {}
         session_id = str(metadata.get("session_id") or f"{self.case_id}-batch-{self._encoded_batches + 1}")
         transcript = format_messages_for_memory(messages, metadata)
-        start = time.time()
+        start = time.perf_counter()
         try:
             await mem.encoder.encode_session(
                 transcript, session_id,
@@ -229,12 +229,12 @@ class MyceliumMemorySystem:
                 self._dream_runs += 1
             except Exception as exc:
                 self._errors.append({"stage": "dream", "session_id": session_id, "error": str(exc)})
-        self._memory_construction_seconds += time.time() - start
+        self._memory_construction_seconds += time.perf_counter() - start
 
     async def answer(self, question: str, metadata: dict[str, Any] | None = None) -> BenchmarkAnswer:
         mem = self._require_mem()
         metadata = metadata or {}
-        start = time.time()
+        start = time.perf_counter()
         try:
             loaded_pages = await mem.load_context(
                 question,
@@ -245,7 +245,7 @@ class MyceliumMemorySystem:
         except Exception as exc:
             self._errors.append({"stage": "load_context", "question": question, "error": str(exc)})
             loaded_pages = []
-        memory_construction_time = time.time() - start
+        memory_construction_time = time.perf_counter() - start
         wiki_context = "\n\n".join(
             f"=== MEMORY: {page.title} ({page.slug}) ===\n{format_page_for_prompt(page)}"
             for page in loaded_pages
@@ -279,14 +279,14 @@ class MyceliumMemorySystem:
 
     async def finalize_case(self) -> None:
         if self.dream_policy == "per-case" and self.mem is not None:
-            start = time.time()
+            start = time.perf_counter()
             try:
                 report = await self.mem.dream()
                 self._record_dream_report(report, session_id=self.case_id)
                 self._dream_runs += 1
             except Exception as exc:
                 self._errors.append({"stage": "dream", "case_id": self.case_id, "error": str(exc)})
-            self._memory_construction_seconds += time.time() - start
+            self._memory_construction_seconds += time.perf_counter() - start
 
     def stats(self) -> dict[str, Any]:
         page_count = 0
@@ -337,9 +337,9 @@ class FullWikiMemorySystem(MyceliumMemorySystem):
             )
         context = "\n\n".join(context_parts)
         
-        start = time.time()
+        start = time.perf_counter()
         answer = await self.qa_client.answer(question, context)
-        query_time = time.time() - start
+        query_time = time.perf_counter() - start
         
         answer.memory_construction_time = 0.0
         answer.query_time_len = query_time

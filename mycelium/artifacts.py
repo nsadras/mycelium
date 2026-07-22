@@ -68,6 +68,8 @@ class MemoryClaim:
     facets: dict[str, Any] = field(default_factory=dict)
     links: list[dict[str, str]] = field(default_factory=list)
     page_slugs: list[str] = field(default_factory=list)
+    salience: float = 0.5
+    display_scope: str = "main"
 
 
 @dataclass
@@ -79,6 +81,7 @@ class EpisodeManifest:
     participants: list[str]
     segment_ids: list[str]
     claim_ids: list[str] = field(default_factory=list)
+    ignored_segment_ids: list[str] = field(default_factory=list)
     summary: str = ""
     extraction_status: str = "pending"
     extraction_error: str | None = None
@@ -171,7 +174,11 @@ class ArtifactStore:
             segment_id for claim in claims for provenance in claim.provenance
             for segment_id in provenance.segment_ids
         }
+        ignored_segments = {
+            segment_id for episode in episodes for segment_id in episode.ignored_segment_ids
+        }
         unresolved = claimed_segments - all_segments
+        accounted_segments = (claimed_segments | ignored_segments) & all_segments
         return {
             "sources": len(sources),
             "episodes": len(episodes),
@@ -180,10 +187,15 @@ class ArtifactStore:
             "segments": len(all_segments),
             "claimed_segments": len(all_segments & claimed_segments),
             "segment_coverage": (len(all_segments & claimed_segments) / len(all_segments)) if all_segments else 1.0,
+            "ignored_segments": len(all_segments & ignored_segments),
+            "accounted_segments": len(accounted_segments),
+            "accounted_coverage": (len(accounted_segments) / len(all_segments)) if all_segments else 1.0,
             "unassigned_segment_ids": sorted(all_segments - claimed_segments),
+            "unaccounted_segment_ids": sorted(all_segments - claimed_segments - ignored_segments),
             "unassigned_claim_ids": sorted(claim.claim_id for claim in claims if not claim.page_slugs),
             "unresolved_provenance_ids": sorted(unresolved),
             "failed_episode_ids": sorted(ep.episode_id for ep in episodes if ep.extraction_status == "failed"),
+            "partial_episode_ids": sorted(ep.episode_id for ep in episodes if ep.extraction_status == "partial"),
         }
 
     @staticmethod
@@ -241,10 +253,23 @@ def segment_transcript(transcript: str, source_id: str) -> list[SourceSegment]:
     return segments
 
 
-def normalize_temporal_facets(facets: dict[str, Any], anchor: str | None) -> dict[str, Any]:
+def normalize_temporal_facets(
+    facets: dict[str, Any], anchor: str | None, claim_text: str | None = None
+) -> dict[str, Any]:
     """Add normalized dates for a conservative set of relative expressions."""
     result = dict(facets or {})
     expression = str(result.get("when") or result.get("time_expression") or "").strip()
+    if not expression and claim_text:
+        match = re.search(
+            r"\b(today|yesterday|tomorrow|last week|next week|this month|"
+            r"(?:last|next) (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
+            r"(?:a |one |two |three |several |few )?years? ago)\b",
+            claim_text,
+            re.I,
+        )
+        if match:
+            expression = match.group(0)
+            result["when"] = expression
     if anchor:
         result.setdefault("observed_at", anchor)
     if not expression or not anchor:
@@ -254,19 +279,32 @@ def normalize_temporal_facets(facets: dict[str, Any], anchor: str | None) -> dic
         return result
     lowered = expression.lower()
     target: datetime | None = None
-    if lowered == "today": target = base
-    elif lowered == "yesterday": target = base - timedelta(days=1)
-    elif lowered == "tomorrow": target = base + timedelta(days=1)
-    elif lowered == "last week": target = base - timedelta(days=7)
-    elif lowered == "next week": target = base + timedelta(days=7)
+    if lowered == "today":
+        target = base
+    elif lowered == "yesterday":
+        target = base - timedelta(days=1)
+    elif lowered == "tomorrow":
+        target = base + timedelta(days=1)
+    elif lowered == "last week":
+        target = base - timedelta(days=7)
+    elif lowered == "next week":
+        target = base + timedelta(days=7)
+    elif lowered == "this month":
+        result["normalized_date"] = base.strftime("%Y-%m")
+        result["date_precision"] = "month"
+        result["normalization_anchor"] = base.date().isoformat()
+        return result
     weekday = re.fullmatch(r"(last|next) (monday|tuesday|wednesday|thursday|friday|saturday|sunday)", lowered)
     if weekday:
         desired = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].index(weekday.group(2))
         delta = (base.weekday() - desired) % 7
-        if weekday.group(1) == "last": target = base - timedelta(days=delta or 7)
-        else: target = base + timedelta(days=((desired - base.weekday()) % 7) or 7)
+        if weekday.group(1) == "last":
+            target = base - timedelta(days=delta or 7)
+        else:
+            target = base + timedelta(days=((desired - base.weekday()) % 7) or 7)
     if target is not None:
         result["normalized_date"] = target.date().isoformat()
+        result["date_precision"] = "week" if lowered in {"last week", "next week"} else "day"
         result["normalization_anchor"] = base.date().isoformat()
     return result
 
@@ -307,6 +345,9 @@ class ClaimReconciler:
             if incoming_entities == self._entities(existing) and existing.kind == incoming.kind and similarity >= 0.92:
                 existing.provenance = self._merge_provenance(existing.provenance, incoming.provenance)
                 existing.confidence = max(existing.confidence, incoming.confidence)
+                existing.salience = max(existing.salience, incoming.salience)
+                if existing.display_scope == "main" and incoming.display_scope != "main":
+                    existing.display_scope = incoming.display_scope
                 existing.facets.update(incoming.facets)
                 self.store.save_claim(existing)
                 return existing
@@ -331,5 +372,6 @@ class ClaimReconciler:
         for item in right:
             key = (item.source_id, tuple(item.segment_ids))
             if key not in keys:
-                result.append(item); keys.add(key)
+                result.append(item)
+                keys.add(key)
         return result

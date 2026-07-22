@@ -263,7 +263,7 @@ def normalize_temporal_facets(
         match = re.search(
             r"\b(today|yesterday|tomorrow|last week|next week|this month|"
             r"(?:last|next) (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
-            r"(?:a |one |two |three |several |few )?years? ago)\b",
+            r"(?:(?:a|one|two|three|\d+) )?years? ago)\b",
             claim_text,
             re.I,
         )
@@ -294,6 +294,17 @@ def normalize_temporal_facets(
         result["date_precision"] = "month"
         result["normalization_anchor"] = base.date().isoformat()
         return result
+    years_ago = re.fullmatch(r"(?:(a|one|two|three|\d+) )?years? ago", lowered)
+    if years_ago:
+        raw_years = years_ago.group(1) or "one"
+        years = {"a": 1, "one": 1, "two": 2, "three": 3}.get(raw_years)
+        if years is None and raw_years.isdigit():
+            years = int(raw_years)
+        if years is not None and 0 < years <= 100:
+            result["normalized_date"] = str(base.year - years)
+            result["date_precision"] = "year"
+            result["normalization_anchor"] = base.date().isoformat()
+            return result
     weekday = re.fullmatch(r"(last|next) (monday|tuesday|wednesday|thursday|friday|saturday|sunday)", lowered)
     if weekday:
         desired = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].index(weekday.group(2))
@@ -342,7 +353,11 @@ class ClaimReconciler:
         incoming_entities = self._entities(incoming)
         for existing in current:
             similarity = SequenceMatcher(None, existing.text.lower(), incoming.text.lower()).ratio()
-            if incoming_entities == self._entities(existing) and existing.kind == incoming.kind and similarity >= 0.92:
+            same_semantic_shape = existing.kind == incoming.kind and similarity >= 0.92
+            effectively_identical = similarity >= 0.98
+            if incoming_entities == self._entities(existing) and (
+                same_semantic_shape or effectively_identical
+            ):
                 existing.provenance = self._merge_provenance(existing.provenance, incoming.provenance)
                 existing.confidence = max(existing.confidence, incoming.confidence)
                 existing.salience = max(existing.salience, incoming.salience)

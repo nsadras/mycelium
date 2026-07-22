@@ -36,6 +36,20 @@ class ExtractedEpisodeOutput(BaseModel):
     ignored_segment_ids: list[str] = Field(default_factory=list, max_length=128)
 
 
+class DerivedClaimOutput(BaseModel):
+    text: str
+    kind: str = "derived insight"
+    about: list[ExtractedEntityOutput] = Field(default_factory=list, max_length=12)
+    basis_claim_ids: list[str] = Field(default_factory=list, min_length=1, max_length=12)
+    inference_basis: str
+    confidence: float = 0.6
+    facets: dict = Field(default_factory=dict)
+
+
+class DerivedClaimsOutput(BaseModel):
+    claims: list[DerivedClaimOutput] = Field(default_factory=list, max_length=64)
+
+
 class ImportanceRatingOutput(BaseModel):
     importance: float
 

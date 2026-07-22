@@ -422,6 +422,8 @@ Requirements:
 - Use evidence_type=explicit when a claim directly paraphrases the speaker, including resolving I/my/you to names. Use evidence_type=inferred only when the source does not state the assertion and it is instead a strong implication. Every inferred claim must include a concise `facets.inference_basis` explaining the reasoning and confidence must be at most 0.7; otherwise use explicit.
 - `kind` is an open descriptive label such as preference, event, plan, decision, relationship, biographical_fact, action_item, or interaction. It is not a fixed ontology.
 - `about` contains entities and optional roles. Use the actual person's name when available.
+- Claim text must contain at least one of its `about.entity` names verbatim so it remains attributable
+  when read by itself. For images, write "Name shared a photo showing ...", not only "A photo shows ...".
 - `facets` is an open object for useful qualifiers such as when, location, reason, object, value, owner, deadline, or polarity. Whenever a claim contains an absolute or relative time expression, put the exact source phrase in `facets.when` (for example yesterday, last Friday, this month, a few years ago, or 12 March 2025). Do not silently replace relative wording with the conversation date.
 - `slot` is optional. Use it only for genuinely replaceable state (for example current_city, current_employer, dietary_preference). Do not assign slots to ordinary events or goals.
 - Do not omit a supported claim merely because it seems unimportant to the current benchmark.
@@ -445,6 +447,7 @@ Extract every independently useful assertion from the supplied previously-unacco
 Preserve exact subjects, temporal phrases, reasons, locations, quantities, and image descriptions.
 Use direct subject–predicate wording without dialogue-reporting wrappers unless the speech act matters.
 Write in third person with explicit names; never copy I/my/we/our/you/your/let's dialogue into claim text.
+Every claim must contain at least one of its `about.entity` names verbatim.
 Lines marked TARGET are the gaps to repair. Lines marked CONTEXT are neighboring dialogue supplied
 only to resolve pronouns, short answers, and references. Extract claims only for TARGET lines and put
 only TARGET ids in `segment_ids`; never cite a CONTEXT id. Whenever time is stated, copy the exact
@@ -475,6 +478,43 @@ first-/second-person dialogue or a deictic fragment. For every substantive TARGE
 our/you/your/it/this to explicit named people and objects using the neighboring CONTEXT. Return a
 standalone third-person subject–predicate assertion. Use `ignored_segment_ids` only when the TARGET
 is genuinely content-free social scaffolding. Never return the raw utterance as claim text."""
+    return system, user
+
+
+def derived_claims_prompt(page_slug: str, claims: str) -> tuple[str, str]:
+    system = f"""You derive a small set of useful, traceable conclusions from canonical memory claims.
+
+Target page: {page_slug}
+
+The supplied claims are explicit source-grounded facts. Derived conclusions are a separate memory
+layer and must never be presented as direct quotations or observations.
+
+Create a conclusion only when it adds information that is not already stated by one claim, such as:
+- exact date or duration arithmetic with unambiguous anchors;
+- a count supported by distinct occurrences (do not count paraphrases of one occurrence twice);
+- a stable recurring pattern supported by at least three distinct dated occasions;
+- a cautious relationship or preference pattern supported by multiple independent facts.
+
+Requirements:
+- Cite 1-12 supplied claim IDs in `basis_claim_ids`; every cited claim must directly support the conclusion.
+  A single basis is allowed only for exact arithmetic using both a fact and its recorded temporal anchor.
+- Use explicit named subjects and standalone subject-predicate wording.
+- Put a short plain-language explanation in `inference_basis`.
+- Confidence must be at most 0.7. Use cautious wording for uncertain conclusions.
+- Do not diagnose medical or psychological conditions, infer protected traits, or speculate about motives.
+- Do not infer that an event never happened merely because it is absent from memory.
+- Never count mentions, descriptions, photos, or repeated reports as if they were distinct real-world
+  events. Do not produce conclusions about how often a word or topic was mentioned.
+- Do not claim an increase, decrease, or trend unless the supporting facts explicitly establish change.
+- A catalog of unrelated interests or activities is a summary, not a derived insight; do not emit it.
+- Do not restate, summarize, or combine unrelated claims. Prefer no output over a weak conclusion.
+- Populate `about` and `basis_claim_ids` explicitly; do not place their values only in prose or facets.
+- Return at most 20 high-value conclusions as JSON with a `claims` array.
+
+Each item contains text, kind, about, basis_claim_ids, inference_basis, confidence, and facets.
+Respond with JSON only."""
+    user = f"""CANONICAL CLAIMS:
+{claims}"""
     return system, user
 
 

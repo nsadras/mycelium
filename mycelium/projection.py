@@ -9,7 +9,7 @@ from typing import Literal
 
 from mycelium.artifacts import MemoryClaim, parse_source_datetime
 
-ProjectionScope = Literal["main", "timeline", "details", "interaction_archive"]
+ProjectionScope = Literal["main", "timeline", "details", "insights", "interaction_archive"]
 
 INTERACTION_KINDS = {
     "acknowledgement", "acknowledgment", "compliment", "encouragement",
@@ -34,6 +34,7 @@ BUCKET_RULES = (
     ("Beliefs & Opinions", {"belief", "opinion", "value"}),
     ("Activities & Experiences", {"activity", "experience", "achievement", "event", "action"}),
     ("Visual References", {"image description", "image caption", "visual", "photo description"}),
+    ("Derived Insights", {"derived insight", "derived pattern", "derived count", "derived duration"}),
 )
 
 
@@ -84,19 +85,42 @@ def claim_date_key(claim: MemoryClaim) -> str:
 
 def project_claim(claim: MemoryClaim) -> ProjectedClaim:
     kind = normalized_kind(claim)
+    text = claim.text.strip()
     scope_hint = claim.display_scope if claim.display_scope in {
-        "main", "timeline", "details", "interaction_archive"
+        "main", "timeline", "details", "insights", "interaction_archive"
     } else "main"
 
     interaction_text = re.match(
         r"^[A-Z][\w'-]+\s+(?:asked|thanked|greeted|congratulated|complimented|"
         r"praised|said goodbye to|wished|apologized to)\b",
-        claim.text.strip(),
+        text,
         re.IGNORECASE,
     )
-    is_interaction = any(term in kind for term in INTERACTION_KINDS) or bool(interaction_text)
-    is_timeline = any(term in kind for term in TIMELINE_KINDS)
+    conversation_departure = re.fullmatch(
+        r"[A-Z][\w'-]+\s+(?:left|signed off|said goodbye)\.?", text, re.IGNORECASE
+    )
+    is_interaction = (
+        any(term in kind for term in INTERACTION_KINDS)
+        or bool(interaction_text)
+        or bool(conversation_departure)
+    )
+    past_event_text = bool(re.match(
+        r"^[A-Z][\w'-]+\s+(?:adopted|arrived|attended|bought|completed|finished|"
+        r"joined|launched|left|lost|made|met|opened|started|traveled|travelled|"
+        r"visited|volunteered)\b",
+        text,
+        re.IGNORECASE,
+    ))
+    is_timeline = any(term in kind for term in TIMELINE_KINDS) or past_event_text
     is_main = any(term in kind for term in MAIN_KINDS)
+    textual_visual = re.search(
+        r"\b(?:photo|image|picture|screenshot)\b",
+        text,
+        re.IGNORECASE,
+    )
+    is_visual = any(term in kind for term in {
+        "image description", "image caption", "visual", "photo description"
+    }) or bool(textual_visual)
 
     score = max(0.0, min(1.0, (claim.salience + claim.confidence) / 2))
     if is_main:
@@ -114,8 +138,16 @@ def project_claim(claim: MemoryClaim) -> ProjectedClaim:
     score = max(0.0, min(1.0, score))
 
     # Deterministic placement overrides model hints for conversational scaffolding.
-    if is_interaction and not is_main:
+    if claim.inferred and claim.facets.get("derivation_method") == "cross_claim_synthesis":
+        scope: ProjectionScope = "insights"
+    elif is_visual:
+        scope = "details"
+    elif conversation_departure:
+        scope = "interaction_archive"
+    elif is_interaction and not is_main:
         scope: ProjectionScope = "interaction_archive"
+    elif past_event_text:
+        scope = "timeline"
     elif is_timeline and not is_main:
         scope = "timeline"
     elif scope_hint == "interaction_archive":
@@ -274,7 +306,7 @@ def _select_main_claims(
     return selected, demoted
 
 
-def partition_claims(claims: list[MemoryClaim], *, main_claim_limit: int = 28) -> dict[ProjectionScope, list[ProjectedClaim]]:
+def partition_claims(claims: list[MemoryClaim], *, main_claim_limit: int = 18) -> dict[ProjectionScope, list[ProjectedClaim]]:
     projected = compact_display_claims([
         project_claim(claim) for claim in claims if claim.status == "active"
     ])
@@ -292,6 +324,10 @@ def partition_claims(claims: list[MemoryClaim], *, main_claim_limit: int = 28) -
         "details": sorted(
             [item for item in projected if item.scope == "details"] + demoted,
             key=lambda item: (item.bucket, item.date_key, item.claim.text.lower()),
+        ),
+        "insights": sorted(
+            (item for item in projected if item.scope == "insights"),
+            key=lambda item: (item.bucket, item.claim.text.lower()),
         ),
         "interaction_archive": sorted(
             (item for item in projected if item.scope == "interaction_archive"),
@@ -320,6 +356,9 @@ def compact_qualifiers(claim: MemoryClaim, *, include_date: bool = False) -> lis
                 qualifiers.append(f"{key}: {value}")
     if claim.inferred:
         qualifiers.append("inferred")
+        basis_ids = claim.facets.get("basis_claim_ids")
+        if isinstance(basis_ids, list) and basis_ids:
+            qualifiers.append(f"based on {len(basis_ids)} facts")
     return qualifiers
 
 
@@ -327,11 +366,14 @@ def compact_record_qualifiers(
     item: ProjectedClaim, *, include_date: bool = False
 ) -> list[str]:
     qualifiers = compact_qualifiers(item.claim, include_date=include_date)
-    if item.scope == "interaction_archive" and len(item.members) > 1:
-        dates = sorted({claim_date_key(claim) for claim in item.members})
-        qualifiers.append(f"repeated {len(item.members)} times")
-        if len(dates) > 1:
-            qualifiers.append(f"from {dates[0]} to {dates[-1]}")
+    source_ids = {
+        provenance.source_id
+        for claim in item.members
+        for provenance in claim.provenance
+        if provenance.source_id
+    }
+    if len(source_ids) > 1:
+        qualifiers.append(f"recorded in {len(source_ids)} sessions")
     return qualifiers
 
 

@@ -168,6 +168,7 @@ class MyceliumMemorySystem:
         self.mem: Mycelium | None = None
         self._encoded_batches = 0
         self._dream_runs = 0
+        self._compaction_runs = 0
         self._memory_construction_seconds = 0.0
         self._errors: list[dict[str, Any]] = []
         self._dream_failures: list[dict[str, Any]] = []
@@ -190,6 +191,7 @@ class MyceliumMemorySystem:
         self.mem.config.reconsolidation.check_on_load = self.reconsolidate
         self._encoded_batches = 0
         self._dream_runs = 0
+        self._compaction_runs = 0
         self._memory_construction_seconds = 0.0
         self._errors = []
         self._dream_failures = []
@@ -287,6 +289,14 @@ class MyceliumMemorySystem:
             except Exception as exc:
                 self._errors.append({"stage": "dream", "case_id": self.case_id, "error": str(exc)})
             self._memory_construction_seconds += time.perf_counter() - start
+        if self.mem is not None:
+            start = time.perf_counter()
+            try:
+                await self.mem.compact()
+                self._compaction_runs += 1
+            except Exception as exc:
+                self._errors.append({"stage": "compact", "case_id": self.case_id, "error": str(exc)})
+            self._memory_construction_seconds += time.perf_counter() - start
 
     def stats(self) -> dict[str, Any]:
         page_count = 0
@@ -299,6 +309,7 @@ class MyceliumMemorySystem:
             "system": self.name,
             "encoded_batches": self._encoded_batches,
             "dream_runs": self._dream_runs,
+            "compaction_runs": self._compaction_runs,
             "wiki_pages": page_count,
             "unconsolidated_logs": log_count,
             "memory_construction_seconds": self._memory_construction_seconds,

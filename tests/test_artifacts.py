@@ -180,6 +180,39 @@ def test_repair_rendering_includes_neighbor_context_but_marks_only_gap_as_target
     assert Encoder._is_direct_atomic_claim("The phrase is attributed to Shia LaBeouf.") is True
 
 
+def test_atomic_claim_requires_an_explicit_about_entity():
+    about = [{"entity": "Ava"}]
+
+    assert Encoder._has_explicit_subject("Ava shared a photo showing a blue room.", about)
+    assert not Encoder._has_explicit_subject("A photo shows a blue room.", about)
+    assert not Encoder._has_explicit_subject("Getting moments of joy is incredible.", about)
+
+
+def test_subjectless_model_paraphrase_is_attributed_to_its_single_source_speaker():
+    result = Encoder._attribute_subjectless_claim(
+        "A photo shows a blue room.", ["Ava"], [{"entity": "Ava"}]
+    )
+
+    assert result is not None
+    text, about = result
+    assert text == "Ava shared a photo showing a blue room."
+    assert Encoder._has_explicit_subject(text, about)
+
+
+def test_subjectless_visual_attribution_repairs_description_grammar_and_ids():
+    result = Encoder._attribute_subjectless_claim(
+        "A photo of a bookshelf contains many books, according to the image caption "
+        "for source-a12#seg-0027.",
+        ["Ava"],
+        [{"entity": "Ava"}],
+    )
+
+    assert result is not None
+    text, _ = result
+    assert text == "Ava shared a photo of a bookshelf containing many books."
+    assert "source-" not in text
+
+
 def test_benchmark_turns_are_split_for_atomic_coverage(tmp_path):
     encoder = Encoder(
         AsyncMock(),
@@ -468,3 +501,31 @@ def test_month_relative_time_preserves_month_precision():
 
     assert facets["normalized_date"] == "2023-03"
     assert facets["date_precision"] == "month"
+
+
+def test_year_relative_time_preserves_year_precision():
+    facets = normalize_temporal_facets(
+        {"when": "three years ago"}, "4:24 pm on 16 March, 2023"
+    )
+
+    assert facets["normalized_date"] == "2020"
+    assert facets["date_precision"] == "year"
+
+
+def test_reconciler_merges_identical_text_despite_kind_label_drift(tmp_path):
+    store = ArtifactStore(tmp_path / "artifacts")
+    first = MemoryClaim(
+        "first", "Ava prefers tea.", "preference", [{"entity": "Ava"}],
+        [ClaimProvenance("source-1", ["segment-1"])], "2024-01-01",
+    )
+    second = MemoryClaim(
+        "second", "Ava prefers tea.", "personal fact", [{"entity": "Ava"}],
+        [ClaimProvenance("source-2", ["segment-2"])], "2024-01-02",
+    )
+
+    reconciler = ClaimReconciler(store)
+    reconciler.reconcile(first)
+    merged = reconciler.reconcile(second)
+
+    assert merged.claim_id == "first"
+    assert {item.source_id for item in merged.provenance} == {"source-1", "source-2"}

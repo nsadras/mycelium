@@ -22,8 +22,15 @@ from mycelium.structured_outputs import (
     WikiRewriteOutput,
     PredictionErrorOutput,
     WikiAppendOutput,
+    DerivedClaimsOutput,
 )
-from mycelium.artifacts import ArtifactStore, MemoryClaim, parse_source_datetime
+from mycelium.artifacts import (
+    ArtifactStore,
+    ClaimProvenance,
+    ClaimReconciler,
+    MemoryClaim,
+    parse_source_datetime,
+)
 from mycelium.projection import (
     ProjectedClaim,
     compact_record_qualifiers,
@@ -617,6 +624,13 @@ class DreamProcess:
 
             page_type = self._page_type_for_slug(page.slug, page.tags)
             if self._uses_claim_evidence():
+                if self.config.dream.derived_insights_enabled and not dry_run:
+                    try:
+                        await self._refresh_derived_insights(page.slug)
+                    except Exception as exc:
+                        logger.warning(
+                            "Keeping existing derived insights for %s: %s", page.slug, exc
+                        )
                 claims = self._claims_for_projection(page.slug)
                 if not claims:
                     logger.info("Skipping claim compaction for %s: no assigned claims", page.slug)
@@ -922,41 +936,62 @@ class DreamProcess:
         return True
 
     def _identify_multi_party_claim_targets(self, evidence: list[EvidenceChunk]) -> list[dict]:
-        """Route social-conversation facts to stable speaker pages, not transient themes."""
+        """Route conversation facts to real participant pages, never synthetic speaker labels."""
         if self.artifacts is None:
             return []
         targets: dict[str, dict] = {}
         for chunk in evidence:
-            speaker = None
+            source = None
+            participant_names: dict[str, str] = {}
+            if chunk.source_id:
+                try:
+                    source = self.artifacts.get_source(chunk.source_id)
+                    for name in [
+                        *source.participants,
+                        *(segment.speaker for segment in source.segments if segment.speaker),
+                    ]:
+                        if name:
+                            participant_names.setdefault(name.strip().lower(), name.strip())
+                except FileNotFoundError:
+                    pass
+            speakers: set[str] = set()
             for claim_id in chunk.claim_ids:
                 try:
                     claim = self.artifacts.get_claim(claim_id)
                 except FileNotFoundError:
                     continue
-                speaker = next((prov.speaker for prov in claim.provenance if prov.speaker), None)
-                if not speaker:
-                    speaker = next((item.get("entity") for item in claim.about if item.get("entity")), None)
-                if speaker:
-                    break
-            if not speaker and chunk.source_id and chunk.segment_ids:
-                try:
-                    source = self.artifacts.get_source(chunk.source_id)
-                    wanted = set(chunk.segment_ids)
-                    speaker = next((seg.speaker for seg in source.segments if seg.segment_id in wanted and seg.speaker), None)
-                except FileNotFoundError:
-                    pass
-            if not speaker or speaker.strip().lower() in {"user", "assistant", "system", "unknown"}:
-                continue
-            slug = f"person-{_slugify(speaker)}"
-            target = targets.setdefault(slug, {
-                "page": slug,
-                "action": "update" if self.wiki.exists(slug) else "create",
-                "page_type": "entity", "log_entry_ids": [], "evidence_ids": [],
-            })
-            if chunk.entry_id not in target["log_entry_ids"]:
-                target["log_entry_ids"].append(chunk.entry_id)
-            if chunk.evidence_id not in target["evidence_ids"]:
-                target["evidence_ids"].append(chunk.evidence_id)
+                about_participants = {
+                    participant_names[str(item.get("entity", "")).strip().lower()]
+                    for item in claim.about
+                    if str(item.get("entity", "")).strip().lower() in participant_names
+                }
+                if about_participants:
+                    speakers.update(about_participants)
+                    continue
+                speakers.update(
+                    participant_names[prov.speaker.strip().lower()]
+                    for prov in claim.provenance
+                    if prov.speaker and prov.speaker.strip().lower() in participant_names
+                )
+            if not speakers and source is not None and chunk.segment_ids:
+                wanted = set(chunk.segment_ids)
+                speakers.update(
+                    segment.speaker for segment in source.segments
+                    if segment.segment_id in wanted and segment.speaker
+                )
+            for speaker in sorted(speakers):
+                if speaker.strip().lower() in {"user", "assistant", "system", "unknown"}:
+                    continue
+                slug = f"person-{_slugify(speaker)}"
+                target = targets.setdefault(slug, {
+                    "page": slug,
+                    "action": "update" if self.wiki.exists(slug) else "create",
+                    "page_type": "entity", "log_entry_ids": [], "evidence_ids": [],
+                })
+                if chunk.entry_id not in target["log_entry_ids"]:
+                    target["log_entry_ids"].append(chunk.entry_id)
+                if chunk.evidence_id not in target["evidence_ids"]:
+                    target["evidence_ids"].append(chunk.evidence_id)
         return list(targets.values())
 
     @staticmethod
@@ -1081,6 +1116,8 @@ class DreamProcess:
             child_links.append(f"- [[{page_slug}-timeline]]: dated events and changes")
         if projected["details"]:
             child_links.append(f"- [[{page_slug}-details]]: supporting durable facts")
+        if projected["insights"]:
+            child_links.append(f"- [[{page_slug}-insights]]: traceable derived conclusions")
         if projected["interaction_archive"]:
             child_links.append(f"- [[{page_slug}-interactions]]: conversational and relationship history")
         if child_links:
@@ -1107,6 +1144,7 @@ class DreamProcess:
             specs = []
             specs.extend(self._projection_shards(parent, "timeline", "Timeline", projected["timeline"]))
             specs.extend(self._projection_shards(parent, "details", "Detailed Facts", projected["details"]))
+            specs.extend(self._projection_shards(parent, "insights", "Derived Insights", projected["insights"]))
             specs.extend(self._projection_shards(parent, "interactions", "Interaction Archive", projected["interaction_archive"]))
             child_slugs = []
             for slug, title, content, items in specs:
@@ -1194,6 +1232,11 @@ class DreamProcess:
             grouped.setdefault(heading, []).append(item)
         shards: list[tuple[list[str], list[ProjectedClaim]]] = []
         lines = [f"# {parent.title}: {title_suffix}", "", f"Parent: [[{parent.slug}]]"]
+        if suffix == "insights":
+            lines.extend([
+                "",
+                "These conclusions are derived from multiple explicit memories; each remains traceable to its supporting claims.",
+            ])
         shard_items: list[ProjectedClaim] = []
         seen_text: set[str] = set()
         for heading in sorted(grouped):
@@ -1238,6 +1281,205 @@ class DreamProcess:
                 shard_lines[3:3] = ["", "Parts: " + " · ".join(f"[[{part}]]" for part in shard_slugs)]
             result.append((slug, title, "\n".join(shard_lines).strip(), included))
         return result
+
+    async def _refresh_derived_insights(self, page_slug: str) -> list[MemoryClaim]:
+        """Replace cross-claim conclusions only after a successful, grounded synthesis."""
+        if self.artifacts is None:
+            return []
+        page_claims = self.artifacts.claims_for_page(page_slug)
+        explicit = [claim for claim in page_claims if claim.status == "active" and not claim.inferred]
+        if len(explicit) < 2:
+            return []
+        allowed = {claim.claim_id: claim for claim in explicit}
+        lines = [self._render_derivation_claim(claim) for claim in sorted(
+            explicit, key=lambda item: (item.recorded_at, item.claim_id)
+        )]
+        batches: list[list[str]] = []
+        current: list[str] = []
+        current_chars = 0
+        for line in lines:
+            if current and current_chars + len(line) > 70000:
+                batches.append(current)
+                current = []
+                current_chars = 0
+            current.append(line)
+            current_chars += len(line) + 1
+        if current:
+            batches.append(current)
+
+        raw_candidates: list[dict] = []
+        for batch_index, batch in enumerate(batches, start=1):
+            batch_header = (
+                f"PARTIAL CLAIM BATCH {batch_index}/{len(batches)}. "
+                "Do not derive a total count from a partial batch.\n"
+                if len(batches) > 1 else ""
+            )
+            system, user = prompts.derived_claims_prompt(
+                page_slug, batch_header + "\n".join(batch)
+            )
+            response = await self.llm.call_structured(
+                system,
+                user,
+                DerivedClaimsOutput,
+                num_predict=4096,
+                dump_success=True,
+                debug_label=f"derived-insights-{page_slug}-batch-{batch_index}",
+            )
+            if not isinstance(response, dict):
+                raise ValueError("derived insight synthesis did not return an object")
+            raw_candidates.extend(
+                item for item in response.get("claims", []) if isinstance(item, dict)
+            )
+
+        reconciler = ClaimReconciler(self.artifacts)
+        refreshed: list[MemoryClaim] = []
+        for raw in raw_candidates:
+            text = " ".join(str(raw.get("text", "")).split())
+            inference_basis = " ".join(str(raw.get("inference_basis", "")).split())
+            supplied_basis_ids = [
+                *raw.get("basis_claim_ids", []),
+                *re.findall(r"\bclaim-[a-z0-9]+\b", inference_basis, re.I),
+            ]
+            basis_ids = list(dict.fromkeys(
+                claim_id for claim_id in supplied_basis_ids
+                if claim_id in allowed
+            ))
+            about = [item for item in raw.get("about", []) if isinstance(item, dict) and item.get("entity")]
+            if re.search(
+                r"\b(?:number of times|frequency of|mentioned the word|"
+                r"documented multiple instances|increas(?:e|ed|ing)|"
+                r"decreas(?:e|ed|ing)|upward trend|downward trend|"
+                r"has shown interest in multiple)\b",
+                text,
+                re.IGNORECASE,
+            ):
+                continue
+            if not text or not basis_ids or not inference_basis:
+                continue
+            basis = [allowed[claim_id] for claim_id in basis_ids]
+            count_language = re.search(
+                r"\b(?:at least|exactly|a total of|on \w+ distinct|"
+                r"multiple (?:dates|occasions|times))\b",
+                text,
+                re.IGNORECASE,
+            )
+            if count_language and not all(
+                claim.kind in {"event", "activity", "action", "achievement"}
+                and bool(claim.facets.get("normalized_date"))
+                for claim in basis
+            ):
+                continue
+            if not about:
+                candidate_entities = {
+                    str(item.get("entity", "")).strip()
+                    for claim in basis for item in claim.about if item.get("entity")
+                }
+                normalized_text_for_about = re.sub(
+                    r"[^a-z0-9]+", " ", text.lower()
+                ).strip()
+                normalized_candidate_entities = [
+                    (entity, re.sub(r"[^a-z0-9]+", " ", entity.lower()).strip())
+                    for entity in sorted(candidate_entities)
+                ]
+                about = [
+                    {"entity": entity}
+                    for entity, normalized_entity in normalized_candidate_entities
+                    if re.search(
+                        rf"(?:^|\s){re.escape(normalized_entity)}(?:\s|$)",
+                        normalized_text_for_about,
+                    )
+                ]
+            if not about:
+                continue
+            if len(basis_ids) == 1:
+                basis_facets = basis[0].facets
+                exact_temporal_math = (
+                    bool(basis_facets.get("duration"))
+                    and bool(basis_facets.get("observed_at"))
+                    and bool(re.search(r"\b(?:year|month|day|date|duration|apart)\b", inference_basis, re.I))
+                )
+                if not exact_temporal_math:
+                    continue
+            normalized_text = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+            normalized_entities = [
+                re.sub(r"[^a-z0-9]+", " ", str(item["entity"]).lower()).strip()
+                for item in about if str(item.get("entity", "")).strip()
+            ]
+            if not any(
+                re.search(rf"(?:^|\s){re.escape(entity)}(?:\s|$)", normalized_text)
+                for entity in normalized_entities
+            ):
+                continue
+            if any(claim_id in text for claim_id in basis_ids):
+                continue
+            provenance: list[ClaimProvenance] = []
+            seen_provenance: set[tuple[str, tuple[str, ...]]] = set()
+            for claim in basis:
+                for item in claim.provenance:
+                    key = (item.source_id, tuple(item.segment_ids))
+                    if key in seen_provenance:
+                        continue
+                    seen_provenance.add(key)
+                    provenance.append(ClaimProvenance(
+                        source_id=item.source_id,
+                        segment_ids=list(item.segment_ids),
+                        raw_log_entry_id=item.raw_log_entry_id,
+                        speaker=item.speaker,
+                        evidence_type="inferred",
+                    ))
+            facets = dict(raw.get("facets", {}) or {})
+            facets.update({
+                "inference_basis": inference_basis,
+                "basis_claim_ids": basis_ids,
+                "derivation_method": "cross_claim_synthesis",
+            })
+            incoming = MemoryClaim(
+                claim_id=f"claim-{uuid.uuid4().hex[:12]}",
+                text=text,
+                kind=str(raw.get("kind") or "derived insight").strip().lower(),
+                about=about,
+                provenance=provenance,
+                recorded_at=max(claim.recorded_at for claim in basis),
+                confidence=max(0.0, min(0.7, float(raw.get("confidence", 0.6)))),
+                inferred=True,
+                facets=facets,
+                page_slugs=[page_slug],
+                salience=0.65,
+                display_scope="details",
+            )
+            canonical = reconciler.reconcile(incoming)
+            if page_slug not in canonical.page_slugs:
+                canonical.page_slugs.append(page_slug)
+                self.artifacts.save_claim(canonical)
+            refreshed.append(canonical)
+
+        refreshed_ids = {claim.claim_id for claim in refreshed}
+        for claim in page_claims:
+            if (
+                claim.status == "active"
+                and claim.inferred
+                and claim.facets.get("derivation_method") == "cross_claim_synthesis"
+                and claim.claim_id not in refreshed_ids
+            ):
+                claim.status = "superseded"
+                self.artifacts.save_claim(claim)
+        return refreshed
+
+    @staticmethod
+    def _render_derivation_claim(claim: MemoryClaim) -> str:
+        useful_facet_keys = (
+            "normalized_date", "date_precision", "when", "observed_at",
+            "duration", "quantity", "location", "object", "reason",
+        )
+        useful_facets = {
+            key: claim.facets[key] for key in useful_facet_keys
+            if key in claim.facets and claim.facets[key] not in (None, "", [], {})
+        }
+        facet_text = (
+            f"; facets={json.dumps(useful_facets, ensure_ascii=False, sort_keys=True)}"
+            if useful_facets else ""
+        )
+        return f"[{claim.claim_id}] recorded={claim.recorded_at}{facet_text}; {claim.text}"
 
     def _evidence_batches(
         self,

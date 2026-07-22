@@ -35,9 +35,10 @@ class DreamConfig:
     conflict_policy: str = 'override'
     max_pages_per_run: int = 20
     evidence_mode: str = 'hybrid'
-    main_page_claim_limit: int = 28
-    projection_page_max_chars: int = 18000
-    projection_page_max_records: int = 80
+    main_page_claim_limit: int = 18
+    projection_page_max_chars: int = 14000
+    projection_page_max_records: int = 60
+    derived_insights_enabled: bool = True
 
 @dataclass
 class DecayConfig:
@@ -106,9 +107,10 @@ class Config:
             conflict_policy=dream_data.get('conflict_policy', 'override'),
             max_pages_per_run=dream_data.get('max_pages_per_run', 20),
             evidence_mode=dream_data.get('evidence_mode', 'hybrid'),
-            main_page_claim_limit=int(dream_data.get('main_page_claim_limit', 28)),
-            projection_page_max_chars=int(dream_data.get('projection_page_max_chars', 18000)),
-            projection_page_max_records=int(dream_data.get('projection_page_max_records', 80)),
+            main_page_claim_limit=int(dream_data.get('main_page_claim_limit', 18)),
+            projection_page_max_chars=int(dream_data.get('projection_page_max_chars', 14000)),
+            projection_page_max_records=int(dream_data.get('projection_page_max_records', 60)),
+            derived_insights_enabled=bool(dream_data.get('derived_insights_enabled', True)),
         )
         
         decay_data = data.get('decay', {})

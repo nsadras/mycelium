@@ -432,7 +432,6 @@ class Encoder:
             ))
             if not segment_ids:
                 continue
-            covered_ids.update(segment_ids)
             source_speakers = list(dict.fromkeys(
                 segment.speaker for segment in source.segments
                 if segment.segment_id in segment_ids and segment.speaker
@@ -440,7 +439,17 @@ class Encoder:
             about = [item for item in raw.get("about", []) if isinstance(item, dict)]
             if not any(item.get("entity") for item in about) and len(source_speakers) == 1:
                 about = [{"entity": source_speakers[0], "role": "speaker"}]
+            if not self._has_explicit_subject(claim_text, about):
+                attributed = self._attribute_subjectless_claim(
+                    claim_text, source_speakers, about
+                )
+                if attributed is None:
+                    continue
+                claim_text, about = attributed
+            covered_ids.update(segment_ids)
             facets = dict(raw.get("facets", {}) or {})
+            if claim_text != str(raw["text"]).strip():
+                facets["attribution_normalized"] = True
             inferred = (
                 raw.get("evidence_type") == "inferred"
                 and bool(str(facets.get("inference_basis") or "").strip())
@@ -469,6 +478,80 @@ class Encoder:
             if canonical.claim_id not in claim_ids:
                 claim_ids.append(canonical.claim_id)
         return covered_ids
+
+    @staticmethod
+    def _has_explicit_subject(text: str, about: list[dict[str, Any]]) -> bool:
+        """Require standalone claims to name at least one entity they are about."""
+        normalized = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+        entities = [
+            re.sub(r"[^a-z0-9]+", " ", str(item.get("entity", "")).lower()).strip()
+            for item in about
+            if item.get("entity")
+        ]
+        return bool(entities) and any(
+            re.search(rf"(?:^|\s){re.escape(entity)}(?:\s|$)", normalized)
+            for entity in entities if entity
+        )
+
+    @classmethod
+    def _attribute_subjectless_claim(
+        cls,
+        text: str,
+        source_speakers: list[str],
+        about: list[dict[str, Any]],
+    ) -> tuple[str, list[dict[str, Any]]] | None:
+        """Make an otherwise useful model paraphrase standalone without guessing its subject."""
+        if len(source_speakers) != 1:
+            return None
+        speaker = source_speakers[0].strip()
+        if not speaker:
+            return None
+        normalized_about = list(about)
+        if not any(
+            str(item.get("entity", "")).strip().lower() == speaker.lower()
+            for item in normalized_about
+        ):
+            normalized_about.append({"entity": speaker, "role": "speaker"})
+        stripped = " ".join(text.split()).strip()
+        stripped = re.sub(
+            r",?\s+according to (?:the )?image caption(?:\s+for\s+source-[a-z0-9]+#seg-\d+)?\.?$",
+            ".",
+            stripped,
+            flags=re.I,
+        )
+        stripped = re.sub(
+            r"\s+for\s+source-[a-z0-9]+#seg-\d+\b", "", stripped, flags=re.I
+        )
+        visual = re.match(
+            r"^(?:a|the)\s+(photo|image|image caption)\s+(shows|describes)\s+(.+)$",
+            stripped,
+            re.I,
+        )
+        if visual:
+            medium = visual.group(1).lower()
+            article = "an" if medium.startswith("image") else "a"
+            verb = "showing" if visual.group(2).lower() == "shows" else "describing"
+            attributed = f"{speaker} shared {article} {medium} {verb} {visual.group(3)}"
+        elif visual_of := re.match(
+            r"^(?:a|the)\s+(photo|image)\s+of\s+(.+?)(?:\s+is present)?\.?$",
+            stripped,
+            re.I,
+        ):
+            medium = visual_of.group(1).lower()
+            article = "an" if medium == "image" else "a"
+            subject = re.sub(
+                r"\s+contains\s+", " containing ", visual_of.group(2), flags=re.I
+            )
+            attributed = f"{speaker} shared {article} {medium} of {subject}"
+        elif re.match(r"^(?:a|the)\s+(?:photo|image|image caption)\b", stripped, re.I):
+            attributed = f"{speaker} shared {stripped[0].lower()}{stripped[1:]}"
+        else:
+            attributed = f"{speaker} reported that {stripped[0].lower()}{stripped[1:]}"
+        if text.rstrip().endswith((".", "!", "?")) and not attributed.endswith((".", "!", "?")):
+            attributed += text.rstrip()[-1]
+        if not cls._has_explicit_subject(attributed, normalized_about):
+            return None
+        return attributed, normalized_about
 
     async def encode(
         self,

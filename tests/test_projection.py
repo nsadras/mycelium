@@ -25,7 +25,19 @@ from mycelium.projection import (
 from mycelium.store import WikiStore
 
 
-def claim(claim_id: str, text: str, kind: str, *, salience: float = 0.5, facets=None):
+def claim(
+    claim_id: str,
+    text: str,
+    kind: str,
+    *,
+    salience: float = 0.5,
+    facets=None,
+    claim_type: str = "unknown",
+    evidence_modality: str = "unknown",
+    temporal_status: str = "unknown",
+    predicate: str | None = None,
+    derivation_operation: str | None = None,
+):
     return MemoryClaim(
         claim_id=claim_id,
         text=text,
@@ -35,6 +47,12 @@ def claim(claim_id: str, text: str, kind: str, *, salience: float = 0.5, facets=
         recorded_at="2024-01-10T12:00:00",
         salience=salience,
         facets=facets or {"observed_at": "4:24 pm on 10 January, 2024"},
+        claim_type=claim_type,
+        evidence_modality=evidence_modality,
+        temporal_status=temporal_status,
+        predicate=predicate,
+        derivation_operation=derivation_operation,
+        schema_version=1,
     )
 
 
@@ -63,6 +81,7 @@ def test_projection_keeps_traceable_inferences_in_separate_insights_scope():
             "basis_claim_ids": ["started", "finished"],
             "inference_basis": "The recorded start and finish dates are four months apart.",
         },
+        derivation_operation="temporal_arithmetic",
     )
     item.inferred = True
 
@@ -85,8 +104,11 @@ def test_projection_reports_repeated_support_as_sessions_not_event_count():
     assert all("times" not in qualifier for qualifier in qualifiers)
 
 
-def test_projection_routes_textual_speech_acts_to_interactions():
-    item = claim("question", "Ava asked Ben about his pets.", "fact")
+def test_projection_routes_interaction_from_semantics_not_wording():
+    item = claim(
+        "question", "Ava and Ben discussed his pets.", "fact",
+        claim_type="interaction", predicate="discussed_with",
+    )
 
     projected = partition_claims([item])
 
@@ -95,8 +117,11 @@ def test_projection_routes_textual_speech_acts_to_interactions():
     ]
 
 
-def test_projection_routes_visual_text_to_details_despite_kind_label():
-    item = claim("photo", "Ava shared a photo of her new desk.", "fact")
+def test_projection_routes_visual_evidence_to_details_despite_kind_and_wording():
+    item = claim(
+        "photo", "Ava's newly arranged desk has a blue surface.", "fact",
+        claim_type="state", evidence_modality="visual", predicate="has_surface_color",
+    )
 
     projected = partition_claims([item])
 
@@ -104,8 +129,11 @@ def test_projection_routes_visual_text_to_details_despite_kind_label():
     assert not projected["main"]
 
 
-def test_projection_routes_departure_to_interactions_despite_plan_label():
-    item = claim("departure", "Ava left.", "plan")
+def test_projection_routes_conversational_departure_by_claim_type():
+    item = claim(
+        "departure", "Ava ended the conversation.", "plan",
+        claim_type="interaction", predicate="ended_conversation", temporal_status="past",
+    )
 
     projected = partition_claims([item])
 
@@ -115,12 +143,13 @@ def test_projection_routes_departure_to_interactions_despite_plan_label():
     assert not projected["main"]
 
 
-def test_projection_routes_dated_past_action_to_timeline_despite_main_kind():
+def test_projection_routes_dated_event_to_timeline_despite_main_kind():
     item = claim(
         "purchase",
         "Ava bought a book three days ago.",
         "plan",
         facets={"normalized_date": "2024-01-07", "date_precision": "day"},
+        claim_type="event", predicate="purchased", temporal_status="past",
     )
 
     projected = partition_claims([item])
@@ -129,8 +158,11 @@ def test_projection_routes_dated_past_action_to_timeline_despite_main_kind():
     assert not projected["main"]
 
 
-def test_projection_routes_undated_past_action_to_timeline_despite_main_kind():
-    item = claim("purchase", "Ava bought a book.", "action item")
+def test_projection_routes_undated_event_from_semantics_not_past_tense():
+    item = claim(
+        "purchase", "A book purchase by Ava occurred.", "action item",
+        claim_type="event", predicate="purchased", temporal_status="past",
+    )
 
     projected = partition_claims([item])
 
@@ -138,19 +170,89 @@ def test_projection_routes_undated_past_action_to_timeline_despite_main_kind():
     assert not projected["main"]
 
 
-def test_projection_routes_any_photographic_reference_to_details():
-    item = claim("photo", "Ava possesses a photo from childhood.", "biographical fact")
+def test_projection_does_not_treat_a_photo_word_as_visual_evidence():
+    item = claim(
+        "photo", "Ava stores family photos in the attic.", "biographical fact",
+        claim_type="state", evidence_modality="speech", predicate="stores",
+    )
 
     projected = partition_claims([item])
 
-    assert [value.claim.claim_id for value in projected["details"]] == ["photo"]
-    assert not projected["main"]
+    assert [value.claim.claim_id for value in projected["main"]] == ["photo"]
+    assert not projected["details"]
+
+
+def test_projection_is_invariant_to_event_paraphrasing():
+    items = [
+        claim(
+            "plain", "Ava bought a book.", "custom subtype",
+            claim_type="event", predicate="purchased", temporal_status="past",
+        ),
+        claim(
+            "nominal", "A book purchase by Ava occurred.", "another subtype",
+            claim_type="event", predicate="purchased", temporal_status="past",
+        ),
+    ]
+
+    assert [project_claim(item).scope for item in items] == ["timeline", "timeline"]
+
+
+def test_derived_basis_validation_uses_semantics_not_conclusion_phrases():
+    dated_events = []
+    for index, text in enumerate((
+        "Ava attended once.",
+        "An attendance by Ava occurred.",
+        "Ava was present at another gathering.",
+    ), start=1):
+        item = claim(
+            f"event-{index}", text, "arbitrary",
+            claim_type="event", predicate="attended", temporal_status="past",
+            facets={"normalized_date": f"2024-01-0{index}"},
+        )
+        item.provenance = [ClaimProvenance(
+            f"source-{index}", [f"source-{index}#seg-0001"]
+        )]
+        dated_events.append(item)
+
+    assert DreamProcess._valid_derivation_basis("event_count", dated_events[:2])
+    assert DreamProcess._valid_derivation_basis("recurring_pattern", dated_events)
+
+    mention = claim(
+        "mention", "Ava mentioned three events.", "event",
+        claim_type="observation", predicate="mentioned", temporal_status="past",
+        facets={"normalized_date": "2024-01-04"},
+    )
+    assert not DreamProcess._valid_derivation_basis(
+        "event_count", [dated_events[0], mention]
+    )
+
+
+def test_cross_fact_derivation_requires_multiple_structured_relations():
+    employer = claim(
+        "employer", "Ava works at Acme.", "fact",
+        claim_type="state", predicate="works_at", temporal_status="current",
+    )
+    role = claim(
+        "role", "Ava is Acme's designer.", "fact",
+        claim_type="identity", predicate="has_role", temporal_status="current",
+    )
+    duplicate_relation = claim(
+        "employer-2", "Acme employs Ava.", "fact",
+        claim_type="state", predicate="works_at", temporal_status="current",
+    )
+
+    assert DreamProcess._valid_derivation_basis(
+        "cross_fact_relationship", [employer, role]
+    )
+    assert not DreamProcess._valid_derivation_basis(
+        "cross_fact_relationship", [employer, duplicate_relation]
+    )
 
 
 def test_projection_demotes_visual_records_from_main_page():
     item = claim(
         "photo", "Ava shared a photo showing a blue room.", "image description",
-        salience=1.0,
+        salience=1.0, claim_type="observation", evidence_modality="visual",
     )
     item.confidence = 1.0
 
@@ -420,6 +522,9 @@ async def test_claim_compaction_persists_grounded_derived_insights(tmp_path):
         {"claims": [{
             "text": "Ava completed the project in four months.",
             "kind": "derived duration",
+            "predicate": "completed_in_duration",
+            "temporal_status": "past",
+            "derivation_operation": "temporal_arithmetic",
             "inference_basis": (
                 "claim-started and claim-finished place the endpoints four months apart."
             ),
@@ -438,6 +543,8 @@ async def test_claim_compaction_persists_grounded_derived_insights(tmp_path):
     inferred = [item for item in artifacts.list_claims() if item.inferred]
     assert len(inferred) == 1
     assert inferred[0].confidence == 0.7
+    assert inferred[0].derivation_operation == "temporal_arithmetic"
+    assert inferred[0].evidence_modality == "inference"
     assert inferred[0].facets["basis_claim_ids"] == [
         "claim-started", "claim-finished"
     ]
@@ -476,6 +583,7 @@ async def test_claim_compaction_rejects_mention_counts_and_unsupported_trends(tm
             {
                 "text": "Ava got tattoos on at least two distinct dates.",
                 "kind": "derived count",
+                "derivation_operation": "event_count",
                 "basis_claim_ids": ["claim-first", "claim-second"],
                 "about": [{"entity": "Ava"}],
                 "inference_basis": "Two claims refer to tattoos.",
@@ -484,6 +592,7 @@ async def test_claim_compaction_rejects_mention_counts_and_unsupported_trends(tm
             {
                 "text": "Ava has shown increasing interest in tattoos.",
                 "kind": "derived pattern",
+                "derivation_operation": "recurring_pattern",
                 "basis_claim_ids": ["claim-first", "claim-second"],
                 "about": [{"entity": "Ava"}],
                 "inference_basis": "Two claims refer to tattoos.",

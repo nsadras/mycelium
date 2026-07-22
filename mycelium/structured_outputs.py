@@ -21,6 +21,18 @@ class ExtractedEntityOutput(BaseModel):
 class ExtractedClaimOutput(BaseModel):
     text: str
     kind: str = "fact"
+    claim_type: Literal[
+        "identity", "state", "event", "preference", "plan", "belief",
+        "relationship", "decision", "commitment", "interaction", "observation",
+        "unknown",
+    ] = "unknown"
+    predicate: str | None = None
+    evidence_modality: Literal[
+        "speech", "visual", "tool", "inference", "mixed", "unknown"
+    ] = "speech"
+    temporal_status: Literal[
+        "past", "current", "future", "recurring", "atemporal", "unknown"
+    ] = "unknown"
     about: list[ExtractedEntityOutput] = Field(default_factory=list, max_length=12)
     segment_ids: list[str] = Field(default_factory=list, max_length=32)
     speaker: str | None = None
@@ -39,9 +51,17 @@ class ExtractedEpisodeOutput(BaseModel):
 class DerivedClaimOutput(BaseModel):
     text: str
     kind: str = "derived insight"
+    predicate: str | None = None
+    temporal_status: Literal[
+        "past", "current", "future", "recurring", "atemporal", "unknown"
+    ] = "unknown"
     about: list[ExtractedEntityOutput] = Field(default_factory=list, max_length=12)
     basis_claim_ids: list[str] = Field(default_factory=list, min_length=1, max_length=12)
     inference_basis: str
+    derivation_operation: Literal[
+        "temporal_arithmetic", "event_count", "recurring_pattern",
+        "cross_fact_relationship",
+    ]
     confidence: float = 0.6
     facets: dict = Field(default_factory=dict)
 

@@ -439,9 +439,10 @@ class Encoder:
             about = [item for item in raw.get("about", []) if isinstance(item, dict)]
             if not any(item.get("entity") for item in about) and len(source_speakers) == 1:
                 about = [{"entity": source_speakers[0], "role": "speaker"}]
+            raw_modality = str(raw.get("evidence_modality") or "unknown").strip().lower()
             if not self._has_explicit_subject(claim_text, about):
                 attributed = self._attribute_subjectless_claim(
-                    claim_text, source_speakers, about
+                    claim_text, source_speakers, about, raw_modality
                 )
                 if attributed is None:
                     continue
@@ -454,6 +455,11 @@ class Encoder:
                 raw.get("evidence_type") == "inferred"
                 and bool(str(facets.get("inference_basis") or "").strip())
             )
+            evidence_modality = raw_modality
+            if inferred:
+                evidence_modality = "inference"
+            elif evidence_modality == "inference":
+                evidence_modality = "speech"
             claim = MemoryClaim(
                 claim_id=f"claim-{uuid.uuid4().hex[:12]}",
                 text=claim_text,
@@ -473,6 +479,10 @@ class Encoder:
                 facets=normalize_temporal_facets(
                     facets, source.occurred_at, claim_text
                 ),
+                claim_type=str(raw.get("claim_type") or "unknown"),
+                predicate=str(raw["predicate"]) if raw.get("predicate") else None,
+                evidence_modality=evidence_modality,
+                temporal_status=str(raw.get("temporal_status") or "unknown"),
             )
             canonical = reconciler.reconcile(claim)
             if canonical.claim_id not in claim_ids:
@@ -499,6 +509,7 @@ class Encoder:
         text: str,
         source_speakers: list[str],
         about: list[dict[str, Any]],
+        evidence_modality: str = "unknown",
     ) -> tuple[str, list[dict[str, Any]]] | None:
         """Make an otherwise useful model paraphrase standalone without guessing its subject."""
         if len(source_speakers) != 1:
@@ -522,29 +533,31 @@ class Encoder:
         stripped = re.sub(
             r"\s+for\s+source-[a-z0-9]+#seg-\d+\b", "", stripped, flags=re.I
         )
-        visual = re.match(
-            r"^(?:a|the)\s+(photo|image|image caption)\s+(shows|describes)\s+(.+)$",
-            stripped,
-            re.I,
-        )
-        if visual:
-            medium = visual.group(1).lower()
-            article = "an" if medium.startswith("image") else "a"
-            verb = "showing" if visual.group(2).lower() == "shows" else "describing"
-            attributed = f"{speaker} shared {article} {medium} {verb} {visual.group(3)}"
-        elif visual_of := re.match(
-            r"^(?:a|the)\s+(photo|image)\s+of\s+(.+?)(?:\s+is present)?\.?$",
-            stripped,
-            re.I,
-        ):
-            medium = visual_of.group(1).lower()
-            article = "an" if medium == "image" else "a"
-            subject = re.sub(
-                r"\s+contains\s+", " containing ", visual_of.group(2), flags=re.I
+        if evidence_modality == "visual":
+            visual = re.match(
+                r"^(?:a|the)\s+(photo|image|image caption)\s+(shows|describes)\s+(.+)$",
+                stripped,
+                re.I,
             )
-            attributed = f"{speaker} shared {article} {medium} of {subject}"
-        elif re.match(r"^(?:a|the)\s+(?:photo|image|image caption)\b", stripped, re.I):
-            attributed = f"{speaker} shared {stripped[0].lower()}{stripped[1:]}"
+            visual_of = re.match(
+                r"^(?:a|the)\s+(photo|image)\s+of\s+(.+?)(?:\s+is present)?\.?$",
+                stripped,
+                re.I,
+            )
+            if visual:
+                medium = visual.group(1).lower()
+                article = "an" if medium.startswith("image") else "a"
+                verb = "showing" if visual.group(2).lower() == "shows" else "describing"
+                attributed = f"{speaker} shared {article} {medium} {verb} {visual.group(3)}"
+            elif visual_of:
+                medium = visual_of.group(1).lower()
+                article = "an" if medium == "image" else "a"
+                subject = re.sub(
+                    r"\s+contains\s+", " containing ", visual_of.group(2), flags=re.I
+                )
+                attributed = f"{speaker} shared {article} {medium} of {subject}"
+            else:
+                attributed = f"{speaker} shared visual evidence describing {stripped[0].lower()}{stripped[1:]}"
         else:
             attributed = f"{speaker} reported that {stripped[0].lower()}{stripped[1:]}"
         if text.rstrip().endswith((".", "!", "?")) and not attributed.endswith((".", "!", "?")):

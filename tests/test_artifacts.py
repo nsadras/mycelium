@@ -24,6 +24,8 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
         "claims": [
             {
                 "text": "Ava prefers tea.", "kind": "preference",
+                "claim_type": "preference", "predicate": "prefers",
+                "evidence_modality": "speech", "temporal_status": "atemporal",
                 "about": [{"entity": "Ava", "role": "person"}],
                 "segment_ids": ["source-fixed-later"],
                 "confidence": 0.9, "facets": {"object": "tea"},
@@ -52,7 +54,72 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
     assert source.segments[0].content == "I prefer tea."
     assert episode.extraction_status == "complete"
     assert claim.provenance[0].segment_ids == [source.segments[0].segment_id]
+    assert claim.claim_type == "preference"
+    assert claim.predicate == "prefers"
+    assert claim.evidence_modality == "speech"
+    assert claim.temporal_status == "atemporal"
     assert artifacts.coverage_report()["segment_coverage"] == 1.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_type", "transcript", "text", "claim_type", "predicate", "temporal_status"),
+    [
+        (
+            "agent_conversation", "USER: Please avoid meetings before 10am.",
+            "Nitin prefers meetings at or after 10am.", "preference", "prefers_meeting_time",
+            "recurring",
+        ),
+        (
+            "meeting_transcript", "[M1] (2024-01-10) Ava: I will send the report Friday.",
+            "Ava committed to sending the report Friday.", "commitment", "send_report",
+            "future",
+        ),
+    ],
+)
+async def test_encoder_persists_general_semantics_across_source_types(
+    tmp_path, source_type, transcript, text, claim_type, predicate, temporal_status
+):
+    llm = AsyncMock()
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    encoder = Encoder(
+        llm, WikiStore(tmp_path / "wiki"), LogStore(tmp_path / "logs"),
+        Config.defaults(), artifacts,
+    )
+
+    async def response(system, user, output_type, **kwargs):
+        segment_id = next(
+            part.split("]", 1)[0]
+            for part in user.split("[")[1:]
+            if part.startswith("source-")
+        )
+        return {
+            "summary": "",
+            "claims": [{
+                "text": text,
+                "kind": "open subtype",
+                "claim_type": claim_type,
+                "predicate": predicate,
+                "evidence_modality": "speech",
+                "temporal_status": temporal_status,
+                "about": [{"entity": text.split()[0]}],
+                "segment_ids": [segment_id],
+                "confidence": 0.9,
+                "facets": {},
+            }],
+            "ignored_segment_ids": [],
+        }
+
+    llm.call_structured.side_effect = response
+    await encoder.encode_session(
+        transcript, "session-1", source_type=source_type, occurred_at="2024-01-10"
+    )
+
+    stored = artifacts.list_claims()[0]
+    assert stored.claim_type == claim_type
+    assert stored.predicate == predicate
+    assert stored.evidence_modality == "speech"
+    assert stored.temporal_status == temporal_status
 
 
 @pytest.mark.asyncio
@@ -190,7 +257,7 @@ def test_atomic_claim_requires_an_explicit_about_entity():
 
 def test_subjectless_model_paraphrase_is_attributed_to_its_single_source_speaker():
     result = Encoder._attribute_subjectless_claim(
-        "A photo shows a blue room.", ["Ava"], [{"entity": "Ava"}]
+        "A photo shows a blue room.", ["Ava"], [{"entity": "Ava"}], "visual"
     )
 
     assert result is not None
@@ -205,6 +272,7 @@ def test_subjectless_visual_attribution_repairs_description_grammar_and_ids():
         "for source-a12#seg-0027.",
         ["Ava"],
         [{"entity": "Ava"}],
+        "visual",
     )
 
     assert result is not None
@@ -476,6 +544,25 @@ def test_reconciler_merges_duplicates_and_supersedes_slots(tmp_path):
     assert replacement.links[0]["relation"] == "supersedes"
 
 
+def test_semantic_envelope_migrates_legacy_kinds_without_classifying_new_prose():
+    provenance = [ClaimProvenance("source-1", ["source-1#seg-0001"])]
+    legacy = MemoryClaim(
+        "legacy", "Any wording at all.", "action_item", [{"entity": "Ava"}],
+        provenance, "2024-01-01", schema_version=1,
+    )
+    modern_unknown = MemoryClaim(
+        "modern", "Ava bought a book.", "event", [{"entity": "Ava"}],
+        provenance, "2024-01-01",
+    )
+
+    assert legacy.claim_type == "commitment"
+    assert legacy.evidence_modality == "speech"
+    assert legacy.temporal_status == "future"
+    assert modern_unknown.claim_type == "unknown"
+    assert modern_unknown.evidence_modality == "unknown"
+    assert modern_unknown.temporal_status == "unknown"
+
+
 def test_locomo_style_timestamp_anchors_relative_dates():
     facets = normalize_temporal_facets(
         {"when": "yesterday"}, "4:24 pm on 16 March, 2023"
@@ -521,6 +608,54 @@ def test_reconciler_merges_identical_text_despite_kind_label_drift(tmp_path):
     second = MemoryClaim(
         "second", "Ava prefers tea.", "personal fact", [{"entity": "Ava"}],
         [ClaimProvenance("source-2", ["segment-2"])], "2024-01-02",
+    )
+
+    reconciler = ClaimReconciler(store)
+    reconciler.reconcile(first)
+    merged = reconciler.reconcile(second)
+
+    assert merged.claim_id == "first"
+    assert {item.source_id for item in merged.provenance} == {"source-1", "source-2"}
+
+
+def test_reconciler_upgrades_legacy_semantics_from_structured_duplicate(tmp_path):
+    store = ArtifactStore(tmp_path / "artifacts")
+    legacy = MemoryClaim(
+        "legacy", "Ava will send the report.", "action_item", [{"entity": "Ava"}],
+        [ClaimProvenance("source-1", ["segment-1"])], "2024-01-01",
+        schema_version=1,
+    )
+    structured = MemoryClaim(
+        "structured", "Ava will send the report.", "open subtype", [{"entity": "Ava"}],
+        [ClaimProvenance("source-2", ["segment-2"])], "2024-01-02",
+        claim_type="commitment", predicate="send_report", evidence_modality="speech",
+        temporal_status="future",
+    )
+
+    reconciler = ClaimReconciler(store)
+    reconciler.reconcile(legacy)
+    merged = reconciler.reconcile(structured)
+
+    assert merged.claim_id == "legacy"
+    assert merged.schema_version == 2
+    assert merged.claim_type == "commitment"
+    assert merged.predicate == "send_report"
+    assert merged.temporal_status == "future"
+
+
+def test_reconciler_uses_structured_relation_across_open_kind_drift(tmp_path):
+    store = ArtifactStore(tmp_path / "artifacts")
+    first = MemoryClaim(
+        "first", "Ava prefers quiet morning meetings.", "personal preference",
+        [{"entity": "Ava"}], [ClaimProvenance("source-1", ["segment-1"])],
+        "2024-01-01", claim_type="preference", predicate="prefers_meeting_time",
+        evidence_modality="speech", temporal_status="recurring",
+    )
+    second = MemoryClaim(
+        "second", "Ava prefers quiet morning work meetings.", "schedule constraint",
+        [{"entity": "Ava"}], [ClaimProvenance("source-2", ["segment-2"])],
+        "2024-01-02", claim_type="preference", predicate="prefers_meeting_time",
+        evidence_modality="speech", temporal_status="recurring",
     )
 
     reconciler = ClaimReconciler(store)

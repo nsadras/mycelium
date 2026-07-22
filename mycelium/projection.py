@@ -11,31 +11,24 @@ from mycelium.artifacts import MemoryClaim, parse_source_datetime
 
 ProjectionScope = Literal["main", "timeline", "details", "insights", "interaction_archive"]
 
-INTERACTION_KINDS = {
-    "acknowledgement", "acknowledgment", "compliment", "encouragement",
-    "farewell", "greeting", "gratitude", "reaction", "reinforcement",
-    "sentiment", "support", "interaction", "question", "inquiry",
+CLAIM_TYPE_BUCKETS = {
+    "identity": "Identity & Background",
+    "state": "Current State",
+    "event": "Activities & Experiences",
+    "preference": "Preferences",
+    "plan": "Goals & Plans",
+    "belief": "Beliefs & Opinions",
+    "relationship": "Relationships",
+    "decision": "Goals & Plans",
+    "commitment": "Goals & Plans",
+    "interaction": "Interactions",
+    "observation": "Supporting Observations",
+    "unknown": "Other Durable Facts",
 }
-TIMELINE_KINDS = {
-    "event", "activity", "action", "achievement", "experience", "change",
-    "status update", "status change", "purchase", "sharing event",
+MAIN_CLAIM_TYPES = {
+    "identity", "state", "preference", "plan", "belief", "relationship",
+    "decision", "commitment",
 }
-MAIN_KINDS = {
-    "biographical fact", "preference", "relationship", "goal", "decision",
-    "commitment", "plan", "action item", "belief", "current state", "status",
-}
-
-BUCKET_RULES = (
-    ("Identity & Background", {"biographical fact", "identity", "background"}),
-    ("Preferences", {"preference", "interest"}),
-    ("Relationships", {"relationship"}),
-    ("Goals & Plans", {"goal", "plan", "commitment", "action item", "decision", "intent"}),
-    ("Current State", {"current state", "status", "state", "change"}),
-    ("Beliefs & Opinions", {"belief", "opinion", "value"}),
-    ("Activities & Experiences", {"activity", "experience", "achievement", "event", "action"}),
-    ("Visual References", {"image description", "image caption", "visual", "photo description"}),
-    ("Derived Insights", {"derived insight", "derived pattern", "derived count", "derived duration"}),
-)
 
 
 @dataclass(frozen=True)
@@ -56,16 +49,12 @@ class ProjectedClaim:
         return tuple(claim.claim_id for claim in self.members)
 
 
-def normalized_kind(claim: MemoryClaim) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", claim.kind.lower()).strip()
-
-
 def presentation_bucket(claim: MemoryClaim) -> str:
-    kind = normalized_kind(claim)
-    for label, terms in BUCKET_RULES:
-        if any(term in kind for term in terms):
-            return label
-    return "Other Durable Facts"
+    if claim.inferred and claim.derivation_operation:
+        return "Derived Insights"
+    if claim.evidence_modality == "visual":
+        return "Visual References"
+    return CLAIM_TYPE_BUCKETS.get(claim.claim_type, "Other Durable Facts")
 
 
 def claim_date_key(claim: MemoryClaim) -> str:
@@ -84,43 +73,17 @@ def claim_date_key(claim: MemoryClaim) -> str:
 
 
 def project_claim(claim: MemoryClaim) -> ProjectedClaim:
-    kind = normalized_kind(claim)
-    text = claim.text.strip()
     scope_hint = claim.display_scope if claim.display_scope in {
         "main", "timeline", "details", "insights", "interaction_archive"
-    } else "main"
-
-    interaction_text = re.match(
-        r"^[A-Z][\w'-]+\s+(?:asked|thanked|greeted|congratulated|complimented|"
-        r"praised|said goodbye to|wished|apologized to)\b",
-        text,
-        re.IGNORECASE,
+    } else "details"
+    claim_type = claim.claim_type
+    is_main = claim_type in MAIN_CLAIM_TYPES
+    is_timeline = claim_type == "event" or (
+        claim_type in {"plan", "commitment", "decision", "state"}
+        and claim.temporal_status == "past"
     )
-    conversation_departure = re.fullmatch(
-        r"[A-Z][\w'-]+\s+(?:left|signed off|said goodbye)\.?", text, re.IGNORECASE
-    )
-    is_interaction = (
-        any(term in kind for term in INTERACTION_KINDS)
-        or bool(interaction_text)
-        or bool(conversation_departure)
-    )
-    past_event_text = bool(re.match(
-        r"^[A-Z][\w'-]+\s+(?:adopted|arrived|attended|bought|completed|finished|"
-        r"joined|launched|left|lost|made|met|opened|started|traveled|travelled|"
-        r"visited|volunteered)\b",
-        text,
-        re.IGNORECASE,
-    ))
-    is_timeline = any(term in kind for term in TIMELINE_KINDS) or past_event_text
-    is_main = any(term in kind for term in MAIN_KINDS)
-    textual_visual = re.search(
-        r"\b(?:photo|image|picture|screenshot)\b",
-        text,
-        re.IGNORECASE,
-    )
-    is_visual = any(term in kind for term in {
-        "image description", "image caption", "visual", "photo description"
-    }) or bool(textual_visual)
+    is_interaction = claim_type == "interaction"
+    is_visual = claim.evidence_modality == "visual"
 
     score = max(0.0, min(1.0, (claim.salience + claim.confidence) / 2))
     if is_main:
@@ -137,24 +100,21 @@ def project_claim(claim: MemoryClaim) -> ProjectedClaim:
         score -= 0.35
     score = max(0.0, min(1.0, score))
 
-    # Deterministic placement overrides model hints for conversational scaffolding.
-    if claim.inferred and claim.facets.get("derivation_method") == "cross_claim_synthesis":
-        scope: ProjectionScope = "insights"
+    # Semantic fields determine placement. Unknown claims fail closed into details.
+    scope: ProjectionScope
+    if claim.inferred and claim.derivation_operation:
+        scope = "insights"
     elif is_visual:
         scope = "details"
-    elif conversation_departure:
+    elif is_interaction:
         scope = "interaction_archive"
-    elif is_interaction and not is_main:
-        scope: ProjectionScope = "interaction_archive"
-    elif past_event_text:
-        scope = "timeline"
-    elif is_timeline and not is_main:
+    elif is_timeline:
         scope = "timeline"
     elif scope_hint == "interaction_archive":
         scope = "interaction_archive"
     elif scope_hint == "timeline":
         scope = "timeline"
-    elif is_main or score >= 0.72:
+    elif is_main:
         scope = "main"
     else:
         scope = "details"

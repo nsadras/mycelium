@@ -402,7 +402,24 @@ Chat sessions maintain an active episode buffer. Encoding happens when an episod
 - automatically for idle or large episodes,
 - on backend shutdown with a forced flush.
 
-The encoder writes the full conversation transcript into one raw durable log. This log is the canonical source evidence for later dream consolidation and retrieval. The LLM does not get an initial lossy pass that extracts only selected facts from the conversation.
+The encoder writes the full conversation transcript into one raw durable log. This log remains the
+canonical source evidence. In claim-evidence mode, the encoder also creates atomic claim artifacts;
+these are an auditable intermediate representation, not a replacement for the transcript. Each claim
+points back to exact source segment IDs, and extraction coverage records which segments produced a
+claim or were intentionally ignored.
+
+Atomic claims use a compact semantic envelope:
+
+- `claim_type`: identity, state, event, preference, plan, belief, relationship, decision,
+  commitment, interaction, observation, or unknown;
+- `predicate`: an open relation rather than a benchmark-specific slot vocabulary;
+- `evidence_modality`: speech, visual, tool, inference, mixed, or unknown;
+- `temporal_status`: past, current, future, recurring, atemporal, or unknown;
+- `about`, open-ended `facets`, and exact provenance retain entities, qualifiers, and source support.
+
+Deterministic wiki projection uses these fields rather than matching verbs or nouns in claim prose.
+Unknown classifications fail closed into detail pages. Existing stores without the envelope are loaded
+through a conservative mapping from their stored `kind`; new claims are never classified from prose.
 
 Encoded episode IDs are stored in `mycelium_store/sessions_meta.json`. This prevents already-flushed active episodes from being repeatedly encoded unless memory is cleared/reset.
 

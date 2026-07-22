@@ -28,6 +28,7 @@ from mycelium.artifacts import (
     ArtifactStore,
     ClaimProvenance,
     ClaimReconciler,
+    DERIVATION_OPERATIONS,
     MemoryClaim,
     parse_source_datetime,
 )
@@ -1025,6 +1026,8 @@ class DreamProcess:
         ) or "unspecified"
         lines = [
             f"CANONICAL CLAIM: {claim.text}",
+            f"type={claim.claim_type}; predicate={claim.predicate or 'unknown'}; "
+            f"modality={claim.evidence_modality}; temporal={claim.temporal_status}; "
             f"kind={claim.kind}; about={about}; confidence={claim.confidence:.2f}; "
             f"status={claim.status}; facets={json.dumps(claim.facets, ensure_ascii=False, sort_keys=True)}",
         ]
@@ -1336,6 +1339,9 @@ class DreamProcess:
         for raw in raw_candidates:
             text = " ".join(str(raw.get("text", "")).split())
             inference_basis = " ".join(str(raw.get("inference_basis", "")).split())
+            operation = str(raw.get("derivation_operation") or "").strip().lower()
+            if operation not in DERIVATION_OPERATIONS:
+                continue
             supplied_basis_ids = [
                 *raw.get("basis_claim_ids", []),
                 *re.findall(r"\bclaim-[a-z0-9]+\b", inference_basis, re.I),
@@ -1345,29 +1351,10 @@ class DreamProcess:
                 if claim_id in allowed
             ))
             about = [item for item in raw.get("about", []) if isinstance(item, dict) and item.get("entity")]
-            if re.search(
-                r"\b(?:number of times|frequency of|mentioned the word|"
-                r"documented multiple instances|increas(?:e|ed|ing)|"
-                r"decreas(?:e|ed|ing)|upward trend|downward trend|"
-                r"has shown interest in multiple)\b",
-                text,
-                re.IGNORECASE,
-            ):
-                continue
             if not text or not basis_ids or not inference_basis:
                 continue
             basis = [allowed[claim_id] for claim_id in basis_ids]
-            count_language = re.search(
-                r"\b(?:at least|exactly|a total of|on \w+ distinct|"
-                r"multiple (?:dates|occasions|times))\b",
-                text,
-                re.IGNORECASE,
-            )
-            if count_language and not all(
-                claim.kind in {"event", "activity", "action", "achievement"}
-                and bool(claim.facets.get("normalized_date"))
-                for claim in basis
-            ):
+            if not self._valid_derivation_basis(operation, basis):
                 continue
             if not about:
                 candidate_entities = {
@@ -1391,15 +1378,15 @@ class DreamProcess:
                 ]
             if not about:
                 continue
-            if len(basis_ids) == 1:
-                basis_facets = basis[0].facets
-                exact_temporal_math = (
-                    bool(basis_facets.get("duration"))
-                    and bool(basis_facets.get("observed_at"))
-                    and bool(re.search(r"\b(?:year|month|day|date|duration|apart)\b", inference_basis, re.I))
-                )
-                if not exact_temporal_math:
-                    continue
+            basis_entity_names = {
+                str(item.get("entity", "")).strip().lower()
+                for claim in basis for item in claim.about if item.get("entity")
+            }
+            if any(
+                str(item.get("entity", "")).strip().lower() not in basis_entity_names
+                for item in about
+            ):
+                continue
             normalized_text = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
             normalized_entities = [
                 re.sub(r"[^a-z0-9]+", " ", str(item["entity"]).lower()).strip()
@@ -1432,6 +1419,7 @@ class DreamProcess:
                 "inference_basis": inference_basis,
                 "basis_claim_ids": basis_ids,
                 "derivation_method": "cross_claim_synthesis",
+                "derivation_operation": operation,
             })
             incoming = MemoryClaim(
                 claim_id=f"claim-{uuid.uuid4().hex[:12]}",
@@ -1446,6 +1434,11 @@ class DreamProcess:
                 page_slugs=[page_slug],
                 salience=0.65,
                 display_scope="details",
+                claim_type="state",
+                predicate=str(raw["predicate"]) if raw.get("predicate") else None,
+                evidence_modality="inference",
+                temporal_status=str(raw.get("temporal_status") or "unknown"),
+                derivation_operation=operation,
             )
             canonical = reconciler.reconcile(incoming)
             if page_slug not in canonical.page_slugs:
@@ -1466,6 +1459,41 @@ class DreamProcess:
         return refreshed
 
     @staticmethod
+    def _valid_derivation_basis(operation: str, basis: list[MemoryClaim]) -> bool:
+        """Validate reasoning prerequisites from structured claims, never conclusion wording."""
+        if not basis:
+            return False
+        if operation == "temporal_arithmetic":
+            if len(basis) == 1:
+                facets = basis[0].facets
+                return bool(facets.get("duration") and facets.get("observed_at"))
+            anchors = [claim.facets.get("normalized_date") for claim in basis]
+            return len(basis) <= 3 and all(anchors) and len(set(anchors)) >= 2
+        if operation == "event_count":
+            if len(basis) < 2 or any(claim.claim_type != "event" for claim in basis):
+                return False
+            occurrence_keys = [
+                claim.facets.get("occurrence_id") or claim.facets.get("normalized_date")
+                for claim in basis
+            ]
+            return all(occurrence_keys) and len(set(occurrence_keys)) == len(occurrence_keys)
+        if operation == "recurring_pattern":
+            dates = [claim.facets.get("normalized_date") for claim in basis]
+            source_ids = {
+                provenance.source_id for claim in basis for provenance in claim.provenance
+            }
+            return (
+                len(basis) >= 3
+                and all(dates)
+                and len(set(dates)) >= 3
+                and len(source_ids) >= 3
+            )
+        if operation == "cross_fact_relationship":
+            predicates = {claim.predicate for claim in basis if claim.predicate}
+            return len(basis) >= 2 and len(predicates) >= 2
+        return False
+
+    @staticmethod
     def _render_derivation_claim(claim: MemoryClaim) -> str:
         useful_facet_keys = (
             "normalized_date", "date_precision", "when", "observed_at",
@@ -1479,7 +1507,11 @@ class DreamProcess:
             f"; facets={json.dumps(useful_facets, ensure_ascii=False, sort_keys=True)}"
             if useful_facets else ""
         )
-        return f"[{claim.claim_id}] recorded={claim.recorded_at}{facet_text}; {claim.text}"
+        return (
+            f"[{claim.claim_id}] type={claim.claim_type}; predicate={claim.predicate or 'unknown'}; "
+            f"modality={claim.evidence_modality}; temporal={claim.temporal_status}; "
+            f"recorded={claim.recorded_at}{facet_text}; {claim.text}"
+        )
 
     def _evidence_batches(
         self,

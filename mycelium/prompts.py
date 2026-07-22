@@ -420,7 +420,17 @@ Requirements:
 - Do not reconstruct dialogue, summarize several unrelated facts into one claim, or invent missing context.
 - Treat raw image URLs, attachment identifiers, and transport metadata as source furniture, not memory claims. Preserve meaningful image captions and what the speaker says the image represents.
 - Use evidence_type=explicit when a claim directly paraphrases the speaker, including resolving I/my/you to names. Use evidence_type=inferred only when the source does not state the assertion and it is instead a strong implication. Every inferred claim must include a concise `facets.inference_basis` explaining the reasoning and confidence must be at most 0.7; otherwise use explicit.
-- `kind` is an open descriptive label such as preference, event, plan, decision, relationship, biographical_fact, action_item, or interaction. It is not a fixed ontology.
+- `kind` remains an open descriptive subtype for human inspection.
+- Also populate the small semantic envelope used for deterministic organization:
+  - `claim_type`: identity, state, event, preference, plan, belief, relationship, decision,
+    commitment, interaction, observation, or unknown.
+  - `predicate`: a short open relation such as prefers, works_at, visited, plans, or decided;
+    use null when no compact relation is clear.
+  - `evidence_modality`: speech, visual, tool, inference, mixed, or unknown. This describes the
+    evidence, not words that happen to occur in the sentence. A speaker discussing a photograph is
+    visual only when the photograph or its contents support the claim.
+  - `temporal_status`: past, current, future, recurring, atemporal, or unknown. Use event for an
+    occurrence and state for a condition; do not infer tense from the conversation timestamp alone.
 - `about` contains entities and optional roles. Use the actual person's name when available.
 - Claim text must contain at least one of its `about.entity` names verbatim so it remains attributable
   when read by itself. For images, write "Name shared a photo showing ...", not only "A photo shows ...".
@@ -429,7 +439,9 @@ Requirements:
 - Do not omit a supported claim merely because it seems unimportant to the current benchmark.
 - Account for every supplied segment id. A segment containing a personal fact, preference, plan, decision, event, relationship, reason, location, quantity, temporal detail, meaningful reaction, or image description must support at least one claim. Put routine conversational scaffolding—including greetings, thanks, generic praise/support, content-free questions, filler, and exact repetitions—in `ignored_segment_ids`. Do not ignore a whole segment when it also contains a useful assertion.
 
-Return JSON with `summary`, `claims`, and `ignored_segment_ids`. Each claim contains text, kind, about, segment_ids, speaker, evidence_type, confidence, slot, and facets. Respond with JSON only."""
+Return JSON with `summary`, `claims`, and `ignored_segment_ids`. Each claim contains text, kind,
+claim_type, predicate, evidence_modality, temporal_status, about, segment_ids, speaker,
+evidence_type, confidence, slot, and facets. Respond with JSON only."""
     user = f"""SOURCE ID: {source_id}
 OCCURRED AT: {occurred_at or 'unknown'}
 
@@ -448,6 +460,10 @@ Preserve exact subjects, temporal phrases, reasons, locations, quantities, and i
 Use direct subject–predicate wording without dialogue-reporting wrappers unless the speech act matters.
 Write in third person with explicit names; never copy I/my/we/our/you/your/let's dialogue into claim text.
 Every claim must contain at least one of its `about.entity` names verbatim.
+Populate `claim_type`, `predicate`, `evidence_modality`, and `temporal_status` using the same compact
+semantic envelope: identity/state/event/preference/plan/belief/relationship/decision/commitment/
+interaction/observation/unknown; speech/visual/tool/inference/mixed/unknown; and
+past/current/future/recurring/atemporal/unknown. `kind` may remain an open descriptive subtype.
 Lines marked TARGET are the gaps to repair. Lines marked CONTEXT are neighboring dialogue supplied
 only to resolve pronouns, short answers, and references. Extract claims only for TARGET lines and put
 only TARGET ids in `segment_ids`; never cite a CONTEXT id. Whenever time is stated, copy the exact
@@ -496,6 +512,9 @@ Create a conclusion only when it adds information that is not already stated by 
 - a cautious relationship or preference pattern supported by multiple independent facts.
 
 Requirements:
+- Set `derivation_operation` to exactly one of temporal_arithmetic, event_count,
+  recurring_pattern, or cross_fact_relationship. Choose it for the reasoning operation, not the
+  wording of the conclusion.
 - Cite 1-12 supplied claim IDs in `basis_claim_ids`; every cited claim must directly support the conclusion.
   A single basis is allowed only for exact arithmetic using both a fact and its recorded temporal anchor.
 - Use explicit named subjects and standalone subject-predicate wording.
@@ -511,7 +530,8 @@ Requirements:
 - Populate `about` and `basis_claim_ids` explicitly; do not place their values only in prose or facets.
 - Return at most 20 high-value conclusions as JSON with a `claims` array.
 
-Each item contains text, kind, about, basis_claim_ids, inference_basis, confidence, and facets.
+Each item contains text, kind, predicate, temporal_status, about, basis_claim_ids,
+inference_basis, derivation_operation, confidence, and facets.
 Respond with JSON only."""
     user = f"""CANONICAL CLAIMS:
 {claims}"""

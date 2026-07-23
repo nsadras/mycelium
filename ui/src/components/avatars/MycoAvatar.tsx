@@ -41,11 +41,6 @@ export default function MycoAvatar({ activity }: AvatarProps) {
           <stop offset="60%" stopColor="#10b981" stopOpacity="0.25" />
           <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
         </radialGradient>
-        <radialGradient id="decayGlow" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#a78bfa" stopOpacity="0.6" />
-          <stop offset="70%" stopColor="#a78bfa" stopOpacity="0.15" />
-          <stop offset="100%" stopColor="#a78bfa" stopOpacity="0" />
-        </radialGradient>
       </defs>
 
       <style>{`
@@ -194,9 +189,6 @@ export default function MycoAvatar({ activity }: AvatarProps) {
       {activity === 'dreaming' && (
         <ellipse cx="80" cy="132" rx="50" ry="15" fill="url(#dreamGlow)" className="animate-glow" />
       )}
-      {activity === 'decaying' && (
-        <ellipse cx="80" cy="132" rx="45" ry="12" fill="url(#decayGlow)" className="animate-glow" />
-      )}
       {activity === 'error' && (
         <ellipse cx="80" cy="132" rx="48" ry="14" fill="#ef4444" opacity="0.3" className="animate-glow" />
       )}
@@ -224,7 +216,7 @@ export default function MycoAvatar({ activity }: AvatarProps) {
         />
 
         {/* C. Blush */}
-        {activity !== 'dreaming' && activity !== 'decaying' && (
+        {activity !== 'dreaming' && (
           <g>
             <ellipse 
               cx="60" 

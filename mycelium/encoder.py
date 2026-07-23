@@ -66,7 +66,6 @@ class Encoder:
             status="raw",
             durability="durable",
             consolidated=False,
-            decay_score=1.0,
         )
 
         self.log_store.append(entry)

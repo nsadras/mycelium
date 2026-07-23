@@ -75,16 +75,6 @@ class RoutingOutput(RootModel[list[RoutingSelectionOutput]]):
     root: list[RoutingSelectionOutput] = Field(default_factory=list, max_length=8)
 
 
-class MemoryUsageItemOutput(BaseModel):
-    page: str
-    used: bool
-    reason: str | None = None
-
-
-class MemoryUsageOutput(BaseModel):
-    pages: list[MemoryUsageItemOutput] = Field(default_factory=list, max_length=12)
-
-
 class ConsolidationTargetOutput(BaseModel):
     page: str
     action: Literal["update", "create", "none"]

@@ -18,10 +18,9 @@ The project includes a Python memory library, a FastAPI backend, and a React web
 - **Tool-aware chat:** The assistant can call Ollama `web_search` and `web_fetch`; tool calls are shown in the UI and stored as separate raw log entries using the truncated result seen by the model.
 - **Dream consolidation:** Raw logs are consolidated into readable semantic wiki pages with source tracking, `[[log:<entry-id>]]` backlinks, and Obsidian-style `[[page-slug]]` cross-links.
 - **Reconsolidation:** Retrieved pages can be flagged as labile when current context appears to contradict or extend them, then resolved into updated wiki pages.
-- **Event-driven memory state:** Wiki pages track retrievability, stability, difficulty, access/reinforcement counts, and conservative archival state inspired by MemoryBank/FSRS.
 - **Wiki editor:** Wiki pages can be viewed and manually edited from the web UI.
 - **Log explorer:** Daily episodic log files can be inspected from the web UI.
-- **Manual memory controls:** The UI can flush episodes, run dream, run decay, resolve reconsolidation, and clear memory for development.
+- **Manual memory controls:** The UI can flush episodes, run dream, resolve reconsolidation, and clear memory for development.
 - **Structured local LLM calls:** Memory operations use Ollama structured outputs with Pydantic schemas.
 
 ## Project Structure
@@ -35,7 +34,6 @@ mycelium/
 │   ├── artifacts.py    # Structured source, episode, claim storage and reconciliation
 │   ├── dream.py        # Claim/source evidence-to-wiki materialization
 │   ├── reconsolidation.py
-│   ├── decay.py
 │   ├── ollama.py       # Internal adapter around the official Ollama SDK
 │   ├── prompts.py
 │   ├── store.py        # Markdown wiki/log persistence
@@ -189,7 +187,7 @@ scripts/benchmark-all-full.sh
 The scripts accept environment overrides:
 
 ```bash
-QA_MODEL=llama3.1:8b MEMORY_MODEL=gemma4:latest RUN_TAG=after-decay-tuning scripts/benchmark-all-full.sh
+QA_MODEL=llama3.1:8b MEMORY_MODEL=gemma4:latest RUN_TAG=after-memory-tuning scripts/benchmark-all-full.sh
 ```
 
 Full-run scripts default to `DREAM_POLICY=per-case` so Mycelium consolidates once per benchmark case instead of after every ingested chunk/session. Override it when needed:
@@ -370,7 +368,6 @@ The sidebar exposes manual memory operations:
 - **Flush Idle:** Encode episodes that have been idle or have grown large.
 - **Flush All:** Force-encode every active episode.
 - **Resolve Current:** Apply pending reconsolidation updates for the selected session.
-- **Decay Pass:** Refresh wiki-page retrievability and archive weak, low-confidence memories.
 - **Dream Pass:** Consolidate raw logs into wiki pages.
 - **Clear Memory:** Development-only reset for wiki pages, logs, labile files, source/episode/claim artifacts, and encoded episode markers. Existing chat transcripts are preserved and made re-encodable through the current structured-claim pipeline.
 
@@ -380,9 +377,7 @@ Memory operation buttons show a spinner while a request is in progress and retur
 
 ### 1. Chat and Retrieval
 
-When a user sends a message, the backend builds a retrieval query from the chat title, recent thread context, and current message. The router LLM selects relevant wiki pages from the index. The routing context includes each page's confidence, importance, retrievability, review timestamp, recall sections, and source-log references so fresh stable memories are preferred without hiding older relevant pages. Loaded pages are added to the chat system prompt with compact snippets from their backlinked raw logs, marked as retrieved, and the full session transcript is passed to the chat model.
-
-After the assistant responds, a small structured LLM call judges which loaded pages were actually used in the final answer. Pages judged as used receive a reinforcement event, increasing stability and resetting retrievability.
+When a user sends a message, the backend builds a retrieval query from the chat title, recent thread context, and current message. The router LLM selects relevant wiki pages using page summaries, confidence, importance, recall sections, and source-log references. Loaded pages are added to the chat system prompt with compact snippets from their backlinked raw logs, and the full session transcript is passed to the chat model.
 
 ### 2. Tool Calls
 
@@ -424,7 +419,7 @@ Encoded episode IDs are stored in `mycelium_store/sessions_meta.json`. This prev
 
 ### 4. Dream Consolidation
 
-The dream process is the offline consolidation pass that turns durable raw logs into semantic wiki pages. It filters unsuitable logs, extracts durable facts from tool observations, batches target identification, canonicalizes proposed page targets to avoid near-duplicates, rewrites one page per final target, records source-log backlinks, updates the deterministic wiki index, marks raw logs consolidated, and runs a decay pass.
+The dream process is the offline consolidation pass that turns durable raw logs into semantic wiki pages. It filters unsuitable logs, extracts durable facts from tool observations, batches target identification, canonicalizes proposed page targets to avoid near-duplicates, rewrites one page per final target, records source-log backlinks, updates the deterministic wiki index, and marks raw logs consolidated.
 
 Generated wiki content is intended to be Obsidian-compatible: cross-page references should use `[[page-slug]]`, and source references should use `[[log:<entry-id>]]`.
 
@@ -435,10 +430,8 @@ flowchart TD
     C --> D[Identify candidate wiki targets]
     D --> E[Canonicalize targets and merge near-duplicates]
     E --> F[Rewrite or create wiki pages]
-    F --> G[Record memory events]
-    G --> H[Rebuild deterministic wiki index]
-    H --> I[Mark logs consolidated]
-    I --> J[Run decay pass]
+    F --> G[Rebuild deterministic wiki index]
+    G --> H[Mark logs consolidated]
 ```
 
 Key behavior:
@@ -453,21 +446,10 @@ Key behavior:
 
 When a wiki page is loaded into a chat, a prediction-error check can flag it as labile if the current context suggests it is outdated, incomplete, or contradicted. Reconsolidation signals are accumulated for the active episode and resolved either manually or during episode flush.
 
-### 6. Memory State and Decay
-
-Wiki pages use an event-driven memory state rather than a single decay score:
-
-- `retrievability` is recomputed as `exp(-elapsed_days / stability_days)`.
-- `stability_days` grows when a page is retrieved, used, dream-updated, or manually edited.
-- `difficulty` rises when a page is contradicted and falls when it is reinforced.
-- `created_at`, `last_accessed`, `last_reviewed`, review counts, reinforcement counts, conflict counts, and `pinned` are stored in page frontmatter.
-
-The decay pass refreshes retrievability and archives only pages that are simultaneously low-retrievability, low-importance, low-confidence, not pinned, and not recently accessed. Raw episodic logs still carry a simple `decay_score` field for log-level bookkeeping.
-
 ## Manual Memory Operations
 
 The backend does not schedule memory work or flush episodes during shutdown. Episode flushing,
-dream consolidation, decay, and reconsolidation run only when explicitly requested through the
+dream consolidation, and reconsolidation run only when explicitly requested through the
 memory API or the web UI controls.
 
 ## Storage Layout
@@ -507,7 +489,7 @@ context_budget_tokens = 8192
 `llm.context_window_tokens` controls token-aware ingestion batching. It is separate from
 `session.context_budget_tokens`, which limits how much retrieved memory is loaded into chats.
 
-Additional defaults for reconsolidation, dream, and decay live in `mycelium/config.py`.
+Additional defaults for reconsolidation and dream live in `mycelium/config.py`.
 
 ## Library Usage
 
@@ -560,4 +542,3 @@ The UI supports Markdown, GitHub-flavored Markdown tables/lists, and KaTeX-rende
 
 - The web app owns long-lived chat sessions; active episodes remain buffered until manually flushed. The direct library session context manager still encodes on context exit.
 - Tool observations are logged immediately, while ordinary chat content is logged only when an episode is flushed.
-- Wiki memory state is event-driven. Retrieval, answer usage, dream creation/update, contradiction, and manual edits all update page metadata.

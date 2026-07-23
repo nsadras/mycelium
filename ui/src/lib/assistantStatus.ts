@@ -6,7 +6,6 @@ export type AssistantActivity =
   | 'responding'
   | 'flushing'
   | 'dreaming'
-  | 'decaying'
   | 'reconsolidating'
   | 'error'
   | 'clicked'

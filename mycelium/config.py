@@ -33,19 +33,12 @@ class DreamConfig:
     derived_insights_enabled: bool = True
 
 @dataclass
-class DecayConfig:
-    archive_threshold: float = 0.10
-    log_threshold: float = 0.05
-    half_life_hours: int = 168
-
-@dataclass
 class Config:
     store_path: Path = Path('./mycelium_store')
     context_budget_tokens: int = 32768
     llm: Optional[LLMConfig] = None
     reconsolidation: Optional[ReconsolidationConfig] = None
     dream: Optional[DreamConfig] = None
-    decay: Optional[DecayConfig] = None
 
     def __post_init__(self):
         if self.llm is None:
@@ -54,8 +47,6 @@ class Config:
             self.reconsolidation = ReconsolidationConfig()
         if self.dream is None:
             self.dream = DreamConfig()
-        if self.decay is None:
-            self.decay = DecayConfig()
 
     @classmethod
     def from_toml(cls, path: Path) -> 'Config':
@@ -100,20 +91,12 @@ class Config:
             derived_insights_enabled=bool(dream_data.get('derived_insights_enabled', True)),
         )
         
-        decay_data = data.get('decay', {})
-        decay = DecayConfig(
-            archive_threshold=decay_data.get('archive_threshold', 0.10),
-            log_threshold=decay_data.get('log_threshold', 0.05),
-            half_life_hours=decay_data.get('half_life_hours', 168)
-        )
-        
         return cls(
             store_path=store_path,
             context_budget_tokens=context_budget_tokens,
             llm=llm,
             reconsolidation=reconsolidation,
             dream=dream,
-            decay=decay
         )
 
     @classmethod

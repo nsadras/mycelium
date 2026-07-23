@@ -15,7 +15,6 @@ def test_wiki_store_save_and_get(tmp_path):
         version=1,
         confidence=0.9,
         importance=0.8,
-        retrievability=0.95,
         tags=["test"],
         related=[Edge(target="other-page", relation="causes", weight=0.5)],
         update_log=[
@@ -94,7 +93,6 @@ def test_log_store_append_and_get(tmp_path):
         status="raw",
         durability="durable",
         consolidated=False,
-        decay_score=1.0
     )
     
     store.append(entry)
@@ -117,7 +115,6 @@ def test_log_store_mark_consolidated(tmp_path):
         importance=0.5,
         status="raw",
         consolidated=False,
-        decay_score=1.0
     )
     
     store.append(entry)
@@ -180,7 +177,6 @@ def test_log_store_markdown_headings_inside_body_are_not_entries(tmp_path):
         status="raw",
         durability="durable",
         consolidated=False,
-        decay_score=1.0,
     )
 
     store.append(entry)
@@ -194,27 +190,6 @@ def test_log_store_markdown_headings_inside_body_are_not_entries(tmp_path):
     store.mark_consolidated(["2026-05-10#tool-abc123"])
     assert store.get_unconsolidated() == []
 
-def test_log_store_update_decay(tmp_path):
-    store = LogStore(tmp_path / "logs")
-    
-    entry = LogEntry(
-        entry_id="2026-05-10#Entry 1",
-        session_id="ses-123",
-        timestamp=datetime(2026, 5, 10, 10, 0, 0),
-        content="User said hello.",
-        importance=0.5,
-        status="raw",
-        consolidated=False,
-        decay_score=1.0
-    )
-    
-    store.append(entry)
-    store.update_decay("2026-05-10#Entry 1", 0.75)
-    
-    unconsolidated = store.get_unconsolidated()
-    assert len(unconsolidated) == 1
-    assert unconsolidated[0].decay_score == 0.75
-
 def test_mycelium_init_seeds_user_profile(tmp_path):
     from mycelium.core import Mycelium
     
@@ -224,7 +199,6 @@ def test_mycelium_init_seeds_user_profile(tmp_path):
     
     page = myc.wiki.get("user-profile")
     assert page.title == "User Profile"
-    assert page.pinned
     assert page.confidence == 0.8
     assert "profile" in page.tags
     
@@ -242,7 +216,6 @@ def test_log_store_mark_unconsolidated(tmp_path):
         importance=0.5,
         status="raw",
         consolidated=False,
-        decay_score=1.0
     )
     
     store.append(entry)
@@ -277,7 +250,6 @@ def test_clear_wiki_store(tmp_path, monkeypatch):
         importance=0.5,
         status="raw",
         consolidated=True,
-        decay_score=1.0
     )
     myc.log_store.append(entry)
     assert len(myc.log_store.get_unconsolidated()) == 0

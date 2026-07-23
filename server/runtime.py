@@ -161,7 +161,6 @@ def append_tool_event_logs(
             status="raw",
             durability="durable",
             consolidated=False,
-            decay_score=1.0,
         )
         mem.log_store.append(entry)
         created_entries.append(entry)
@@ -322,14 +321,6 @@ async def run_dream() -> dict[str, Any]:
         "completed_source_ids": report.completed_source_ids,
         "pending_source_ids": report.pending_source_ids,
         "failures": report.failures,
-    }
-
-
-async def run_decay() -> dict[str, Any]:
-    changed_retrievability = await get_mem().dream_process.decay_engine.run_pass()
-    return {
-        "pages_changed": len(changed_retrievability),
-        "changed_retrievability": changed_retrievability,
     }
 
 

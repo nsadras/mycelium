@@ -35,7 +35,6 @@ mycelium/
 │   ├── encoder.py             # Encoding process
 │   ├── dream.py               # Dream / consolidation process
 │   ├── reconsolidation.py     # Reconsolidation + lability window
-│   ├── decay.py               # Decay score engine
 │   ├── budget.py              # Token budget / context window manager
 │   ├── models.py              # Dataclasses: WikiPage, LogEntry, etc.
 │   ├── prompts.py             # All LLM prompt templates (single source of truth)
@@ -47,7 +46,6 @@ mycelium/
 │   ├── test_encoder.py
 │   ├── test_dream.py
 │   ├── test_reconsolidation.py
-│   ├── test_decay.py
 │   └── test_session.py
 │
 ├── examples/
@@ -129,7 +127,6 @@ class WikiPage:
     last_updated: datetime
     version: int
     confidence: float                    # 0.0–1.0
-    decay_score: float                   # 0.0–1.0
     importance: float                    # 0.0–1.0
     tags: list[str] = field(default_factory=list)
     related: list[Edge] = field(default_factory=list)
@@ -153,7 +150,6 @@ class LogEntry:
     tags: list[str]
     status: Literal['raw', 'consolidated', 'archived']
     consolidated: bool = False
-    decay_score: float = 1.0
 
 @dataclass
 class PredictionError:
@@ -235,7 +231,6 @@ class LogStore:
     def mark_consolidated(self, entry_ids: list[str]) -> None: ...
     # sets consolidated=True in the log file for given entry IDs
 
-    def update_decay(self, entry_id: str, new_score: float) -> None: ...
 ```
 
 ### Frontmatter convention
@@ -439,8 +434,7 @@ class DreamProcess:
              c. Save (unless dry_run)
         6. Update _index.md via consolidation_index_prompt
         7. Mark consolidated entries in LogStore
-        8. Run decay pass (call decay engine)
-        9. Return DreamReport
+        8. Return DreamReport
         """
         ...
 
@@ -511,48 +505,6 @@ class ReconsolidationEngine:
         """
         ...
 ```
-
-### 8.4 Decay Engine (`decay.py`)
-
-```python
-from datetime import datetime, timezone
-
-def compute_decay_score(
-    current_score: float,
-    last_accessed: datetime,
-    importance: float,
-    access_count: int,
-    now: datetime | None = None,
-) -> float:
-    """
-    now defaults to datetime.now(timezone.utc).
-
-    Formula:
-      hours_elapsed = (now - last_accessed).total_seconds() / 3600
-      recency = 0.995 ** hours_elapsed
-      adjusted = recency ** (1.0 - importance * 0.5)
-      freq_boost = min(0.3, access_count * 0.02)
-      return min(1.0, adjusted + freq_boost)
-    """
-    ...
-
-class DecayEngine:
-    def __init__(self, wiki: WikiStore, logs: LogStore, config: Config): ...
-
-    async def run_pass(self) -> dict[str, float]:
-        """
-        1. Load all wiki pages
-        2. Recompute decay_score for each
-        3. Save updated pages
-        4. Archive pages below config.decay.archive_threshold
-        5. Update log entry decay scores
-        6. Soft-delete log entries below config.decay.log_threshold
-        7. Return dict of {slug: new_score} for changed pages
-        """
-        ...
-```
-
----
 
 ## 9. Session Context Manager (`session.py`)
 
@@ -730,12 +682,6 @@ class DreamConfig:
     max_pages_per_run: int = 20
 
 @dataclass
-class DecayConfig:
-    archive_threshold: float = 0.10
-    log_threshold: float = 0.05
-    half_life_hours: int = 168
-
-@dataclass
 class Config:
     store_path: Path = Path('./mycelium_store')
     context_budget_tokens: int = 8192
@@ -743,7 +689,6 @@ class Config:
     llm: LLMConfig = LLMConfig()
     reconsolidation: ReconsolidationConfig = ReconsolidationConfig()
     dream: DreamConfig = DreamConfig()
-    decay: DecayConfig = DecayConfig()
 
     @classmethod
     def from_toml(cls, path: Path) -> 'Config':
@@ -827,12 +772,6 @@ def mock_llm():
 - `resolve_labile_pages()` → page rewritten, version incremented, update_log appended
 - `accumulate_signal()` → multiple signals accumulated then resolved in single rewrite
 
-`test_decay.py`
-- `compute_decay_score()` pure function: spot-check values at 0h, 24h, 168h, 720h
-- High importance decays slower than low importance
-- Access count provides freq_boost up to cap of 0.3
-- `run_pass()` archives pages below archive_threshold
-
 `test_session.py`
 - `session()` context manager: load_context called on enter
 - `session.build_prompt()` injects memory_context
@@ -873,25 +812,22 @@ Build in this order. Each phase should have passing tests before moving to the n
 15. `tests/test_reconsolidation.py`
 16. Wire reconsolidation into `load_context()` and session exit
 
-**Phase 6 — Dream + Decay**
-17. `decay.py`
-18. `dream.py`
-19. `tests/test_decay.py`
-20. `tests/test_dream.py`
-21. Wire dream into session exit
+**Phase 6 — Dream**
+17. `dream.py`
+18. `tests/test_dream.py`
 
 **Phase 7 — Integration**
-22. `core.py` — `Mycelium.__init__()`, `_init_store()`, top-level API
-23. `__init__.py` — public exports
-24. `examples/basic_session.py` — smoke test against live Ollama
-25. `examples/langgraph_integration.py`
+19. `core.py` — `Mycelium.__init__()`, `_init_store()`, top-level API
+20. `__init__.py` — public exports
+21. `examples/basic_session.py` — smoke test against live Ollama
+22. `examples/langgraph_integration.py`
 
 ---
 
 ## 15. Coding Conventions
 
 - All LLM-calling methods are `async`. No sync LLM calls anywhere.
-- Never import from a higher-level module into a lower-level one. Dependency direction: `core → encoder/dream/reconsolidation/decay → store/ollama/prompts → models/config/budget`
+- Never import from a higher-level module into a lower-level one. Dependency direction: `core → encoder/dream/reconsolidation → store/ollama/prompts → models/config/budget`
 - No `print()` statements. Use `logging.getLogger(__name__)` in every module.
 - Every public method has a docstring.
 - Type hints on all function signatures. Run `mypy mycelium/` and fix all errors.

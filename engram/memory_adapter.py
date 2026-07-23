@@ -82,7 +82,6 @@ def ingest_meeting_into_memory(mem, store: EngramStore, meeting_id: str) -> LogE
         status="raw",
         durability="durable",
         consolidated=False,
-        decay_score=1.0,
     )
     mem.log_store.append(entry)
     store.update_meeting(meeting_id, memory_log_entry_id=entry.entry_id)

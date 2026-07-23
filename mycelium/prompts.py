@@ -285,7 +285,7 @@ def routing_prompt(index_content: str, query: str, budget_tokens: int) -> tuple[
 
 Constraints:
 - Total loaded content must stay under {budget_tokens} tokens
-- Prefer pages with higher confidence, importance, and retrievability, but do not ignore highly relevant older memories solely because retrievability is low
+- Prefer pages with higher confidence and importance when relevance is otherwise comparable
 - Follow related links and Obsidian-style [[page-slug]] links to include associated pages if budget allows
 - If no pages are clearly relevant, return an empty list
 
@@ -300,28 +300,6 @@ Respond with valid JSON only. No markdown code fences, no explanation, no preamb
 
 USER QUERY:
 {query}"""
-    return system, user
-
-def memory_usage_prompt(user_message: str, assistant_response: str, loaded_pages: str) -> tuple[str, str]:
-    system = """You judge whether retrieved long-term memory pages were actually used in the assistant's final response.
-
-A page was used if the assistant response depends on facts, preferences, project context, prior decisions, or framing from that page.
-Do not mark a page used merely because it was loaded. Do not mark a page used for generic knowledge that appears in both the page and the model's prior knowledge.
-
-Return JSON with one "pages" list. Each item must contain:
-- "page": the page slug
-- "used": boolean
-- "reason": short string or null
-
-Respond with valid JSON only. No markdown code fences, no explanation, no preamble."""
-    user = f"""USER MESSAGE:
-{user_message}
-
-ASSISTANT RESPONSE:
-{assistant_response}
-
-LOADED MEMORY PAGES:
-{loaded_pages}"""
     return system, user
 
 def claim_extraction_prompt(source_type: str, source_id: str, occurred_at: str | None, segments: str) -> tuple[str, str]:

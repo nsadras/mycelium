@@ -13,7 +13,6 @@ from mycelium.ollama import OllamaClient
 from mycelium.config import Config
 from mycelium.batching import batch_items, split_text_by_tokens, structured_input_budget
 from mycelium import prompts
-from mycelium.decay import DecayEngine, record_memory_event
 from mycelium.structured_outputs import (
     CanonicalizationOutput,
     ConsolidationIdentifyOutput,
@@ -105,7 +104,6 @@ class DreamProcess:
         self.logs = logs
         self.config = config
         self.artifacts = artifacts
-        self.decay_engine = DecayEngine(wiki, logs, config)
         self._identification_failures: dict[str, str] = {}
         self._preparation_failures: dict[str, str] = {}
         self._pending_page_claim_ids: dict[str, set[str]] = {}
@@ -142,7 +140,6 @@ class DreamProcess:
             ]
             if not dry_run and completed_source_ids:
                 self.logs.mark_consolidated(completed_source_ids)
-                await self.decay_engine.run_pass()
             if not dry_run and self._index_needs_rebuild():
                 self._save_deterministic_index({}, dry_run=False, now=datetime.now())
             return DreamReport(
@@ -318,7 +315,6 @@ class DreamProcess:
                     existing_page.confidence = confidence
                     existing_page.importance = importance
                     existing_page.update_log.append(log)
-                    record_memory_event(existing_page, "dream_updated", now=now)
                     changed_pages[existing_page.slug] = existing_page
                     changed_page_sources.setdefault(existing_page.slug, set()).update(page_source_ids)
                     pages_updated += 1
@@ -339,7 +335,6 @@ class DreamProcess:
                     source_log_entries=page_source_ids,
                     update_log=[UpdateLogEntry(1, now, "system", "dream", 0.0, "Initial creation", 0.0, confidence)]
                 )
-                record_memory_event(new_page, "dream_created", now=now)
                 changed_pages[new_page.slug] = new_page
                 changed_page_sources.setdefault(new_page.slug, set()).update(page_source_ids)
                 title_to_slug[title_key] = page_slug
@@ -448,7 +443,6 @@ class DreamProcess:
                         existing_page.importance = new_importance
                         existing_page.update_log.append(log)
 
-                    record_memory_event(existing_page, "dream_updated", now=now)
 
                     changed_pages[existing_page.slug] = existing_page
                     changed_page_sources.setdefault(existing_page.slug, set()).update(page_source_ids)
@@ -479,11 +473,9 @@ class DreamProcess:
                             confidence,
                         )]
                     )
-                    record_memory_event(fork_page, "dream_created", now=now)
                     
                     existing_page.related.append(Edge(fork_slug, "contradicts", 1.0))
                     existing_page.confidence = max(0.0, existing_page.confidence - 0.1)
-                    record_memory_event(existing_page, "contradicted", now=now)
                     
                     conflicts_found.append(page_slug)
                     conflicts_resolved += 1
@@ -520,7 +512,6 @@ class DreamProcess:
                         existing_page.last_updated = now
                         log = UpdateLogEntry(existing_page.version, now, "system", "dream", 0.0, "Merged during dream", existing_page.confidence, confidence)
                         existing_page.update_log.append(log)
-                        record_memory_event(existing_page, "dream_updated", now=now)
                         changed_pages[existing_page.slug] = existing_page
                         changed_page_sources.setdefault(existing_page.slug, set()).update(page_source_ids)
                         pages_updated += 1
@@ -576,10 +567,6 @@ class DreamProcess:
         if not dry_run and completed_source_ids:
             self.logs.mark_consolidated(completed_source_ids)
 
-        # 8. Run decay pass
-        if not dry_run:
-            await self.decay_engine.run_pass()
-            
         return DreamReport(
             pages_updated=pages_updated,
             pages_created=pages_created,
@@ -709,7 +696,6 @@ class DreamProcess:
             page.confidence = confidence
             page.importance = importance
             page.update_log.append(log)
-            record_memory_event(page, "dream_updated", now=now)
 
             changed_pages[page.slug] = page
             pages_updated += 1
@@ -1176,7 +1162,6 @@ class DreamProcess:
                         )],
                     )
                     created.add(slug)
-                record_memory_event(page, "dream_updated", now=now)
                 derived[slug] = page
             existing_targets = {edge.target for edge in parent.related}
             for child_slug in child_slugs:
@@ -1964,7 +1949,6 @@ class DreamProcess:
                 status=entry.status,
                 durability="durable",
                 consolidated=entry.consolidated,
-                decay_score=entry.decay_score,
             )
         ]
 

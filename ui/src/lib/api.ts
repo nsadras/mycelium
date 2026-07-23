@@ -32,9 +32,6 @@ export interface LoadedPage {
   title: string;
   confidence: number;
   importance?: number;
-  retrievability?: number;
-  stability_days?: number;
-  difficulty?: number;
   version: number;
 }
 
@@ -51,15 +48,6 @@ export interface WikiPage {
   version?: number;
   confidence: number;
   importance?: number;
-  stability_days?: number;
-  difficulty?: number;
-  retrievability?: number;
-  last_accessed?: string | null;
-  last_reviewed?: string | null;
-  review_count?: number;
-  reinforced_count?: number;
-  conflict_count?: number;
-  pinned?: boolean;
   tags: string[];
   related?: { target: string; relation: string }[];
   update_log?: { version: number; reason: string; date: string }[];

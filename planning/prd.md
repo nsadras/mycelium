@@ -30,7 +30,7 @@
 
 ### 1.1 Vision
 
-Mycelium is a **dependency-light Python library** that gives LLM-based agents a memory system modeled on human neurobiology. It implements the full cognitive lifecycle — encoding, consolidation, reconsolidation, decay, and associative recall — using nothing but **plain markdown files and a locally-running LLM**.
+Mycelium is a **dependency-light Python library** that gives LLM-based agents a memory system modeled on human neurobiology. It implements encoding, consolidation, reconsolidation, and associative recall using nothing but **plain markdown files and a locally-running LLM**.
 
 There are no vector databases. No embedding models. No graph databases. No cloud API calls. The entire memory store is a directory of human-readable text files, and all intelligence (consolidation, relevancy ranking, reconsolidation) is performed by a local LLM via Ollama.
 
@@ -75,7 +75,6 @@ Mycelium maps directly to well-established neuroscience. The plain-text architec
 | Slow-wave sleep | Dream Process | Rewrites wiki pages from logs |
 | REM sleep | Association Pass | Updates `_index.md` cross-links |
 | Reconsolidation | Lability Window | Rewrites wiki page on retrieval conflict |
-| Forgetting curve | Decay Engine | Updates `decay_score` in frontmatter |
 | Working memory | Context Buffer | In-process string, injected into prompt |
 
 ### 2.2 Why Plain Text
@@ -149,7 +148,6 @@ The Karpathy wiki addresses the first two partially (the agent can rewrite wiki 
 │      │  2. identifies patterns / abstractions                    │
 │      │  3. rewrites relevant wiki/<topic>.md pages               │
 │      │  4. updates _index.md cross-links                         │
-│      │  5. updates decay scores in log frontmatter               │
 │      │                                                           │
 │      ▼                                                           │
 │  ┌────────────────────────────────────────────────────┐         │
@@ -158,7 +156,7 @@ The Karpathy wiki addresses the first two partially (the agent can rewrite wiki 
 │  │  ├── _index.md          ← table of contents + links│         │
 │  │  ├── <topic-a>.md       ← semantic memory page     │         │
 │  │  ├── <topic-b>.md                                  │         │
-│  │  └── _archive/          ← decayed pages            │         │
+│  │  └── _archive/          ← manually archived pages  │         │
 │  │                                                     │         │
 │  │  logs/                                              │         │
 │  │  ├── 2026-05-01.md      ← raw episodic entries      │         │
@@ -206,7 +204,7 @@ mycelium_store/
 │   ├── _index.md                  # routing index + cross-links
 │   ├── <topic>.md                 # one page per semantic concept
 │   └── _archive/
-│       └── <topic>.md             # decayed pages (below threshold)
+│       └── <topic>.md             # manually archived pages
 │
 ├── logs/
 │   ├── YYYY-MM-DD.md              # daily episodic log
@@ -230,7 +228,6 @@ created: 2026-04-15T10:22:00
 last_updated: 2026-05-09T02:14:00
 version: 4
 confidence: 0.82
-decay_score: 0.94
 importance: 0.9
 tags: [architecture, design, tech-stack]
 related:
@@ -349,9 +346,9 @@ NEW LOG ENTRIES:
 
 After all page rewrites, the LLM updates `_index.md` to reflect new pages, updated descriptions, and new cross-links.
 
-**Step 4 — Decay episodic entries:**
+**Step 4 — Finalize episodic entries:**
 
-Log entries that have been successfully consolidated have their `consolidated: true` flag set. Their `decay_score` is recalculated and updated in the frontmatter. Entries below `decay_threshold` (default 0.05) are soft-deleted (struck through, not removed) in the log.
+Log entries that have been successfully consolidated have their `consolidated: true` flag set so later dream passes do not process them again.
 
 ```python
 dream = mem.dream_process()
@@ -465,7 +462,7 @@ the wiki index, select the pages most relevant to load into context.
 
 Constraints:
 - Total loaded content must stay under [context_budget] tokens
-- Prefer pages with higher confidence and lower decay_score
+- Prefer pages with higher confidence and importance when relevance is otherwise comparable
 - Follow related: links to include associated pages if budget allows
 - If no pages are clearly relevant, return an empty list
 
@@ -494,30 +491,6 @@ Selected pages are formatted and prepended to the session context:
 
 === END MEMORY ===
 ```
-
----
-
-### 5.5 Decay Engine
-
-Runs as part of the Dream Process. Updates `decay_score` in the frontmatter of all log entries and wiki pages. The decay function balances recency, importance, and access frequency:
-
-```python
-def decay_score(
-    current_score: float,
-    hours_since_access: float,
-    importance: float,
-    access_count: int,
-) -> float:
-    # Base exponential decay
-    recency = 0.995 ** hours_since_access
-    # Importance slows decay (high importance = closer to 1.0 exponent)
-    adjusted = recency ** (1.0 - importance * 0.5)
-    # Spaced repetition boost from access frequency
-    freq_boost = min(0.3, access_count * 0.02)
-    return min(1.0, adjusted + freq_boost)
-```
-
-Wiki pages with `decay_score < archive_threshold` (default 0.1) are moved to `wiki/_archive/`. Log entries below `decay_threshold` (default 0.05) are marked consolidated and no longer loaded during dream passes.
 
 ---
 
@@ -571,7 +544,6 @@ pages = await mem.load_context(
 #   .slug           str    — filename without .md
 #   .content        str    — full page content
 #   .confidence     float
-#   .decay_score    float
 #   .version        int
 #   .was_flagged    bool   — True if reconsolidation was triggered
 #   .discrepancy    float  — prediction error score (0 if not flagged)
@@ -768,10 +740,6 @@ strategy = "full"             # "full" | "new_only" | "association_only"
 conflict_policy = "fork"      # "fork" | "override" | "merge"
 max_pages_per_run = 20        # safety limit
 
-[decay]
-archive_threshold = 0.10      # wiki pages below this → _archive/
-log_threshold = 0.05          # log entries below this → soft-deleted
-half_lifers = 168         # 1 week for importance=0 entries
 ```
 
 ---
@@ -813,7 +781,7 @@ Every reconsolidation event captures a structured pair: (original belief, correc
 | **v0.1 — Foundation** | File store + episodic log | `Mycelium` client, `mycelium_store/` layout, log append, TOML config, Ollama wrapper |
 | **v0.2 — Encoding** | LLM-based memory extraction | `encode()`, `encode_session()`, importascoring LLM call, log frontmatter |
 | **v0.3 — Wiki + Retrieval** | Index routing + context loading | `_index.md` format, `load_context()` LLM routing call, context budget manager, `session()` context manager |
-| **v0.4 — Dream Process** | Async consolidation pipeline | `dream()`, page identification LLM call, page rewrite LLM call, index update, decay engine |
+| **v0.4 — Dream Process** | Async consolidation pipeline | `dream()`, page identification LLM call, page rewrite LLM call, index update |
 | **v0.5 — Reconsolidation** | Lability window + prediction error | Prediction error LLM call, labile file management, rewrite sys, `update_log` provenance |
 | **v0.6 — Harness** | Agent integration examples | LangGraph integration example, CLI tool (`mycelium dream`, `mycelium status`), documentation |
 | **v1.0 — Benchmarks** | Evaluation + release | LOCOMO eval, comparison vs. Mem0 / HippoRAG / plain Karpathy wiki, PyPI release |

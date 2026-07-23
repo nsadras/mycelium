@@ -126,17 +126,12 @@ async def chat(session_id: str, req: ChatRequest):
     chat_response = await mem.llm.call_messages(messages)
     response_text = chat_response.content
     tool_events = [asdict(event) for event in chat_response.tool_events]
-    memory_usage = await mem.record_memory_usage(req.message, response_text, loaded_pages)
-
     loaded_page_meta = [
         {
             "slug": p.slug,
             "title": p.title,
             "confidence": p.confidence,
             "importance": p.importance,
-            "retrievability": p.retrievability,
-            "stability_days": p.stability_days,
-            "difficulty": p.difficulty,
             "version": p.version,
         }
         for p in loaded_pages
@@ -150,7 +145,6 @@ async def chat(session_id: str, req: ChatRequest):
         "response": response_text,
         "loaded_pages": loaded_page_meta,
         "tool_events": tool_events,
-        "memory_usage": memory_usage,
         "tool_logs_created": len(tool_log_entries),
         "episode_id": episode_id,
     }

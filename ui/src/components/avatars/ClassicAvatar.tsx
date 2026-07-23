@@ -1,4 +1,4 @@
-import { Book, BrainCircuit, FileText, Loader2, Mic, Moon, Radio, Sparkles, Waves } from 'lucide-react';
+import { Book, BrainCircuit, FileText, Loader2, Mic, Moon, Sparkles, Waves } from 'lucide-react';
 import type { AvatarProps } from './index';
 
 export default function ClassicAvatar({ activity }: AvatarProps) {
@@ -16,9 +16,6 @@ export default function ClassicAvatar({ activity }: AvatarProps) {
   }
   if (activity === 'flushing') {
     return <Waves size={28} className="text-white animate-pulse" />;
-  }
-  if (activity === 'decaying') {
-    return <Radio size={28} className="text-white animate-pulse" />;
   }
   if (activity === 'reconsolidating') {
     return <BrainCircuit size={28} className="text-white animate-pulse" />;

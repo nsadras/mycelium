@@ -14,7 +14,7 @@ interface SidebarProps {
   setActiveTab: (tab: 'chat' | 'engram' | 'wiki' | 'logs') => void;
   onDream: () => void;
   onMemoryOperation: (
-    operation: 'flush-current' | 'flush-idle' | 'flush-all' | 'reconsolidate-current' | 'dream' | 'decay' | 'clear-memory' | 'clear-wiki'
+    operation: 'flush-current' | 'flush-idle' | 'flush-all' | 'reconsolidate-current' | 'dream' | 'clear-memory' | 'clear-wiki'
   ) => void;
   hasSelectedSession: boolean;
   runningMemoryOperation: string | null;
@@ -71,13 +71,6 @@ export default function Sidebar({
       icon: BrainCircuit,
       needsSession: true,
       tooltip: 'Apply pending reconsolidation updates for the selected chat.',
-    },
-    {
-      id: 'decay',
-      label: 'Decay Pass',
-      icon: RefreshCw,
-      needsSession: false,
-      tooltip: 'Refresh retrievability and archive weak memories.',
     },
     {
       id: 'clear-wiki',

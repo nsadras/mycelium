@@ -17,7 +17,6 @@ const activityCopy: Record<AssistantActivity, { label: string; detail: string }>
   responding: { label: 'Responding', detail: 'Writing' },
   flushing: { label: 'Flushing', detail: 'Encoding episode' },
   dreaming: { label: 'Dreaming', detail: 'Consolidating logs' },
-  decaying: { label: 'Decaying', detail: 'Refreshing memory state' },
   reconsolidating: { label: 'Resolving', detail: 'Updating memory' },
   error: { label: 'Error', detail: 'Check logs' },
   clicked: { label: 'Hello', detail: 'Interacting' },

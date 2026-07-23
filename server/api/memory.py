@@ -1,10 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from datetime import datetime
-from pathlib import Path
 
 from pydantic import BaseModel
 
-from mycelium.decay import record_memory_event
 from mycelium.models import UpdateLogEntry
 from server.runtime import (
     clear_memory_store,
@@ -13,7 +11,6 @@ from server.runtime import (
     flush_session_episode,
     get_mem,
     resolve_session_reconsolidation,
-    run_decay,
     run_dream as run_dream_process,
 )
 
@@ -36,7 +33,6 @@ class WikiPageUpdate(BaseModel):
     tags: list[str] = []
     confidence: float | None = None
     importance: float | None = None
-    pinned: bool | None = None
 
 
 def wiki_page_response(page):
@@ -47,15 +43,6 @@ def wiki_page_response(page):
         "version": page.version,
         "confidence": page.confidence,
         "importance": page.importance,
-        "stability_days": page.stability_days,
-        "difficulty": page.difficulty,
-        "retrievability": page.retrievability,
-        "last_accessed": page.last_accessed.isoformat() if page.last_accessed else None,
-        "last_reviewed": page.last_reviewed.isoformat() if page.last_reviewed else None,
-        "review_count": page.review_count,
-        "reinforced_count": page.reinforced_count,
-        "conflict_count": page.conflict_count,
-        "pinned": page.pinned,
         "tags": page.tags,
         "source_log_entries": page.source_log_entries,
         "related": [{"target": r.target, "relation": r.relation} for r in page.related],
@@ -72,15 +59,6 @@ async def list_wiki():
             "title": p.title,
             "confidence": p.confidence,
             "importance": p.importance,
-            "retrievability": p.retrievability,
-            "stability_days": p.stability_days,
-            "difficulty": p.difficulty,
-            "last_accessed": p.last_accessed.isoformat() if p.last_accessed else None,
-            "last_reviewed": p.last_reviewed.isoformat() if p.last_reviewed else None,
-            "review_count": p.review_count,
-            "reinforced_count": p.reinforced_count,
-            "conflict_count": p.conflict_count,
-            "pinned": p.pinned,
             "tags": p.tags,
         }
         for p in pages
@@ -112,8 +90,6 @@ async def update_wiki_page(slug: str, req: WikiPageUpdate):
         page.confidence = max(0.0, min(1.0, req.confidence))
     if req.importance is not None:
         page.importance = max(0.0, min(1.0, req.importance))
-    if req.pinned is not None:
-        page.pinned = req.pinned
     page.version += 1
     page.last_updated = datetime.now()
     page.update_log.append(
@@ -128,7 +104,6 @@ async def update_wiki_page(slug: str, req: WikiPageUpdate):
             new_confidence=page.confidence,
         )
     )
-    record_memory_event(page, "manually_edited", now=page.last_updated)
     mem.wiki.save(page)
     return wiki_page_response(page)
 
@@ -189,11 +164,6 @@ async def unconsolidate_log(filename: str):
 @router.post("/dream")
 async def run_dream():
     return await run_dream_process()
-
-
-@router.post("/decay")
-async def decay():
-    return await run_decay()
 
 
 @router.post("/dev/clear")

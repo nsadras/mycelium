@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import List, Optional, Literal
 import uuid
-import logging
 
 from mycelium.models import WikiPage, DreamReport
 from mycelium.store import WikiStore, LogStore
@@ -11,13 +10,10 @@ from mycelium.encoder import Encoder
 from mycelium.budget import ContextBudget
 from mycelium.session import Session
 from mycelium import prompts
-from mycelium.decay import initialize_memory_state, record_memory_event
 from mycelium.facts import page_recall_context, routing_recall_index
 from mycelium.sources import source_contexts_for_pages
-from mycelium.structured_outputs import MemoryUsageOutput, RoutingOutput
+from mycelium.structured_outputs import RoutingOutput
 from mycelium.artifacts import ArtifactStore
-
-logger = logging.getLogger(__name__)
 
 class Mycelium:
     def __init__(
@@ -96,11 +92,9 @@ class Mycelium:
                 version=1,
                 confidence=0.8,
                 importance=1.0,
-                pinned=True,
                 tags=tags,
                 related=[]
             )
-            initialize_memory_state(profile_page, "manual_created")
             self._wiki.save(profile_page)
             
             # Register in the index if not present
@@ -214,15 +208,12 @@ class Mycelium:
             recall_block = f"{recall_context}\n\n" if recall_context else ""
             content = (
                 f"=== MEMORY: {page.title} "
-                f"(confidence: {page.confidence:.2f}, retrievability: {page.retrievability:.2f}, v{page.version}) ===\n"
+                f"(confidence: {page.confidence:.2f}, v{page.version}) ===\n"
                 f"{recall_block}{page.content}\n=== END MEMORY ==="
             )
             
             if budget.fits(content):
                 budget.consume(content)
-                record_memory_event(page, "retrieved")
-                self.wiki.save(page)
-                
                 if reconsolidate and self.config.reconsolidation.check_on_load:
                     error = await self.reconsolidation_engine.check(page, query)
                     if error.discrepancy_score > self.config.reconsolidation.lability_threshold:
@@ -251,12 +242,11 @@ class Mycelium:
             return base_index
 
         metadata_lines = [
-            "## Memory State",
+            "## Page Metadata",
             *[
                 (
                     f"- [[{p.slug}]]: confidence={p.confidence:.2f}; "
-                    f"importance={p.importance:.2f}; retrievability={p.retrievability:.2f}; "
-                    f"last_reviewed={p.last_reviewed.isoformat() if p.last_reviewed else 'never'}"
+                    f"importance={p.importance:.2f}"
                 )
                 for p in pages
             ],
@@ -266,46 +256,6 @@ class Mycelium:
         if recall_index:
             parts.append(recall_index)
         return "\n\n".join(parts)
-
-    async def record_memory_usage(
-        self,
-        user_message: str,
-        assistant_response: str,
-        loaded_pages: list[WikiPage],
-    ) -> list[dict]:
-        if not loaded_pages:
-            return []
-
-        pages_context = "\n\n".join(
-            (
-                f"PAGE: {page.slug}\n"
-                f"TITLE: {page.title}\n"
-                f"CONTENT:\n{page.content[:4000]}"
-            )
-            for page in loaded_pages
-        )
-        system, user = prompts.memory_usage_prompt(user_message, assistant_response, pages_context)
-        try:
-            response = await self.llm.call_structured(system, user, MemoryUsageOutput)
-        except Exception as exc:
-            logger.warning("Memory usage judge failed: %s", exc)
-            return []
-
-        raw_pages = response.get("pages", []) if isinstance(response, dict) else []
-        usage_results = []
-        for item in raw_pages:
-            if not isinstance(item, dict):
-                continue
-            slug = str(item.get("page", "")).strip()
-            used = bool(item.get("used", False))
-            reason = item.get("reason")
-            usage_results.append({"page": slug, "used": used, "reason": reason})
-            if used and self.wiki.exists(slug):
-                page = self.wiki.get(slug)
-                record_memory_event(page, "used")
-                self.wiki.save(page)
-
-        return usage_results
 
     from contextlib import asynccontextmanager
     

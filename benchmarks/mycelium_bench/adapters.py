@@ -256,7 +256,6 @@ class MyceliumMemorySystem:
                         "title": page.title,
                         "confidence": page.confidence,
                         "importance": page.importance,
-                        "retrievability": page.retrievability,
                     }
                     for page in loaded_pages
                 ],
@@ -347,7 +346,6 @@ class FullWikiMemorySystem(MyceliumMemorySystem):
                         "title": page.title,
                         "confidence": page.confidence,
                         "importance": page.importance,
-                        "retrievability": page.retrievability,
                     }
                     for page in all_pages
                 ],

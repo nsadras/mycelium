@@ -56,14 +56,13 @@ class EngramConfig:
             with open(config_path, "rb") as f:
                 data = tomllib.load(f)
 
-        store_root = Path(data.get("store", {}).get("path", "./mycelium_store"))
         engram_data = data.get("engram", {})
         whisper_data = engram_data.get("whisper", {})
         diarization_data = engram_data.get("diarization", {})
         summary_data = engram_data.get("summary", {})
         llm_data = data.get("llm", {})
 
-        store_path = Path(engram_data.get("store_path", store_root / "engram"))
+        store_path = Path(engram_data.get("store_path", "./mycelium_store/engram"))
         return cls(
             store_path=store_path,
             audio_dir=Path(engram_data.get("audio_dir", store_path / "audio")),

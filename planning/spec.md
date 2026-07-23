@@ -661,31 +661,23 @@ from pathlib import Path
 
 @dataclass
 class LLMConfig:
-    provider: str = 'ollama'
     url: str = 'http://localhost:11434'
     model: str = 'gemma3:12b'
     temperature: float = 0.2
     timeout_seconds: int = 120
-    max_retries: int = 3
 
 @dataclass
 class ReconsolidationConfig:
-    enabled: bool = True
     lability_threshold: float = 0.35
-    lability_window: str = 'session'
     check_on_load: bool = True
 
 @dataclass
 class DreamConfig:
-    strategy: str = 'full'
     conflict_policy: str = 'fork'
-    max_pages_per_run: int = 20
 
 @dataclass
 class Config:
-    store_path: Path = Path('./mycelium_store')
     context_budget_tokens: int = 8192
-    min_importance_to_encode: float = 0.3
     llm: LLMConfig = LLMConfig()
     reconsolidation: ReconsolidationConfig = ReconsolidationConfig()
     dream: DreamConfig = DreamConfig()

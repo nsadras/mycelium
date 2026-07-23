@@ -34,7 +34,6 @@ class Mycelium:
             self.config = Config.from_toml(Path(config_path))
         else:
             self.config = Config.defaults()
-            self.config.store_path = self.store_path
             self.config.llm.model = ollama_model
             self.config.llm.url = ollama_url
             self.config.context_budget_tokens = context_budget_tokens

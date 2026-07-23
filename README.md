@@ -473,9 +473,6 @@ The memory store is meant to be readable and editable, but prefer the UI/API for
 Runtime settings live in `mycelium.toml`:
 
 ```toml
-[store]
-path = "./mycelium_store"
-
 [llm]
 model = "gemma4:latest"
 url = "http://localhost:11434"
@@ -485,6 +482,9 @@ context_window_tokens = 32768
 [session]
 context_budget_tokens = 8192
 ```
+
+The memory store path is supplied explicitly to `Mycelium(store_path=...)` rather than read
+from the TOML file. Engram has its own `engram.store_path` setting.
 
 `llm.context_window_tokens` controls token-aware ingestion batching. It is separate from
 `session.context_budget_tokens`, which limits how much retrieved memory is loaded into chats.

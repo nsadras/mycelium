@@ -646,7 +646,6 @@ Mycelium targets Ollama as the local LLM runtime. All LLM calls go to `http://lo
 ```toml
 # mycelium.toml
 [llm]
-provider = "ollama"
 url = "http://localhost:11434"
 model = "gemma3:12b"            # recommended baseline
 timeout_seconds = 120
@@ -714,31 +713,21 @@ Pages are loaded in priority order until the budget is exhausted. The index file
 ```toml
 # mycelium.toml — full reference
 
-[store]
-path = "./mycelium_store"
-
 [llm]
-provider = "ollama"
 url = "http://localhost:11434"
 model = "gemma3:12b"
 temperature = 0.2
 timeout_seconds = 120
-max_retries = 3
 
 [session]
 context_budget_tokens = 8192  # max wiki content to inject per session
-min_importance_to_encode = 0.3
 
 [reconsolidation]
-enabled = true
 lability_threshold = 0.35     # prediction error score threshold
-lability_window = "session"   # "session" | int (seconds)
 check_on_load = true          # run prediction error check on every load
 
 [dream]
-strategy = "full"             # "full" | "new_only" | "association_only"
 conflict_policy = "fork"      # "fork" | "override" | "merge"
-max_pages_per_run = 20        # safety limit
 
 ```
 

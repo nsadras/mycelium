@@ -1,6 +1,3 @@
-[store]
-path = "./mycelium_store"
-
 [llm]
 model = "gemma4:12b"
 url = "http://localhost:11434"

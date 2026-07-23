@@ -1,6 +1,5 @@
 [store]
 path = "./mycelium_store"
-git_commits = false
 
 [llm]
 model = "gemma4:12b"

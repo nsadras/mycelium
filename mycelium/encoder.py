@@ -115,7 +115,7 @@ class Encoder:
                 for item in segments
             ]
         )
-        split_turns = source_type in {"benchmark_conversation", "meeting_transcript"}
+        split_turns = source_type in {"multi_party_conversation", "meeting_transcript"}
         expanded: list[SourceSegment] = []
         for source_index, segment in enumerate(base):
             parts = self._sentence_parts(segment.content) if split_turns else [segment.content]

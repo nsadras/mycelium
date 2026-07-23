@@ -274,7 +274,7 @@ def test_projection_demotes_visual_records_from_main_page():
 def test_multi_party_routing_uses_real_about_entities_not_synthetic_speakers(tmp_path):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     artifacts.save_source(SourceDocument(
-        source_id="source-1", source_type="benchmark_conversation",
+        source_id="source-1", source_type="multi_party_conversation",
         session_id="session-1", recorded_at="2024-01-10T12:00:00",
         occurred_at="2024-01-10T12:00:00", participants=["John", "Tim"],
         segments=[
@@ -302,7 +302,7 @@ def test_multi_party_routing_uses_real_about_entities_not_synthetic_speakers(tmp
         claim_ids=("relationship",), source_id="source-1",
     )]
 
-    targets = dream._identify_multi_party_claim_targets(evidence)
+    targets = dream._identify_participant_claim_targets(evidence)
 
     assert {target["page"] for target in targets} == {"person-john", "person-tim"}
 
@@ -391,14 +391,13 @@ def test_projection_removes_standalone_calendar_date_that_conflicts_with_normali
     assert display_claim_text(item) == "Ava left her job."
 
 
-def test_display_compaction_recognizes_safe_lexical_equivalents():
+def test_display_compaction_does_not_conflate_handwritten_synonyms():
     first = claim("first", "Ava started an online clothing store.", "biographical_fact")
     second = claim("second", "Ava opened an online clothes shop.", "biographical_fact")
 
     compacted = compact_display_claims([project_claim(first), project_claim(second)])
 
-    assert len(compacted) == 1
-    assert set(compacted[0].claim_ids) == {"first", "second"}
+    assert len(compacted) == 2
 
 
 def test_main_projection_caps_a_single_repetitive_bucket():

@@ -133,11 +133,6 @@ _DISPLAY_STOPWORDS = {
 
 def _diversity_terms(text: str) -> set[str]:
     normalized = text.lower()
-    normalized = re.sub(
-        r"\b(?:not giving up|never giving up|will not quit|won't quit)\b",
-        " persevere ",
-        normalized,
-    )
     terms = set()
     for token in re.findall(r"[a-z0-9]+", normalized):
         if token in _DISPLAY_STOPWORDS or (len(token) < 3 and not token.isdigit()):
@@ -146,12 +141,6 @@ def _diversity_terms(text: str) -> set[str]:
             if token.endswith(suffix) and len(token) - len(suffix) >= 4:
                 token = token[:-len(suffix)]
                 break
-        token = {
-            "open": "start",
-            "launch": "start",
-            "cloth": "clothing",
-            "shop": "store",
-        }.get(token, token)
         terms.add(token)
     return terms
 

@@ -41,7 +41,7 @@ mycelium/
 │   ├── store.py        # Markdown wiki/log persistence
 │   └── structured_outputs.py
 ├── server/             # FastAPI backend
-│   ├── main.py         # App setup and background scheduler
+│   ├── main.py         # App setup and API routing
 │   └── api/            # Sessions and memory API routers
 ├── ui/                 # React frontend (Vite + TypeScript + Tailwind)
 │   └── src/components/ # Chat, Wiki, Logs, Sidebar controls
@@ -399,9 +399,7 @@ These tool logs are raw observations. They do not require an encoding LLM call; 
 
 Chat sessions maintain an active episode buffer. Encoding happens when an episode is flushed:
 
-- manually via **Flush Current** or **Flush All**,
-- automatically for idle or large episodes,
-- on backend shutdown with a forced flush.
+- manually through the API or the **Flush Current**, **Flush Idle**, and **Flush All** UI controls.
 
 The encoder writes the full conversation transcript into one raw durable log. This log remains the
 canonical source evidence. In claim-evidence mode, the encoder also creates atomic claim artifacts;
@@ -413,7 +411,7 @@ Atomic claims use a compact semantic envelope:
 
 - `claim_type`: identity, state, event, preference, plan, belief, relationship, decision,
   commitment, interaction, observation, or unknown;
-- `predicate`: an open relation rather than a benchmark-specific slot vocabulary;
+- `predicate`: an open relation rather than a closed slot vocabulary;
 - `evidence_modality`: speech, visual, tool, inference, mixed, or unknown;
 - `temporal_status`: past, current, future, recurring, atemporal, or unknown;
 - `about`, open-ended `facets`, and exact provenance retain entities, qualifiers, and source support.
@@ -466,16 +464,11 @@ Wiki pages use an event-driven memory state rather than a single decay score:
 
 The decay pass refreshes retrievability and archives only pages that are simultaneously low-retrievability, low-importance, low-confidence, not pinned, and not recently accessed. Raw episodic logs still carry a simple `decay_score` field for log-level bookkeeping.
 
-## Background Automation
+## Manual Memory Operations
 
-The FastAPI backend starts an APScheduler instance on startup:
-
-- every 5 minutes: flush idle or large active episodes,
-- every 30 minutes: run the dream process,
-- every configured decay interval: refresh memory-state retrievability and archive weak pages,
-- on shutdown: force-flush active episodes.
-
-The web UI can also trigger the same memory operations manually.
+The backend does not schedule memory work or flush episodes during shutdown. Episode flushing,
+dream consolidation, decay, and reconsolidation run only when explicitly requested through the
+memory API or the web UI controls.
 
 ## Storage Layout
 
@@ -500,7 +493,6 @@ Runtime settings live in `mycelium.toml`:
 ```toml
 [store]
 path = "./mycelium_store"
-git_commits = false
 
 [llm]
 model = "gemma4:latest"
@@ -566,7 +558,6 @@ The UI supports Markdown, GitHub-flavored Markdown tables/lists, and KaTeX-rende
 
 ## Current Notes
 
-- The web app owns long-lived chat sessions and scheduled flushing. The direct library session context manager still encodes on context exit.
+- The web app owns long-lived chat sessions; active episodes remain buffered until manually flushed. The direct library session context manager still encodes on context exit.
 - Tool observations are logged immediately, while ordinary chat content is logged only when an episode is flushed.
 - Wiki memory state is event-driven. Retrieval, answer usage, dream creation/update, contradiction, and manual edits all update page metadata.
-- Git commit integration exists in configuration/model fields but is not a primary UI workflow.

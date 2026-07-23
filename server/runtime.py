@@ -30,8 +30,6 @@ def get_mem() -> mycelium.Mycelium:
     global _mem
     if _mem is None:
         _mem = mycelium.Mycelium(store_path="./mycelium_store", config_path="mycelium.toml")
-        # The web app owns episode flushing, so don't dream after every message.
-        _mem.config.dream.schedule = "manual"
     return _mem
 
 
@@ -293,7 +291,7 @@ async def flush_idle_episodes(
             candidates.append(session_id)
 
     save_meta(meta)
-    results = [await flush_session_episode(session_id, "manual" if force else "policy") for session_id in candidates]
+    results = [await flush_session_episode(session_id, "manual") for session_id in candidates]
     return {"flushed": len([r for r in results if r["status"] == "flushed"]), "results": results}
 
 
@@ -321,7 +319,6 @@ async def run_dream() -> dict[str, Any]:
         "entries_consolidated": report.entries_consolidated,
         "conflicts_found": report.conflicts_found,
         "conflicts_resolved": report.conflicts_resolved,
-        "git_commit_sha": report.git_commit_sha,
         "completed_source_ids": report.completed_source_ids,
         "pending_source_ids": report.pending_source_ids,
         "failures": report.failures,

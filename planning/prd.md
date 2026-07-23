@@ -44,7 +44,7 @@ Mycelium is the first agent memory framework to implement reconsolidation. That 
 
 ### 1.3 Design Principles
 
-- **Plain text over infrastructure.** Every memory artifact is a readable markdown file. The store can be inspected, edited, version-controlled with git, and understood without any tooling.
+- **Plain text over infrastructure.** Every memory artifact is a readable markdown file. The store can be inspected, edited, backed up or version-controlled externally, and understood without Mycelium-specific tooling.
 - **Local LLM over API calls.** All LLM work (encoding, consolidation, reconsolidation, relevancy routing) runs via Ollama. No token costs, no rate limits, no data leaving the machine.
 - **LLM calls over algorithms.** Clustering, ranking, conflict detection, and abstraction are all LLM calls — not embedding similarity or graph traversal. This is more powerful, more flexible, and eliminates the entire embedding stack.
 - **No frameworks.** Mycelium has no dependency on LangChain, LangGraph, or any agent framework. It is a plain Python library. Agent harnesses can be built on top of it using whatever framework the developer prefers.
@@ -85,7 +85,7 @@ The Karpathy wiki pattern (April 2026) makes the case compellingly: for curated 
 The additional advantages for Mycelium specifically:
 
 - **Debuggability.** Memory failures are visible. You can read the wiki pages that the agent read, see exactly what was in context, and understand why it behaved as it did.
-- **Version control.** The entire memory store is a git repository. Every reconsolidation event, every dream process run, every decay update is a diff. You have a complete audit trail for free.
+- **Auditability.** Memory artifacts remain readable files, so operators can inspect changes and choose their own backup or version-control workflow.
 - **Portability.** The memory store is just a folder. It can be copied, backed up, shared, or inspected without any database tooling.
 - **Publishability.** Plain-text memory traces are easier to analyze, benchmark, and report on than opaque vector store states.
 
@@ -144,7 +144,7 @@ The Karpathy wiki addresses the first two partially (the agent can rewrite wiki 
 │      │   append to logs/YYYY-MM-DD.md                           │
 │      │                                                           │
 │      ▼                                                           │
-│  Dream Process (async, post-session or scheduled)                │
+│  Dream Process (manually triggered)                              │
 │      │  1. local LLM reads recent log entries                    │
 │      │  2. identifies patterns / abstractions                    │
 │      │  3. rewrites relevant wiki/<topic>.md pages               │
@@ -311,7 +311,7 @@ The LLM returns structured entries which are appended to `logs/YYYY-MM-DD.md`.
 
 ### 5.2 Consolidation — The Dream Process
 
-An async background job (post-session or scheduled). Reads recent log entries and rewrites relevant wiki pages. Models slow-wave sleep consolidation: episodic → semantic, lossy compression, principle extraction.
+A manually triggered consolidation pass. Reads recent log entries and rewrites relevant wiki pages. Models slow-wave sleep consolidation: episodic → semantic, lossy compression, principle extraction.
 
 **Step 1 — Identify affected pages:**
 ```
@@ -431,7 +431,7 @@ ACCUMULATED UPDATE SIGNALS:
 [list of {discrepancy_score, explanation, suggested_update} from session]
 ```
 
-The rewritten page replaces the original. The labile copy is removed. The change is automatically captured in git if the store is a git repository (recommended).
+The rewritten page replaces the original. The labile copy is removed.
 
 #### 5.3.4 Update Log (Provenance)
 
@@ -523,7 +523,7 @@ Wiki pages with `decay_score < archive_threshold` (default 0.1) are moved to `wi
 
 ## 6. Python API Specification
 
-Mycelium is a plain Python library. Dependencies: `pathlib`, `httpx` (Ollama client), `tomllib`, `apscheduler`. No LangChain, no vector DB, no embedding model.
+Mycelium is a plain Python library with no LangChain, vector database, or embedding-model dependency.
 
 ### 6.1 Core Client
 
@@ -536,10 +536,7 @@ mem = mycelium.Mycelium(
     ollama_url='http://localhost:11434',
     context_budget_tokens=8192,        # max tokens to inject per session
     lability_threshold=0.35,
-    dream_schedule='post_session',     # 'post_session' | 'cron' | 'manual'
-    decay_interval_hours=6,
     conflict_policy='fork',            # 'fork' | 'override' | 'merge'
-    git_commits=True,                  # auto-commit store changes
 )
 ```
 
@@ -557,7 +554,7 @@ async with mem.session(query=user_query, session_id='ses-abc') as session:
 # On __aexit__:
 #   1. Session transcript appended to today's log
 #   2. Labile pages resolved and rewritten
-#   3. Dream Process triggered (if dream_schedule='post_session')
+# Dream consolidation remains an explicit `mem.dream()` call.
 ```
 
 ### 6.3 Retrieval API
@@ -613,7 +610,6 @@ report = await mem.dream(
 #   .entries_consolidated int
 #   .conflicts_found     List[str]   — page slugs with conflicts
 #   .conflicts_resolved  int
-#   .git_commit_sha      str | None
 ```
 
 ### 6.6 Wiki Management API
@@ -748,7 +744,6 @@ Pages are loaded in priority order until the budget is exhausted. The index file
 
 [store]
 path = "./mycelium_store"
-git_commits = te            # auto-commit after each dream run
 
 [llm]
 provider = "ollama"
@@ -769,14 +764,11 @@ lability_window = "session"   # "session" | int (seconds)
 check_on_load = true          # run prediction error check on every load
 
 [dream]
-schedule = "post_session"     # "post_session" | "cron" | "manual"
-cron_expression = "0 2 * * *" # 2am daily (if schedule = "cron")
 strategy = "full"             # "full" | "new_only" | "association_only"
 conflict_policy = "fork"      # "fork" | "override" | "merge"
 max_pages_per_run = 20        # safety limit
 
 [decay]
-interval_hours = 6
 archive_threshold = 0.10      # wiki pages below this → _archive/
 log_threshold = 0.05          # log entries below this → soft-deleted
 half_lifers = 168         # 1 week for importance=0 entries
@@ -821,7 +813,7 @@ Every reconsolidation event captures a structured pair: (original belief, correc
 | **v0.1 — Foundation** | File store + episodic log | `Mycelium` client, `mycelium_store/` layout, log append, TOML config, Ollama wrapper |
 | **v0.2 — Encoding** | LLM-based memory extraction | `encode()`, `encode_session()`, importascoring LLM call, log frontmatter |
 | **v0.3 — Wiki + Retrieval** | Index routing + context loading | `_index.md` format, `load_context()` LLM routing call, context budget manager, `session()` context manager |
-| **v0.4 — Dream Process** | Async consolidation pipeline | `dream()`, page identification LLM call, page rewrite LLM call, index update, decay engine, git commits |
+| **v0.4 — Dream Process** | Async consolidation pipeline | `dream()`, page identification LLM call, page rewrite LLM call, index update, decay engine |
 | **v0.5 — Reconsolidation** | Lability window + prediction error | Prediction error LLM call, labile file management, rewrite sys, `update_log` provenance |
 | **v0.6 — Harness** | Agent integration examples | LangGraph integration example, CLI tool (`mycelium dream`, `mycelium status`), documentation |
 | **v1.0 — Benchmarks** | Evaluation + release | LOCOMO eval, comparison vs. Mem0 / HippoRAG / plain Karpathy wiki, PyPI release |

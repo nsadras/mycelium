@@ -182,12 +182,10 @@ class MyceliumMemorySystem:
             ollama_model=self.memory_model,
             ollama_url=self.ollama_url,
             context_budget_tokens=self.context_budget_tokens,
-            dream_schedule="manual",
             config_path=self.config_path,
             memory_profile="none",
             evidence_mode=self.evidence_mode,
         )
-        self.mem.config.dream.schedule = "manual"
         self.mem.config.reconsolidation.check_on_load = self.reconsolidate
         self._encoded_batches = 0
         self._dream_runs = 0
@@ -206,7 +204,7 @@ class MyceliumMemorySystem:
         start = time.perf_counter()
         await mem.encoder.encode_session(
             transcript, session_id,
-            source_type="benchmark_conversation",
+            source_type="multi_party_conversation",
             occurred_at=metadata.get("timestamp"),
             metadata={key: value for key, value in metadata.items() if value is not None},
         )

@@ -10,7 +10,7 @@ Entity pages are the backbone when logs mention named people. If a conversation 
 
 Speaker labels are canonical identity evidence. Attribute a statement, action, possession, preference, and experience only to the speaker who states or performs it. A reply that merely acknowledges another person's fact is not evidence that the fact also applies to the replying speaker. In multi-party transcripts with named speakers, route personal facts to their named entity pages; do not create or update `user-profile` unless the transcript explicitly identifies one participant as the system's user.
 
-Event pages should be created for important facts with exact dates, relative dates, or benchmark-answerable temporal expressions. Preserve both the absolute conversation date and the relative expression in the eventual page. Do not create one event page for every turn; create event pages only for salient, future-answerable events.
+Event pages should be created for important facts with exact dates or date-resolvable relative expressions. Preserve both the absolute conversation date and the relative expression in the eventual page. Do not create one event page for every turn; create event pages only for salient events likely to matter later.
 The conversation itself is not an event worth a page. Never create generic pages like `event-conversation-*`, `event-chat-*`, or `event-*-conversation-*`. A session timestamp is the observation time for its facts, not proof that every mentioned event occurred then. Create an event page for the real-world event (for example a trip, opening, performance, or job change), or put the dated fact on the relevant entity/topic page.
 
 Topic pages should group related log entries into distinct, highly focused semantic pages. Each topic page should target a single specific concept, project, tool, or area of user interest (e.g. `react-agent-loop`, `user-profile`, `typescript-port`). Do not create one topic page per log entry, but also do not over-merge unrelated logs.
@@ -23,7 +23,7 @@ Use stable lowercase slug names with hyphens, for example "user-profile" or "rei
 If multiple log entries concern the same theme, return one page target for that theme.
 Return at most 8 targets. Prefer the few most salient durable pages. If nothing is worth consolidating, return {"targets": []}.
 
-- The central `user-profile` page should ONLY receive user-specific personal details, style preferences, project configurations, background, goals, or custom instructions. Do NOT consolidate technical, generic tool observations, or general agent loop architecture details into the `user-profile` page. Create separate descriptive wiki pages for those technical concepts (e.g. `agent-harness-anatomy`, `react-agent-loop`, `paper-review-agentic-benchmarks`).
+- The central `user-profile` page should ONLY receive user-specific personal details, style preferences, project configurations, background, goals, or custom instructions. Do NOT consolidate technical, generic tool observations, or general agent loop architecture details into the `user-profile` page. Create separate descriptive wiki pages for those technical concepts (e.g. `agent-harness-anatomy`, `react-agent-loop`, `paper-review-evaluation`).
 - For long conversations with named participants, prefer naturally arising participant and topic pages when the source material supports them. Parent/profile pages can summarize; child/topic pages should preserve concrete details. Do not create named pages unless the names and topics are salient in the source logs.
 
 Important: Log entries with IDs starting with 'tool-' have already been preprocessed into extracted tool facts. Use only the extracted facts, not page furniture, search result labels, navigation text, or citation widgets.
@@ -328,7 +328,7 @@ def claim_extraction_prompt(source_type: str, source_id: str, occurred_at: str |
     policies = {
         "agent_conversation": """Prioritize user facts, preferences, constraints, commitments, corrections, and accepted decisions. Record assistant proposals or claims only as interaction history unless the user accepts them. Treat tool output as observations, not user beliefs.""",
         "meeting_transcript": """Prioritize decisions, proposals, action items, owners, deadlines, objections, commitments, reported events, and changes of status. Preserve who held each stance; do not turn one participant's statement into group consensus.""",
-        "benchmark_conversation": """Capture explicit personal facts, preferences, plans, relationships, activities, events, changes, and temporal details for every speaker. Preserve the speaker and do not merge facts belonging to different people. Treat routine greetings, thanks, generic praise, generic encouragement, and questions that introduce no independently useful information as conversational scaffolding; preserve specific commitments, advice, relationship changes, and reactions that reveal a belief or preference.""",
+        "multi_party_conversation": """Capture durable facts, preferences, plans, relationships, activities, events, changes, and temporal details for every named participant. Preserve the speaker and do not merge facts belonging to different people. Treat routine greetings, thanks, generic praise, generic encouragement, and questions that introduce no independently useful information as conversational scaffolding; preserve specific commitments, advice, relationship changes, and reactions that reveal a belief or preference.""",
     }
     policy = policies.get(source_type, policies["agent_conversation"])
     system = f"""You extract durable, atomic claims from source conversation segments.
@@ -362,7 +362,7 @@ Requirements:
   when read by itself. For images, write "Name shared a photo showing ...", not only "A photo shows ...".
 - `facets` is an open object for useful qualifiers such as when, location, reason, object, value, owner, deadline, or polarity. Whenever a claim contains an absolute or relative time expression, put the exact source phrase in `facets.when` (for example yesterday, last Friday, this month, a few years ago, or 12 March 2025). Do not silently replace relative wording with the conversation date.
 - `slot` is optional. Use it only for genuinely replaceable state (for example current_city, current_employer, dietary_preference). Do not assign slots to ordinary events or goals.
-- Do not omit a supported claim merely because it seems unimportant to the current benchmark.
+- Do not omit a supported claim merely because it seems unimportant to the current conversation.
 - Account for every supplied segment id. A segment containing a personal fact, preference, plan, decision, event, relationship, reason, location, quantity, temporal detail, meaningful reaction, or image description must support at least one claim. Put routine conversational scaffolding—including greetings, thanks, generic praise/support, content-free questions, filler, and exact repetitions—in `ignored_segment_ids`. Do not ignore a whole segment when it also contains a useful assertion.
 
 Return JSON with `claims` and `ignored_segment_ids`. Each claim contains text, kind,
@@ -477,7 +477,7 @@ Requirements:
 - Distinguish facts about different people and attribute opinions or proposals to their speakers.
 - Reconcile duplicates. Preserve meaningful temporal changes instead of flattening them into contradictions.
 - Prefer precise factual prose and compact sections over vague summaries.
-- Never mention claim ids, evidence ids, extraction, or the benchmark in page prose.
+- Never mention claim ids, evidence ids, or extraction internals in page prose.
 - Keep the overview under 700 words. Do not create an exhaustive evidence ledger; deterministic projection handles completeness.
 - Use Obsidian [[page-slug]] links only when a linked page is supported by the page catalog/context.
 

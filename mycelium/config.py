@@ -1,14 +1,8 @@
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-# Use tomllib from standard library in Python 3.11+
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    # Use tomli for older versions if needed, though we require >= 3.11
-    import tomllib
+import tomllib
 
 @dataclass
 class LLMConfig:
@@ -29,8 +23,6 @@ class ReconsolidationConfig:
 
 @dataclass
 class DreamConfig:
-    schedule: str = 'post_session'
-    cron_expression: str = '0 2 * * *'
     strategy: str = 'full'
     conflict_policy: str = 'override'
     max_pages_per_run: int = 20
@@ -42,7 +34,6 @@ class DreamConfig:
 
 @dataclass
 class DecayConfig:
-    interval_hours: int = 6
     archive_threshold: float = 0.10
     log_threshold: float = 0.05
     half_life_hours: int = 168
@@ -50,7 +41,6 @@ class DecayConfig:
 @dataclass
 class Config:
     store_path: Path = Path('./mycelium_store')
-    git_commits: bool = False
     context_budget_tokens: int = 32768
     llm: Optional[LLMConfig] = None
     reconsolidation: Optional[ReconsolidationConfig] = None
@@ -77,7 +67,6 @@ class Config:
             data = tomllib.load(f)
             
         store_path = Path(data.get('store', {}).get('path', './mycelium_store'))
-        git_commits = data.get('store', {}).get('git_commits', False)
         context_budget_tokens = data.get('session', {}).get('context_budget_tokens', 32768)
         
         llm_data = data.get('llm', {})
@@ -101,8 +90,6 @@ class Config:
         
         dream_data = data.get('dream', {})
         dream = DreamConfig(
-            schedule=dream_data.get('schedule', 'post_session'),
-            cron_expression=dream_data.get('cron_expression', '0 2 * * *'),
             strategy=dream_data.get('strategy', 'full'),
             conflict_policy=dream_data.get('conflict_policy', 'override'),
             max_pages_per_run=dream_data.get('max_pages_per_run', 20),
@@ -115,7 +102,6 @@ class Config:
         
         decay_data = data.get('decay', {})
         decay = DecayConfig(
-            interval_hours=decay_data.get('interval_hours', 6),
             archive_threshold=decay_data.get('archive_threshold', 0.10),
             log_threshold=decay_data.get('log_threshold', 0.05),
             half_life_hours=decay_data.get('half_life_hours', 168)
@@ -123,7 +109,6 @@ class Config:
         
         return cls(
             store_path=store_path,
-            git_commits=git_commits,
             context_budget_tokens=context_budget_tokens,
             llm=llm,
             reconsolidation=reconsolidation,

@@ -6,7 +6,7 @@ from datetime import datetime
 
 @pytest.fixture
 def temp_mycelium(tmp_path):
-    mem = Mycelium(store_path=tmp_path / "store", git_commits=False)
+    mem = Mycelium(store_path=tmp_path / "store")
     mem.llm = AsyncMock()
     mem.encoder = AsyncMock()
     return mem

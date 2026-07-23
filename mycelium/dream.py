@@ -151,7 +151,6 @@ class DreamProcess:
                 len(completed_source_ids),
                 [],
                 0,
-                None,
                 completed_source_ids=completed_source_ids,
                 pending_source_ids=pending_source_ids,
                 failures=[
@@ -166,7 +165,7 @@ class DreamProcess:
             self._uses_claim_evidence() and self._is_multi_party_evidence(evidence)
         )
         if deterministic_multi_party:
-            all_targets = self._identify_multi_party_claim_targets(evidence)
+            all_targets = self._identify_participant_claim_targets(evidence)
         else:
             all_targets = []
             identify_batches = self._evidence_batches(
@@ -581,26 +580,12 @@ class DreamProcess:
         if not dry_run:
             await self.decay_engine.run_pass()
             
-        commit_sha = None
-        if self.config.git_commits and not dry_run:
-            try:
-                import git
-                repo = git.Repo(self.config.store_path.parent)
-                repo.git.add(A=True)
-                commit = repo.index.commit(f"chore: dream process run ({pages_updated} up, {pages_created} cr)")
-                commit_sha = commit.hexsha
-            except ImportError:
-                pass
-            except Exception:
-                pass
-
         return DreamReport(
             pages_updated=pages_updated,
             pages_created=pages_created,
             entries_consolidated=len(completed_source_ids),
             conflicts_found=conflicts_found,
             conflicts_resolved=conflicts_resolved,
-            git_commit_sha=commit_sha,
             completed_source_ids=completed_source_ids,
             pending_source_ids=pending_source_ids,
             failures=failures,
@@ -753,7 +738,6 @@ class DreamProcess:
             entries_consolidated=0,
             conflicts_found=[],
             conflicts_resolved=0,
-            git_commit_sha=None,
         )
 
     async def _identify_targets_for_chunk(
@@ -820,8 +804,8 @@ class DreamProcess:
                 evidence_ids = [item.evidence_id for item in evidence]
             target = dict(target)
             target_slug = _slugify(str(target.get("page", "")))
-            if target_slug == "user-profile" and self._benchmark_evidence(evidence):
-                # Multi-party benchmark/meeting participants are not implicitly the system user.
+            if target_slug == "user-profile" and self._has_named_participant_scope(evidence):
+                # Named participants are not implicitly the system user.
                 continue
             target["evidence_ids"] = list(dict.fromkeys(evidence_ids))
             target["log_entry_ids"] = list(
@@ -833,11 +817,14 @@ class DreamProcess:
                 validated.append(target)
         return validated
 
-    def _benchmark_evidence(self, evidence: list[EvidenceChunk]) -> bool:
+    def _has_named_participant_scope(self, evidence: list[EvidenceChunk]) -> bool:
         source_ids = {chunk.source_id for chunk in evidence if chunk.source_id}
         for source_id in source_ids:
             try:
-                if self.artifacts.get_source(source_id).source_type in {"benchmark_conversation", "meeting_transcript"}:
+                if self.artifacts.get_source(source_id).source_type in {
+                    "multi_party_conversation",
+                    "meeting_transcript",
+                }:
                     return True
             except FileNotFoundError:
                 continue
@@ -933,13 +920,13 @@ class DreamProcess:
             return False
         for source_id in source_ids:
             try:
-                if self.artifacts.get_source(source_id).source_type != "benchmark_conversation":
+                if self.artifacts.get_source(source_id).source_type != "multi_party_conversation":
                     return False
             except FileNotFoundError:
                 return False
         return True
 
-    def _identify_multi_party_claim_targets(self, evidence: list[EvidenceChunk]) -> list[dict]:
+    def _identify_participant_claim_targets(self, evidence: list[EvidenceChunk]) -> list[dict]:
         """Route conversation facts to real participant pages, never synthetic speaker labels."""
         targets: dict[str, dict] = {}
         for chunk in evidence:

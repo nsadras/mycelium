@@ -27,12 +27,9 @@ class Mycelium:
         ollama_url: str = 'http://localhost:11434',
         context_budget_tokens: int = 32768,
         lability_threshold: float = 0.35,
-        dream_schedule: Literal['post_session', 'cron', 'manual'] = 'post_session',
-        decay_interval_hours: int = 6,
         conflict_policy: Literal['fork', 'override', 'merge'] = 'override',
-        git_commits: bool = False,
         config_path: str | Path | None = None,
-        memory_profile: Literal["user", "scenario", "none"] = "user",
+        memory_profile: Literal["user", "none"] = "user",
         evidence_mode: Literal["raw", "claims", "hybrid"] | None = None,
     ):
         self.store_path = Path(store_path)
@@ -46,10 +43,7 @@ class Mycelium:
             self.config.llm.url = ollama_url
             self.config.context_budget_tokens = context_budget_tokens
             self.config.reconsolidation.lability_threshold = lability_threshold
-            self.config.dream.schedule = dream_schedule
-            self.config.decay.interval_hours = decay_interval_hours
             self.config.dream.conflict_policy = conflict_policy
-            self.config.git_commits = git_commits
 
         if evidence_mode is not None:
             self.config.dream.evidence_mode = evidence_mode
@@ -64,7 +58,7 @@ class Mycelium:
             url=self.config.llm.url,
             model=self.config.llm.model,
             temperature=self.config.llm.temperature,
-            timeout=self.config.timeout_seconds if hasattr(self.config, 'timeout_seconds') else self.config.llm.timeout_seconds,
+            timeout=self.config.llm.timeout_seconds,
             context_window_tokens=self.config.llm.context_window_tokens,
         )
         from mycelium.reconsolidation import ReconsolidationEngine
@@ -74,32 +68,20 @@ class Mycelium:
         from mycelium.dream import DreamProcess
         self.dream_process = DreamProcess(self.llm, self._wiki, self._log_store, self.config, self.artifacts)
 
-    def _ensure_seed_profile(self, memory_profile: Literal["user", "scenario", "none"]) -> None:
+    def _ensure_seed_profile(self, memory_profile: Literal["user", "none"]) -> None:
         if memory_profile == "none":
             return
-        if memory_profile == "scenario":
-            slug = "scenario-profile"
-            title = "Scenario Profile"
-            content = (
-                "Central repository for benchmark scenario participants, conversation setup, "
-                "and durable facts that do not belong to one real user's personal profile.\n\n"
-                "## Key Facts\n"
-                "- This store represents an evaluation scenario, not the operator's personal memory.\n\n"
-                "## Event Timeline\n"
-            )
-            tags = ["profile", "scenario", "benchmark"]
-            summary = "Central repository for benchmark scenario participants and conversation setup."
-        else:
-            slug = "user-profile"
-            title = "User Profile"
-            content = (
-                "Central repository for user preferences, background, plans, and custom instructions.\n\n"
-                "## Key Facts\n"
-                "- The page tracks durable user-specific details and preferences.\n\n"
-                "## Event Timeline\n"
-            )
-            tags = ["profile", "personalization"]
-            summary = "Central repository for user preferences, background, plans, and custom instructions."
+
+        slug = "user-profile"
+        title = "User Profile"
+        content = (
+            "Central repository for user preferences, background, plans, and custom instructions.\n\n"
+            "## Key Facts\n"
+            "- The page tracks durable user-specific details and preferences.\n\n"
+            "## Event Timeline\n"
+        )
+        tags = ["profile", "personalization"]
+        summary = "Central repository for user preferences, background, plans, and custom instructions."
 
         if not self._wiki.exists(slug):
             from mycelium.models import WikiPage
@@ -343,9 +325,6 @@ class Mycelium:
             
             await self.reconsolidation_engine.resolve_labile_pages(session_id)
             
-            if self.config.dream.schedule == 'post_session':
-                await self.dream()
-
     async def dream(self, **kwargs) -> DreamReport:
         kwargs.setdefault('conflict_policy', self.config.dream.conflict_policy)
         return await self.dream_process.run(**kwargs)

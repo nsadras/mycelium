@@ -262,7 +262,7 @@ class ArtifactStore:
             return json.load(handle)
 
 
-_LOC0MO_LINE = re.compile(
+_LABELED_TRANSCRIPT_LINE = re.compile(
     r"^\[(?P<label>[^]]+)]\s*(?:\((?P<time>[^)]+)\)\s*)?(?P<speaker>[^:]+):\s*(?P<text>.*)$"
 )
 _ROLE_LINE = re.compile(r"^(?P<role>USER|ASSISTANT|SYSTEM|TOOL)(?:\s*\([^)]*\))?:\s*(?P<text>.*)$", re.I)
@@ -278,16 +278,16 @@ def segment_transcript(transcript: str, source_id: str) -> list[SourceSegment]:
             continue
         if not segments and re.match(r"^(Session|Timestamp|Sample):\s*", line, re.I):
             continue
-        locomo = _LOC0MO_LINE.match(line)
+        labeled_turn = _LABELED_TRANSCRIPT_LINE.match(line)
         role_match = _ROLE_LINE.match(line)
-        if locomo:
+        if labeled_turn:
             current = SourceSegment(
                 segment_id=f"{source_id}#seg-{len(segments) + 1:04d}",
                 index=len(segments),
-                speaker=locomo.group("speaker").strip(),
-                timestamp=locomo.group("time"),
-                content=locomo.group("text").strip(),
-                metadata={"source_label": locomo.group("label")},
+                speaker=labeled_turn.group("speaker").strip(),
+                timestamp=labeled_turn.group("time"),
+                content=labeled_turn.group("text").strip(),
+                metadata={"source_label": labeled_turn.group("label")},
             )
             segments.append(current)
         elif role_match:

@@ -75,9 +75,6 @@ dependencies = [
     "pyyaml>=6.0",          # frontmatter parsing
     "python-frontmatter>=1.1",  # markdown + YAML frontmatter
     "tiktoken>=0.7",        # token counting (model-agnostic)
-    "apscheduler>=3.10",    # dream process scheduling
-    "tomllib",              # config parsing (stdlib in 3.11+)
-    "gitpython>=3.1",       # optional git commits
 ]
 
 [project.optional-dependencies]
@@ -172,7 +169,6 @@ class DreamReport:
     entries_consolidated: int
     conflicts_found: list[str]           # page slugs
     conflicts_resolved: int
-    git_commit_sha: Optional[str]
 
 @dataclass
 class MemoryResult:
@@ -444,8 +440,7 @@ class DreamProcess:
         6. Update _index.md via consolidation_index_prompt
         7. Mark consolidated entries in LogStore
         8. Run decay pass (call decay engine)
-        9. If config.git_commits and not dry_run: git commit
-        10. Return DreamReport
+        9. Return DreamReport
         """
         ...
 
@@ -626,7 +621,6 @@ class Mycelium:
         On __aexit__:
           1. Encode transcript via Encoder.encode_session()
           2. Resolve labile pages via ReconsolidationEngine.resolve_labile_pages()
-          3. If dream_schedule == 'post_session': await dream.run()
         """
         ...
 ```
@@ -644,10 +638,7 @@ class Mycelium:
         ollama_url: str = 'http://localhost:11434',
         context_budget_tokens: int = 8192,
         lability_threshold: float = 0.35,
-        dream_schedule: Literal['post_session', 'cron', 'manual'] = 'post_session',
-        decay_interval_hours: int = 6,
         conflict_policy: Literal['fork', 'override', 'merge'] = 'fork',
-        git_commits: bool = False,
         config_path: str | Path | None = None,
     ):
         """
@@ -734,15 +725,12 @@ class ReconsolidationConfig:
 
 @dataclass
 class DreamConfig:
-    schedule: str = 'post_session'
-    cron_expression: str = '0 2 * * *'
     strategy: str = 'full'
     conflict_policy: str = 'fork'
     max_pages_per_run: int = 20
 
 @dataclass
 class DecayConfig:
-    interval_hours: int = 6
     archive_threshold: float = 0.10
     log_threshold: float = 0.05
     half_life_hours: int = 168
@@ -750,7 +738,6 @@ class DecayConfig:
 @dataclass
 class Config:
     store_path: Path = Path('./mycelium_store')
-    git_commits: bool = False
     context_budget_tokens: int = 8192
     min_importance_to_encode: float = 0.3
     llm: LLMConfig = LLMConfig()
@@ -804,7 +791,7 @@ from mycelium.store import WikiStore, LogStore
 @pytest.fixture
 def tmp_store(tmp_path):
     """Creates a Mycelium instance backed by a temp directory."""
-    return Mycelium(store_path=tmp_path / 'store', git_commits=False)
+    return Mycelium(store_path=tmp_path / 'store')
 
 @pytest.fixture
 def mock_llm():
@@ -852,7 +839,7 @@ def mock_llm():
 - `session.record()` appends to transcript
 - On exit: encode_session called with full transcript
 - On exit: resolve_labile_pages called
-- On exit with `dream_schedule='post_session'`: dream.run() called
+- Dream consolidation runs only through an explicit `dream()` call
 
 ---
 
@@ -927,7 +914,6 @@ async def main():
     mem = mycelium.Mycelium(
         store_path='./smoke_test_store',
         ollama_model='gemma3:12b',
-        dream_schedule='manual',   # don't auto-dream during smoke test
     )
 
     # Session 1: record some experience

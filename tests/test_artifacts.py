@@ -46,7 +46,7 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
 
     await encoder.encode_session(
         "[D1:1] (2024-01-10) Ava: I prefer tea.", "session-1",
-        source_type="benchmark_conversation", occurred_at="2024-01-10",
+        source_type="multi_party_conversation", occurred_at="2024-01-10",
     )
 
     source = artifacts.list_sources()[0]
@@ -155,7 +155,7 @@ async def test_encoder_fills_missing_about_and_requires_inference_basis(tmp_path
     await encoder.encode_session(
         "[D1:1] (2024-01-10) Ava: Teaching dance is something I enjoy.",
         "session-1",
-        source_type="benchmark_conversation",
+        source_type="multi_party_conversation",
         occurred_at="2024-01-10",
     )
 
@@ -213,7 +213,7 @@ async def test_encoder_repairs_substantive_unclaimed_segments(tmp_path):
         "[D1:1] (2024-01-10) Ava: I like tea.\n"
         "[D1:2] (2024-01-10) Ava: I visited Paris yesterday.",
         "session-1",
-        source_type="benchmark_conversation",
+        source_type="multi_party_conversation",
         occurred_at="2024-01-10",
     )
 
@@ -275,7 +275,7 @@ def test_subjectless_visual_attribution_repairs_description_grammar_and_ids():
     assert "source-" not in text
 
 
-def test_benchmark_turns_are_split_for_atomic_coverage(tmp_path):
+def test_labeled_multi_party_turns_are_split_for_atomic_coverage(tmp_path):
     encoder = Encoder(
         AsyncMock(),
         LogStore(tmp_path / "logs"),
@@ -287,7 +287,7 @@ def test_benchmark_turns_are_split_for_atomic_coverage(tmp_path):
         "[D1:1] (2023-01-29) Jon: I found a studio. I visited Paris yesterday!\n"
         "Image caption: a bright room",
         "source-1",
-        "benchmark_conversation",
+        "multi_party_conversation",
     )
 
     assert [segment.content for segment in segments] == [
@@ -335,7 +335,7 @@ async def test_encoder_repairs_dialogue_shaped_claim_as_atomic_fact(tmp_path):
     await encoder.encode_session(
         "[D1:1] (2024-01-10) Ava: I prefer tea.",
         "session-1",
-        source_type="benchmark_conversation",
+        source_type="multi_party_conversation",
         occurred_at="2024-01-10",
     )
 
@@ -379,7 +379,7 @@ async def test_encoder_runs_bounded_final_normalization_for_rejected_repair(tmp_
     await encoder.encode_session(
         "[D1:1] (2024-01-10) Ava: My store is doing great!",
         "session-1",
-        source_type="benchmark_conversation",
+        source_type="multi_party_conversation",
         occurred_at="2024-01-10",
     )
 
@@ -412,7 +412,7 @@ async def test_encoder_honors_explicitly_ignored_scaffolding(tmp_path):
     await encoder.encode_session(
         "[D1:1] (2024-01-10) Ava: Thanks for the encouragement!",
         "session-1",
-        source_type="benchmark_conversation",
+        source_type="multi_party_conversation",
         occurred_at="2024-01-10",
     )
 
@@ -457,7 +457,7 @@ async def test_encoder_programmatically_ignores_image_urls(tmp_path):
         "[D1:1] (2024-01-10) Ava: Ava shared a painting.\n"
         "Image URL: ['https://example.test/painting.jpg']",
         "session-1",
-        source_type="benchmark_conversation",
+        source_type="multi_party_conversation",
         occurred_at="2024-01-10",
     )
 
@@ -539,7 +539,7 @@ def test_semantic_envelope_does_not_infer_from_kind_or_prose():
     assert unknown.temporal_status == "unknown"
 
 
-def test_locomo_style_timestamp_anchors_relative_dates():
+def test_human_readable_timestamp_anchors_relative_dates():
     facets = normalize_temporal_facets(
         {"when": "yesterday"}, "4:24 pm on 16 March, 2023"
     )

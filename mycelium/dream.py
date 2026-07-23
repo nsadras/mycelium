@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -15,7 +16,6 @@ from mycelium.batching import batch_items, split_text_by_tokens, structured_inpu
 from mycelium import prompts
 from mycelium.structured_outputs import (
     CanonicalizationOutput,
-    ConsolidationIdentifyOutput,
     ToolObservationExtractionOutput,
     WikiMergeOutput,
     WikiRewriteOutput,
@@ -29,6 +29,7 @@ from mycelium.artifacts import (
     ClaimReconciler,
     DERIVATION_OPERATIONS,
     MemoryClaim,
+    SourceDocument,
     parse_source_datetime,
 )
 from mycelium.projection import (
@@ -107,7 +108,6 @@ class DreamProcess:
         self._identification_failures: dict[str, str] = {}
         self._preparation_failures: dict[str, str] = {}
         self._pending_page_claim_ids: dict[str, set[str]] = {}
-        self._stale_projection_slugs: set[str] = set()
 
     def _uses_claim_evidence(self) -> bool:
         return self.config.dream.evidence_mode != "raw"
@@ -122,7 +122,9 @@ class DreamProcess:
         raw_entries = self.logs.get_unconsolidated()
         self._preparation_failures = {}
         self._pending_page_claim_ids: dict[str, set[str]] = {}
-        self._stale_projection_slugs: set[str] = set()
+        retired_derived_pages, migrated_projection_parents = (
+            self._retire_derived_pages(dry_run=dry_run)
+        )
         entries = await self._prepare_entries(raw_entries)
         evidence = self._build_run_evidence(entries)
         self._identification_failures = {}
@@ -140,10 +142,10 @@ class DreamProcess:
             ]
             if not dry_run and completed_source_ids:
                 self.logs.mark_consolidated(completed_source_ids)
-            if not dry_run and self._index_needs_rebuild():
+            if not dry_run and (retired_derived_pages or self._index_needs_rebuild()):
                 self._save_deterministic_index({}, dry_run=False, now=datetime.now())
             return DreamReport(
-                0,
+                len(migrated_projection_parents),
                 0,
                 len(completed_source_ids),
                 [],
@@ -168,7 +170,7 @@ class DreamProcess:
             identify_batches = self._evidence_batches(
                 evidence,
                 lambda text: prompts.consolidation_identify_prompt(index_content, text),
-                num_predict=2048,
+                num_predict=4096,
             )
             for chunk in identify_batches:
                 all_targets.extend(await self._identify_targets_for_chunk(index_content, chunk))
@@ -197,7 +199,7 @@ class DreamProcess:
             for source_id, reason in self._preparation_failures.items()
         )
             
-        pages_updated = 0
+        pages_updated = len(migrated_projection_parents)
         pages_created = 0
         updated_operations: dict[str, int] = {}
         created_operations: dict[str, int] = {}
@@ -283,7 +285,7 @@ class DreamProcess:
             if self._uses_claim_evidence():
                 content = self._strip_internal_artifact_ids(content)
                 content = self._dedupe_repeated_lines(content)
-                content = self._with_main_projection(page_slug, content)
+                content = self._with_inline_projection(page_slug)
             
             now = datetime.now()
             
@@ -532,17 +534,11 @@ class DreamProcess:
             for slug, page in changed_pages.items()
             if not (changed_page_sources.get(slug, set()) & failed_source_ids)
         }
-        if self._uses_claim_evidence():
-            derived, derived_created, derived_updated = self._build_projection_pages(
-                changed_pages, datetime.now()
-            )
-            changed_pages.update(derived)
-            for slug in derived_created:
-                created_operations[slug] = 1
-            for slug in derived_updated:
-                updated_operations[slug] = 1
         pages_created = sum(created_operations.get(slug, 0) for slug in changed_pages)
-        pages_updated = sum(updated_operations.get(slug, 0) for slug in changed_pages)
+        pages_updated = (
+            sum(updated_operations.get(slug, 0) for slug in changed_pages)
+            + len(migrated_projection_parents - changed_pages.keys())
+        )
 
         if not dry_run:
             for page in changed_pages.values():
@@ -550,11 +546,9 @@ class DreamProcess:
                 self.artifacts.assign_pages(
                     self._pending_page_claim_ids.get(page.slug, set()), page.slug
                 )
-            for stale_slug in sorted(self._stale_projection_slugs):
-                self.wiki.archive(stale_slug)
 
         # 6. Update index
-        if changed_pages:
+        if changed_pages or retired_derived_pages:
             self._save_deterministic_index(changed_pages, dry_run=dry_run, now=datetime.now())
 
         # 7. Mark consolidated
@@ -584,21 +578,22 @@ class DreamProcess:
         dry_run: bool = False,
     ) -> DreamReport:
         """Compact wiki pages by doing a full rewrite to deduplicate and reorganize accumulated facts."""
+        self._pending_page_claim_ids = {}
+        retired_derived_pages, migrated_projection_parents = (
+            self._retire_derived_pages(dry_run=dry_run)
+        )
         pages = self.wiki.list_all()
         if slugs:
             pages = [p for p in pages if p.slug in slugs]
 
-        pages_updated = 0
+        pages_updated = len(migrated_projection_parents)
         pages_created = 0
         changed_pages: dict[str, WikiPage] = {}
-        projection_parents: dict[str, WikiPage] = {}
-        self._pending_page_claim_ids = {}
-        self._stale_projection_slugs = set()
         now = datetime.now()
 
         for page in pages:
-            # Projection pages are deterministic outputs. Rebuild them from their
-            # parent claims instead of asking the model to summarize a summary.
+            # Legacy generated views are retired before compaction. Skip any
+            # remaining generated artifacts rather than summarizing a summary.
             if self._is_placeholder_slug(page.slug) or "derived-memory" in page.tags:
                 continue
 
@@ -664,8 +659,7 @@ class DreamProcess:
             if self._uses_claim_evidence():
                 content = self._strip_internal_artifact_ids(content)
                 content = self._dedupe_repeated_lines(content)
-                content = self._with_main_projection(page.slug, content)
-                projection_parents[page.slug] = page
+                content = self._with_inline_projection(page.slug)
             if self._normalized_text(content) == self._normalized_text(page.content):
                 continue
 
@@ -698,24 +692,13 @@ class DreamProcess:
             page.update_log.append(log)
 
             changed_pages[page.slug] = page
-            pages_updated += 1
-
-        if self._uses_claim_evidence() and projection_parents:
-            derived, created, updated = self._build_projection_pages(projection_parents, now)
-            # Projection may add or remove child links even when the overview text
-            # itself was already current.
-            for slug, parent in projection_parents.items():
-                changed_pages.setdefault(slug, parent)
-            changed_pages.update(derived)
-            pages_created += len(created)
-            pages_updated += len(updated)
+            pages_updated = len(migrated_projection_parents | set(changed_pages))
 
         if changed_pages and not dry_run:
-            # Parents are saved after projection so their child links are included.
             for page in changed_pages.values():
                 self.wiki.save(page)
-            for stale_slug in sorted(self._stale_projection_slugs):
-                self.wiki.archive(stale_slug)
+
+        if (changed_pages or retired_derived_pages) and not dry_run:
             self._save_deterministic_index(changed_pages, dry_run=False, now=now)
 
         return DreamReport(
@@ -735,14 +718,19 @@ class DreamProcess:
             return []
         if isinstance(evidence[0], LogEntry):
             evidence = self._build_evidence(evidence)
-        chunk_str = self._format_evidence_for_prompt(evidence)
+        alias_to_evidence = {
+            f"C{index:03d}": item for index, item in enumerate(evidence, start=1)
+        }
+        chunk_str = self._format_identification_evidence(alias_to_evidence)
         system, user = prompts.consolidation_identify_prompt(index_content, chunk_str)
         try:
             identification_res = await self.llm.call_structured(
                 system,
                 user,
-                ConsolidationIdentifyOutput,
-                num_predict=2048,
+                self._identification_schema(list(alias_to_evidence)),
+                num_predict=4096,
+                dump_success=True,
+                debug_label="dream-identification",
             )
         except Exception as exc:
             if len(evidence) <= 1:
@@ -761,47 +749,140 @@ class DreamProcess:
                 *await self._identify_targets_for_chunk(index_content, evidence[midpoint:]),
             ]
 
-        if isinstance(identification_res, dict):
-            targets = identification_res.get("targets", [])
-        elif isinstance(identification_res, list):
-            targets = identification_res
-        elif hasattr(identification_res, "targets"):
-            targets = identification_res.targets
-        else:
-            targets = []
-
-        allowed_ids = {item.evidence_id for item in evidence}
-        evidence_by_entry: dict[str, list[str]] = {}
-        for item in evidence:
-            evidence_by_entry.setdefault(item.entry_id, []).append(item.evidence_id)
-        validated = []
-        for target in targets:
-            if not isinstance(target, dict):
-                continue
-            evidence_ids = [
-                evidence_id
-                for evidence_id in target.get("evidence_ids", [])
-                if evidence_id in allowed_ids
-            ]
-            if not evidence_ids:
-                for entry_id in self._clean_log_entry_ids(target.get("log_entry_ids", [])):
-                    evidence_ids.extend(evidence_by_entry.get(entry_id, []))
-            if not evidence_ids and target.get("action") in ("update", "create"):
-                evidence_ids = [item.evidence_id for item in evidence]
-            target = dict(target)
-            target_slug = _slugify(str(target.get("page", "")))
-            if target_slug == "user-profile" and self._has_named_participant_scope(evidence):
-                # Named participants are not implicitly the system user.
-                continue
-            target["evidence_ids"] = list(dict.fromkeys(evidence_ids))
-            target["log_entry_ids"] = list(
-                dict.fromkeys(
-                    item.entry_id for item in evidence if item.evidence_id in target["evidence_ids"]
-                )
+        routes = (
+            identification_res.get("routes", [])
+            if isinstance(identification_res, dict)
+            else []
+        )
+        aliases = [
+            route.get("evidence_alias")
+            for route in routes
+            if isinstance(route, dict)
+        ]
+        expected_aliases = set(alias_to_evidence)
+        if (
+            len(routes) != len(alias_to_evidence)
+            or len(aliases) != len(set(aliases))
+            or set(aliases) != expected_aliases
+        ):
+            self._record_identification_batch_failure(
+                evidence,
+                "routing response did not account for every evidence alias exactly once",
             )
-            if target["evidence_ids"] or target.get("action") == "none":
-                validated.append(target)
+            return []
+
+        routed_pages = {
+            _slugify(str(route.get("page", "")))
+            for route in routes
+            if route.get("disposition") == "route"
+        }
+        if len(routed_pages) > 8:
+            self._record_identification_batch_failure(
+                evidence,
+                "routing response exceeded the eight-page batch limit",
+            )
+            return []
+
+        validated = []
+        for route in routes:
+            alias = route["evidence_alias"]
+            item = alias_to_evidence[alias]
+            disposition = route.get("disposition")
+            if disposition == "ignore":
+                if route.get("action") != "none" or str(route.get("page", "")).strip():
+                    self._identification_failures[item.evidence_id] = (
+                        f"invalid ignore decision for alias {alias}"
+                    )
+                continue
+            page_slug = _slugify(str(route.get("page", "")))
+            action = route.get("action")
+            if (
+                disposition != "route"
+                or action not in ("update", "create")
+                or not page_slug
+                or self._is_placeholder_slug(page_slug)
+            ):
+                self._identification_failures[item.evidence_id] = (
+                    f"invalid route decision for alias {alias}"
+                )
+                continue
+            if page_slug == "user-profile" and self._has_named_participant_scope([item]):
+                self._identification_failures[item.evidence_id] = (
+                    "named-participant evidence cannot be routed to user-profile"
+                )
+                continue
+            validated.append({
+                "page": page_slug,
+                "action": action,
+                "page_type": self._page_type_for_target(route),
+                "evidence_ids": [item.evidence_id],
+                "log_entry_ids": [item.entry_id],
+            })
         return validated
+
+    @staticmethod
+    def _identification_schema(aliases: list[str]) -> dict:
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["routes"],
+            "properties": {
+                "routes": {
+                    "type": "array",
+                    "minItems": len(aliases),
+                    "maxItems": len(aliases),
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": [
+                            "evidence_alias",
+                            "disposition",
+                            "page",
+                            "action",
+                            "page_type",
+                        ],
+                        "properties": {
+                            "evidence_alias": {"type": "string", "enum": aliases},
+                            "disposition": {
+                                "type": "string",
+                                "enum": ["route", "ignore"],
+                            },
+                            "page": {"type": "string", "maxLength": 120},
+                            "action": {
+                                "type": "string",
+                                "enum": ["update", "create", "none"],
+                            },
+                            "page_type": {
+                                "type": "string",
+                                "enum": ["entity", "event", "topic"],
+                            },
+                        },
+                    },
+                }
+            },
+        }
+
+    @staticmethod
+    def _format_identification_evidence(
+        alias_to_evidence: dict[str, EvidenceChunk],
+    ) -> str:
+        return "\n\n".join(
+            (
+                f"[EVIDENCE {alias}] parent_log={item.entry_id}; "
+                f"chunk={item.chunk_index}/{item.chunk_count}; durability={item.durability}; "
+                f"importance={item.importance:.2f}\n{item.content}"
+            )
+            for alias, item in alias_to_evidence.items()
+        )
+
+    def _record_identification_batch_failure(
+        self,
+        evidence: list[EvidenceChunk],
+        reason: str,
+    ) -> None:
+        logger.warning("Rejecting incomplete dream routing batch: %s", reason)
+        for item in evidence:
+            self._identification_failures[item.evidence_id] = reason
 
     def _has_named_participant_scope(self, evidence: list[EvidenceChunk]) -> bool:
         source_ids = {chunk.source_id for chunk in evidence if chunk.source_id}
@@ -847,7 +928,8 @@ class DreamProcess:
             return self._build_evidence(entries)
         entry_ids = {entry.entry_id for entry in entries}
         source_by_id = {source.source_id: source for source in self.artifacts.list_sources()}
-        for episode in self.artifacts.list_episodes():
+        episodes = self.artifacts.list_episodes()
+        for episode in episodes:
             source = source_by_id.get(episode.source_id)
             if (
                 mode == "claims"
@@ -858,20 +940,45 @@ class DreamProcess:
                 self._preparation_failures[source.raw_log_entry_id] = (
                     episode.extraction_error or "claim extraction failed"
                 )
-        claims = [
+        source_claims = [
             claim for claim in self.artifacts.list_claims(status="active")
             if any(prov.raw_log_entry_id in entry_ids for prov in claim.provenance)
+        ]
+        claims = [
+            claim for claim in source_claims
+            if self._claim_is_admitted(claim, source_by_id)
         ]
         evidence = [self._claim_evidence(claim, include_spans=mode == "hybrid") for claim in claims]
         if mode == "hybrid":
             claimed_segments = {
-                segment_id for claim in claims for prov in claim.provenance for segment_id in prov.segment_ids
+                segment_id
+                for claim in source_claims
+                for prov in claim.provenance
+                for segment_id in prov.segment_ids
+            }
+            ignored_segments = {
+                segment_id
+                for episode in episodes
+                if (
+                    episode.source_id in source_by_id
+                    and source_by_id[episode.source_id].raw_log_entry_id in entry_ids
+                )
+                for segment_id in episode.ignored_segment_ids
             }
             for source in self.artifacts.list_sources():
                 if source.raw_log_entry_id not in entry_ids:
                     continue
                 for segment in source.segments:
-                    if segment.segment_id in claimed_segments or not segment.content.strip():
+                    if (
+                        segment.segment_id in claimed_segments
+                        or segment.segment_id in ignored_segments
+                        or (
+                            source.source_type == "agent_conversation"
+                            and str(segment.role or segment.speaker or "").strip().lower()
+                            in {"assistant", "system", "tool"}
+                        )
+                        or not segment.content.strip()
+                    ):
                         continue
                     evidence.append(EvidenceChunk(
                         evidence_id=f"{segment.segment_id}::unassigned",
@@ -895,6 +1002,35 @@ class DreamProcess:
         if mode == "hybrid" and missing_entries:
             evidence.extend(self._build_evidence([entry for entry in entries if entry.entry_id in missing_entries]))
         return evidence
+
+    @staticmethod
+    def _claim_is_admitted(
+        claim: MemoryClaim,
+        source_by_id: Mapping[str, SourceDocument],
+    ) -> bool:
+        """Keep assistant output as source history, not durable chat memory."""
+        for provenance in claim.provenance:
+            source = source_by_id.get(provenance.source_id)
+            if source is None:
+                continue
+            if source.source_type != "agent_conversation":
+                return True
+
+            wanted = set(provenance.segment_ids)
+            roles = {
+                str(value).strip().lower()
+                for segment in source.segments
+                if segment.segment_id in wanted
+                for value in (segment.role, segment.speaker)
+                if value
+            }
+            if provenance.speaker:
+                roles.add(provenance.speaker.strip().lower())
+            if "user" in roles:
+                return True
+            if roles - {"assistant", "system", "tool", "unknown"}:
+                return True
+        return False
 
     @staticmethod
     def _source_timestamp(value: str) -> datetime:
@@ -1029,7 +1165,9 @@ class DreamProcess:
 
     def _materialization_evidence(self, page_slug: str, current: list[EvidenceChunk]) -> list[EvidenceChunk]:
         current_claim_ids = {claim_id for chunk in current for claim_id in chunk.claim_ids}
-        existing_claims = self.artifacts.claims_for_page(page_slug)
+        existing_claims = self._admitted_claims(
+            self.artifacts.claims_for_page(page_slug)
+        )
         # Exact spans validate/expose extraction and unclaimed spans stay lossless, but
         # repeating every quote during final materialization wastes the context window.
         merged = []
@@ -1061,158 +1199,76 @@ class DreamProcess:
                 claims[claim_id] = self.artifacts.get_claim(claim_id)
             except FileNotFoundError:
                 continue
-        return [claim for claim in claims.values() if claim.status == "active"]
+        return self._admitted_claims(
+            claim for claim in claims.values() if claim.status == "active"
+        )
 
-    def _with_main_projection(self, page_slug: str, overview: str) -> str:
-        """Render a bounded primary page; complete detail lives in derived views."""
+    def _admitted_claims(
+        self, claims: Iterable[MemoryClaim]
+    ) -> list[MemoryClaim]:
+        source_by_id = {
+            source.source_id: source for source in self.artifacts.list_sources()
+        }
+        return [
+            claim
+            for claim in claims
+            if self._claim_is_admitted(claim, source_by_id)
+        ]
+
+    def _with_inline_projection(self, page_slug: str) -> str:
+        """Render every claim view in one page instead of multiplying wiki files."""
         active = self._claims_for_projection(page_slug)
         if not active:
-            return overview
+            return "## Memory"
         projected = partition_claims(
             active, main_claim_limit=self.config.dream.main_page_claim_limit
         )
-        groups: dict[str, list[ProjectedClaim]] = {}
-        for item in projected["main"]:
-            groups.setdefault(item.bucket, []).append(item)
-        # The generated overview and deterministic claim list largely repeated
-        # one another. Claims-mode pages use one authoritative compact view;
-        # the model output remains useful for title, tags, and importance.
-        lines = ["## Memory"]
-        for label in sorted(groups):
-            lines.extend(["", f"### {label}"])
-            for item in groups[label]:
-                qualifiers = compact_record_qualifiers(item, include_date=True)
-                suffix = f" _({'; '.join(qualifiers)})_" if qualifiers else ""
-                lines.append(f"- {display_claim_text(item.claim)}{suffix}")
-        child_links = []
-        if projected["timeline"]:
-            child_links.append(f"- [[{page_slug}-timeline]]: dated events and changes")
-        if projected["details"]:
-            child_links.append(f"- [[{page_slug}-details]]: supporting durable facts")
-        if projected["insights"]:
-            child_links.append(f"- [[{page_slug}-insights]]: traceable derived conclusions")
-        if projected["interaction_archive"]:
-            child_links.append(f"- [[{page_slug}-interactions]]: conversational and relationship history")
-        if child_links:
-            lines.extend(["", "## Memory Sections", *child_links])
+        lines = self._render_projection_section("Memory", projected["main"])
+        lines.extend(self._render_projection_section(
+            "Timeline", projected["timeline"], date_grouped=True
+        ))
+        lines.extend(self._render_projection_section(
+            "Detailed Facts", projected["details"]
+        ))
+        lines.extend(self._render_projection_section(
+            "Derived Insights", projected["insights"], insights=True
+        ))
+        lines.extend(self._render_projection_section(
+            "Interaction Archive",
+            projected["interaction_archive"],
+            date_grouped=True,
+            interactions=True,
+        ))
         return "\n".join(lines).strip()
 
-    def _build_projection_pages(
+    def _render_projection_section(
         self,
-        parent_pages: dict[str, WikiPage],
-        now: datetime,
-    ) -> tuple[dict[str, WikiPage], set[str], set[str]]:
-        derived: dict[str, WikiPage] = {}
-        created: set[str] = set()
-        updated: set[str] = set()
-        for parent_slug, parent in list(parent_pages.items()):
-            if "derived-memory" in parent.tags:
-                continue
-            claims = self._claims_for_projection(parent_slug)
-            if not claims:
-                continue
-            projected = partition_claims(
-                claims, main_claim_limit=self.config.dream.main_page_claim_limit
-            )
-            specs = []
-            specs.extend(self._projection_shards(parent, "timeline", "Timeline", projected["timeline"]))
-            specs.extend(self._projection_shards(parent, "details", "Detailed Facts", projected["details"]))
-            specs.extend(self._projection_shards(parent, "insights", "Derived Insights", projected["insights"]))
-            specs.extend(self._projection_shards(parent, "interactions", "Interaction Archive", projected["interaction_archive"]))
-            child_slugs = []
-            for slug, title, content, items in specs:
-                child_slugs.append(slug)
-                projection_kind = slug.removeprefix(f"{parent_slug}-").split("-")[0]
-                sources = list(dict.fromkeys(
-                    provenance.raw_log_entry_id
-                    for item in items for claim in item.members
-                    for provenance in claim.provenance
-                    if provenance.raw_log_entry_id
-                ))
-                if self.wiki.exists(slug):
-                    page = self.wiki.get(slug)
-                    if (
-                        self._normalized_text(page.content) == self._normalized_text(content)
-                        and page.source_log_entries == sources
-                    ):
-                        continue
-                    page.title = title
-                    page.content = content
-                    page.source_log_entries = sources
-                    page.version += 1
-                    page.last_updated = now
-                    page.update_log.append(UpdateLogEntry(
-                        page.version, now, "system", "projection", 0.0,
-                        "Regenerated deterministic claim projection",
-                        page.confidence, 1.0,
-                    ))
-                    page.confidence = 1.0
-                    updated.add(slug)
-                else:
-                    page = WikiPage(
-                        slug=slug, title=title, content=content,
-                        created=now, last_updated=now, version=1,
-                        confidence=1.0, importance=max(0.4, parent.importance - 0.1),
-                        tags=["derived-memory", projection_kind, f"parent:{parent_slug}"],
-                        related=[Edge(parent_slug, "informs", 1.0)],
-                        source_log_entries=sources,
-                        update_log=[UpdateLogEntry(
-                            1, now, "system", "projection", 0.0,
-                            "Initial deterministic claim projection", 0.0, 1.0,
-                        )],
-                    )
-                    created.add(slug)
-                derived[slug] = page
-            existing_targets = {edge.target for edge in parent.related}
-            for child_slug in child_slugs:
-                if child_slug not in existing_targets:
-                    parent.related.append(Edge(child_slug, "informs", 1.0))
-            for existing in self.wiki.list_all():
-                if (
-                    existing.slug not in child_slugs
-                    and "derived-memory" in existing.tags
-                    and f"parent:{parent_slug}" in existing.tags
-                ):
-                    self._stale_projection_slugs.add(existing.slug)
-            parent.related = [
-                edge for edge in parent.related if edge.target not in self._stale_projection_slugs
-            ]
-        return derived, created, updated
-
-    def _projection_shards(
-        self,
-        parent: WikiPage,
-        suffix: str,
-        title_suffix: str,
+        title: str,
         items: list[ProjectedClaim],
         *,
-        max_chars: int | None = None,
-        max_records: int | None = None,
-    ) -> list[tuple[str, str, str, list[ProjectedClaim]]]:
+        date_grouped: bool = False,
+        interactions: bool = False,
+        insights: bool = False,
+    ) -> list[str]:
         if not items:
-            return []
-        max_chars = max_chars or self.config.dream.projection_page_max_chars
-        max_records = max_records or self.config.dream.projection_page_max_records
-        date_grouped = suffix in {"timeline", "interactions"}
+            return [f"## {title}"] if title == "Memory" else []
+        lines = ["", f"## {title}"] if title != "Memory" else ["## Memory"]
+        if insights:
+            lines.extend([
+                "",
+                "These conclusions are derived from explicit memories and remain traceable to their supporting claims.",
+            ])
         grouped: dict[str, list[ProjectedClaim]] = {}
         for item in items:
             heading = (
                 "Repeated interactions"
-                if suffix == "interactions" and len(item.members) > 1
+                if interactions and len(item.members) > 1
                 else item.date_key if date_grouped else item.bucket
             )
             grouped.setdefault(heading, []).append(item)
-        shards: list[tuple[list[str], list[ProjectedClaim]]] = []
-        lines = [f"# {parent.title}: {title_suffix}", "", f"Parent: [[{parent.slug}]]"]
-        if suffix == "insights":
-            lines.extend([
-                "",
-                "These conclusions are derived from multiple explicit memories; each remains traceable to its supporting claims.",
-            ])
-        shard_items: list[ProjectedClaim] = []
         seen_text: set[str] = set()
         for heading in sorted(grouped):
-            heading_added = False
+            rendered: list[str] = []
             for item in grouped[heading]:
                 rendered_text = display_claim_text(item.claim)
                 normalized = self._normalized_text(rendered_text)
@@ -1221,42 +1277,69 @@ class DreamProcess:
                 seen_text.add(normalized)
                 qualifiers = compact_record_qualifiers(item, include_date=not date_grouped)
                 suffix_text = f" _({'; '.join(qualifiers)})_" if qualifiers else ""
-                bullet = f"- {rendered_text}{suffix_text}"
-                heading_lines = ["", f"## {heading}"] if not heading_added else []
-                addition = "\n".join([*heading_lines, bullet])
-                if shard_items and (
-                    len("\n".join(lines)) + len(addition) > max_chars
-                    or len(shard_items) >= max_records
-                ):
-                    shards.append((lines, shard_items))
-                    lines = [f"# {parent.title}: {title_suffix}", "", f"Parent: [[{parent.slug}]]", "", f"## {heading}"]
-                    shard_items = []
-                    heading_added = True
-                else:
-                    lines.extend(heading_lines)
-                    heading_added = True
-                lines.append(bullet)
-                shard_items.append(item)
-        if shard_items:
-            shards.append((lines, shard_items))
-        result = []
-        shard_slugs = [
-            f"{parent.slug}-{suffix}" if index == 1 else f"{parent.slug}-{suffix}-{index}"
-            for index in range(1, len(shards) + 1)
-        ]
-        for index, (shard_lines, included) in enumerate(shards, start=1):
-            number = "" if index == 1 else f"-{index}"
-            slug = f"{parent.slug}-{suffix}{number}"
-            title = f"{parent.title}: {title_suffix}" + (f" {index}" if len(shards) > 1 else "")
-            shard_lines[0] = f"# {title}"
-            if len(shard_slugs) > 1:
-                shard_lines[3:3] = ["", "Parts: " + " · ".join(f"[[{part}]]" for part in shard_slugs)]
-            result.append((slug, title, "\n".join(shard_lines).strip(), included))
-        return result
+                rendered.append(f"- {rendered_text}{suffix_text}")
+            if rendered:
+                lines.extend(["", f"### {heading}", *rendered])
+        return lines
+
+    def _retire_derived_pages(self, *, dry_run: bool) -> tuple[bool, set[str]]:
+        """Move legacy views into their parents, then archive the extra pages."""
+        try:
+            pages = self.wiki.list_all()
+        except Exception:
+            return False, set()
+        if not isinstance(pages, list):
+            return False, set()
+
+        derived_pages = [page for page in pages if "derived-memory" in page.tags]
+        derived_slugs = {page.slug for page in derived_pages}
+        if not derived_slugs or dry_run:
+            return False, set()
+
+        parent_slugs = {
+            tag.removeprefix("parent:")
+            for page in derived_pages
+            for tag in page.tags
+            if tag.startswith("parent:") and tag.removeprefix("parent:")
+        }
+        migrated_parents: set[str] = set()
+        now = datetime.now()
+
+        for page in pages:
+            if page.slug in derived_slugs:
+                continue
+            related = [edge for edge in page.related if edge.target not in derived_slugs]
+            changed = len(related) != len(page.related)
+            if page.slug in parent_slugs and self._claims_for_projection(page.slug):
+                inline_content = self._with_inline_projection(page.slug)
+                if self._normalized_text(inline_content) != self._normalized_text(page.content):
+                    page.content = inline_content
+                    changed = True
+            if changed:
+                page.related = related
+                page.version += 1
+                page.last_updated = now
+                page.update_log.append(UpdateLogEntry(
+                    page.version,
+                    now,
+                    "system",
+                    "dream",
+                    0.0,
+                    "Migrated materialized memory views into the parent page",
+                    page.confidence,
+                    page.confidence,
+                ))
+                self.wiki.save(page)
+                migrated_parents.add(page.slug)
+        for slug in sorted(derived_slugs):
+            self.wiki.archive(slug)
+        return True, migrated_parents
 
     async def _refresh_derived_insights(self, page_slug: str) -> list[MemoryClaim]:
         """Replace cross-claim conclusions only after a successful, grounded synthesis."""
-        page_claims = self.artifacts.claims_for_page(page_slug)
+        page_claims = self._admitted_claims(
+            self.artifacts.claims_for_page(page_slug)
+        )
         explicit = [claim for claim in page_claims if claim.status == "active" and not claim.inferred]
         if len(explicit) < 2:
             return []
@@ -1823,7 +1906,7 @@ class DreamProcess:
 
         catalog = []
         for page in pages:
-            if self._is_placeholder_slug(page.slug):
+            if self._is_placeholder_slug(page.slug) or "derived-memory" in page.tags:
                 continue
             catalog.append(
                 {

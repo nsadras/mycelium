@@ -3,6 +3,7 @@ import { Menu, History } from 'lucide-react';
 import api, { type Session } from './lib/api';
 import Chat from './components/Chat';
 import Engram from './components/Engram';
+import MemoryInspector from './components/MemoryInspector';
 import WikiExplorer from './components/WikiExplorer';
 import LogExplorer from './components/LogExplorer';
 import Sidebar from './components/Sidebar';
@@ -27,10 +28,11 @@ function isMemoryActivity(activity: AssistantActivity) {
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'chat' | 'engram' | 'wiki' | 'logs'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'engram' | 'memory' | 'wiki' | 'logs'>('chat');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [runningMemoryOperation, setRunningMemoryOperation] = useState<string | null>(null);
+  const [memoryRevision, setMemoryRevision] = useState(0);
   const [assistantStatus, setAssistantStatus] = useState<AssistantStatus>(idleStatus);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -126,6 +128,7 @@ function App() {
       } else {
         res = await api.post('/memory/dream');
       }
+      setMemoryRevision((revision) => revision + 1);
       alert(`${operation.replaceAll('-', ' ')} complete:\n${JSON.stringify(res.data, null, 2)}`);
     } catch (err) {
       console.error("Memory operation failed", err);
@@ -202,6 +205,7 @@ function App() {
           />
         )}
         {activeTab === 'engram' && <Engram setAssistantStatus={setAssistantStatus} />}
+        {activeTab === 'memory' && <MemoryInspector refreshKey={memoryRevision} />}
         {activeTab === 'wiki' && <WikiExplorer />}
         {activeTab === 'logs' && <LogExplorer />}
       </main>

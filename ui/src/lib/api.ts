@@ -59,6 +59,134 @@ export interface LogFile {
   content?: string;
 }
 
+export interface ChatEpisodeState {
+  session_id: string;
+  query: string;
+  transcript_turns: number;
+  episode_seq?: number | null;
+  active_episode?: Record<string, unknown> | null;
+  encoded_episodes: Record<string, unknown>[];
+}
+
+export interface ArtifactSourceSegment {
+  segment_id: string;
+  index: number;
+  content: string;
+  speaker?: string | null;
+  role?: string | null;
+  timestamp?: string | null;
+  start_seconds?: number | null;
+  end_seconds?: number | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface ArtifactSourceSummary {
+  source_id: string;
+  source_type: string;
+  session_id: string;
+  recorded_at: string;
+  occurred_at?: string | null;
+  participants: string[];
+  raw_log_entry_id?: string | null;
+  metadata: Record<string, unknown>;
+  segment_count: number;
+}
+
+export interface ArtifactSource extends Omit<ArtifactSourceSummary, 'segment_count'> {
+  segments: ArtifactSourceSegment[];
+}
+
+export interface EpisodeArtifact {
+  episode_id: string;
+  source_id: string;
+  source_type: string;
+  occurred_at?: string | null;
+  participants: string[];
+  segment_ids: string[];
+  claim_ids: string[];
+  ignored_segment_ids: string[];
+  extraction_status: string;
+  extraction_error?: string | null;
+}
+
+export interface ClaimProvenanceArtifact {
+  source_id: string;
+  segment_ids: string[];
+  raw_log_entry_id?: string | null;
+  speaker?: string | null;
+  evidence_type: string;
+}
+
+export interface MemoryClaimArtifact {
+  claim_id: string;
+  text: string;
+  kind: string;
+  about: Record<string, string>[];
+  provenance: ClaimProvenanceArtifact[];
+  recorded_at: string;
+  status: string;
+  confidence: number;
+  inferred: boolean;
+  slot?: string | null;
+  facets: Record<string, unknown>;
+  links: Record<string, string>[];
+  page_slugs: string[];
+  salience: number;
+  claim_type: string;
+  predicate?: string | null;
+  evidence_modality: string;
+  temporal_status: string;
+  derivation_operation?: string | null;
+}
+
+export interface ArtifactCoverage {
+  sources: number;
+  episodes: number;
+  claims: number;
+  active_claims: number;
+  suppressed_claims: number;
+  segments: number;
+  claimed_segments: number;
+  segment_coverage: number;
+  ignored_segments: number;
+  accounted_segments: number;
+  accounted_coverage: number;
+  unassigned_segment_ids: string[];
+  unaccounted_segment_ids: string[];
+  unassigned_claim_ids: string[];
+  unresolved_provenance_ids: string[];
+  failed_episode_ids: string[];
+  partial_episode_ids: string[];
+}
+
+export interface ArtifactOverview {
+  coverage: ArtifactCoverage;
+  projection: {
+    page_assignments: number;
+    assigned_claims: number;
+    multi_page_claims: number;
+    average_pages_per_claim: number;
+    max_pages_per_claim: number;
+  };
+  integrity: {
+    healthy: boolean;
+    issues: Record<string, string[]>;
+  };
+  labile_pages: number;
+  archived_pages: number;
+}
+
+export interface StoredMemoryFile {
+  filename: string;
+  content: string;
+}
+
+export interface StoredMemoryFiles {
+  wiki_index?: StoredMemoryFile | null;
+  labile_pages: StoredMemoryFile[];
+  archived_pages: StoredMemoryFile[];
+}
+
 export interface EngramActionItem {
   owner?: string | null;
   task: string;

@@ -12,7 +12,7 @@ from mycelium.artifacts import (
 )
 from mycelium.config import Config
 from mycelium.dream import DreamProcess, EvidenceChunk
-from mycelium.models import WikiPage
+from mycelium.models import Edge, WikiPage
 from mycelium.projection import (
     claim_date_key,
     compact_display_claims,
@@ -307,53 +307,6 @@ def test_multi_party_routing_uses_real_about_entities_not_synthetic_speakers(tmp
     assert {target["page"] for target in targets} == {"person-john", "person-tim"}
 
 
-def test_projection_shards_have_stable_bounded_names(tmp_path):
-    dream = DreamProcess(
-        MagicMock(), MagicMock(), MagicMock(), Config.defaults(),
-        ArtifactStore(tmp_path / "artifacts"),
-    )
-    parent = WikiPage(
-        slug="person-ava", title="Ava", content="Overview",
-        created=datetime.now(), last_updated=datetime.now(),
-        version=1, confidence=0.8, importance=0.8,
-    )
-    items = [
-        project_claim(claim(f"event-{index}", f"Ava attended community event {index} with several friends.", "event"))
-        for index in range(12)
-    ]
-
-    shards = dream._projection_shards(parent, "timeline", "Timeline", items, max_chars=360)
-
-    assert len(shards) > 1
-    assert shards[0][0] == "person-ava-timeline"
-    assert shards[1][0] == "person-ava-timeline-2"
-    assert all(content.startswith("# Ava: Timeline") for _, _, content, _ in shards)
-    assert "[[person-ava-timeline-2]]" in shards[0][2]
-
-
-def test_projection_shards_cap_record_count(tmp_path):
-    dream = DreamProcess(
-        MagicMock(), MagicMock(), MagicMock(), Config.defaults(),
-        ArtifactStore(tmp_path / "artifacts"),
-    )
-    parent = WikiPage(
-        slug="person-ava", title="Ava", content="Overview",
-        created=datetime.now(), last_updated=datetime.now(),
-        version=1, confidence=0.8, importance=0.8,
-    )
-    items = [
-        project_claim(claim(f"detail-{index}", f"Ava recorded distinct detail {index}.", "fact"))
-        for index in range(5)
-    ]
-
-    shards = dream._projection_shards(
-        parent, "details", "Detailed Facts", items,
-        max_chars=10000, max_records=2,
-    )
-
-    assert [len(included) for _, _, _, included in shards] == [2, 2, 1]
-
-
 def test_projection_labels_observation_dates_without_calling_them_event_dates():
     item = claim("event", "Ava launched a project.", "event")
 
@@ -447,7 +400,7 @@ def test_compact_qualifiers_hide_provenance_and_redundant_values():
 
 
 @pytest.mark.asyncio
-async def test_claim_compaction_rebuilds_parent_and_derived_views(tmp_path):
+async def test_claim_compaction_rebuilds_all_views_inline(tmp_path):
     config = Config.defaults()
     config.dream.evidence_mode = "claims"
     wiki = WikiStore(tmp_path / "wiki")
@@ -456,8 +409,21 @@ async def test_claim_compaction_rebuilds_parent_and_derived_views(tmp_path):
         slug="person-ava", title="Ava", content="Old verbose memory ledger",
         created=datetime.now(), last_updated=datetime.now(),
         version=1, confidence=0.8, importance=0.8,
+        related=[Edge("person-ava-timeline", "informs")],
     )
     wiki.save(parent)
+    wiki.save(WikiPage(
+        slug="person-ava-timeline",
+        title="Ava — Timeline",
+        content="Legacy materialized projection",
+        created=datetime.now(),
+        last_updated=datetime.now(),
+        version=1,
+        confidence=0.8,
+        importance=0.8,
+        tags=["derived-memory", "timeline", "parent:person-ava"],
+    ))
+    wiki.save_index("# Memory Index\n\n- [[person-ava]]\n- [[person-ava-timeline]]")
     artifacts.save_source(SourceDocument(
         source_id="source-1",
         source_type="meeting_transcript",
@@ -468,6 +434,22 @@ async def test_claim_compaction_rebuilds_parent_and_derived_views(tmp_path):
         segments=[],
         raw_log_entry_id="source-log-1",
     ))
+    artifacts.save_source(SourceDocument(
+        source_id="source-2",
+        source_type="agent_conversation",
+        session_id="session-2",
+        recorded_at="2024-01-11T12:00:00",
+        occurred_at=None,
+        participants=["user", "assistant"],
+        segments=[SourceSegment(
+            "source-2#seg-0001",
+            0,
+            "Ava should buy the tea shop.",
+            "assistant",
+            "assistant",
+        )],
+        raw_log_entry_id="source-log-2",
+    ))
     for item in (
         claim("preference", "Ava prefers oolong tea.", "preference", salience=0.9),
         claim("event", "Ava visited Kyoto.", "event", salience=0.7),
@@ -476,6 +458,20 @@ async def test_claim_compaction_rebuilds_parent_and_derived_views(tmp_path):
         item.page_slugs = ["person-ava"]
         item.provenance[0].raw_log_entry_id = "source-log-1"
         artifacts.save_claim(item)
+    assistant_claim = claim(
+        "assistant-suggestion",
+        "Ava should buy the tea shop.",
+        "plan",
+        salience=0.9,
+    )
+    assistant_claim.page_slugs = ["person-ava"]
+    assistant_claim.provenance = [ClaimProvenance(
+        "source-2",
+        ["source-2#seg-0001"],
+        raw_log_entry_id="source-log-2",
+        speaker="assistant",
+    )]
+    artifacts.save_claim(assistant_claim)
 
     llm = AsyncMock()
     llm.call_structured.return_value = {
@@ -492,13 +488,21 @@ async def test_claim_compaction_rebuilds_parent_and_derived_views(tmp_path):
 
     rebuilt = wiki.get("person-ava")
     assert report.pages_updated == 1
-    assert report.pages_created == 2
+    assert report.pages_created == 0
     assert "Old verbose memory ledger" not in rebuilt.content
     assert "## Memory" in rebuilt.content
-    assert "[[person-ava-timeline]]" in rebuilt.content
-    assert "[[person-ava-interactions]]" in rebuilt.content
-    assert "Ava visited Kyoto." in wiki.get("person-ava-timeline").content
-    assert "Ava greeted Ben." in wiki.get("person-ava-interactions").content
+    assert "## Timeline" in rebuilt.content
+    assert "## Interaction Archive" in rebuilt.content
+    assert "Ava visited Kyoto." in rebuilt.content
+    assert "Ava greeted Ben." in rebuilt.content
+    assert "Ava should buy the tea shop." not in rebuilt.content
+    assert not any(edge.target == "person-ava-timeline" for edge in rebuilt.related)
+    assert "[[person-ava-timeline]]" not in wiki.get_index()
+    assert (wiki.archive_dir / "person-ava-timeline.md").exists()
+    with pytest.raises(FileNotFoundError):
+        wiki.get("person-ava-timeline")
+    with pytest.raises(FileNotFoundError):
+        wiki.get("person-ava-interactions")
     logs.get_many.assert_not_called()
 
 
@@ -563,9 +567,10 @@ async def test_claim_compaction_persists_grounded_derived_insights(tmp_path):
         "claim-started", "claim-finished"
     ]
     assert all(provenance.evidence_type == "inferred" for provenance in inferred[0].provenance)
-    insights = wiki.get("person-ava-insights").content
-    assert "Ava completed the project in four months." in insights
-    assert "based on 2 facts" in insights
+    rebuilt = wiki.get("person-ava")
+    assert "## Derived Insights" in rebuilt.content
+    assert "Ava completed the project in four months." in rebuilt.content
+    assert "based on 2 facts" in rebuilt.content
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,8 @@ The project includes a Python memory library, a FastAPI backend, and a React web
 - **Reconsolidation:** Retrieved pages can be flagged as labile when current context appears to contradict or extend them, then resolved into updated wiki pages.
 - **Wiki editor:** Wiki pages can be viewed and manually edited from the web UI.
 - **Log explorer:** Daily episodic log files can be inspected from the web UI.
+- **Memory inspector:** Trace chat episode state through source segments, extraction manifests,
+  atomic claims, provenance, wiki assignments, and stored intermediate files.
 - **Manual memory controls:** The UI can flush episodes, run dream, resolve reconsolidation, and clear memory for development.
 - **Structured local LLM calls:** Memory operations use Ollama structured outputs with Pydantic schemas.
 
@@ -355,10 +357,13 @@ uv run python -m server.main
 
 ## Web UI
 
-The web UI has four main tabs:
+The web UI has five main tabs:
 
 - **Chat:** Create and rename sessions, continue conversations, view loaded memory pages, and expand tool calls/results.
 - **Engram:** Upload raw meeting recordings, review unprocessed recordings, manually process them into diarized transcripts and structured summaries, and ingest meeting logs into memory.
+- **Memory:** Inspect the complete processing chain: active and encoded chat episodes, canonical
+  source segments, extraction manifests, atomic claims, exact provenance, projection coverage,
+  integrity warnings, the wiki index, labile snapshots, and archived pages.
 - **Wiki:** Browse semantic memory pages, inspect source log references and update history, and edit page content.
 - **Logs:** Browse daily raw episodic log files.
 
@@ -427,8 +432,8 @@ Generated wiki content is intended to be Obsidian-compatible: cross-page referen
 flowchart TD
     A[Unconsolidated raw logs] --> B[Prepare durable entries]
     B --> C[Extract durable facts from tool observations]
-    C --> D[Identify candidate wiki targets]
-    D --> E[Canonicalize targets and merge near-duplicates]
+    C --> D[Route every evidence alias or explicitly ignore it]
+    D --> E[Canonicalize routed targets and merge near-duplicates]
     E --> F[Rewrite or create wiki pages]
     F --> G[Rebuild deterministic wiki index]
     G --> H[Mark logs consolidated]
@@ -437,7 +442,8 @@ flowchart TD
 Key behavior:
 
 - Tool observations are not consolidated directly. A tool-specific extraction prompt first keeps only source-grounded durable facts and discards page furniture, navigation text, ranking labels, and boilerplate.
-- Target identification is batched by log entries, but canonicalization sees all proposed targets from the full dream pass at once. This prevents same-pass near-duplicates such as `llm-selection` and `local-llm-deployment` from becoming separate pages.
+- Target identification uses short batch-local aliases (`C001`, `C002`, ...) constrained by a dynamic JSON schema. The model must route or explicitly ignore every alias exactly once; canonical claim and log IDs never cross the LLM protocol boundary.
+- Incomplete, duplicated, invalid, or over-broad routing responses fail closed and leave their source logs unconsolidated. Canonicalization then sees all valid proposed targets from the full dream pass at once, preventing same-pass near-duplicates such as `llm-selection` and `local-llm-deployment` from becoming separate pages.
 - Page rewrites happen once per final canonical target under the default `override` policy. `fork` and `merge` can add extra LLM calls for existing-page updates.
 - Session-only and ephemeral logs are marked consolidated but do not become durable wiki pages.
 - `_index.md` is generated deterministically from actual wiki pages rather than rewritten by the LLM.

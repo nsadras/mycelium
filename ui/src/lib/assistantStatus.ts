@@ -12,6 +12,7 @@ export type AssistantActivity =
   | 'clicked-left'
   | 'clicked-right'
   | 'wiki'
+  | 'memory'
   | 'logs'
   | 'engram'
   | 'chat';

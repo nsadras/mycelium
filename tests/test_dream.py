@@ -1,7 +1,14 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from mycelium.dream import DreamProcess
-from mycelium.artifacts import ArtifactStore
+from mycelium.dream import DreamProcess, EvidenceChunk
+from mycelium.artifacts import (
+    ArtifactStore,
+    ClaimProvenance,
+    EpisodeManifest,
+    MemoryClaim,
+    SourceDocument,
+    SourceSegment,
+)
 from mycelium.models import LogEntry, WikiPage
 from mycelium.config import Config
 from datetime import datetime
@@ -30,10 +37,223 @@ def dream_process(tmp_path, mock_llm, mock_wiki, mock_logs):
         ArtifactStore(tmp_path / "artifacts"),
     )
 
+
+def route(
+    evidence_alias: str,
+    page: str,
+    *,
+    action: str = "create",
+    page_type: str = "topic",
+) -> dict:
+    return {
+        "evidence_alias": evidence_alias,
+        "disposition": "route",
+        "page": page,
+        "action": action,
+        "page_type": page_type,
+    }
+
+
+def ignore(evidence_alias: str) -> dict:
+    return {
+        "evidence_alias": evidence_alias,
+        "disposition": "ignore",
+        "page": "",
+        "action": "none",
+        "page_type": "topic",
+    }
+
+
+def test_dream_admits_user_claims_but_not_assistant_or_ignored_segments(tmp_path):
+    config = Config.defaults()
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    raw_entry_id = "2026-07-23#session-1"
+    source = SourceDocument(
+        source_id="source-1",
+        source_type="agent_conversation",
+        session_id="session-1",
+        recorded_at="2026-07-23T12:00:00",
+        occurred_at=None,
+        participants=["user", "assistant"],
+        segments=[
+            SourceSegment("source-1#seg-0001", 0, "I prefer tea.", "user", "user"),
+            SourceSegment("source-1#seg-0002", 1, "Tea contains caffeine.", "assistant", "assistant"),
+            SourceSegment("source-1#seg-0003", 2, "Thanks!", "user", "user"),
+        ],
+        raw_log_entry_id=raw_entry_id,
+    )
+    episode = EpisodeManifest(
+        episode_id="episode-1",
+        source_id=source.source_id,
+        source_type=source.source_type,
+        occurred_at=None,
+        participants=source.participants,
+        segment_ids=[segment.segment_id for segment in source.segments],
+        claim_ids=["claim-user", "claim-assistant"],
+        ignored_segment_ids=["source-1#seg-0003"],
+        extraction_status="complete",
+    )
+    artifacts.save_source(source)
+    artifacts.save_episode(episode)
+    for claim_id, text, segment_id, speaker in (
+        ("claim-user", "The user prefers tea.", "source-1#seg-0001", "user"),
+        ("claim-assistant", "Tea contains caffeine.", "source-1#seg-0002", "assistant"),
+    ):
+        artifacts.save_claim(MemoryClaim(
+            claim_id=claim_id,
+            text=text,
+            kind="fact",
+            about=[{"entity": speaker}],
+            provenance=[ClaimProvenance(
+                source_id=source.source_id,
+                segment_ids=[segment_id],
+                raw_log_entry_id=raw_entry_id,
+                speaker=speaker,
+            )],
+            recorded_at=source.recorded_at,
+        ))
+    entry = LogEntry(
+        entry_id=raw_entry_id,
+        session_id="session-1",
+        timestamp=datetime.now(),
+        content="USER: I prefer tea.\nASSISTANT: Tea contains caffeine.\nUSER: Thanks!",
+        importance=0.8,
+        status="raw",
+    )
+    dream = DreamProcess(MagicMock(), MagicMock(), MagicMock(), config, artifacts)
+
+    evidence = dream._build_run_evidence([entry])
+
+    assert [item.evidence_id for item in evidence] == ["claim-user::claim"]
+
+
+@pytest.mark.asyncio
+async def test_dream_maps_constrained_aliases_to_canonical_evidence_ids(
+    dream_process, mock_llm
+):
+    evidence = [
+        EvidenceChunk(
+            evidence_id=f"claim-{index}::claim",
+            entry_id="2026-07-23#session-1",
+            session_id="session-1",
+            timestamp=datetime.now(),
+            content=text,
+            importance=0.8,
+            durability="durable",
+            chunk_index=1,
+            chunk_count=1,
+            claim_ids=(f"claim-{index}",),
+        )
+        for index, text in ((1, "The user prefers tea."), (2, "The user asked a greeting."))
+    ]
+    mock_llm.call_structured.return_value = {
+        "routes": [route("C001", "tea"), ignore("C002")]
+    }
+
+    targets = await dream_process._identify_targets_for_chunk("# Index", evidence)
+
+    assert targets == [{
+        "page": "tea",
+        "action": "create",
+        "page_type": "topic",
+        "evidence_ids": ["claim-1::claim"],
+        "log_entry_ids": ["2026-07-23#session-1"],
+    }]
+    call = mock_llm.call_structured.call_args
+    schema = call.args[2]
+    assert schema["properties"]["routes"]["items"]["properties"][
+        "evidence_alias"
+    ]["enum"] == ["C001", "C002"]
+    assert "[EVIDENCE C001]" in call.args[1]
+    assert "claim-1::claim" not in call.args[1]
+    assert call.kwargs["dump_success"] is True
+    assert call.kwargs["debug_label"] == "dream-identification"
+
+
+@pytest.mark.asyncio
+async def test_dream_rejects_incomplete_alias_coverage(dream_process, mock_llm):
+    evidence = [
+        EvidenceChunk(
+            evidence_id=f"claim-{index}::claim",
+            entry_id=f"2026-07-23#session-{index}",
+            session_id=f"session-{index}",
+            timestamp=datetime.now(),
+            content=f"Durable fact {index}.",
+            importance=0.8,
+            durability="durable",
+            chunk_index=1,
+            chunk_count=1,
+            claim_ids=(f"claim-{index}",),
+        )
+        for index in (1, 2)
+    ]
+    mock_llm.call_structured.return_value = {
+        "routes": [route("C001", "fact-one")]
+    }
+
+    targets = await dream_process._identify_targets_for_chunk("# Index", evidence)
+
+    assert targets == []
+    assert set(dream_process._identification_failures) == {
+        "claim-1::claim",
+        "claim-2::claim",
+    }
+
+
+@pytest.mark.asyncio
+async def test_dream_leaves_source_pending_when_routing_is_incomplete(
+    dream_process, mock_llm, mock_wiki, mock_logs
+):
+    entry = LogEntry(
+        entry_id="2026-07-23#session-1",
+        session_id="session-1",
+        timestamp=datetime.now(),
+        content="The user prefers tea.",
+        importance=0.8,
+        status="raw",
+    )
+    mock_logs.get_unconsolidated.return_value = [entry]
+    mock_wiki.get_index.return_value = "# Index"
+    mock_llm.call_structured.return_value = {"routes": []}
+
+    report = await dream_process.run()
+
+    assert report.entries_consolidated == 0
+    assert report.completed_source_ids == []
+    assert report.pending_source_ids == [entry.entry_id]
+    assert report.failures[0]["stage"] == "identification"
+    mock_logs.mark_consolidated.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dream_consolidates_source_after_explicit_ignore_decision(
+    dream_process, mock_llm, mock_wiki, mock_logs
+):
+    entry = LogEntry(
+        entry_id="2026-07-23#session-1",
+        session_id="session-1",
+        timestamp=datetime.now(),
+        content="Hello!",
+        importance=0.2,
+        status="raw",
+    )
+    mock_logs.get_unconsolidated.return_value = [entry]
+    mock_wiki.get_index.return_value = "# Index"
+    mock_llm.call_structured.return_value = {
+        "routes": [ignore("C001")]
+    }
+
+    report = await dream_process.run()
+
+    assert report.pages_created == 0
+    assert report.entries_consolidated == 1
+    assert report.pending_source_ids == []
+    mock_logs.mark_consolidated.assert_called_once_with([entry.entry_id])
+
 @pytest.mark.asyncio
 async def test_dream_process_run(dream_process, mock_llm, mock_wiki, mock_logs):
     # Setup state
-    entry = LogEntry(
+    entry1 = LogEntry(
         entry_id="2026-05-10#Entry1",
         session_id="ses-123",
         timestamp=datetime.now(),
@@ -41,18 +261,29 @@ async def test_dream_process_run(dream_process, mock_llm, mock_wiki, mock_logs):
         importance=0.8,
         status="raw"
     )
-    mock_logs.get_unconsolidated.return_value = [entry]
+    entry2 = LogEntry(
+        entry_id="2026-05-10#Entry2",
+        session_id="ses-123",
+        timestamp=datetime.now(),
+        content="Existing experience update",
+        importance=0.8,
+        status="raw",
+    )
+    mock_logs.get_unconsolidated.return_value = [entry1, entry2]
     mock_wiki.get_index.return_value = "# Index"
     
     # LLM responses
     mock_llm.call_structured.side_effect = [
         # Identify
-        [{"page": "project-notes", "action": "create"}, {"page": "existing-page", "action": "update"}],
+        {"routes": [
+            route("C001", "project-notes"),
+            route("C002", "existing-page", action="update"),
+        ]},
         # Canonicalize
         {
             "mappings": [
                 {"proposed_page": "project-notes", "action": "create_new", "canonical_page": "project-notes", "log_entry_ids": ["2026-05-10#Entry1"]},
-                {"proposed_page": "existing-page", "action": "use_existing", "canonical_page": "existing-page", "log_entry_ids": ["2026-05-10#Entry1"]},
+                {"proposed_page": "existing-page", "action": "use_existing", "canonical_page": "existing-page", "log_entry_ids": ["2026-05-10#Entry2"]},
             ]
         },
         # Rewrite new
@@ -83,20 +314,26 @@ async def test_dream_process_run(dream_process, mock_llm, mock_wiki, mock_logs):
     
     assert report.pages_updated == 1
     assert report.pages_created == 1
-    assert report.entries_consolidated == 1
+    assert report.entries_consolidated == 2
     
     # Verify saves
     assert mock_wiki.save.call_count == 2
     saved_pages = [call.args[0] for call in mock_wiki.save.call_args_list]
-    assert all("2026-05-10#Entry1" in page.source_log_entries for page in saved_pages)
+    assert {source for page in saved_pages for source in page.source_log_entries} == {
+        "2026-05-10#Entry1",
+        "2026-05-10#Entry2",
+    }
     saved_index = mock_wiki.save_index.call_args.args[0]
     assert "[[project-notes]]" in saved_index
     assert "[[existing-page]]" in saved_index
-    mock_logs.mark_consolidated.assert_called_once_with(["2026-05-10#Entry1"])
+    mock_logs.mark_consolidated.assert_called_once_with([
+        "2026-05-10#Entry1",
+        "2026-05-10#Entry2",
+    ])
 
 
 @pytest.mark.asyncio
-async def test_dream_process_dedupes_duplicate_identification(dream_process, mock_llm, mock_wiki, mock_logs):
+async def test_dream_process_accepts_one_alias_route(dream_process, mock_llm, mock_wiki, mock_logs):
     entry = LogEntry(
         entry_id="2026-05-10#Entry1",
         session_id="ses-123",
@@ -110,11 +347,7 @@ async def test_dream_process_dedupes_duplicate_identification(dream_process, moc
     mock_wiki.exists.return_value = False
     mock_wiki.list_all.return_value = []
     mock_llm.call_structured.side_effect = [
-        [
-            {"page": "RLHF", "action": "create"},
-            {"page": "[[rlhf]]", "action": "create"},
-            {"page": "rlhf.md", "action": "create"},
-        ],
+        {"routes": [route("C001", "rlhf")]},
         {"title": "RLHF", "content": "One page", "confidence": 0.8, "importance": 0.7},
     ]
 
@@ -144,8 +377,8 @@ async def test_dream_identification_splits_failed_raw_log_batch(dream_process, m
     )
     mock_llm.call_structured.side_effect = [
         ValueError("bad json"),
-        [{"page": "caroline-profile", "action": "create", "log_entry_ids": [entry1.entry_id]}],
-        [{"page": "melanie-profile", "action": "create", "log_entry_ids": [entry2.entry_id]}],
+        {"routes": [route("C001", "caroline-profile")]},
+        {"routes": [route("C001", "melanie-profile")]},
     ]
 
     targets = await dream_process._identify_targets_for_chunk("# Index", [entry1, entry2])
@@ -170,9 +403,9 @@ async def test_dream_identification_splits_failed_single_long_raw_log(dream_proc
         importance=0.8,
         status="raw",
     )
-    mock_llm.call_structured.return_value = [
-        {"page": "caroline-profile", "action": "create", "log_entry_ids": [entry.entry_id]}
-    ]
+    mock_llm.call_structured.return_value = {
+        "routes": [route("C001", "caroline-profile")]
+    }
 
     targets = await dream_process._identify_targets_for_chunk("# Index", [entry])
 
@@ -180,7 +413,7 @@ async def test_dream_identification_splits_failed_single_long_raw_log(dream_proc
     assert all(target["log_entry_ids"] == [entry.entry_id] for target in targets)
     assert mock_llm.call_structured.call_count >= 1
     first_prompt = mock_llm.call_structured.call_args_list[0][0][1]
-    assert f"[EVIDENCE {entry.entry_id}::chunk-0001]" in first_prompt
+    assert "[EVIDENCE C001]" in first_prompt
     assert entry.entry_id in first_prompt
     assert "session-b7ce924b-1" not in first_prompt
 
@@ -219,16 +452,39 @@ async def test_dream_discards_connected_staged_pages_when_a_rewrite_fails(
         importance=0.9,
         status="raw",
     )
-    evidence_id = f"{entry.entry_id}::chunk-0001"
+    dream_process._build_run_evidence = MagicMock(return_value=[
+        EvidenceChunk(
+            evidence_id=f"{entry.entry_id}::chunk-0001",
+            entry_id=entry.entry_id,
+            session_id=entry.session_id,
+            timestamp=entry.timestamp,
+            content="Durable topic one.",
+            importance=entry.importance,
+            durability="durable",
+            chunk_index=1,
+            chunk_count=2,
+        ),
+        EvidenceChunk(
+            evidence_id=f"{entry.entry_id}::chunk-0002",
+            entry_id=entry.entry_id,
+            session_id=entry.session_id,
+            timestamp=entry.timestamp,
+            content="Durable topic two.",
+            importance=entry.importance,
+            durability="durable",
+            chunk_index=2,
+            chunk_count=2,
+        ),
+    ])
     mock_logs.get_unconsolidated.return_value = [entry]
     mock_wiki.get_index.return_value = "# Index"
     mock_wiki.list_all.return_value = []
     mock_wiki.exists.return_value = False
     mock_llm.call_structured.side_effect = [
-        [
-            {"page": "topic-one", "action": "create", "evidence_ids": [evidence_id]},
-            {"page": "topic-two", "action": "create", "evidence_ids": [evidence_id]},
-        ],
+        {"routes": [
+            route("C001", "topic-one"),
+            route("C002", "topic-two"),
+        ]},
         {
             "mappings": [
                 {"proposed_page": "topic-one", "action": "create_new", "canonical_page": "topic-one"},
@@ -250,7 +506,7 @@ async def test_dream_discards_connected_staged_pages_when_a_rewrite_fails(
 
 @pytest.mark.asyncio
 async def test_dream_process_merges_same_title_creates(dream_process, mock_llm, mock_wiki, mock_logs):
-    entry = LogEntry(
+    entry1 = LogEntry(
         entry_id="2026-05-10#Entry1",
         session_id="ses-123",
         timestamp=datetime.now(),
@@ -258,7 +514,15 @@ async def test_dream_process_merges_same_title_creates(dream_process, mock_llm, 
         importance=0.8,
         status="raw"
     )
-    mock_logs.get_unconsolidated.return_value = [entry]
+    entry2 = LogEntry(
+        entry_id="2026-05-10#Entry2",
+        session_id="ses-123",
+        timestamp=datetime.now(),
+        content="Another new experience",
+        importance=0.8,
+        status="raw",
+    )
+    mock_logs.get_unconsolidated.return_value = [entry1, entry2]
     mock_wiki.get_index.return_value = "# Index"
     mock_wiki.list_all.return_value = []
     saved_pages = {}
@@ -276,10 +540,7 @@ async def test_dream_process_merges_same_title_creates(dream_process, mock_llm, 
     mock_wiki.save.side_effect = save
     mock_wiki.get.side_effect = get
     mock_llm.call_structured.side_effect = [
-        [
-            {"page": "rlhf", "action": "create"},
-            {"page": "dpo", "action": "create"},
-        ],
+        {"routes": [route("C001", "rlhf"), route("C002", "dpo")]},
         {
             "mappings": [
                 {"proposed_page": "rlhf", "action": "create_new", "canonical_page": "rlhf", "log_entry_ids": []},
@@ -332,7 +593,7 @@ async def test_dream_process_fork_on_actual_contradiction(dream_process, mock_ll
     # 2. Rewrite
     # 3. Prediction Error check (returns contradiction!)
     mock_llm.call_structured.side_effect = [
-        [{"page": "existing-page", "action": "update"}],
+        {"routes": [route("C001", "existing-page", action="update")]},
         {"title": "Existing Title", "content": "Updated contradictory content", "confidence": 0.9, "importance": 0.8},
         {"conflict_type": "major", "discrepancy_score": 0.8, "explanation": "Strong contradiction detected", "suggested_update": None},
     ]
@@ -390,7 +651,7 @@ async def test_dream_process_override_on_non_contradiction(dream_process, mock_l
     # 2. Rewrite
     # 3. Prediction Error check (returns non-contradiction / additive!)
     mock_llm.call_structured.side_effect = [
-        [{"page": "existing-page", "action": "update"}],
+        {"routes": [route("C001", "existing-page", action="update")]},
         {"title": "Existing Title", "content": "Updated additive content", "confidence": 0.9, "importance": 0.8},
         {"conflict_type": "additive", "discrepancy_score": 0.2, "explanation": "Compatible additive update", "suggested_update": None},
         # Append response returning empty to trigger fallback to rewrite
@@ -445,10 +706,10 @@ async def test_dream_process_precise_log_routing(dream_process, mock_llm, mock_w
     # Second & Third: Rewrite outputs
     mock_llm.call_structured.side_effect = [
         # Identify pass maps each page to a specific log entry ID!
-        [
-            {"page": "react-loop", "action": "create", "log_entry_ids": ["2026-05-10#Entry1"]},
-            {"page": "user-profile", "action": "create", "log_entry_ids": ["2026-05-10#Entry2"]}
-        ],
+        {"routes": [
+            route("C001", "react-loop"),
+            route("C002", "user-profile"),
+        ]},
         {
             "mappings": [
                 {"proposed_page": "react-loop", "action": "create_new", "canonical_page": "react-loop", "log_entry_ids": ["2026-05-10#Entry1"]},
@@ -511,14 +772,9 @@ async def test_dream_process_passes_page_type_to_rewrite_and_tags_page(
     saved_pages = {}
     mock_wiki.save.side_effect = lambda page: saved_pages.setdefault(page.slug, page)
     mock_llm.call_structured.side_effect = [
-        [
-            {
-                "page": "person-melanie",
-                "action": "create",
-                "page_type": "entity",
-                "log_entry_ids": ["2026-05-10#Entry1"],
-            }
-        ],
+        {"routes": [
+            route("C001", "person-melanie", page_type="entity")
+        ]},
         {
             "title": "Melanie",
             "content": "Melanie painted a lake sunrise last year.",
@@ -567,10 +823,10 @@ async def test_dream_process_canonicalizes_same_pass_near_duplicates(dream_proce
     saved_pages = {}
     mock_wiki.save.side_effect = lambda page: saved_pages.setdefault(page.slug, page)
     mock_llm.call_structured.side_effect = [
-        [
-            {"page": "llm-selection", "action": "create", "log_entry_ids": ["2026-05-10#Entry1"]},
-            {"page": "local-llm-deployment", "action": "create", "log_entry_ids": ["2026-05-10#Entry2"]},
-        ],
+        {"routes": [
+            route("C001", "llm-selection"),
+            route("C002", "local-llm-deployment"),
+        ]},
         {
             "mappings": [
                 {
@@ -648,7 +904,7 @@ async def test_dream_process_extracts_tool_facts_before_identification(dream_pro
             ],
             "discarded_noise": ["Navigation"],
         },
-        [{"page": "library-x", "action": "create", "log_entry_ids": ["2026-05-10#tool-abc123"]}],
+        {"routes": [route("C001", "library-x")]},
         {"title": "Library X", "content": "Library X version 2.0 adds frobnicate().", "confidence": 0.9, "importance": 0.8},
     ]
 

@@ -75,18 +75,6 @@ class RoutingOutput(RootModel[list[RoutingSelectionOutput]]):
     root: list[RoutingSelectionOutput] = Field(default_factory=list, max_length=8)
 
 
-class ConsolidationTargetOutput(BaseModel):
-    page: str
-    action: Literal["update", "create", "none"]
-    page_type: Literal["entity", "event", "topic"] = "topic"
-    log_entry_ids: list[str] = Field(default_factory=list, max_length=20)
-    evidence_ids: list[str] = Field(default_factory=list, max_length=20)
-
-
-class ConsolidationIdentifyOutput(BaseModel):
-    targets: list[ConsolidationTargetOutput] = Field(default_factory=list, max_length=8)
-
-
 class CanonicalizationMappingOutput(BaseModel):
     proposed_page: str
     action: Literal["use_existing", "create_new", "drop"]

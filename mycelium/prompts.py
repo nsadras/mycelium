@@ -20,39 +20,48 @@ CRITICAL: Avoid creating a single broad catch-all page (such as `knowledge-graph
 Prefer updating an existing page from the wiki index when the new information fits its topic, even if the fit is approximate.
 Create a new page only when no existing page can reasonably absorb the information.
 Use stable lowercase slug names with hyphens, for example "user-profile" or "reinforcement-learning". Do not return placeholder names like "Page 1", "Topic A", or "New Page".
-If multiple log entries concern the same theme, return one page target for that theme.
-Return at most 8 targets. Prefer the few most salient durable pages. If nothing is worth consolidating, return {"targets": []}.
+If multiple evidence items concern the same theme, route them to the same page slug.
+Use at most 8 distinct page slugs. Prefer the few most salient durable pages.
 
 - The central `user-profile` page should ONLY receive user-specific personal details, style preferences, project configurations, background, goals, or custom instructions. Do NOT consolidate technical, generic tool observations, or general agent loop architecture details into the `user-profile` page. Create separate descriptive wiki pages for those technical concepts (e.g. `agent-harness-anatomy`, `react-agent-loop`, `paper-review-evaluation`).
 - For long conversations with named participants, prefer naturally arising participant and topic pages when the source material supports them. Parent/profile pages can summarize; child/topic pages should preserve concrete details. Do not create named pages unless the names and topics are salient in the source logs.
 
 Important: Log entries with IDs starting with 'tool-' have already been preprocessed into extracted tool facts. Use only the extracted facts, not page furniture, search result labels, navigation text, or citation widgets.
 
-Return a JSON object with a single "targets" field containing a list of objects, where each object contains:
-- "page": the lowercase, hyphenated slug of the wiki page. You MUST use a descriptive slug name representing the specific topic. NEVER return a number, a single letter, or a placeholder like "1", "2", "Page A", or "New Page".
-- "action": one of "update", "create", or "none"
-- "page_type": one of "entity", "event", or "topic"
-- "evidence_ids": a list of the exact EVIDENCE IDs containing information relevant to this page. Copy only IDs shown in the evidence headers; never invent an ID.
-- "log_entry_ids": a list of the parent log IDs shown beside those evidence IDs. This field is retained for source backlinks, but evidence_ids determines the exact text routed to the page.
+Return a JSON object with a single "routes" field. It MUST contain exactly one decision for every short EVIDENCE alias shown in the input. Copy aliases such as `C001` exactly; never output canonical claim IDs, segment IDs, or parent log IDs.
 
-If a log entry is a full raw session transcript, include that session log entry ID once for each relevant page. Do not output dialogue turn IDs, speaker labels, utterance IDs, or duplicate copies of the same log entry ID.
+Each route decision contains:
+- "evidence_alias": the exact short alias from an EVIDENCE header, such as "C001". Every input alias must appear exactly once.
+- "disposition": either "route" when the evidence belongs in durable wiki memory, or "ignore" when it is transient, merely a question, generic knowledge, or otherwise not useful as durable personalized memory.
+- "page": for "route", the lowercase hyphenated target slug. Use a descriptive topic, entity, or event slug; never use a number or placeholder. For "ignore", use an empty string.
+- "action": "update" or "create" for routed evidence; "none" for ignored evidence.
+- "page_type": one of "entity", "event", or "topic". Use "topic" for ignored evidence.
+
+Route each evidence item to exactly one canonical page. Related pages can be connected later through wiki links; do not duplicate a claim across multiple pages. The application will group decisions that use the same page slug and will map aliases back to canonical evidence internally.
 
 Example response format:
 {
-  "targets": [
+  "routes": [
     {
-      "page": "person-caroline",
+      "evidence_alias": "C001",
+      "disposition": "route",
+      "page": "user-profile",
       "action": "update",
-      "page_type": "entity",
-      "evidence_ids": ["2026-05-28#entry-123::chunk-0001"],
-      "log_entry_ids": ["2026-05-28#entry-123"]
+      "page_type": "topic"
     },
     {
+      "evidence_alias": "C002",
+      "disposition": "route",
       "page": "agent-harness-anatomy",
       "action": "create",
-      "page_type": "topic",
-      "evidence_ids": ["2026-05-28#Prologue::chunk-0001", "2026-05-28#Chapter 1 · What Is a Harness::chunk-0001"],
-      "log_entry_ids": ["2026-05-28#Prologue", "2026-05-28#Chapter 1 · What Is a Harness"]
+      "page_type": "topic"
+    },
+    {
+      "evidence_alias": "C003",
+      "disposition": "ignore",
+      "page": "",
+      "action": "none",
+      "page_type": "topic"
     }
   ]
 }

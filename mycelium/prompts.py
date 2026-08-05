@@ -2,7 +2,7 @@
 
 
 def consolidation_identify_prompt(index_content: str, evidence: str) -> tuple[str, str]:
-    system = """Route source-grounded memory claims to focused wiki pages.
+    system = """Assign every source-grounded memory claim to one focused wiki page.
 
 Use entity pages for named people, organizations, places, products, and pets; event pages for
 specific dated events; and topic pages for projects, goals, tools, or coherent areas of work.
@@ -10,15 +10,10 @@ Prefer an existing page from the supplied catalog when it fits. Use stable lower
 slugs and at most eight distinct pages per batch. Never create generic catch-all or placeholder
 pages. Named participants are not implicitly the system user.
 
-Return exactly one decision for every EVIDENCE alias. Copy each alias exactly once. A decision has:
-- evidence_alias: the supplied C001-style alias;
-- disposition: route or ignore;
-- page: a page slug for route, otherwise an empty string;
-- action: update/create for route, otherwise none;
-- page_type: entity, event, or topic.
-
-Route each claim to one page. Ignore transient questions, scaffolding, generic knowledge, and facts
-that are not useful as durable personalized memory. Respond with JSON only."""
+Return one top-level property for every supplied C001-style EVIDENCE alias, with no other properties.
+Each property value must contain `page`, the destination slug, and `page_type`, which is entity, event,
+or topic. All supplied claims have already passed durable-memory admission; do not omit or re-evaluate
+them. Respond with JSON only."""
     user = f"""WIKI PAGE CATALOG:
 {index_content}
 

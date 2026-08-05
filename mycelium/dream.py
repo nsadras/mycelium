@@ -39,7 +39,7 @@ class DreamProcess:
         self.logs = logs
         self.config = config
         self.artifacts = artifacts
-        self.router = ClaimRouter(llm, wiki, artifacts)
+        self.router = ClaimRouter(llm, wiki)
         self.materializer = PageMaterializer(wiki, artifacts, config)
         self.reconsolidator = ClaimReconsolidator(llm, artifacts)
 
@@ -114,14 +114,6 @@ class DreamProcess:
                     "routing_failed",
                     failure.reason,
                 )
-            for claim_id in routing.ignored_claim_ids:
-                self._set_decision(
-                    decisions,
-                    claim_id,
-                    "ignored_semantic",
-                    "The semantic router judged this claim unsuitable for wiki consolidation.",
-                )
-
             successful_routes = [
                 route
                 for route in routing.routes
@@ -270,7 +262,7 @@ class DreamProcess:
                 reason=(
                     "Legacy Dream-derived claims are not part of the source-grounded pipeline."
                     if is_legacy_derivation
-                    else "Awaiting semantic routing."
+                    else "Awaiting page assignment."
                     if admitted
                     else "Assistant or system output remains source history, not durable memory."
                 ),

@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from mycelium import prompts
-from mycelium.artifacts import ArtifactStore, MemoryClaim, SourceDocument
+from mycelium.artifacts import MemoryClaim, SourceDocument
 from mycelium.ollama import OllamaClient
 from mycelium.store import WikiStore
-from mycelium.structured_outputs import ConsolidationRoutesOutput
+from mycelium.structured_outputs import consolidation_output_model
 
 
 PLACEHOLDER_SLUG_RE = re.compile(
@@ -59,30 +59,32 @@ class RoutingFailure:
 @dataclass
 class RoutingResult:
     routes: list[ClaimRoute]
-    ignored_claim_ids: set[str]
     failures: list[RoutingFailure]
 
 
 class ClaimRouter:
     """Route every admitted claim exactly once with one structured LLM decision."""
 
-    def __init__(self, llm: OllamaClient, wiki: WikiStore, artifacts: ArtifactStore):
+    def __init__(self, llm: OllamaClient, wiki: WikiStore):
         self.llm = llm
         self.wiki = wiki
-        self.artifacts = artifacts
 
     async def route(self, evidence: list[ClaimEvidence]) -> RoutingResult:
-        result = RoutingResult(routes=[], ignored_claim_ids=set(), failures=[])
-        for offset in range(0, len(evidence), 32):
-            batch = evidence[offset:offset + 32]
-            batch_result = await self._route_batch(batch)
-            result.routes.extend(batch_result.routes)
-            result.ignored_claim_ids.update(batch_result.ignored_claim_ids)
-            result.failures.extend(batch_result.failures)
+        result = RoutingResult(routes=[], failures=[])
+        evidence_by_source: dict[str, list[ClaimEvidence]] = {}
+        for item in evidence:
+            evidence_by_source.setdefault(item.raw_log_entry_id, []).append(item)
+        for source_evidence in evidence_by_source.values():
+            for offset in range(0, len(source_evidence), 32):
+                batch = source_evidence[offset:offset + 32]
+                batch_result = await self._route_batch(batch)
+                result.routes.extend(batch_result.routes)
+                result.failures.extend(batch_result.failures)
         return result
 
     async def _route_batch(self, evidence: list[ClaimEvidence]) -> RoutingResult:
         aliases = {f"C{index:03d}": item for index, item in enumerate(evidence, start=1)}
+        output_model = consolidation_output_model(aliases)
         system, user = prompts.consolidation_identify_prompt(
             self._page_catalog(), self._format_evidence(aliases)
         )
@@ -90,55 +92,32 @@ class ClaimRouter:
             response = await self.llm.call_structured(
                 system,
                 user,
-                ConsolidationRoutesOutput,
+                output_model,
                 num_predict=4096,
                 debug_label="dream-claim-routing",
             )
+            if not isinstance(response, dict):
+                raise ValueError("Routing response was not an object")
+            destinations = output_model.model_validate(response).model_dump()
         except Exception as exc:
-            return self._fail_batch(evidence, f"Routing request failed: {type(exc).__name__}")
-
-        routes = response.get("routes", []) if isinstance(response, dict) else []
-        returned_aliases = [
-            str(route.get("evidence_alias", ""))
-            for route in routes
-            if isinstance(route, dict)
-        ]
-        if (
-            len(routes) != len(aliases)
-            or len(returned_aliases) != len(set(returned_aliases))
-            or set(returned_aliases) != set(aliases)
-        ):
             return self._fail_batch(
-                evidence, "Routing response did not account for every claim exactly once"
+                evidence,
+                f"Routing response did not satisfy the source contract: {type(exc).__name__}",
             )
 
         routed_slugs = {
-            slugify(str(route.get("page", "")))
-            for route in routes
-            if route.get("disposition") == "route"
+            slugify(str(destination.get("page", "")))
+            for destination in destinations.values()
         }
         if len(routed_slugs) > 8:
             return self._fail_batch(evidence, "Routing response exceeded eight pages")
 
-        result = RoutingResult(routes=[], ignored_claim_ids=set(), failures=[])
-        for route in routes:
-            item = aliases[str(route["evidence_alias"])]
-            disposition = route.get("disposition")
-            if disposition == "ignore":
-                if route.get("action") != "none" or str(route.get("page", "")).strip():
-                    result.failures.append(self._failure(item, "Invalid ignore decision"))
-                else:
-                    result.ignored_claim_ids.add(item.claim.claim_id)
-                continue
-
-            page_slug = slugify(str(route.get("page", "")))
-            page_type = str(route.get("page_type", "topic")).lower()
-            if (
-                disposition != "route"
-                or route.get("action") not in {"create", "update"}
-                or is_placeholder_slug(page_slug)
-                or page_type not in PAGE_TYPES
-            ):
+        result = RoutingResult(routes=[], failures=[])
+        for alias, item in aliases.items():
+            destination = destinations[alias]
+            page_slug = slugify(str(destination.get("page", "")))
+            page_type = str(destination.get("page_type", "topic")).lower()
+            if is_placeholder_slug(page_slug) or page_type not in PAGE_TYPES:
                 result.failures.append(self._failure(item, "Invalid route decision"))
                 continue
             if page_slug == "user-profile" and self._has_named_participant_scope(item.source):
@@ -202,6 +181,5 @@ class ClaimRouter:
     def _fail_batch(self, evidence: Iterable[ClaimEvidence], reason: str) -> RoutingResult:
         return RoutingResult(
             routes=[],
-            ignored_claim_ids=set(),
             failures=[self._failure(item, reason) for item in evidence],
         )

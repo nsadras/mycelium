@@ -1,6 +1,7 @@
 from datetime import datetime
 
 import pytest
+from pydantic import ValidationError
 from unittest.mock import AsyncMock
 
 from mycelium.artifacts import (
@@ -17,6 +18,30 @@ from mycelium.artifacts import (
 from mycelium.config import Config
 from mycelium.encoder import Encoder
 from mycelium.store import LogStore
+from mycelium.structured_outputs import extraction_output_model
+
+
+def test_extraction_schema_requires_batch_constrained_claim_evidence():
+    first = "source-test#seg-0001"
+    second = "source-test#seg-0002"
+    output_model = extraction_output_model({first, second})
+    valid = {
+        "claims": [{"text": "Ava prefers tea.", "segment_ids": [first]}],
+        "ignored_segment_ids": [second],
+    }
+
+    assert output_model.model_validate(valid).claims[0].segment_ids == [first]
+    for invalid in (
+        {"claims": [{"text": "Ava prefers tea."}], "ignored_segment_ids": []},
+        {"claims": [{"text": "Ava prefers tea.", "segment_ids": []}], "ignored_segment_ids": []},
+        {
+            "claims": [{"text": "Ava prefers tea.", "segment_ids": ["source-other#seg-1"]}],
+            "ignored_segment_ids": [],
+        },
+        {"claims": []},
+    ):
+        with pytest.raises(ValidationError):
+            output_model.model_validate(invalid)
 
 
 @pytest.mark.asyncio
@@ -33,6 +58,7 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
                 "confidence": 0.9, "facets": {"object": "tea"},
             }
         ],
+        "ignored_segment_ids": [],
     }
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts)
@@ -204,6 +230,42 @@ async def test_encoder_records_uncovered_segments_without_repair(tmp_path):
     assert report["segment_coverage"] == 0.5
     assert len(report["unaccounted_segment_ids"]) == 1
     assert artifacts.list_episodes()[0].extraction_status == "partial"
+
+
+@pytest.mark.asyncio
+async def test_encoder_rejects_batch_that_claims_and_ignores_same_segment(tmp_path):
+    llm = AsyncMock()
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    encoder = Encoder(
+        llm,
+        LogStore(tmp_path / "logs"),
+        Config.defaults(),
+        artifacts,
+    )
+
+    async def response(system, user, output_type, **kwargs):
+        segment_id = user.split("[", 1)[1].split("]", 1)[0]
+        return {
+            "claims": [{
+                "text": "Ava prefers tea.",
+                "about": [{"entity": "Ava"}],
+                "segment_ids": [segment_id],
+            }],
+            "ignored_segment_ids": [segment_id],
+        }
+
+    llm.call_structured.side_effect = response
+    await encoder.encode_session(
+        "[D1:1] (2024-01-10) Ava: I prefer tea.",
+        "session-1",
+        source_type="multi_party_conversation",
+        occurred_at="2024-01-10",
+    )
+
+    episode = artifacts.list_episodes()[0]
+    assert episode.extraction_status == "partial"
+    assert "both claimed and ignored" in str(episode.extraction_error)
+    assert artifacts.list_claims() == []
 
 
 def test_dialogue_shaped_claims_are_rejected_without_repair():

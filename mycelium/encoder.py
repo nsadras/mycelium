@@ -8,7 +8,7 @@ from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.config import Config
 from mycelium import prompts
-from mycelium.structured_outputs import ExtractedEpisodeOutput
+from mycelium.structured_outputs import extraction_output_model
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimProvenance,
@@ -181,6 +181,7 @@ class Encoder:
                 self._segment_batches(extractable_segments), start=1
             ):
                 batch_ids = {segment.segment_id for segment in batch}
+                output_model = extraction_output_model(batch_ids)
                 system, user = prompts.claim_extraction_prompt(
                     source.source_type,
                     source.source_id,
@@ -191,7 +192,7 @@ class Encoder:
                     response = await self.llm.call_structured(
                         system,
                         user,
-                        ExtractedEpisodeOutput,
+                        output_model,
                         num_predict=8192,
                         debug_label=(
                             f"claim-extraction-{source.source_id}-batch-{batch_index}"
@@ -199,6 +200,10 @@ class Encoder:
                     )
                     if not isinstance(response, dict):
                         raise ValueError("claim extraction did not return an object")
+                    response = output_model.model_validate(response).model_dump(
+                        exclude_none=True
+                    )
+                    self._validate_batch_accounting(response, batch_ids)
                     covered_ids.update(self._persist_extracted_claims(
                         source, response, batch_ids, reconciler, claim_ids
                     ))
@@ -247,8 +252,31 @@ class Encoder:
         ]
 
     @staticmethod
+    def _validate_batch_accounting(
+        response: dict[str, Any], allowed_ids: set[str]
+    ) -> None:
+        claimed_ids = {
+            segment_id
+            for claim in response.get("claims", [])
+            for segment_id in claim.get("segment_ids", [])
+        }
+        ignored_ids = set(response.get("ignored_segment_ids", []))
+        invalid_ids = (claimed_ids | ignored_ids) - allowed_ids
+        if invalid_ids:
+            raise ValueError(
+                "Extraction referenced unknown segment IDs: "
+                + ", ".join(sorted(invalid_ids))
+            )
+        overlap = claimed_ids & ignored_ids
+        if overlap:
+            raise ValueError(
+                "Extraction marked segments as both claimed and ignored: "
+                + ", ".join(sorted(overlap))
+            )
+
+    @staticmethod
     def _is_direct_atomic_claim(text: str) -> bool:
-        """Reject dialogue-shaped output so coverage repair can rewrite it."""
+        """Reject dialogue-shaped output instead of storing conversational debris."""
         normalized = " ".join(text.split()).strip()
         if not normalized:
             return False

@@ -2,6 +2,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from mycelium.artifacts import (
     ArtifactStore,
@@ -15,26 +16,35 @@ from mycelium.config import Config
 from mycelium.dream import DreamProcess
 from mycelium.models import LogEntry
 from mycelium.store import LogStore, WikiStore
+from mycelium.structured_outputs import consolidation_output_model
 
 
 def route(alias: str, page: str, page_type: str = "topic") -> dict:
     return {
-        "evidence_alias": alias,
-        "disposition": "route",
-        "page": page,
-        "action": "create",
-        "page_type": page_type,
+        alias: {
+            "page": page,
+            "page_type": page_type,
+        },
     }
 
 
-def ignore(alias: str) -> dict:
-    return {
-        "evidence_alias": alias,
-        "disposition": "ignore",
-        "page": "",
-        "action": "none",
-        "page_type": "topic",
+def test_consolidation_schema_requires_one_destination_for_every_exact_alias():
+    output_model = consolidation_output_model(["C001", "C002"])
+    valid = {
+        **route("C001", "ava", "entity"),
+        **route("C002", "tea", "topic"),
     }
+
+    assert set(output_model.model_validate(valid).model_dump()) == {"C001", "C002"}
+    for invalid in (
+        route("C001", "ava", "entity"),
+        {**valid, **route("C003", "extra")},
+        {"routes": []},
+        {"C001": {"page": "", "page_type": "entity"}, **route("C002", "tea")},
+        {"C001": {"page": "ava"}, **route("C002", "tea")},
+    ):
+        with pytest.raises(ValidationError):
+            output_model.model_validate(invalid)
 
 
 def build_dream(tmp_path, *, llm_response: dict):
@@ -135,7 +145,7 @@ def add_claim(
 @pytest.mark.asyncio
 async def test_dream_routes_claim_and_materializes_deterministic_page(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response={"routes": [route("C001", "memory-design")]}
+        tmp_path, llm_response=route("C001", "memory-design")
     )
     entry, source = add_source(logs, artifacts)
     claim = add_claim(artifacts, source)
@@ -155,25 +165,9 @@ async def test_dream_routes_claim_and_materializes_deterministic_page(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dream_explicit_ignore_is_terminal_and_audited(tmp_path):
-    dream, _, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response={"routes": [ignore("C001")]}
-    )
-    entry, source = add_source(logs, artifacts)
-    claim = add_claim(artifacts, source)
-
-    report = await dream.run()
-
-    assert report.completed_source_ids == [entry.entry_id]
-    assert wiki.list_all() == []
-    assert artifacts.get_claim(claim.claim_id).dream_disposition == "ignored_semantic"
-    assert artifacts.list_dream_runs()[0].status == "completed"
-
-
-@pytest.mark.asyncio
 async def test_dream_rejects_incomplete_alias_coverage_and_keeps_source_pending(tmp_path):
     dream, _, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response={"routes": []}
+        tmp_path, llm_response={}
     )
     entry, source = add_source(logs, artifacts)
     add_claim(artifacts, source)
@@ -188,9 +182,43 @@ async def test_dream_rejects_incomplete_alias_coverage_and_keeps_source_pending(
 
 
 @pytest.mark.asyncio
+async def test_dream_routes_sources_separately_so_one_invalid_response_is_isolated(tmp_path):
+    dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
+    first_entry, first_source = add_source(logs, artifacts, suffix="first")
+    add_claim(
+        artifacts,
+        first_source,
+        claim_id="claim-first",
+        text="The user prefers tea.",
+    )
+    second_entry, second_source = add_source(logs, artifacts, suffix="second")
+    add_claim(
+        artifacts,
+        second_source,
+        claim_id="claim-second",
+        text="The user prefers coffee.",
+    )
+
+    async def respond(system, user, output_type, **kwargs):
+        if "claim=The user prefers tea." in user:
+            return {}
+        return route("C001", "coffee")
+
+    llm.call_structured.side_effect = respond
+    report = await dream.run()
+
+    assert report.pending_source_ids == [first_entry.entry_id]
+    assert report.completed_source_ids == [second_entry.entry_id]
+    assert logs.get(first_entry.entry_id).consolidated is False
+    assert logs.get(second_entry.entry_id).consolidated is True
+    assert wiki.exists("coffee")
+    assert llm.call_structured.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_partial_extraction_routes_available_claims_without_repair(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response={"routes": [route("C001", "partial-memory")]}
+        tmp_path, llm_response=route("C001", "partial-memory")
     )
     entry, source = add_source(logs, artifacts, extraction_status="partial")
     add_claim(artifacts, source)
@@ -204,7 +232,7 @@ async def test_partial_extraction_routes_available_claims_without_repair(tmp_pat
 
 @pytest.mark.asyncio
 async def test_failed_extraction_never_falls_back_to_raw_evidence(tmp_path):
-    dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response={"routes": []})
+    dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
     entry, _ = add_source(logs, artifacts, extraction_status="failed")
 
     report = await dream.run()
@@ -217,7 +245,7 @@ async def test_failed_extraction_never_falls_back_to_raw_evidence(tmp_path):
 
 @pytest.mark.asyncio
 async def test_partial_extraction_without_claims_stays_pending(tmp_path):
-    dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response={"routes": []})
+    dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
     entry, _ = add_source(logs, artifacts, extraction_status="partial")
 
     report = await dream.run()
@@ -231,7 +259,7 @@ async def test_partial_extraction_without_claims_stays_pending(tmp_path):
 @pytest.mark.asyncio
 async def test_named_participant_claim_cannot_route_to_user_profile(tmp_path):
     dream, _, _, logs, artifacts = build_dream(
-        tmp_path, llm_response={"routes": [route("C001", "user-profile")]}
+        tmp_path, llm_response=route("C001", "user-profile")
     )
     entry, source = add_source(
         logs,
@@ -250,7 +278,7 @@ async def test_named_participant_claim_cannot_route_to_user_profile(tmp_path):
 @pytest.mark.asyncio
 async def test_dream_dry_run_reports_but_does_not_write(tmp_path):
     dream, _, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response={"routes": [route("C001", "preview-page")]}
+        tmp_path, llm_response=route("C001", "preview-page")
     )
     entry, source = add_source(logs, artifacts)
     claim = add_claim(artifacts, source)
@@ -267,7 +295,7 @@ async def test_dream_dry_run_reports_but_does_not_write(tmp_path):
 @pytest.mark.asyncio
 async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response={"routes": [route("C001", "stable-page")]}
+        tmp_path, llm_response=route("C001", "stable-page")
     )
     _, source = add_source(logs, artifacts, suffix="first")
     add_claim(artifacts, source, claim_id="claim-first", text="The user prefers tea.")
@@ -276,7 +304,7 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
     _, source_two = add_source(logs, artifacts, suffix="second")
     add_claim(artifacts, source_two, claim_id="claim-second", text="The user prefers coffee.")
     llm.call_structured.side_effect = [
-        {"routes": [route("C001", "stable-page")]},
+        route("C001", "stable-page"),
         {"decisions": [{
             "incoming_alias": "N001",
             "relation": "additive",
@@ -297,7 +325,7 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
 @pytest.mark.asyncio
 async def test_dream_persists_contradiction_proposal_and_marks_both_claims_pending(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response={"routes": [route("C001", "user-profile", "entity")]}
+        tmp_path, llm_response=route("C001", "user-profile", "entity")
     )
     _, first_source = add_source(logs, artifacts, suffix="first")
     add_claim(
@@ -316,7 +344,7 @@ async def test_dream_persists_contradiction_proposal_and_marks_both_claims_pendi
         text="The user dislikes tea.",
     )
     llm.call_structured.side_effect = [
-        {"routes": [route("C001", "user-profile", "entity")]},
+        route("C001", "user-profile", "entity"),
         {"decisions": [{
             "incoming_alias": "N001",
             "relation": "contradicts",
@@ -349,7 +377,7 @@ async def test_dream_persists_contradiction_proposal_and_marks_both_claims_pendi
 @pytest.mark.asyncio
 async def test_dream_fails_source_closed_when_reconsolidation_response_is_invalid(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response={"routes": [route("C001", "user-profile", "entity")]}
+        tmp_path, llm_response=route("C001", "user-profile", "entity")
     )
     _, first_source = add_source(logs, artifacts, suffix="first")
     add_claim(artifacts, first_source, claim_id="claim-old")
@@ -363,7 +391,7 @@ async def test_dream_fails_source_closed_when_reconsolidation_response_is_invali
         text="The user no longer prefers deterministic memory views.",
     )
     llm.call_structured.side_effect = [
-        {"routes": [route("C001", "user-profile", "entity")]},
+        route("C001", "user-profile", "entity"),
         {"decisions": []},
     ]
 

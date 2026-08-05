@@ -1,8 +1,9 @@
 """Structured response contracts used by production LLM calls."""
 
-from typing import Literal
+from collections.abc import Collection
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel, create_model
 
 
 class ExtractedEntityOutput(BaseModel):
@@ -26,7 +27,7 @@ class ExtractedClaimOutput(BaseModel):
         "past", "current", "future", "recurring", "atemporal", "unknown"
     ] = "unknown"
     about: list[ExtractedEntityOutput] = Field(default_factory=list, max_length=12)
-    segment_ids: list[str] = Field(default_factory=list, max_length=32)
+    segment_ids: list[str] = Field(min_length=1, max_length=32)
     speaker: str | None = None
     evidence_type: Literal["explicit", "inferred"] = "explicit"
     confidence: float = 0.8
@@ -35,8 +36,38 @@ class ExtractedClaimOutput(BaseModel):
 
 
 class ExtractedEpisodeOutput(BaseModel):
-    claims: list[ExtractedClaimOutput] = Field(default_factory=list, max_length=128)
-    ignored_segment_ids: list[str] = Field(default_factory=list, max_length=256)
+    claims: list[ExtractedClaimOutput] = Field(max_length=128)
+    ignored_segment_ids: list[str] = Field(max_length=256)
+
+
+def extraction_output_model(
+    allowed_segment_ids: Collection[str],
+) -> type[BaseModel]:
+    """Build a retryable structured contract scoped to one extraction batch."""
+    segment_ids = tuple(sorted({str(value) for value in allowed_segment_ids if value}))
+    if not segment_ids:
+        raise ValueError("Extraction output requires at least one allowed segment ID")
+    segment_id_type = Literal.__getitem__(segment_ids)
+    claim_model = create_model(
+        "BatchExtractedClaimOutput",
+        __base__=ExtractedClaimOutput,
+        segment_ids=(
+            list[segment_id_type],  # type: ignore[valid-type]
+            Field(min_length=1, max_length=32),
+        ),
+    )
+    return create_model(
+        "BatchExtractedEpisodeOutput",
+        __base__=ExtractedEpisodeOutput,
+        claims=(
+            list[claim_model],  # type: ignore[valid-type]
+            Field(max_length=128),
+        ),
+        ignored_segment_ids=(
+            list[segment_id_type],  # type: ignore[valid-type]
+            Field(max_length=256),
+        ),
+    )
 
 
 class GroundedAnswerOutput(BaseModel):
@@ -55,16 +86,27 @@ class RoutingOutput(RootModel[list[RoutingSelectionOutput]]):
     root: list[RoutingSelectionOutput] = Field(default_factory=list, max_length=8)
 
 
-class ConsolidationRouteOutput(BaseModel):
-    evidence_alias: str
-    disposition: Literal["route", "ignore"]
-    page: str = ""
-    action: Literal["update", "create", "none"] = "none"
-    page_type: Literal["entity", "event", "topic"] = "topic"
+class ConsolidationDestinationOutput(BaseModel):
+    page: str = Field(min_length=1, max_length=120)
+    page_type: Literal["entity", "event", "topic"]
 
 
-class ConsolidationRoutesOutput(BaseModel):
-    routes: list[ConsolidationRouteOutput] = Field(default_factory=list, max_length=64)
+def consolidation_output_model(
+    evidence_aliases: Collection[str],
+) -> type[BaseModel]:
+    """Build an exact source-scoped page-assignment contract."""
+    aliases = tuple(dict.fromkeys(str(value) for value in evidence_aliases if value))
+    if not aliases:
+        raise ValueError("Consolidation output requires at least one evidence alias")
+    fields: dict[str, Any] = {
+        alias: (ConsolidationDestinationOutput, ...)
+        for alias in aliases
+    }
+    return create_model(
+        "SourceConsolidationOutput",
+        __config__=ConfigDict(extra="forbid"),
+        **fields,
+    )
 
 
 class ReconsolidationDecisionOutput(BaseModel):

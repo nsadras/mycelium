@@ -28,6 +28,8 @@ from mycelium.artifacts import (
     ClaimProvenance,
     ClaimReconciler,
     DERIVATION_OPERATIONS,
+    DreamClaimDecision,
+    DreamRunAudit,
     MemoryClaim,
     SourceDocument,
     parse_source_datetime,
@@ -108,6 +110,9 @@ class DreamProcess:
         self._identification_failures: dict[str, str] = {}
         self._preparation_failures: dict[str, str] = {}
         self._pending_page_claim_ids: dict[str, set[str]] = {}
+        self._dream_run_id: str | None = None
+        self._dream_run_started_at: str | None = None
+        self._claim_audit: dict[str, DreamClaimDecision] = {}
 
     def _uses_claim_evidence(self) -> bool:
         return self.config.dream.evidence_mode != "raw"
@@ -118,7 +123,9 @@ class DreamProcess:
         dry_run: bool = False,
         conflict_policy: Literal['fork', 'override', 'merge'] = 'override',
     ) -> DreamReport:
-        
+        self._dream_run_id = f"dream-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        self._dream_run_started_at = datetime.now().astimezone().isoformat()
+        self._claim_audit = {}
         raw_entries = self.logs.get_unconsolidated()
         self._preparation_failures = {}
         self._pending_page_claim_ids: dict[str, set[str]] = {}
@@ -144,7 +151,7 @@ class DreamProcess:
                 self.logs.mark_consolidated(completed_source_ids)
             if not dry_run and (retired_derived_pages or self._index_needs_rebuild()):
                 self._save_deterministic_index({}, dry_run=False, now=datetime.now())
-            return DreamReport(
+            report = DreamReport(
                 len(migrated_projection_parents),
                 0,
                 len(completed_source_ids),
@@ -157,6 +164,14 @@ class DreamProcess:
                     for source_id, reason in self._preparation_failures.items()
                 ],
             )
+            self._persist_run_audit(
+                raw_entries,
+                report,
+                strategy=strategy,
+                conflict_policy=conflict_policy,
+                dry_run=dry_run,
+            )
+            return report
             
         index_content = self.wiki.get_index()
         
@@ -178,6 +193,7 @@ class DreamProcess:
         identification = self._dedupe_identification(all_targets)
         if not deterministic_multi_party:
             identification = await self._canonicalize_identification(identification, evidence)
+        self._record_routing_targets(identification, evidence)
         evidence_by_id = {chunk.evidence_id: chunk for chunk in evidence}
         failed_source_ids = {
             evidence_by_id[evidence_id].entry_id
@@ -561,7 +577,7 @@ class DreamProcess:
         if not dry_run and completed_source_ids:
             self.logs.mark_consolidated(completed_source_ids)
 
-        return DreamReport(
+        report = DreamReport(
             pages_updated=pages_updated,
             pages_created=pages_created,
             entries_consolidated=len(completed_source_ids),
@@ -571,6 +587,14 @@ class DreamProcess:
             pending_source_ids=pending_source_ids,
             failures=failures,
         )
+        self._persist_run_audit(
+            raw_entries,
+            report,
+            strategy=strategy,
+            conflict_policy=conflict_policy,
+            dry_run=dry_run,
+        )
+        return report
 
     async def compact(
         self,
@@ -741,6 +765,9 @@ class DreamProcess:
                     exc,
                 )
                 self._identification_failures[evidence_id] = str(exc)
+                self._set_evidence_audit(
+                    evidence[0], "routing_failed", f"Identification failed: {exc}"
+                )
                 return []
 
             midpoint = max(1, len(evidence) // 2)
@@ -793,6 +820,17 @@ class DreamProcess:
                     self._identification_failures[item.evidence_id] = (
                         f"invalid ignore decision for alias {alias}"
                     )
+                    self._set_evidence_audit(
+                        item,
+                        "routing_failed",
+                        f"Invalid ignore decision for alias {alias}.",
+                    )
+                else:
+                    self._set_evidence_audit(
+                        item,
+                        "ignored_semantic",
+                        "The semantic router explicitly judged this claim unsuitable for wiki consolidation.",
+                    )
                 continue
             page_slug = _slugify(str(route.get("page", "")))
             action = route.get("action")
@@ -805,10 +843,20 @@ class DreamProcess:
                 self._identification_failures[item.evidence_id] = (
                     f"invalid route decision for alias {alias}"
                 )
+                self._set_evidence_audit(
+                    item,
+                    "routing_failed",
+                    f"Invalid route decision for alias {alias}.",
+                )
                 continue
             if page_slug == "user-profile" and self._has_named_participant_scope([item]):
                 self._identification_failures[item.evidence_id] = (
                     "named-participant evidence cannot be routed to user-profile"
+                )
+                self._set_evidence_audit(
+                    item,
+                    "routing_failed",
+                    "Named-participant evidence cannot be routed to user-profile.",
                 )
                 continue
             validated.append({
@@ -883,6 +931,171 @@ class DreamProcess:
         logger.warning("Rejecting incomplete dream routing batch: %s", reason)
         for item in evidence:
             self._identification_failures[item.evidence_id] = reason
+            self._set_evidence_audit(item, "routing_failed", reason)
+
+    def _initialize_claim_audit(
+        self,
+        claim: MemoryClaim,
+        *,
+        disposition: str,
+        reason: str,
+    ) -> None:
+        provenance = claim.provenance[0] if claim.provenance else None
+        self._claim_audit[claim.claim_id] = DreamClaimDecision(
+            claim_id=claim.claim_id,
+            evidence_id=f"{claim.claim_id}::claim",
+            source_id=provenance.source_id if provenance else "",
+            raw_log_entry_id=provenance.raw_log_entry_id if provenance else None,
+            disposition=disposition,
+            reason=reason,
+        )
+
+    def _set_evidence_audit(
+        self,
+        evidence: EvidenceChunk,
+        disposition: str,
+        reason: str,
+        *,
+        page_slugs: list[str] | None = None,
+    ) -> None:
+        for claim_id in evidence.claim_ids:
+            decision = self._claim_audit.get(claim_id)
+            if decision is None:
+                try:
+                    claim = self.artifacts.get_claim(claim_id)
+                except FileNotFoundError:
+                    continue
+                self._initialize_claim_audit(
+                    claim, disposition=disposition, reason=reason
+                )
+                decision = self._claim_audit[claim_id]
+            decision.disposition = disposition
+            decision.reason = reason
+            decision.page_slugs = list(dict.fromkeys(page_slugs or []))
+
+    def _record_routing_targets(
+        self,
+        identification: list[dict],
+        evidence: list[EvidenceChunk],
+    ) -> None:
+        evidence_by_id = {item.evidence_id: item for item in evidence}
+        pages_by_evidence: dict[str, list[str]] = {}
+        for target in identification:
+            if not isinstance(target, dict):
+                continue
+            page_slug = _slugify(str(target.get("page", "")))
+            for evidence_id in target.get("evidence_ids", []):
+                if page_slug:
+                    pages_by_evidence.setdefault(evidence_id, []).append(page_slug)
+        for evidence_id, page_slugs in pages_by_evidence.items():
+            item = evidence_by_id.get(evidence_id)
+            if item is None:
+                continue
+            unique_pages = list(dict.fromkeys(page_slugs))
+            self._set_evidence_audit(
+                item,
+                "routed",
+                f"Routed to wiki page(s): {', '.join(unique_pages)}.",
+                page_slugs=unique_pages,
+            )
+
+    def _persist_run_audit(
+        self,
+        raw_entries: list[LogEntry],
+        report: DreamReport,
+        *,
+        strategy: str,
+        conflict_policy: str,
+        dry_run: bool,
+    ) -> None:
+        if dry_run or self._dream_run_id is None or self._dream_run_started_at is None:
+            return
+
+        raw_entry_ids = {entry.entry_id for entry in raw_entries}
+        source_by_id = {
+            source.source_id: source for source in self.artifacts.list_sources()
+        }
+        for claim in self.artifacts.list_claims(status="active"):
+            raw_log_ids = {
+                provenance.raw_log_entry_id
+                for provenance in claim.provenance
+                if provenance.raw_log_entry_id
+            }
+            if not (raw_log_ids & raw_entry_ids) or claim.claim_id in self._claim_audit:
+                continue
+            admitted = self._claim_is_admitted(claim, source_by_id)
+            raw_log_id = next(iter(raw_log_ids & raw_entry_ids), None)
+            was_pending = raw_log_id in report.pending_source_ids
+            self._initialize_claim_audit(
+                claim,
+                disposition=(
+                    "routing_failed"
+                    if admitted and was_pending
+                    else "ignored_semantic"
+                    if admitted
+                    else "excluded_assistant"
+                ),
+                reason=(
+                    "The source could not be prepared for semantic routing."
+                    if admitted and was_pending
+                    else "The source was not eligible for durable Dream consolidation."
+                    if admitted
+                    else "Assistant, system, or tool output is retained as source history, not durable memory."
+                ),
+            )
+
+        pending_sources = set(report.pending_source_ids)
+        failure_reasons: dict[str, list[str]] = {}
+        for failure in report.failures:
+            for source_id in str(failure.get("source_id", "")).split(","):
+                if source_id:
+                    failure_reasons.setdefault(source_id, []).append(
+                        str(failure.get("reason", "Dream processing failed."))
+                    )
+
+        for decision in self._claim_audit.values():
+            raw_log_id = decision.raw_log_entry_id
+            if (
+                raw_log_id in pending_sources
+                and decision.disposition != "excluded_assistant"
+            ):
+                reasons = failure_reasons.get(raw_log_id, [])
+                decision.disposition = "routing_failed"
+                decision.reason = "; ".join(dict.fromkeys(reasons)) or (
+                    "The source remained pending because Dream processing did not complete."
+                )
+                decision.page_slugs = []
+            elif decision.disposition == "pending":
+                decision.disposition = "routing_failed"
+                decision.reason = "No terminal semantic routing decision was recorded."
+
+        decisions = sorted(self._claim_audit.values(), key=lambda item: item.claim_id)
+        has_routing_failure = any(
+            decision.disposition == "routing_failed" for decision in decisions
+        )
+        if report.pending_source_ids and not report.completed_source_ids:
+            status = "failed"
+        elif report.pending_source_ids or report.failures or has_routing_failure:
+            status = "partial"
+        else:
+            status = "completed"
+        audit = DreamRunAudit(
+            run_id=self._dream_run_id,
+            started_at=self._dream_run_started_at,
+            completed_at=datetime.now().astimezone().isoformat(),
+            status=status,
+            strategy=strategy,
+            conflict_policy=conflict_policy,
+            evidence_mode=self.config.dream.evidence_mode,
+            source_ids=[entry.entry_id for entry in raw_entries],
+            completed_source_ids=list(report.completed_source_ids),
+            pending_source_ids=list(report.pending_source_ids),
+            pages_created=report.pages_created,
+            pages_updated=report.pages_updated,
+            claim_decisions=decisions,
+            failures=list(report.failures),
+        )
+        self.artifacts.persist_dream_audit(audit)
 
     def _has_named_participant_scope(self, evidence: list[EvidenceChunk]) -> bool:
         source_ids = {chunk.source_id for chunk in evidence if chunk.source_id}
@@ -944,10 +1157,20 @@ class DreamProcess:
             claim for claim in self.artifacts.list_claims(status="active")
             if any(prov.raw_log_entry_id in entry_ids for prov in claim.provenance)
         ]
-        claims = [
-            claim for claim in source_claims
-            if self._claim_is_admitted(claim, source_by_id)
-        ]
+        claims = []
+        for claim in source_claims:
+            admitted = self._claim_is_admitted(claim, source_by_id)
+            self._initialize_claim_audit(
+                claim,
+                disposition="pending" if admitted else "excluded_assistant",
+                reason=(
+                    "Awaiting semantic routing."
+                    if admitted
+                    else "Assistant, system, or tool output is retained as source history, not durable memory."
+                ),
+            )
+            if admitted:
+                claims.append(claim)
         evidence = [self._claim_evidence(claim, include_spans=mode == "hybrid") for claim in claims]
         if mode == "hybrid":
             claimed_segments = {

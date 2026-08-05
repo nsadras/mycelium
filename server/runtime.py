@@ -364,6 +364,7 @@ def clear_memory_store() -> dict[str, int]:
     counts["artifact_sources_deleted"] = artifact_counts["sources"]
     counts["artifact_episodes_deleted"] = artifact_counts["episodes"]
     counts["artifact_claims_deleted"] = artifact_counts["claims"]
+    counts["artifact_dream_runs_deleted"] = artifact_counts["dream_runs"]
 
     mem.wiki.save_index("# Wiki Index\n\n_last updated: never_\n\n## Pages\n")
     meta = load_meta()

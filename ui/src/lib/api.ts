@@ -137,6 +137,37 @@ export interface MemoryClaimArtifact {
   evidence_modality: string;
   temporal_status: string;
   derivation_operation?: string | null;
+  dream_disposition: string;
+  dream_disposition_reason?: string | null;
+  dream_run_id?: string | null;
+  dream_disposition_at?: string | null;
+}
+
+export interface DreamClaimDecisionArtifact {
+  claim_id: string;
+  evidence_id: string;
+  source_id: string;
+  raw_log_entry_id?: string | null;
+  disposition: string;
+  reason: string;
+  page_slugs: string[];
+}
+
+export interface DreamRunArtifact {
+  run_id: string;
+  started_at: string;
+  completed_at: string;
+  status: string;
+  strategy: string;
+  conflict_policy: string;
+  evidence_mode: string;
+  source_ids: string[];
+  completed_source_ids: string[];
+  pending_source_ids: string[];
+  pages_created: number;
+  pages_updated: number;
+  claim_decisions: DreamClaimDecisionArtifact[];
+  failures: Record<string, string>[];
 }
 
 export interface ArtifactCoverage {
@@ -171,6 +202,10 @@ export interface ArtifactOverview {
   integrity: {
     healthy: boolean;
     issues: Record<string, string[]>;
+  };
+  dream_audit: {
+    runs: number;
+    claim_dispositions: Record<string, number>;
   };
   labile_pages: number;
   archived_pages: number;

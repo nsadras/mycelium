@@ -29,6 +29,13 @@ DERIVATION_OPERATIONS = {
     "temporal_arithmetic", "event_count", "recurring_pattern",
     "cross_fact_relationship",
 }
+DREAM_DISPOSITIONS = {
+    "pending",
+    "routed",
+    "ignored_semantic",
+    "excluded_assistant",
+    "routing_failed",
+}
 
 def _normalized_label(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
@@ -90,6 +97,10 @@ class MemoryClaim:
     evidence_modality: str = "unknown"
     temporal_status: str = "unknown"
     derivation_operation: str | None = None
+    dream_disposition: str = "pending"
+    dream_disposition_reason: str | None = None
+    dream_run_id: str | None = None
+    dream_disposition_at: str | None = None
 
     def __post_init__(self) -> None:
         """Normalize the compact semantic envelope without inferring it from prose or labels."""
@@ -114,6 +125,40 @@ class MemoryClaim:
             self.predicate = " ".join(str(self.predicate).split()).strip() or None
         operation = _normalized_label(self.derivation_operation).replace(" ", "_")
         self.derivation_operation = operation if operation in DERIVATION_OPERATIONS else None
+
+        disposition = str(self.dream_disposition or "pending").strip().lower()
+        self.dream_disposition = (
+            disposition if disposition in DREAM_DISPOSITIONS else "pending"
+        )
+
+
+@dataclass
+class DreamClaimDecision:
+    claim_id: str
+    evidence_id: str
+    source_id: str
+    raw_log_entry_id: str | None
+    disposition: str
+    reason: str
+    page_slugs: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DreamRunAudit:
+    run_id: str
+    started_at: str
+    completed_at: str
+    status: str
+    strategy: str
+    conflict_policy: str
+    evidence_mode: str
+    source_ids: list[str]
+    completed_source_ids: list[str]
+    pending_source_ids: list[str]
+    pages_created: int
+    pages_updated: int
+    claim_decisions: list[DreamClaimDecision] = field(default_factory=list)
+    failures: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -153,7 +198,13 @@ class ArtifactStore:
         self.sources_dir = root / "sources"
         self.episodes_dir = root / "episodes"
         self.claims_dir = root / "claims"
-        for directory in (self.sources_dir, self.episodes_dir, self.claims_dir):
+        self.dream_runs_dir = root / "dream-runs"
+        for directory in (
+            self.sources_dir,
+            self.episodes_dir,
+            self.claims_dir,
+            self.dream_runs_dir,
+        ):
             directory.mkdir(parents=True, exist_ok=True)
 
     def save_source(self, source: SourceDocument) -> None:
@@ -184,13 +235,48 @@ class ArtifactStore:
         data["provenance"] = [ClaimProvenance(**item) for item in data.get("provenance", [])]
         return MemoryClaim(**data)
 
+    def save_dream_run(self, run: DreamRunAudit) -> None:
+        _atomic_json(self.dream_runs_dir / f"{_safe_id(run.run_id)}.json", asdict(run))
+
+    def get_dream_run(self, run_id: str) -> DreamRunAudit:
+        data = self._read(self.dream_runs_dir / f"{_safe_id(run_id)}.json")
+        data["claim_decisions"] = [
+            DreamClaimDecision(**item) for item in data.get("claim_decisions", [])
+        ]
+        return DreamRunAudit(**data)
+
+    def list_dream_runs(self) -> list[DreamRunAudit]:
+        return [
+            self.get_dream_run(path.stem)
+            for path in sorted(self.dream_runs_dir.glob("*.json"), reverse=True)
+        ]
+
+    def persist_dream_audit(self, run: DreamRunAudit) -> None:
+        """Commit current claim dispositions, then write the immutable run record."""
+        decided_at = run.completed_at
+        for decision in run.claim_decisions:
+            try:
+                claim = self.get_claim(decision.claim_id)
+            except FileNotFoundError:
+                continue
+            claim.dream_disposition = decision.disposition
+            claim.dream_disposition_reason = decision.reason
+            claim.dream_run_id = run.run_id
+            claim.dream_disposition_at = decided_at
+            for page_slug in decision.page_slugs:
+                if page_slug not in claim.page_slugs:
+                    claim.page_slugs.append(page_slug)
+            self.save_claim(claim)
+        self.save_dream_run(run)
+
     def clear(self) -> dict[str, int]:
         """Delete all derived artifacts while leaving canonical UI conversations untouched."""
-        counts = {"sources": 0, "episodes": 0, "claims": 0}
+        counts = {"sources": 0, "episodes": 0, "claims": 0, "dream_runs": 0}
         for label, directory in (
             ("sources", self.sources_dir),
             ("episodes", self.episodes_dir),
             ("claims", self.claims_dir),
+            ("dream_runs", self.dream_runs_dir),
         ):
             for path in directory.glob("*.json"):
                 path.unlink()

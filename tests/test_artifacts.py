@@ -638,7 +638,12 @@ def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
         temporal_status="past",
     ))
 
-    assert store.clear() == {"sources": 1, "episodes": 1, "claims": 1}
+    assert store.clear() == {
+        "sources": 1,
+        "episodes": 1,
+        "claims": 1,
+        "dream_runs": 0,
+    }
     assert store.list_sources() == []
     assert store.list_episodes() == []
     assert store.list_claims() == []

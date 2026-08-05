@@ -138,6 +138,11 @@ async def artifact_overview():
     page_counts = [len(claim.page_slugs) for claim in claims]
     assigned_page_counts = [count for count in page_counts if count]
     page_assignments = sum(page_counts)
+    disposition_counts: dict[str, int] = {}
+    for claim in claims:
+        disposition_counts[claim.dream_disposition] = (
+            disposition_counts.get(claim.dream_disposition, 0) + 1
+        )
     return {
         "coverage": coverage,
         "projection": {
@@ -150,6 +155,10 @@ async def artifact_overview():
             "max_pages_per_claim": max(page_counts, default=0),
         },
         "integrity": _artifact_integrity(mem),
+        "dream_audit": {
+            "runs": len(mem.artifacts.list_dream_runs()),
+            "claim_dispositions": disposition_counts,
+        },
         "labile_pages": len(list(mem.wiki.labile_dir.glob("*.md"))),
         "archived_pages": len(list(mem.wiki.archive_dir.glob("*.md"))),
     }
@@ -220,6 +229,19 @@ async def get_artifact_claim(claim_id: str):
         return asdict(get_mem().artifacts.get_claim(claim_id))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Claim artifact not found") from exc
+
+
+@router.get("/artifacts/dream-runs")
+async def list_artifact_dream_runs():
+    return [asdict(run) for run in get_mem().artifacts.list_dream_runs()]
+
+
+@router.get("/artifacts/dream-runs/{run_id}")
+async def get_artifact_dream_run(run_id: str):
+    try:
+        return asdict(get_mem().artifacts.get_dream_run(run_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Dream run artifact not found") from exc
 
 
 @router.get("/artifacts/files")

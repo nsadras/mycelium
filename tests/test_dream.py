@@ -127,6 +127,145 @@ def test_dream_admits_user_claims_but_not_assistant_or_ignored_segments(tmp_path
     assert [item.evidence_id for item in evidence] == ["claim-user::claim"]
 
 
+def _claim_dream_fixture(tmp_path, mock_llm, mock_wiki, mock_logs, *, assistant=True):
+    config = Config.defaults()
+    config.dream.evidence_mode = "claims"
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    entry_id = "2026-07-23#session-audit"
+    segments = [
+        SourceSegment("source-audit#seg-0001", 0, "I prefer tea.", "user", "user"),
+    ]
+    if assistant:
+        segments.append(SourceSegment(
+            "source-audit#seg-0002", 1, "Tea contains caffeine.",
+            "assistant", "assistant",
+        ))
+    source = SourceDocument(
+        source_id="source-audit",
+        source_type="agent_conversation",
+        session_id="session-audit",
+        recorded_at="2026-07-23T12:00:00",
+        occurred_at=None,
+        participants=["user", "assistant"],
+        segments=segments,
+        raw_log_entry_id=entry_id,
+    )
+    artifacts.save_source(source)
+    for claim_id, text, segment_id, speaker in [
+        ("claim-user", "The user prefers tea.", segments[0].segment_id, "user"),
+        *([(
+            "claim-assistant", "Tea contains caffeine.", segments[1].segment_id,
+            "assistant",
+        )] if assistant else []),
+    ]:
+        artifacts.save_claim(MemoryClaim(
+            claim_id=claim_id,
+            text=text,
+            kind="fact",
+            about=[{"entity": speaker}],
+            provenance=[ClaimProvenance(
+                source_id=source.source_id,
+                segment_ids=[segment_id],
+                raw_log_entry_id=entry_id,
+                speaker=speaker,
+            )],
+            recorded_at=source.recorded_at,
+        ))
+    entry = LogEntry(
+        entry_id=entry_id,
+        session_id=source.session_id,
+        timestamp=datetime.now(),
+        content="USER: I prefer tea.",
+        importance=0.8,
+        status="raw",
+    )
+    mock_logs.get_unconsolidated.return_value = [entry]
+    mock_wiki.get_index.return_value = "# Index"
+    mock_wiki.exists.return_value = False
+    mock_wiki.list_all.return_value = []
+    return DreamProcess(mock_llm, mock_wiki, mock_logs, config, artifacts), artifacts
+
+
+@pytest.mark.asyncio
+async def test_dream_persists_routed_and_excluded_claim_audit(
+    tmp_path, mock_llm, mock_wiki, mock_logs
+):
+    dream, artifacts = _claim_dream_fixture(
+        tmp_path, mock_llm, mock_wiki, mock_logs
+    )
+    mock_llm.call_structured.side_effect = [
+        {"routes": [route("C001", "tea-preferences")]},
+        {
+            "title": "Tea Preferences",
+            "content": "The user prefers tea.",
+            "tags": ["tea"],
+            "confidence": 0.9,
+            "importance": 0.7,
+        },
+    ]
+
+    report = await dream.run()
+
+    assert report.entries_consolidated == 1
+    run = artifacts.list_dream_runs()[0]
+    assert run.status == "completed"
+    assert run.source_ids == ["2026-07-23#session-audit"]
+    assert {
+        decision.claim_id: (decision.disposition, decision.page_slugs)
+        for decision in run.claim_decisions
+    } == {
+        "claim-user": ("routed", ["tea-preferences"]),
+        "claim-assistant": ("excluded_assistant", []),
+    }
+    routed = artifacts.get_claim("claim-user")
+    excluded = artifacts.get_claim("claim-assistant")
+    assert routed.dream_disposition == "routed"
+    assert routed.dream_run_id == run.run_id
+    assert routed.dream_disposition_at == run.completed_at
+    assert excluded.dream_disposition == "excluded_assistant"
+
+
+@pytest.mark.asyncio
+async def test_dream_persists_explicit_ignore_disposition(
+    tmp_path, mock_llm, mock_wiki, mock_logs
+):
+    dream, artifacts = _claim_dream_fixture(
+        tmp_path, mock_llm, mock_wiki, mock_logs, assistant=False
+    )
+    mock_llm.call_structured.return_value = {"routes": [ignore("C001")]}
+
+    report = await dream.run()
+
+    assert report.entries_consolidated == 1
+    decision = artifacts.list_dream_runs()[0].claim_decisions[0]
+    assert decision.disposition == "ignored_semantic"
+    assert "explicitly judged" in decision.reason
+    assert artifacts.get_claim("claim-user").dream_disposition == "ignored_semantic"
+
+
+@pytest.mark.asyncio
+async def test_dream_persists_routing_failure_without_overwriting_assistant_exclusion(
+    tmp_path, mock_llm, mock_wiki, mock_logs
+):
+    dream, artifacts = _claim_dream_fixture(
+        tmp_path, mock_llm, mock_wiki, mock_logs
+    )
+    mock_llm.call_structured.side_effect = RuntimeError("model unavailable")
+
+    report = await dream.run()
+
+    assert report.entries_consolidated == 0
+    run = artifacts.list_dream_runs()[0]
+    assert run.status == "failed"
+    assert {
+        decision.claim_id: decision.disposition for decision in run.claim_decisions
+    } == {
+        "claim-user": "routing_failed",
+        "claim-assistant": "excluded_assistant",
+    }
+    assert artifacts.get_claim("claim-user").page_slugs == []
+
+
 @pytest.mark.asyncio
 async def test_dream_maps_constrained_aliases_to_canonical_evidence_ids(
     dream_process, mock_llm

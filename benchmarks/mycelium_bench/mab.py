@@ -16,7 +16,7 @@ from benchmarks.mycelium_bench.adapters import BenchmarkMessage, MemorySystem
 class MyceliumMABAgent:
     def __init__(self, system: MemorySystem) -> None:
         self.system = system
-        self.agent_start_time = time.time()
+        self.agent_start_time = time.perf_counter()
 
     async def memorize_context(self, context_chunks: list[str], context_id: int) -> None:
         await self.system.reset(f"context-{context_id}")
@@ -83,7 +83,7 @@ async def run_memoryagentbench(
     output_path = output_dir / "results.json"
     metrics: dict[str, list[Any]] = defaultdict(list)
     results: list[dict[str, Any]] = []
-    started = time.time()
+    started = time.perf_counter()
     query_index = 0
     agent = MyceliumMABAgent(system)
 
@@ -143,7 +143,7 @@ def write_mab_results(
         "data": results,
         "metrics": metrics,
         "averaged_metrics": averaged_metrics,
-        "time_cost": time.time() - started,
+        "time_cost": time.perf_counter() - started,
     }
     output_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return {
@@ -151,7 +151,7 @@ def write_mab_results(
         "output_path": str(output_path),
         "queries": len(results),
         "averaged_metrics": averaged_metrics,
-        "elapsed_seconds": time.time() - started,
+        "elapsed_seconds": time.perf_counter() - started,
     }
 
 

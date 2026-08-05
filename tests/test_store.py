@@ -1,6 +1,4 @@
-import pytest
 from datetime import datetime
-from pathlib import Path
 from mycelium.models import WikiPage, LogEntry, Edge, UpdateLogEntry
 from mycelium.store import WikiStore, LogStore
 
@@ -16,7 +14,6 @@ def test_wiki_store_save_and_get(tmp_path):
         version=1,
         confidence=0.9,
         importance=0.8,
-        retrievability=0.95,
         tags=["test"],
         related=[Edge(target="other-page", relation="causes", weight=0.5)],
         update_log=[
@@ -95,7 +92,6 @@ def test_log_store_append_and_get(tmp_path):
         status="raw",
         durability="durable",
         consolidated=False,
-        decay_score=1.0
     )
     
     store.append(entry)
@@ -118,7 +114,6 @@ def test_log_store_mark_consolidated(tmp_path):
         importance=0.5,
         status="raw",
         consolidated=False,
-        decay_score=1.0
     )
     
     store.append(entry)
@@ -181,7 +176,6 @@ def test_log_store_markdown_headings_inside_body_are_not_entries(tmp_path):
         status="raw",
         durability="durable",
         consolidated=False,
-        decay_score=1.0,
     )
 
     store.append(entry)
@@ -195,27 +189,6 @@ def test_log_store_markdown_headings_inside_body_are_not_entries(tmp_path):
     store.mark_consolidated(["2026-05-10#tool-abc123"])
     assert store.get_unconsolidated() == []
 
-def test_log_store_update_decay(tmp_path):
-    store = LogStore(tmp_path / "logs")
-    
-    entry = LogEntry(
-        entry_id="2026-05-10#Entry 1",
-        session_id="ses-123",
-        timestamp=datetime(2026, 5, 10, 10, 0, 0),
-        content="User said hello.",
-        importance=0.5,
-        status="raw",
-        consolidated=False,
-        decay_score=1.0
-    )
-    
-    store.append(entry)
-    store.update_decay("2026-05-10#Entry 1", 0.75)
-    
-    unconsolidated = store.get_unconsolidated()
-    assert len(unconsolidated) == 1
-    assert unconsolidated[0].decay_score == 0.75
-
 def test_mycelium_init_seeds_user_profile(tmp_path):
     from mycelium.core import Mycelium
     
@@ -225,7 +198,6 @@ def test_mycelium_init_seeds_user_profile(tmp_path):
     
     page = myc.wiki.get("user-profile")
     assert page.title == "User Profile"
-    assert page.pinned
     assert page.confidence == 0.8
     assert "profile" in page.tags
     
@@ -243,7 +215,6 @@ def test_log_store_mark_unconsolidated(tmp_path):
         importance=0.5,
         status="raw",
         consolidated=False,
-        decay_score=1.0
     )
     
     store.append(entry)
@@ -278,7 +249,6 @@ def test_clear_wiki_store(tmp_path, monkeypatch):
         importance=0.5,
         status="raw",
         consolidated=True,
-        decay_score=1.0
     )
     myc.log_store.append(entry)
     assert len(myc.log_store.get_unconsolidated()) == 0
@@ -308,24 +278,65 @@ def test_clear_wiki_store(tmp_path, monkeypatch):
     assert len(unconsolidated) == 1
     assert not unconsolidated[0].consolidated
 
-@pytest.mark.asyncio
-async def test_delete_individual_wiki_page_api(tmp_path, monkeypatch):
+
+def test_clear_memory_store_removes_artifacts_and_preserves_conversations(tmp_path, monkeypatch):
+    from mycelium.artifacts import (
+        ClaimProvenance,
+        EpisodeManifest,
+        MemoryClaim,
+        SourceDocument,
+        SourceSegment,
+    )
     from mycelium.core import Mycelium
-    from server.api.memory import delete_wiki_page
-    
-    myc = Mycelium(store_path=tmp_path)
-    monkeypatch.setattr("server.api.memory.get_mem", lambda: myc)
-    
-    from mycelium.models import WikiPage
-    myc.wiki.save(WikiPage(slug="target-page", title="Target", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
-    myc.wiki.save_index("# Wiki Index\n\n## Pages\n- [[user-profile]]\n- [[target-page]]")
-    
-    assert myc.wiki.exists("target-page")
-    
-    await delete_wiki_page("target-page")
-    
-    assert not myc.wiki.exists("target-page")
-    
-    index_content = myc.wiki.get_index()
-    assert "[[target-page]]" not in index_content
-    assert "[[user-profile]]" in index_content
+    from server import runtime
+
+    myc = Mycelium(store_path=tmp_path / "store")
+    sessions_file = tmp_path / "sessions_meta.json"
+    monkeypatch.setattr(runtime, "get_mem", lambda: myc)
+    monkeypatch.setattr(runtime, "SESSIONS_FILE", sessions_file)
+    transcript = [
+        {"role": "user", "content": "Remember tea."},
+        {"role": "assistant", "content": "I will."},
+    ]
+    runtime.save_meta({
+        "session-1": {
+            "query": "Tea",
+            "transcript": transcript,
+            "episode_seq": 2,
+            "encoded_episodes": ["session-1-ep-1"],
+            "active_episode": {
+                "id": "session-1-ep-2", "buffer": [], "turn_count": 0,
+            },
+        }
+    })
+    myc.artifacts.save_source(SourceDocument(
+        source_id="source-1", source_type="agent_conversation",
+        session_id="session-1", recorded_at="2026-07-22", occurred_at=None,
+        participants=["user"],
+        segments=[SourceSegment("source-1#seg-0001", 0, "Remember tea.")],
+    ))
+    myc.artifacts.save_episode(EpisodeManifest(
+        episode_id="episode-1", source_id="source-1",
+        source_type="agent_conversation", occurred_at=None,
+        participants=["user"], segment_ids=["source-1#seg-0001"],
+    ))
+    myc.artifacts.save_claim(MemoryClaim(
+        "claim-1", "The user wants tea remembered.", "preference",
+        [{"entity": "user"}],
+        [ClaimProvenance("source-1", ["source-1#seg-0001"])],
+        "2026-07-22", claim_type="preference", evidence_modality="speech",
+        temporal_status="current",
+    ))
+
+    counts = runtime.clear_memory_store()
+
+    assert counts["artifact_sources_deleted"] == 1
+    assert counts["artifact_episodes_deleted"] == 1
+    assert counts["artifact_claims_deleted"] == 1
+    assert myc.artifacts.list_sources() == []
+    assert myc.artifacts.list_episodes() == []
+    assert myc.artifacts.list_claims() == []
+    session = runtime.load_meta()["session-1"]
+    assert session["transcript"] == transcript
+    assert session["encoded_episodes"] == []
+    assert session["active_episode"]["buffer"] == transcript

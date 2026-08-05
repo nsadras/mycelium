@@ -32,15 +32,6 @@ class WikiPage:
     version: int
     confidence: float                    # 0.0–1.0
     importance: float                    # 0.0–1.0
-    stability_days: float = 14.0
-    difficulty: float = 0.4
-    retrievability: float = 1.0
-    last_accessed: Optional[datetime] = None
-    last_reviewed: Optional[datetime] = None
-    review_count: int = 0
-    reinforced_count: int = 0
-    conflict_count: int = 0
-    pinned: bool = False
     tags: list[str] = field(default_factory=list)
     related: list[Edge] = field(default_factory=list)
     source_log_entries: list[str] = field(default_factory=list)
@@ -64,7 +55,6 @@ class LogEntry:
     status: Literal['raw', 'consolidated', 'archived']
     durability: Literal['ephemeral', 'session', 'durable'] = 'durable'
     consolidated: bool = False
-    decay_score: float = 1.0
 
 @dataclass
 class PredictionError:
@@ -78,9 +68,6 @@ class DreamReport:
     pages_updated: int
     pages_created: int
     entries_consolidated: int
-    conflicts_found: list[str]           # page slugs
-    conflicts_resolved: int
-    git_commit_sha: Optional[str]
     completed_source_ids: list[str] = field(default_factory=list)
     pending_source_ids: list[str] = field(default_factory=list)
     failures: list[dict[str, str]] = field(default_factory=list)

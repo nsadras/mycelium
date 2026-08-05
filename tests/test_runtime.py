@@ -1,5 +1,11 @@
 from types import SimpleNamespace
 
+import pytest
+from unittest.mock import AsyncMock
+
+from mycelium.artifacts import ArtifactStore
+from mycelium.config import Config
+from mycelium.encoder import Encoder
 from mycelium.store import LogStore
 from server import runtime
 from server.runtime import append_tool_event_logs, ensure_session_record
@@ -36,11 +42,40 @@ def test_no_entries_flush_should_preserve_buffer_shape():
     assert record["encoded_episodes"] == []
 
 
-def test_append_tool_event_logs_creates_unconsolidated_entries(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypatch):
     log_store = LogStore(tmp_path / "logs")
-    monkeypatch.setattr(runtime, "get_mem", lambda: SimpleNamespace(log_store=log_store))
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    llm = AsyncMock()
+    llm.call_structured.return_value = {
+        "claims": [{
+            "text": "Ollama version 1.2 supports asynchronous web search.",
+            "kind": "tool fact",
+            "claim_type": "observation",
+            "predicate": "supports",
+            "evidence_modality": "tool",
+            "about": [{"entity": "Ollama"}],
+            "segment_ids": ["source-placeholder"],
+            "facets": {"version": "1.2"},
+        }],
+        "ignored_segment_ids": [],
+    }
+    encoder = Encoder(llm, log_store, Config.defaults(), artifacts)
 
-    created = append_tool_event_logs(
+    async def source_aware_response(system, user, output_type, **kwargs):
+        response = dict(llm.call_structured.return_value)
+        response["claims"] = [dict(response["claims"][0])]
+        response["claims"][0]["segment_ids"] = [
+            user.split("[", 1)[1].split("]", 1)[0]
+        ]
+        return response
+
+    llm.call_structured.side_effect = source_aware_response
+    monkeypatch.setattr(
+        runtime, "get_mem", lambda: SimpleNamespace(log_store=log_store, encoder=encoder)
+    )
+
+    created = await append_tool_event_logs(
         "chat-123",
         "chat-123-ep-1",
         [
@@ -58,10 +93,12 @@ def test_append_tool_event_logs_creates_unconsolidated_entries(tmp_path, monkeyp
     entries = log_store.get_unconsolidated()
     assert len(created) == 1
     assert len(entries) == 1
-    assert entries[0].entry_id.startswith(created[0].entry_id.split("#")[0] + "#tool-")
+    assert entries[0].entry_id == created[0].entry_id
     assert entries[0].session_id == "chat-123-ep-1"
     assert "Tool observation from chat." in entries[0].content
     assert "- chat_session_id: chat-123" in entries[0].content
     assert "- tool_name: web_search" in entries[0].content
     assert '"query": "local llm news"' in entries[0].content
     assert "Useful new information." in entries[0].content
+    assert artifacts.list_sources()[0].source_type == "tool_observation"
+    assert artifacts.list_claims()[0].evidence_modality == "tool"

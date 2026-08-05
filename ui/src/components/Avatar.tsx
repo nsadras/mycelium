@@ -17,19 +17,19 @@ const activityCopy: Record<AssistantActivity, { label: string; detail: string }>
   responding: { label: 'Responding', detail: 'Writing' },
   flushing: { label: 'Flushing', detail: 'Encoding episode' },
   dreaming: { label: 'Dreaming', detail: 'Consolidating logs' },
-  decaying: { label: 'Decaying', detail: 'Refreshing memory state' },
   reconsolidating: { label: 'Resolving', detail: 'Updating memory' },
   error: { label: 'Error', detail: 'Check logs' },
   clicked: { label: 'Hello', detail: 'Interacting' },
   'clicked-left': { label: 'Hello', detail: 'Interacting' },
   'clicked-right': { label: 'Hello', detail: 'Interacting' },
   wiki: { label: 'Wiki', detail: 'Browsing memory' },
+  memory: { label: 'Memory', detail: 'Inspecting artifacts' },
   logs: { label: 'Logs', detail: 'Inspecting episodes' },
   engram: { label: 'Engram', detail: 'Meeting memory' },
   chat: { label: 'Chat', detail: 'Ready' },
 };
 
-export default function Avatar({ status, activeTab }: { status: AssistantStatus; activeTab?: 'chat' | 'engram' | 'wiki' | 'logs' }) {
+export default function Avatar({ status, activeTab }: { status: AssistantStatus; activeTab?: 'chat' | 'engram' | 'memory' | 'wiki' | 'logs' }) {
   const [selectedAvatarId, setSelectedAvatarId] = useState<string>(() => {
     try {
       return localStorage.getItem('mycellium_avatar') || 'myco';

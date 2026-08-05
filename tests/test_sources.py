@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from mycelium.models import LogEntry, WikiPage
-from mycelium.sources import source_context_for_page
+from mycelium.sources import source_context_for_page, source_contexts_for_pages
 from mycelium.store import LogStore
 
 
@@ -40,3 +40,42 @@ def test_source_context_for_page_uses_backlinked_logs(tmp_path):
     assert "SOURCE LOG SNIPPETS FOR [[pixel]]" in context
     assert "2026-05-10#session-abc123" in context
     assert "Caroline: I adopted Pixel from Denver." in context
+
+
+def test_source_contexts_for_pages_deduplicates_logs_and_preserves_conversation_time(tmp_path):
+    logs = LogStore(tmp_path / "logs")
+    entry = LogEntry(
+        entry_id="2026-07-20#session-abc123",
+        session_id="session_1",
+        timestamp=datetime(2026, 7, 20, 10, 0, 0),
+        content=(
+            "Raw conversation transcript.\n\n"
+            "Timestamp: 4:04 pm on 20 January, 2023\n"
+            "[D1:2] Jon: I lost my banker job yesterday."
+        ),
+        importance=0.8,
+        status="raw",
+        consolidated=False,
+    )
+    logs.append(entry)
+    pages = [
+        WikiPage(
+            slug=slug,
+            title=slug,
+            content="Summary.",
+            created=datetime.now(),
+            last_updated=datetime.now(),
+            version=1,
+            confidence=0.9,
+            importance=0.8,
+            source_log_entries=[entry.entry_id],
+        )
+        for slug in ("person-jon", "dance-studio")
+    ]
+
+    contexts = source_contexts_for_pages(pages, logs, "When did Jon lose his banker job?")
+    combined = "\n".join(contexts.values())
+
+    assert combined.count(entry.entry_id) == 1
+    assert "conversation_time=4:04 pm on 20 January, 2023" in combined
+    assert "Jon: I lost my banker job yesterday." in combined

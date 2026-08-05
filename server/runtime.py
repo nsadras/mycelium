@@ -4,9 +4,9 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-import uuid
 
 import mycelium
+from mycelium.artifacts import SourceSegment
 from mycelium.models import LogEntry
 from engram import EngramConfig, EngramService, EngramStore
 
@@ -30,8 +30,6 @@ def get_mem() -> mycelium.Mycelium:
     global _mem
     if _mem is None:
         _mem = mycelium.Mycelium(store_path="./mycelium_store", config_path="mycelium.toml")
-        # The web app owns episode flushing, so don't dream after every message.
-        _mem.config.dream.schedule = "manual"
     return _mem
 
 
@@ -133,7 +131,7 @@ def _format_tool_observation_content(
     )
 
 
-def append_tool_event_logs(
+async def append_tool_event_logs(
     session_id: str,
     episode_id: str,
     tool_events: list[dict[str, Any]],
@@ -143,30 +141,39 @@ def append_tool_event_logs(
         return []
 
     mem = get_mem()
-    now = utc_now()
-    date_str = now.strftime("%Y-%m-%d")
     created_entries = []
 
     for tool_event in tool_events:
-        short_id = str(uuid.uuid4())[:8]
-        entry = LogEntry(
-            entry_id=f"{date_str}#tool-{short_id}",
-            session_id=episode_id,
-            timestamp=now,
-            content=_format_tool_observation_content(
-                chat_session_id=session_id,
-                episode_id=episode_id,
-                turn_count=turn_count,
-                tool_event=tool_event,
-            ),
-            importance=0.5,
-            status="raw",
-            durability="durable",
-            consolidated=False,
-            decay_score=1.0,
+        content = _format_tool_observation_content(
+            chat_session_id=session_id,
+            episode_id=episode_id,
+            turn_count=turn_count,
+            tool_event=tool_event,
         )
-        mem.log_store.append(entry)
-        created_entries.append(entry)
+        tool_name = str(tool_event.get("tool_name") or "unknown")
+        result = str(tool_event.get("result") or "").strip()
+        entries = await mem.encoder.encode_session(
+            content,
+            episode_id,
+            source_type="tool_observation",
+            metadata={
+                "chat_session_id": session_id,
+                "episode_id": episode_id,
+                "turn_count": turn_count,
+                "tool_name": tool_name,
+                "arguments": dict(tool_event.get("arguments") or {}),
+                "failed": bool(tool_event.get("failed")),
+                "truncated": bool(tool_event.get("truncated")),
+            },
+            segments=[SourceSegment(
+                segment_id="",
+                index=0,
+                speaker=tool_name,
+                role="tool",
+                content=result or "Tool call produced no result.",
+            )],
+        )
+        created_entries.extend(entries)
 
     return created_entries
 
@@ -293,7 +300,7 @@ async def flush_idle_episodes(
             candidates.append(session_id)
 
     save_meta(meta)
-    results = [await flush_session_episode(session_id, "manual" if force else "policy") for session_id in candidates]
+    results = [await flush_session_episode(session_id, "manual") for session_id in candidates]
     return {"flushed": len([r for r in results if r["status"] == "flushed"]), "results": results}
 
 
@@ -319,20 +326,9 @@ async def run_dream() -> dict[str, Any]:
         "pages_updated": report.pages_updated,
         "pages_created": report.pages_created,
         "entries_consolidated": report.entries_consolidated,
-        "conflicts_found": report.conflicts_found,
-        "conflicts_resolved": report.conflicts_resolved,
-        "git_commit_sha": report.git_commit_sha,
         "completed_source_ids": report.completed_source_ids,
         "pending_source_ids": report.pending_source_ids,
         "failures": report.failures,
-    }
-
-
-async def run_decay() -> dict[str, Any]:
-    changed_retrievability = await get_mem().dream_process.decay_engine.run_pass()
-    return {
-        "pages_changed": len(changed_retrievability),
-        "changed_retrievability": changed_retrievability,
     }
 
 
@@ -343,6 +339,9 @@ def clear_memory_store() -> dict[str, int]:
         "archived_pages_deleted": 0,
         "logs_deleted": 0,
         "labile_files_deleted": 0,
+        "artifact_sources_deleted": 0,
+        "artifact_episodes_deleted": 0,
+        "artifact_claims_deleted": 0,
         "sessions_reset": 0,
     }
 
@@ -368,6 +367,12 @@ def clear_memory_store() -> dict[str, int]:
     for path in labile_dir.glob("*.md"):
         path.unlink()
         counts["labile_files_deleted"] += 1
+
+    artifact_counts = mem.artifacts.clear()
+    counts["artifact_sources_deleted"] = artifact_counts["sources"]
+    counts["artifact_episodes_deleted"] = artifact_counts["episodes"]
+    counts["artifact_claims_deleted"] = artifact_counts["claims"]
+    counts["artifact_dream_runs_deleted"] = artifact_counts["dream_runs"]
 
     mem.wiki.save_index("# Wiki Index\n\n_last updated: never_\n\n## Pages\n")
     meta = load_meta()

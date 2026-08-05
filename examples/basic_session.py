@@ -5,7 +5,6 @@ async def main():
     mem = mycelium.Mycelium(
         store_path='./smoke_test_store',
         ollama_model='gemma4:latest',
-        dream_schedule='manual',   # don't auto-dream during smoke test
     )
 
     # Session 1: record some experience

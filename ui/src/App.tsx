@@ -3,6 +3,7 @@ import { Menu, History } from 'lucide-react';
 import api, { type Session } from './lib/api';
 import Chat from './components/Chat';
 import Engram from './components/Engram';
+import MemoryInspector from './components/MemoryInspector';
 import WikiExplorer from './components/WikiExplorer';
 import LogExplorer from './components/LogExplorer';
 import Sidebar from './components/Sidebar';
@@ -10,7 +11,7 @@ import SporeBackground from './components/SporeBackground';
 import { idleStatus, type AssistantActivity, type AssistantStatus } from './lib/assistantStatus';
 
 const memoryOperationStatus: Record<
-  'flush-current' | 'flush-idle' | 'flush-all' | 'reconsolidate-current' | 'dream' | 'decay' | 'clear-memory' | 'clear-wiki',
+  'flush-current' | 'flush-idle' | 'flush-all' | 'reconsolidate-current' | 'dream' | 'clear-memory' | 'clear-wiki',
   AssistantStatus
 > = {
   'flush-current': { activity: 'flushing', label: 'Flushing', detail: 'Encoding selected episode' },
@@ -18,40 +19,40 @@ const memoryOperationStatus: Record<
   'flush-all': { activity: 'flushing', label: 'Flushing', detail: 'Encoding all episodes' },
   'reconsolidate-current': { activity: 'reconsolidating', label: 'Resolving', detail: 'Applying memory updates' },
   dream: { activity: 'dreaming', label: 'Dreaming', detail: 'Consolidating logs' },
-  decay: { activity: 'decaying', label: 'Decaying', detail: 'Refreshing memory state' },
   'clear-memory': { activity: 'flushing', label: 'Clearing', detail: 'Resetting memory store' },
   'clear-wiki': { activity: 'flushing', label: 'Clearing Wiki', detail: 'Resetting wiki index' },
 };
 
 function isMemoryActivity(activity: AssistantActivity) {
-  return activity === 'flushing' || activity === 'dreaming' || activity === 'decaying' || activity === 'reconsolidating';
+  return activity === 'flushing' || activity === 'dreaming' || activity === 'reconsolidating';
 }
 
 function App() {
-  const [activeTab, setActiveTab] = useState<'chat' | 'engram' | 'wiki' | 'logs'>('chat');
+  const [activeTab, setActiveTab] = useState<'chat' | 'engram' | 'memory' | 'wiki' | 'logs'>('chat');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [runningMemoryOperation, setRunningMemoryOperation] = useState<string | null>(null);
+  const [memoryRevision, setMemoryRevision] = useState(0);
   const [assistantStatus, setAssistantStatus] = useState<AssistantStatus>(idleStatus);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
 
   useEffect(() => {
-    fetchSessions();
-  }, []);
-
-  const fetchSessions = async () => {
-    try {
-      const res = await api.get('/sessions/');
-      const ordered = [...res.data].reverse();
-      setSessions(ordered);
-      if (ordered.length > 0 && !selectedSessionId) {
-        setSelectedSessionId(ordered[0].id);
+    const fetchSessions = async () => {
+      try {
+        const res = await api.get('/sessions/');
+        const ordered = [...res.data].reverse();
+        setSessions(ordered);
+        if (ordered.length > 0) {
+          setSelectedSessionId((current) => current ?? ordered[0].id);
+        }
+      } catch (err) {
+        console.error("Failed to fetch sessions", err);
       }
-    } catch (err) {
-      console.error("Failed to fetch sessions", err);
-    }
-  };
+    };
+
+    void fetchSessions();
+  }, []);
 
   const handleCreateSession = async (query?: string) => {
     try {
@@ -81,7 +82,7 @@ function App() {
   };
 
   const handleMemoryOperation = async (
-    operation: 'flush-current' | 'flush-idle' | 'flush-all' | 'reconsolidate-current' | 'dream' | 'decay' | 'clear-memory' | 'clear-wiki'
+    operation: 'flush-current' | 'flush-idle' | 'flush-all' | 'reconsolidate-current' | 'dream' | 'clear-memory' | 'clear-wiki'
   ) => {
     let shouldResetStatus = true;
     try {
@@ -120,8 +121,6 @@ function App() {
         res = await api.post('/memory/episodes/flush-all');
       } else if (operation === 'reconsolidate-current') {
         res = await api.post('/memory/reconsolidation/resolve', { session_id: selectedSessionId! });
-      } else if (operation === 'decay') {
-        res = await api.post('/memory/decay');
       } else if (operation === 'clear-memory') {
         res = await api.post('/memory/dev/clear');
       } else if (operation === 'clear-wiki') {
@@ -129,6 +128,7 @@ function App() {
       } else {
         res = await api.post('/memory/dream');
       }
+      setMemoryRevision((revision) => revision + 1);
       alert(`${operation.replaceAll('-', ' ')} complete:\n${JSON.stringify(res.data, null, 2)}`);
     } catch (err) {
       console.error("Memory operation failed", err);
@@ -205,6 +205,7 @@ function App() {
           />
         )}
         {activeTab === 'engram' && <Engram setAssistantStatus={setAssistantStatus} />}
+        {activeTab === 'memory' && <MemoryInspector refreshKey={memoryRevision} />}
         {activeTab === 'wiki' && <WikiExplorer />}
         {activeTab === 'logs' && <LogExplorer />}
       </main>

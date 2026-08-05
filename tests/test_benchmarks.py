@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from benchmarks.mycelium_bench.adapters import BenchmarkAnswer, BenchmarkMessage, format_messages_for_memory
+from benchmarks.mycelium_bench.adapters import (
+    BenchmarkAnswer,
+    BenchmarkMessage,
+    OllamaQaClient,
+    format_messages_for_memory,
+)
 from benchmarks.mycelium_bench.adapters import MyceliumMemorySystem
 from benchmarks.mycelium_bench.locomo import iter_locomo_sessions, run_locomo
 from benchmarks.mycelium_bench.scoring import locomo_score
@@ -133,7 +138,38 @@ def test_memory_profile_none_skips_seed_profile(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_mycelium_benchmark_adapter_preserves_raw_transcript_on_encode_failure(tmp_path):
+async def test_qa_client_uses_grounded_structured_answer():
+    client = OllamaQaClient("test", "http://localhost:11434")
+    client.llm.call_structured = AsyncMock(
+        return_value={"answerable": True, "answer": "19 January, 2023", "evidence": "D1:2"}
+    )
+
+    answer = await client.answer(
+        "When did Jon lose his job?",
+        "conversation_time=20 January, 2023\n[D1:2] Jon: Lost my job yesterday.",
+    )
+
+    assert answer.output == "19 January, 2023"
+    assert answer.metadata["grounding"]["evidence"] == "D1:2"
+
+
+@pytest.mark.asyncio
+async def test_qa_client_returns_consistent_refusal_for_unsupported_premise():
+    client = OllamaQaClient("test", "http://localhost:11434")
+    client.llm.call_structured = AsyncMock(
+        return_value={"answerable": False, "answer": "", "evidence": None}
+    )
+
+    answer = await client.answer(
+        "Why did Gina close her bank account?",
+        "[D8:1] Jon: I had to shut down my bank account.",
+    )
+
+    assert answer.output == "I do not have enough information to answer this question."
+
+
+@pytest.mark.asyncio
+async def test_mycelium_benchmark_adapter_surfaces_encode_failure_without_fallback(tmp_path):
     class FakeQa:
         pass
 
@@ -146,12 +182,13 @@ async def test_mycelium_benchmark_adapter_preserves_raw_transcript_on_encode_fai
     )
     await system.reset("case-1")
     system.mem.encoder.encode_session = AsyncMock(side_effect=ValueError("bad json"))
-    system.mem.encoder.encode = AsyncMock()
 
-    await system.memorize([BenchmarkMessage(role="user", content="Caroline researched adoption agencies.")])
+    with pytest.raises(ValueError, match="bad json"):
+        await system.memorize([
+            BenchmarkMessage(
+                role="user", content="Caroline researched adoption agencies."
+            )
+        ])
 
-    system.mem.encoder.encode.assert_called_once()
-    kwargs = system.mem.encoder.encode.call_args.kwargs
-    assert "Raw benchmark session transcript preserved" in kwargs["content"]
-    assert "Caroline researched adoption agencies." in kwargs["content"]
-    assert system.stats()["encoded_batches"] == 1
+    system.mem.encoder.encode_session.assert_awaited_once()
+    assert system.stats()["encoded_batches"] == 0

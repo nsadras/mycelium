@@ -1,19 +1,18 @@
-from fastapi import APIRouter, HTTPException
-from datetime import datetime
+from dataclasses import asdict
 from pathlib import Path
+
+from fastapi import APIRouter, HTTPException
 
 from pydantic import BaseModel
 
-from mycelium.decay import record_memory_event
-from mycelium.models import UpdateLogEntry
 from server.runtime import (
     clear_memory_store,
     clear_wiki_store,
     flush_idle_episodes,
     flush_session_episode,
     get_mem,
+    load_meta,
     resolve_session_reconsolidation,
-    run_decay,
     run_dream as run_dream_process,
 )
 
@@ -30,15 +29,6 @@ class IdleFlushRequest(BaseModel):
     force: bool = False
 
 
-class WikiPageUpdate(BaseModel):
-    title: str
-    content: str
-    tags: list[str] = []
-    confidence: float | None = None
-    importance: float | None = None
-    pinned: bool | None = None
-
-
 def wiki_page_response(page):
     return {
         "slug": page.slug,
@@ -47,19 +37,215 @@ def wiki_page_response(page):
         "version": page.version,
         "confidence": page.confidence,
         "importance": page.importance,
-        "stability_days": page.stability_days,
-        "difficulty": page.difficulty,
-        "retrievability": page.retrievability,
-        "last_accessed": page.last_accessed.isoformat() if page.last_accessed else None,
-        "last_reviewed": page.last_reviewed.isoformat() if page.last_reviewed else None,
-        "review_count": page.review_count,
-        "reinforced_count": page.reinforced_count,
-        "conflict_count": page.conflict_count,
-        "pinned": page.pinned,
         "tags": page.tags,
         "source_log_entries": page.source_log_entries,
         "related": [{"target": r.target, "relation": r.relation} for r in page.related],
         "update_log": [{"version": u.version, "reason": u.reason, "date": u.date.isoformat()} for u in page.update_log],
+    }
+
+
+def _stored_memory_file(path: Path) -> dict[str, str]:
+    return {
+        "filename": path.name,
+        "content": path.read_text(encoding="utf-8"),
+    }
+
+
+def _artifact_integrity(mem) -> dict:
+    sources = mem.artifacts.list_sources()
+    episodes = mem.artifacts.list_episodes()
+    claims = mem.artifacts.list_claims()
+    pages = {page.slug for page in mem.wiki.list_all()}
+    logs = {entry.entry_id for entry in mem.log_store.list_entries(days=None)}
+
+    source_by_id = {source.source_id: source for source in sources}
+    episode_source_ids = {episode.source_id for episode in episodes}
+    claim_by_id = {claim.claim_id: claim for claim in claims}
+
+    issues = {
+        "sources_without_episode": sorted(
+            source_id for source_id in source_by_id if source_id not in episode_source_ids
+        ),
+        "episodes_missing_source": sorted(
+            episode.episode_id for episode in episodes if episode.source_id not in source_by_id
+        ),
+        "episodes_missing_claims": sorted(
+            f"{episode.episode_id}:{claim_id}"
+            for episode in episodes
+            for claim_id in episode.claim_ids
+            if claim_id not in claim_by_id
+        ),
+        "claims_missing_episode": sorted(
+            claim.claim_id
+            for claim in claims
+            if claim.provenance
+            and not any(provenance.source_id in episode_source_ids for provenance in claim.provenance)
+        ),
+        "claims_missing_provenance": sorted(
+            claim.claim_id for claim in claims if not claim.provenance
+        ),
+        "claims_missing_source": sorted(
+            f"{claim.claim_id}:{provenance.source_id}"
+            for claim in claims
+            for provenance in claim.provenance
+            if provenance.source_id not in source_by_id
+        ),
+        "claims_missing_segments": sorted(
+            f"{claim.claim_id}:{segment_id}"
+            for claim in claims
+            for provenance in claim.provenance
+            if provenance.source_id in source_by_id
+            for segment_id in provenance.segment_ids
+            if segment_id
+            not in {
+                segment.segment_id for segment in source_by_id[provenance.source_id].segments
+            }
+        ),
+        "claims_missing_pages": sorted(
+            f"{claim.claim_id}:{page_slug}"
+            for claim in claims
+            for page_slug in claim.page_slugs
+            if page_slug not in pages
+        ),
+        "sources_missing_raw_log": sorted(
+            source.source_id
+            for source in sources
+            if source.raw_log_entry_id and source.raw_log_entry_id not in logs
+        ),
+    }
+    return {
+        "healthy": not any(issues.values()),
+        "issues": issues,
+    }
+
+
+@router.get("/artifacts/overview")
+async def artifact_overview():
+    mem = get_mem()
+    claims = mem.artifacts.list_claims()
+    coverage = mem.artifacts.coverage_report()
+    coverage["suppressed_claims"] = len(claims) - coverage["active_claims"]
+    page_counts = [len(claim.page_slugs) for claim in claims]
+    assigned_page_counts = [count for count in page_counts if count]
+    page_assignments = sum(page_counts)
+    disposition_counts: dict[str, int] = {}
+    for claim in claims:
+        disposition_counts[claim.dream_disposition] = (
+            disposition_counts.get(claim.dream_disposition, 0) + 1
+        )
+    return {
+        "coverage": coverage,
+        "projection": {
+            "page_assignments": page_assignments,
+            "assigned_claims": len(assigned_page_counts),
+            "multi_page_claims": sum(count > 1 for count in page_counts),
+            "average_pages_per_claim": (
+                page_assignments / len(assigned_page_counts) if assigned_page_counts else 0.0
+            ),
+            "max_pages_per_claim": max(page_counts, default=0),
+        },
+        "integrity": _artifact_integrity(mem),
+        "dream_audit": {
+            "runs": len(mem.artifacts.list_dream_runs()),
+            "claim_dispositions": disposition_counts,
+        },
+        "labile_pages": len(list(mem.wiki.labile_dir.glob("*.md"))),
+        "archived_pages": len(list(mem.wiki.archive_dir.glob("*.md"))),
+    }
+
+
+@router.get("/artifacts/chat-episodes")
+async def list_chat_episode_state():
+    return [
+        {
+            "session_id": session_id,
+            "query": record.get("query", "New session"),
+            "transcript_turns": len(record.get("transcript", [])),
+            "episode_seq": record.get("episode_seq"),
+            "active_episode": record.get("active_episode"),
+            "encoded_episodes": record.get("encoded_episodes", []),
+        }
+        for session_id, record in load_meta().items()
+    ]
+
+
+@router.get("/artifacts/sources")
+async def list_artifact_sources():
+    return [
+        {
+            "source_id": source.source_id,
+            "source_type": source.source_type,
+            "session_id": source.session_id,
+            "recorded_at": source.recorded_at,
+            "occurred_at": source.occurred_at,
+            "participants": source.participants,
+            "raw_log_entry_id": source.raw_log_entry_id,
+            "metadata": source.metadata,
+            "segment_count": len(source.segments),
+        }
+        for source in get_mem().artifacts.list_sources()
+    ]
+
+
+@router.get("/artifacts/sources/{source_id}")
+async def get_artifact_source(source_id: str):
+    try:
+        return asdict(get_mem().artifacts.get_source(source_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Source artifact not found") from exc
+
+
+@router.get("/artifacts/episodes")
+async def list_artifact_episodes():
+    return [asdict(episode) for episode in get_mem().artifacts.list_episodes()]
+
+
+@router.get("/artifacts/episodes/{episode_id}")
+async def get_artifact_episode(episode_id: str):
+    try:
+        return asdict(get_mem().artifacts.get_episode(episode_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Episode artifact not found") from exc
+
+
+@router.get("/artifacts/claims")
+async def list_artifact_claims():
+    return [asdict(claim) for claim in get_mem().artifacts.list_claims()]
+
+
+@router.get("/artifacts/claims/{claim_id}")
+async def get_artifact_claim(claim_id: str):
+    try:
+        return asdict(get_mem().artifacts.get_claim(claim_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Claim artifact not found") from exc
+
+
+@router.get("/artifacts/dream-runs")
+async def list_artifact_dream_runs():
+    return [asdict(run) for run in get_mem().artifacts.list_dream_runs()]
+
+
+@router.get("/artifacts/dream-runs/{run_id}")
+async def get_artifact_dream_run(run_id: str):
+    try:
+        return asdict(get_mem().artifacts.get_dream_run(run_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Dream run artifact not found") from exc
+
+
+@router.get("/artifacts/files")
+async def list_stored_memory_files():
+    mem = get_mem()
+    index_path = mem.wiki.wiki_dir / "_index.md"
+    return {
+        "wiki_index": _stored_memory_file(index_path) if index_path.exists() else None,
+        "labile_pages": [
+            _stored_memory_file(path) for path in sorted(mem.wiki.labile_dir.glob("*.md"))
+        ],
+        "archived_pages": [
+            _stored_memory_file(path) for path in sorted(mem.wiki.archive_dir.glob("*.md"))
+        ],
     }
 
 @router.get("/wiki")
@@ -72,15 +258,6 @@ async def list_wiki():
             "title": p.title,
             "confidence": p.confidence,
             "importance": p.importance,
-            "retrievability": p.retrievability,
-            "stability_days": p.stability_days,
-            "difficulty": p.difficulty,
-            "last_accessed": p.last_accessed.isoformat() if p.last_accessed else None,
-            "last_reviewed": p.last_reviewed.isoformat() if p.last_reviewed else None,
-            "review_count": p.review_count,
-            "reinforced_count": p.reinforced_count,
-            "conflict_count": p.conflict_count,
-            "pinned": p.pinned,
             "tags": p.tags,
         }
         for p in pages
@@ -95,62 +272,6 @@ async def get_wiki_page(slug: str):
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Page not found")
 
-
-@router.put("/wiki/{slug}")
-async def update_wiki_page(slug: str, req: WikiPageUpdate):
-    mem = get_mem()
-    try:
-        page = mem.wiki.get(slug)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Page not found")
-
-    previous_confidence = page.confidence
-    page.title = req.title.strip() or page.title
-    page.content = req.content
-    page.tags = req.tags
-    if req.confidence is not None:
-        page.confidence = max(0.0, min(1.0, req.confidence))
-    if req.importance is not None:
-        page.importance = max(0.0, min(1.0, req.importance))
-    if req.pinned is not None:
-        page.pinned = req.pinned
-    page.version += 1
-    page.last_updated = datetime.now()
-    page.update_log.append(
-        UpdateLogEntry(
-            version=page.version,
-            date=page.last_updated,
-            session_id="manual",
-            trigger="manual",
-            discrepancy_score=0.0,
-            reason="Manual edit from web UI",
-            previous_confidence=previous_confidence,
-            new_confidence=page.confidence,
-        )
-    )
-    record_memory_event(page, "manually_edited", now=page.last_updated)
-    mem.wiki.save(page)
-    return wiki_page_response(page)
-
-@router.delete("/wiki/{slug}")
-async def delete_wiki_page(slug: str):
-    mem = get_mem()
-    if not mem.wiki.exists(slug):
-        raise HTTPException(status_code=404, detail="Page not found")
-    
-    # Archive/soft-delete
-    mem.wiki.archive(slug)
-    
-    # Remove from index file
-    index_content = mem.wiki.get_index()
-    lines = index_content.splitlines()
-    new_lines = []
-    for line in lines:
-        if f"[[{slug}]]" not in line:
-            new_lines.append(line)
-    mem.wiki.save_index("\n".join(new_lines))
-    
-    return {"slug": slug, "status": "success"}
 
 @router.get("/logs")
 async def list_logs():
@@ -189,11 +310,6 @@ async def unconsolidate_log(filename: str):
 @router.post("/dream")
 async def run_dream():
     return await run_dream_process()
-
-
-@router.post("/decay")
-async def decay():
-    return await run_decay()
 
 
 @router.post("/dev/clear")

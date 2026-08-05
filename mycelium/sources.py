@@ -44,6 +44,54 @@ def source_context_for_page(
     return "\n".join(lines)
 
 
+def source_contexts_for_pages(
+    pages: list[WikiPage],
+    logs: LogStore,
+    query: str,
+    *,
+    max_entries: int = 6,
+    max_chars_per_entry: int = 2200,
+) -> dict[str, str]:
+    """Select source evidence once across all loaded pages.
+
+    Entity and topic pages often backlink the same conversation. Selecting sources
+    independently for every page repeats long transcript windows, crowds out useful
+    evidence, and gives small models several copies of the same fact. This function
+    ranks unique logs globally, then attaches each selected snippet to one page.
+    """
+    owners: dict[str, str] = {}
+    entries_by_id: dict[str, LogEntry] = {}
+    for page in pages:
+        for entry in logs.get_many(page.source_log_entries):
+            entries_by_id.setdefault(entry.entry_id, entry)
+            owners.setdefault(entry.entry_id, page.slug)
+
+    snippets = select_source_snippets(
+        list(entries_by_id.values()),
+        query,
+        max_entries=max_entries,
+        max_chars_per_entry=max_chars_per_entry,
+    )
+    grouped: dict[str, list[SourceSnippet]] = {}
+    for snippet in snippets:
+        owner = owners.get(snippet.entry_id)
+        if owner:
+            grouped.setdefault(owner, []).append(snippet)
+
+    contexts: dict[str, str] = {}
+    for slug, page_snippets in grouped.items():
+        lines = ["CANONICAL SOURCE LOG SNIPPETS (prefer these over wiki summaries):"]
+        for snippet in page_snippets:
+            lines.append(
+                f"- {snippet.entry_id} "
+                f"(session={snippet.session_id or 'unknown'}, conversation_time={snippet.timestamp}, "
+                f"score={snippet.score})"
+            )
+            lines.append(_indent(snippet.text.strip()))
+        contexts[slug] = "\n".join(lines)
+    return contexts
+
+
 def select_source_snippets(
     entries: list[LogEntry],
     query: str,
@@ -62,7 +110,8 @@ def select_source_snippets(
             SourceSnippet(
                 entry_id=entry.entry_id,
                 session_id=entry.session_id,
-                timestamp=entry.timestamp.isoformat(timespec="minutes"),
+                timestamp=_conversation_timestamp(entry.content)
+                or entry.timestamp.isoformat(timespec="minutes"),
                 text=text,
                 score=score,
             )
@@ -138,6 +187,11 @@ def _clip(text: str, max_chars: int) -> str:
 
 def _indent(text: str) -> str:
     return "\n".join(f"  {line}" for line in text.splitlines())
+
+
+def _conversation_timestamp(text: str) -> str | None:
+    match = re.search(r"^Timestamp:\s*(.+?)\s*$", text, re.MULTILINE | re.IGNORECASE)
+    return match.group(1).strip() if match else None
 
 
 _STOPWORDS = {

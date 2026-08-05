@@ -7,6 +7,7 @@ from datetime import datetime
 from engram.models import Meeting, MeetingSummary, TranscriptSegment
 from engram.store import EngramStore
 from mycelium.models import LogEntry
+from mycelium.artifacts import SourceSegment
 
 
 def resolved_speaker_name(speaker: str | None, speaker_names: dict[str, str] | None = None) -> str:
@@ -81,11 +82,51 @@ def ingest_meeting_into_memory(mem, store: EngramStore, meeting_id: str) -> LogE
         status="raw",
         durability="durable",
         consolidated=False,
-        decay_score=1.0,
     )
     mem.log_store.append(entry)
     store.update_meeting(meeting_id, memory_log_entry_id=entry.entry_id)
     return entry
+
+
+async def encode_meeting_into_memory(mem, store: EngramStore, meeting_id: str) -> LogEntry:
+    """Encode a meeting through the source→episode→claim pipeline."""
+    meeting = store.get_meeting(meeting_id)
+    if meeting.memory_log_entry_id:
+        return mem.log_store.get(meeting.memory_log_entry_id)
+    if not hasattr(mem, "encoder"):
+        return ingest_meeting_into_memory(mem, store, meeting_id)
+    transcript_segments = store.list_segments(meeting_id)
+    explicit_segments = [
+        SourceSegment(
+            segment_id=segment.id,
+            index=segment.segment_index,
+            speaker=resolved_speaker_name(segment.speaker, meeting.speaker_names),
+            content=segment.text,
+            start_seconds=segment.start_seconds,
+            end_seconds=segment.end_seconds,
+            metadata={"engram_segment_id": segment.id},
+        )
+        for segment in transcript_segments
+    ]
+    transcript = meeting_transcript_text(transcript_segments, meeting.speaker_names)
+    entries = await mem.encoder.encode_session(
+        transcript,
+        f"meeting-{meeting.id}",
+        source_type="meeting_transcript",
+        occurred_at=meeting.started_at,
+        participants=list(dict.fromkeys(segment.speaker for segment in explicit_segments if segment.speaker)),
+        segments=explicit_segments,
+        metadata={
+            "meeting_id": meeting.id,
+            "title": meeting.title,
+            "ended_at": meeting.ended_at.isoformat() if meeting.ended_at else None,
+            "summary": meeting.summary.summary if meeting.summary else None,
+        },
+    )
+    if not entries:
+        raise ValueError("Meeting transcript was empty")
+    store.update_meeting(meeting_id, memory_log_entry_id=entries[0].entry_id)
+    return entries[0]
 
 
 def _fmt_time(seconds: float) -> str:

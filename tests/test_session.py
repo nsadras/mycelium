@@ -1,11 +1,11 @@
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 from mycelium.core import Mycelium
 from mycelium.models import WikiPage
 
 @pytest.fixture
 def temp_mycelium(tmp_path):
-    mem = Mycelium(store_path=tmp_path / "store", git_commits=False)
+    mem = Mycelium(store_path=tmp_path / "store")
     mem.llm = AsyncMock()
     mem.encoder = AsyncMock()
     return mem

@@ -32,7 +32,7 @@ async def run_locomo(
     predictions = read_json_if_exists(output_dir / "predictions.json", default=[])
     flat_rows = read_jsonl_if_exists(output_dir / "predictions.jsonl")
     completed_sample_ids = {str(sample.get("sample_id")) for sample in predictions}
-    started = time.time()
+    started = time.perf_counter()
 
     for sample_index, sample in enumerate(samples):
         sample_id = str(sample.get("sample_id") or f"sample-{sample_index}")
@@ -156,7 +156,7 @@ def summarize_locomo_run(rows: list[dict[str, Any]], started: float, prediction_
         {
             "benchmark": "locomo",
             "prediction_key": prediction_key,
-            "elapsed_seconds": time.time() - started,
+            "elapsed_seconds": time.perf_counter() - started,
             "mean_input_len": mean(row["input_len"] for row in rows),
             "mean_output_len": mean(row["output_len"] for row in rows),
             "mean_memory_construction_time": mean(row["memory_construction_time"] for row in rows),

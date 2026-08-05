@@ -4,16 +4,18 @@ import os
 import time
 import re
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Union, Optional
 
 from dotenv import load_dotenv
-from ollama import AsyncClient, Client, RequestError, ResponseError, web_fetch, web_search
+from ollama import AsyncClient, RequestError, ResponseError, web_fetch, web_search
 from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
 LLM_DEBUG_DIR_ENV = "MYCELIUM_LLM_DEBUG_DIR"
+LLM_CALL_LOG_LIMIT = 100
 
 
 @dataclass
@@ -48,8 +50,7 @@ class OllamaClient:
         self.timeout = timeout
         self.context_window_tokens = context_window_tokens
         self.client = AsyncClient(host=self.url, timeout=self.timeout)
-        self.web_client = Client()
-        self._call_log: list[dict] = []
+        self._call_log: deque[dict[str, Any]] = deque(maxlen=LLM_CALL_LOG_LIMIT)
 
     def _extract_json(self, content: str) -> Union[dict, list]:
         """
@@ -130,7 +131,7 @@ class OllamaClient:
                 options=options,
             )
             try:
-                response = await self.client.chat(
+                response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
                     model=self.model,
                     messages=messages,
                     stream=False,
@@ -149,7 +150,9 @@ class OllamaClient:
                     except (json.JSONDecodeError, ValidationError, ValueError):
                         self._log_call(call_id, attempt + 1, sys_prompt, user, content, latency_ms, False)
                         if attempt == max_retries - 1:
-                            raise ValueError(f"Failed to parse JSON response from Ollama after {max_retries} attempts: {content}")
+                            raise ValueError(
+                                f"Failed to parse JSON response from Ollama after {max_retries} attempts"
+                            )
                         continue # Retry
                         
                 self._log_call(call_id, attempt + 1, sys_prompt, user, content, latency_ms, True)
@@ -160,6 +163,8 @@ class OllamaClient:
                 self._log_call(call_id, attempt + 1, sys_prompt, user, str(e), latency_ms, False)
                 if attempt == max_retries - 1:
                     raise
+
+        raise RuntimeError("LLM call exhausted its retry budget")
 
     async def call_messages(
         self,
@@ -253,7 +258,7 @@ class OllamaClient:
         tools = [web_search, web_fetch] if enable_tools else None
         think_enabled = think if think is not None else bool(enable_tools)
         for round_idx in range(max_tool_rounds + 1):
-            response = await self.client.chat(
+            response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
                 model=self.model,
                 messages=messages,
                 tools=tools,
@@ -266,8 +271,6 @@ class OllamaClient:
             assistant_message = self._assistant_message_dict(response)
             content = assistant_message.get("content", "").strip()
             tool_calls = assistant_message.get("tool_calls", [])
-            if content:
-                logger.info("LLM assistant content during tool loop\n%s", content)
             messages.append(assistant_message)
             if not tool_calls:
                 return content, metadata
@@ -275,7 +278,7 @@ class OllamaClient:
                 return content, metadata
             for tool_call in tool_calls:
                 tool_name, tool_args = self._tool_call_name_args(tool_call)
-                result = self._run_tool(tool_name, tool_args)
+                result = await self._run_tool(tool_name, tool_args)
                 truncated = result[:tool_result_chars]
                 failed = result.startswith(f"Tool {tool_name} failed:") or result == f"Tool {tool_name} not found"
                 tool_events.append(
@@ -288,18 +291,17 @@ class OllamaClient:
                     )
                 )
                 logger.info(
-                    "LLM tool call\n%s",
+                    "LLM tool call %s",
                     json.dumps(
                         {
                             "call_id": call_id,
                             "tool_name": tool_name,
-                            "arguments": tool_args,
-                            "result": truncated,
+                            "argument_keys": sorted(tool_args),
+                            "result_chars": len(result),
+                            "failed": failed,
                             "truncated": len(result) > len(truncated),
                         },
-                        indent=2,
                         ensure_ascii=False,
-                        default=str,
                     ),
                 )
                 messages.append({"role": "tool", "content": truncated, "tool_name": tool_name})
@@ -332,12 +334,16 @@ class OllamaClient:
             return "", {}
         return str(getattr(function, "name", "")), dict(getattr(function, "arguments", {}) or {})
 
-    def _run_tool(self, tool_name: str, tool_args: dict[str, Any]) -> str:
+    async def _run_tool(self, tool_name: str, tool_args: dict[str, Any]) -> str:
         try:
             if tool_name == "web_search":
-                return self._format_web_search_result(self.web_client.web_search(**tool_args))
+                return self._format_web_search_result(
+                    await self.client.web_search(**tool_args)
+                )
             if tool_name == "web_fetch":
-                return self._format_web_fetch_result(self.web_client.web_fetch(**tool_args))
+                return self._format_web_fetch_result(
+                    await self.client.web_fetch(**tool_args)
+                )
             return f"Tool {tool_name} not found"
         except Exception as exc:
             return f"Tool {tool_name} failed: {exc}"
@@ -478,7 +484,7 @@ class OllamaClient:
                 options=options,
             )
             try:
-                response = await self.client.chat(
+                response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
                     model=self.model,
                     messages=messages,
                     think=False,
@@ -536,7 +542,7 @@ class OllamaClient:
                         )
                         raise ValueError(
                             f"Failed to parse JSON response from Ollama after {max_retries} attempts"
-                            f"{metadata_text}{debug_text}: {content}"
+                            f"{metadata_text}{debug_text}"
                         )
                     continue
 
@@ -679,8 +685,11 @@ class OllamaClient:
         prompt: str | None = None,
         system: str | None = None,
     ) -> None:
+        message_chars = sum(
+            len(str(message.get("content", ""))) for message in (messages or [])
+        )
         logger.info(
-            "LLM request\n%s",
+            "LLM request %s",
             json.dumps(
                 {
                     "call_id": call_id,
@@ -688,13 +697,11 @@ class OllamaClient:
                     "max_retries": max_retries,
                     "endpoint": endpoint,
                     "model": model,
-                    "format": output_format,
+                    "format": "schema" if isinstance(output_format, dict) else output_format,
                     "options": options,
-                    "messages": messages,
-                    "system": system,
-                    "prompt": prompt,
+                    "message_count": len(messages or []),
+                    "request_chars": message_chars + len(system or "") + len(prompt or ""),
                 },
-                indent=2,
                 ensure_ascii=False,
                 default=str,
             ),
@@ -715,12 +722,12 @@ class OllamaClient:
             "timestamp": time.time(),
             "call_id": call_id,
             "attempt": attempt,
-            "system": system,
-            "user": user,
-            "response": response,
+            "system_chars": len(system),
+            "user_chars": len(user),
+            "response_chars": len(response),
             "latency_ms": latency_ms,
             "success": success,
             "metadata": metadata or {},
         }
         self._call_log.append(entry)
-        logger.info("LLM response\n%s", json.dumps(entry, indent=2, ensure_ascii=False))
+        logger.info("LLM response %s", json.dumps(entry, ensure_ascii=False))

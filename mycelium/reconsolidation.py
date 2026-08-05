@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List
 from collections import defaultdict
 
 from mycelium.models import WikiPage, PredictionError, UpdateLogEntry
@@ -8,7 +8,6 @@ from mycelium.store import WikiStore
 from mycelium.ollama import OllamaClient
 from mycelium.config import Config
 from mycelium import prompts
-from mycelium.decay import record_memory_event
 from mycelium.structured_outputs import PredictionErrorOutput, ReconsolidationRewriteOutput
 
 class ReconsolidationEngine:
@@ -95,9 +94,6 @@ class ReconsolidationEngine:
                 original_page.version += 1
                 original_page.last_updated = datetime.now()
                 original_page.update_log.append(log_entry)
-                record_memory_event(original_page, "contradicted", now=original_page.last_updated)
-                record_memory_event(original_page, "dream_updated", now=original_page.last_updated)
-                
                 # Save it (resolving labile status)
                 self.wiki.save(original_page)
                 self.wiki.resolve_labile(slug, session_id)

@@ -7,6 +7,7 @@ from mycelium.artifacts import (
     ClaimProvenance,
     EpisodeManifest,
     MemoryClaim,
+    ReconsolidationProposal,
     SourceDocument,
     SourceSegment,
 )
@@ -50,7 +51,7 @@ def artifact_memory(tmp_path, monkeypatch):
         occurred_at=None,
         participants=source.participants,
         segment_ids=["source-test#seg-0001"],
-        claim_ids=["claim-test"],
+        claim_ids=["claim-test", "claim-old"],
         extraction_status="complete",
     )
     claim = MemoryClaim(
@@ -70,9 +71,27 @@ def artifact_memory(tmp_path, monkeypatch):
         evidence_modality="speech",
         temporal_status="atemporal",
     )
+    old_claim = MemoryClaim(
+        claim_id="claim-old",
+        text="The user previously preferred coffee.",
+        kind="preference",
+        about=[{"entity": "user"}],
+        provenance=[ClaimProvenance(
+            source_id=source.source_id,
+            segment_ids=["source-test#seg-0001"],
+            raw_log_entry_id=entry.entry_id,
+            speaker="user",
+        )],
+        recorded_at="2026-07-21T12:00:00",
+        page_slugs=["user-profile"],
+        claim_type="preference",
+        evidence_modality="speech",
+        temporal_status="atemporal",
+    )
     mem.artifacts.save_source(source)
     mem.artifacts.save_episode(episode)
     mem.artifacts.save_claim(claim)
+    mem.artifacts.save_claim(old_claim)
     mem.wiki.save(WikiPage(
         slug="archived-page",
         title="Archived",
@@ -84,7 +103,17 @@ def artifact_memory(tmp_path, monkeypatch):
         importance=0.5,
     ))
     mem.wiki.archive("archived-page")
-    mem.wiki.mark_labile("user-profile", "session-1")
+    mem.artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
+        proposal_id="recon-test",
+        incoming_claim_id="claim-test",
+        target_claim_id="claim-old",
+        proposed_relation="contradicts",
+        explanation="Fixture proposal",
+        confidence=0.5,
+        dream_run_id="dream-test",
+        created_at="2026-07-22T12:00:00",
+        affected_page_slugs=["user-profile"],
+    ))
     monkeypatch.setattr(memory, "get_mem", lambda: mem)
     monkeypatch.setattr(memory, "load_meta", lambda: {
         "chat-1": {
@@ -109,19 +138,20 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
     claims = await memory.list_artifact_claims()
     claim = await memory.get_artifact_claim("claim-test")
     dream_runs = await memory.list_artifact_dream_runs()
+    proposals = await memory.list_reconsolidation_proposals()
     files = await memory.list_stored_memory_files()
 
     assert overview["coverage"]["accounted_coverage"] == 1.0
     assert overview["projection"] == {
-        "page_assignments": 1,
-        "assigned_claims": 1,
+        "page_assignments": 2,
+        "assigned_claims": 2,
         "multi_page_claims": 0,
         "average_pages_per_claim": 1.0,
         "max_pages_per_claim": 1,
     }
     assert overview["dream_audit"] == {
         "runs": 0,
-        "claim_dispositions": {"pending": 1},
+        "claim_dispositions": {"pending": 2},
     }
     assert overview["integrity"] == {
         "healthy": True,
@@ -135,6 +165,7 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
             "claims_missing_segments": [],
             "claims_missing_pages": [],
             "sources_missing_raw_log": [],
+            "proposals_missing_claims": [],
         },
     }
     assert chat_episodes == [{
@@ -148,15 +179,14 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
     assert sources[0]["segment_count"] == 1
     assert source["segments"][0]["content"] == "I prefer tea."
     assert episodes == [episode]
-    assert episode["claim_ids"] == ["claim-test"]
-    assert claims == [claim]
+    assert episode["claim_ids"] == ["claim-test", "claim-old"]
+    assert {item["claim_id"] for item in claims} == {"claim-old", "claim-test"}
     assert claim["provenance"][0]["segment_ids"] == ["source-test#seg-0001"]
     assert dream_runs == []
+    assert proposals[0]["proposal_id"] == "recon-test"
+    assert overview["reconsolidation_proposals"] == {"pending": 1}
     assert files["wiki_index"]["filename"] == "_index.md"
     assert [item["filename"] for item in files["archived_pages"]] == ["archived-page.md"]
-    assert [item["filename"] for item in files["labile_pages"]] == [
-        "user-profile.session-1.md"
-    ]
 
 
 @pytest.mark.asyncio
@@ -166,7 +196,31 @@ async def test_artifact_detail_endpoints_return_404(artifact_memory):
         (memory.get_artifact_episode, "episode-missing"),
         (memory.get_artifact_claim, "claim-missing"),
         (memory.get_artifact_dream_run, "dream-missing"),
+        (memory.get_reconsolidation_proposal, "recon-missing"),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await loader(artifact_id)
         assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reject_proposal_endpoint_applies_immediately(artifact_memory):
+    response = await memory.reject_reconsolidation_proposal(
+        "recon-test",
+        memory.ProposalReviewRequest(reviewer_note="Both statements remain relevant."),
+    )
+
+    assert response["proposal"]["status"] == "rejected"
+    assert response["proposal"]["reviewer_note"] == "Both statements remain relevant."
+    assert artifact_memory.artifacts.get_claim("claim-test").status == "active"
+    assert artifact_memory.artifacts.get_claim("claim-old").status == "active"
+
+
+@pytest.mark.asyncio
+async def test_review_proposal_endpoint_returns_404(artifact_memory):
+    with pytest.raises(HTTPException) as exc_info:
+        await memory.approve_reconsolidation_proposal(
+            "recon-missing", memory.ProposalReviewRequest()
+        )
+
+    assert exc_info.value.status_code == 404

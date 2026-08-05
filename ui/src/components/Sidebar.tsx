@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Archive, Book, BrainCircuit, Database, FileText, Loader2, MessageSquare, Mic, Moon, RefreshCw, Save, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Archive, Book, Database, FileText, Loader2, MessageSquare, Mic, Moon, RefreshCw, Save, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import Avatar from './Avatar';
@@ -14,7 +14,7 @@ interface SidebarProps {
   setActiveTab: (tab: 'chat' | 'engram' | 'memory' | 'wiki' | 'logs') => void;
   onDream: () => void;
   onMemoryOperation: (
-    operation: 'flush-current' | 'flush-idle' | 'flush-all' | 'reconsolidate-current' | 'dream' | 'clear-memory' | 'clear-wiki'
+    operation: 'flush-current' | 'flush-idle' | 'flush-all' | 'dream' | 'clear-memory' | 'clear-wiki'
   ) => void;
   hasSelectedSession: boolean;
   runningMemoryOperation: string | null;
@@ -65,13 +65,6 @@ export default function Sidebar({
       icon: Archive,
       needsSession: false,
       tooltip: 'Encode every active chat episode now.',
-    },
-    {
-      id: 'reconsolidate-current',
-      label: 'Resolve Current',
-      icon: BrainCircuit,
-      needsSession: true,
-      tooltip: 'Apply pending reconsolidation updates for the selected chat.',
     },
     {
       id: 'clear-wiki',

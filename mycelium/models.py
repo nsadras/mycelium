@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 @dataclass
 class Edge:
@@ -17,7 +17,6 @@ class UpdateLogEntry:
     date: datetime
     session_id: str
     trigger: Literal['reconsolidation', 'dream', 'manual']
-    discrepancy_score: float
     reason: str
     previous_confidence: float
     new_confidence: float
@@ -35,14 +34,7 @@ class WikiPage:
     tags: list[str] = field(default_factory=list)
     related: list[Edge] = field(default_factory=list)
     source_log_entries: list[str] = field(default_factory=list)
-    labile: bool = False
-    labile_session: Optional[str] = None
     update_log: list[UpdateLogEntry] = field(default_factory=list)
-
-    # Set after retrieval, not stored on disk
-    was_flagged: bool = field(default=False, repr=False)
-    discrepancy_score: float = field(default=0.0, repr=False)
-    discrepancy_explanation: str = field(default='', repr=False)
     source_context: str = field(default='', repr=False)
 
 @dataclass
@@ -57,13 +49,6 @@ class LogEntry:
     consolidated: bool = False
 
 @dataclass
-class PredictionError:
-    conflict_type: Literal['none', 'additive', 'partial', 'major']
-    discrepancy_score: float             # 0.0–1.0
-    explanation: str
-    suggested_update: Optional[str]
-
-@dataclass
 class DreamReport:
     pages_updated: int
     pages_created: int
@@ -71,6 +56,7 @@ class DreamReport:
     completed_source_ids: list[str] = field(default_factory=list)
     pending_source_ids: list[str] = field(default_factory=list)
     failures: list[dict[str, str]] = field(default_factory=list)
+    reconsolidation_proposal_ids: list[str] = field(default_factory=list)
 
 @dataclass
 class MemoryResult:

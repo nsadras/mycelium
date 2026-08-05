@@ -9,6 +9,7 @@ from mycelium.artifacts import (
     ClaimReconciler,
     EpisodeManifest,
     MemoryClaim,
+    ReconsolidationProposal,
     SourceDocument,
     SourceSegment,
     normalize_temporal_facets,
@@ -465,7 +466,7 @@ async def test_encoder_batches_large_initial_extractions(tmp_path):
     assert artifacts.list_episodes()[0].extraction_status == "complete"
 
 
-def test_reconciler_merges_duplicates_and_supersedes_slots(tmp_path):
+def test_reconciler_merges_duplicates_but_leaves_slot_changes_for_review(tmp_path):
     store = ArtifactStore(tmp_path / "artifacts")
     reconcile = ClaimReconciler(store).reconcile
     common = dict(
@@ -477,8 +478,8 @@ def test_reconciler_merges_duplicates_and_supersedes_slots(tmp_path):
     replacement = reconcile(MemoryClaim(claim_id="claim-3", text="Ava now prefers coffee.", slot="favorite_drink", **common))
 
     assert duplicate.claim_id == first.claim_id
-    assert store.get_claim("claim-1").status == "superseded"
-    assert replacement.links[0]["relation"] == "supersedes"
+    assert store.get_claim("claim-1").status == "active"
+    assert replacement.links == []
 
 
 def test_semantic_envelope_does_not_infer_from_kind_or_prose():
@@ -591,16 +592,28 @@ def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
         "2024-01-01", claim_type="interaction", evidence_modality="speech",
         temporal_status="past",
     ))
+    store.save_reconsolidation_proposal(ReconsolidationProposal(
+        proposal_id="recon-1",
+        incoming_claim_id="claim-1",
+        target_claim_id="claim-2",
+        proposed_relation="contradicts",
+        explanation="Test proposal",
+        confidence=0.8,
+        dream_run_id="dream-1",
+        created_at="2024-01-01",
+    ))
 
     assert store.clear() == {
         "sources": 1,
         "episodes": 1,
         "claims": 1,
         "dream_runs": 0,
+        "reconsolidation_proposals": 1,
     }
     assert store.list_sources() == []
     assert store.list_episodes() == []
     assert store.list_claims() == []
+    assert store.list_reconsolidation_proposals() == []
 
 
 def test_reconciler_uses_structured_relation_across_open_kind_drift(tmp_path):

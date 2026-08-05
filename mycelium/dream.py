@@ -19,6 +19,7 @@ from mycelium.artifacts import (
 from mycelium.config import Config
 from mycelium.consolidation import ClaimEvidence, ClaimRouter
 from mycelium.materialization import PageMaterializer
+from mycelium.reconsolidation import ClaimReconsolidator, add_claim_link
 from mycelium.models import DreamReport, LogEntry
 from mycelium.ollama import OllamaClient
 from mycelium.store import LogStore, WikiStore
@@ -40,6 +41,7 @@ class DreamProcess:
         self.artifacts = artifacts
         self.router = ClaimRouter(llm, wiki, artifacts)
         self.materializer = PageMaterializer(wiki, artifacts, config)
+        self.reconsolidator = ClaimReconsolidator(llm, artifacts)
 
     async def run(self, *, dry_run: bool = False) -> DreamReport:
         started_at = datetime.now().astimezone().isoformat()
@@ -128,6 +130,53 @@ class DreamProcess:
         else:
             successful_routes = []
 
+        reconciliation = await self.reconsolidator.analyze(
+            successful_routes,
+            current_claim_ids={item.claim.claim_id for item in evidence},
+            dream_run_id=run_id,
+        ) if successful_routes else None
+        if reconciliation is not None:
+            for recon_failure in reconciliation.failures:
+                failed_source_ids.add(recon_failure.raw_log_entry_id)
+                failures.append({
+                    "stage": "reconsolidation",
+                    "source_id": recon_failure.raw_log_entry_id,
+                    "reason": recon_failure.reason,
+                })
+                self._set_decision(
+                    decisions,
+                    recon_failure.claim_id,
+                    "routing_failed",
+                    recon_failure.reason,
+                )
+            successful_routes = [
+                route for route in successful_routes
+                if route.raw_log_entry_id not in failed_source_ids
+            ]
+            successful_claim_ids = {route.claim_id for route in successful_routes}
+            supporting_relations = [
+                relation for relation in reconciliation.supporting_relations
+                if relation.incoming_claim_id in successful_claim_ids
+            ]
+            proposals = [
+                proposal for proposal in reconciliation.proposals
+                if proposal.incoming_claim_id in successful_claim_ids
+            ]
+        else:
+            supporting_relations = []
+            proposals = []
+
+        if not dry_run:
+            for relation in supporting_relations:
+                incoming = self.artifacts.get_claim(relation.incoming_claim_id)
+                target = self.artifacts.get_claim(relation.target_claim_id)
+                add_claim_link(incoming, "supports", target.claim_id)
+                add_claim_link(target, "supported_by", incoming.claim_id)
+                self.artifacts.save_claim(incoming)
+                self.artifacts.save_claim(target)
+            for proposal in proposals:
+                self.artifacts.save_reconsolidation_proposal(proposal)
+
         materialized = self.materializer.stage(successful_routes)
         for route in successful_routes:
             self._set_decision(
@@ -156,6 +205,17 @@ class DreamProcess:
 
         if not dry_run:
             self.materializer.persist(materialized)
+            routed_slugs = {route.page_slug for route in successful_routes}
+            pending_related_slugs = {
+                slug for proposal in proposals for slug in proposal.affected_page_slugs
+                if slug not in routed_slugs
+            }
+            if pending_related_slugs:
+                related_pages = self.materializer.regenerate(pending_related_slugs)
+                materialized.changed_pages.update(related_pages.changed_pages)
+                materialized.created_slugs.update(related_pages.created_slugs)
+                materialized.updated_slugs.update(related_pages.updated_slugs)
+                materialized.deleted_slugs.update(related_pages.deleted_slugs)
             if completed_source_ids:
                 self.logs.mark_consolidated(completed_source_ids)
 
@@ -166,6 +226,9 @@ class DreamProcess:
             completed_source_ids=completed_source_ids,
             pending_source_ids=pending_source_ids,
             failures=failures,
+            reconsolidation_proposal_ids=[
+                proposal.proposal_id for proposal in proposals
+            ],
         )
         if not dry_run:
             self._persist_audit(run_id, started_at, raw_entries, report, decisions)
@@ -283,4 +346,5 @@ class DreamProcess:
             pages_updated=report.pages_updated,
             claim_decisions=sorted(decisions.values(), key=lambda item: item.claim_id),
             failures=list(report.failures),
+            reconsolidation_proposal_ids=list(report.reconsolidation_proposal_ids),
         ))

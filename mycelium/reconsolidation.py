@@ -1,105 +1,321 @@
-import json
+"""Evidence-triggered reconsolidation of canonical memory claims."""
+
+from __future__ import annotations
+
+import re
+import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List
-from collections import defaultdict
 
-from mycelium.models import WikiPage, PredictionError, UpdateLogEntry
-from mycelium.store import WikiStore
-from mycelium.ollama import OllamaClient
-from mycelium.config import Config
 from mycelium import prompts
-from mycelium.structured_outputs import PredictionErrorOutput, ReconsolidationRewriteOutput
+from mycelium.artifacts import (
+    ArtifactStore,
+    MemoryClaim,
+    ReconsolidationProposal,
+)
+from mycelium.consolidation import ClaimRoute
+from mycelium.materialization import PageMaterializer
+from mycelium.ollama import OllamaClient
+from mycelium.structured_outputs import ReconsolidationDecisionsOutput
 
-class ReconsolidationEngine:
-    def __init__(self, llm: OllamaClient, wiki: WikiStore, config: Config):
+
+@dataclass(frozen=True)
+class ReconciliationFailure:
+    claim_id: str
+    raw_log_entry_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class SupportingRelation:
+    incoming_claim_id: str
+    target_claim_id: str
+
+
+@dataclass
+class ReconciliationResult:
+    supporting_relations: list[SupportingRelation] = field(default_factory=list)
+    proposals: list[ReconsolidationProposal] = field(default_factory=list)
+    failures: list[ReconciliationFailure] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ReviewResult:
+    proposal: ReconsolidationProposal
+    pages_updated: list[str]
+    pages_deleted: list[str]
+
+
+class ReviewConflictError(RuntimeError):
+    """The proposal can no longer be safely reviewed."""
+
+
+def add_claim_link(claim: MemoryClaim, relation: str, target: str) -> None:
+    link = {"relation": relation, "target": target}
+    if link not in claim.links:
+        claim.links.append(link)
+
+
+class ClaimReconsolidator:
+    """Classify new claims against bounded, deterministic existing candidates."""
+
+    def __init__(self, llm: OllamaClient, artifacts: ArtifactStore):
         self.llm = llm
-        self.wiki = wiki
-        self.config = config
-        # in-memory store for accumulated signals: {(slug, session_id): [PredictionError, ...]}
-        self._signals: Dict[tuple[str, str], List[PredictionError]] = defaultdict(list)
+        self.artifacts = artifacts
 
-    async def check(self, page: WikiPage, context: str) -> PredictionError:
-        system, user = prompts.prediction_error_prompt(page.content, context)
-        response = await self.llm.call_structured(system, user, PredictionErrorOutput)
-        if not isinstance(response, dict):
-            # Fallback
-            return PredictionError(
-                conflict_type="none",
-                discrepancy_score=0.0,
-                explanation="Failed to parse prediction error from LLM",
-                suggested_update=None
+    async def analyze(
+        self,
+        routes: list[ClaimRoute],
+        *,
+        current_claim_ids: set[str],
+        dream_run_id: str,
+    ) -> ReconciliationResult:
+        result = ReconciliationResult()
+        active = self.artifacts.list_claims(status="active")
+        current_ids = set(current_claim_ids)
+        existing = [claim for claim in active if claim.claim_id not in current_ids]
+
+        for route in routes:
+            try:
+                incoming = self.artifacts.get_claim(route.claim_id)
+            except FileNotFoundError:
+                result.failures.append(ReconciliationFailure(
+                    route.claim_id,
+                    route.raw_log_entry_id,
+                    "Incoming claim artifact is missing",
+                ))
+                continue
+            candidates = self._candidates(incoming, route.page_slug, existing)
+            if not candidates:
+                continue
+            relation = await self._classify(incoming, candidates)
+            if isinstance(relation, str):
+                result.failures.append(ReconciliationFailure(
+                    route.claim_id, route.raw_log_entry_id, relation
+                ))
+                continue
+            relation_name, target, explanation, confidence = relation
+            if relation_name == "additive":
+                continue
+            if relation_name == "supports":
+                result.supporting_relations.append(SupportingRelation(
+                    incoming.claim_id, target.claim_id
+                ))
+                continue
+            existing_proposal = self.artifacts.find_reconsolidation_proposal(
+                incoming.claim_id, target.claim_id, relation_name
             )
-            
-        return PredictionError(
-            conflict_type=response.get("conflict_type", "none"),
-            discrepancy_score=float(response.get("discrepancy_score", 0.0)),
-            explanation=response.get("explanation", ""),
-            suggested_update=response.get("suggested_update")
+            if existing_proposal is not None:
+                continue
+            result.proposals.append(ReconsolidationProposal(
+                proposal_id=f"recon-{uuid.uuid4().hex[:12]}",
+                incoming_claim_id=incoming.claim_id,
+                target_claim_id=target.claim_id,
+                proposed_relation=relation_name,
+                explanation=explanation,
+                confidence=confidence,
+                dream_run_id=dream_run_id,
+                created_at=datetime.now().astimezone().isoformat(),
+                affected_page_slugs=sorted({
+                    route.page_slug, *incoming.page_slugs, *target.page_slugs
+                }),
+            ))
+        return result
+
+    def _candidates(
+        self,
+        incoming: MemoryClaim,
+        page_slug: str,
+        existing: list[MemoryClaim],
+    ) -> list[MemoryClaim]:
+        incoming_entities = self._entities(incoming)
+        if not incoming_entities:
+            return []
+        candidates = [
+            claim for claim in existing
+            if incoming_entities & self._entities(claim)
+            and (
+                page_slug in claim.page_slugs
+                or bool(incoming.slot and claim.slot == incoming.slot)
+            )
+        ]
+        return sorted(
+            candidates,
+            key=lambda claim: self._candidate_rank(incoming, claim),
+            reverse=True,
+        )[:12]
+
+    @staticmethod
+    def _candidate_rank(incoming: MemoryClaim, candidate: MemoryClaim) -> tuple[int, int, int, str]:
+        return (
+            int(bool(incoming.slot and candidate.slot == incoming.slot)),
+            int(bool(incoming.predicate and candidate.predicate == incoming.predicate)),
+            int(incoming.claim_type == candidate.claim_type),
+            candidate.recorded_at,
         )
 
-    async def flag_labile(self, page: WikiPage, session_id: str) -> None:
-        self.wiki.mark_labile(page.slug, session_id)
+    async def _classify(
+        self, incoming: MemoryClaim, candidates: list[MemoryClaim]
+    ) -> tuple[str, MemoryClaim, str, float] | str:
+        aliases = {f"E{index:03d}": claim for index, claim in enumerate(candidates, start=1)}
+        candidate_text = "\n".join(
+            f"[{alias}] type={claim.claim_type}; predicate={claim.predicate or 'unknown'}; "
+            f"slot={claim.slot or 'none'}; recorded_at={claim.recorded_at}\n{claim.text}"
+            for alias, claim in aliases.items()
+        )
+        system, user = prompts.claim_reconsolidation_prompt(
+            "N001",
+            (
+                f"type={incoming.claim_type}; predicate={incoming.predicate or 'unknown'}; "
+                f"slot={incoming.slot or 'none'}; recorded_at={incoming.recorded_at}\n"
+                f"{incoming.text}"
+            ),
+            candidate_text,
+        )
+        try:
+            response = await self.llm.call_structured(
+                system,
+                user,
+                ReconsolidationDecisionsOutput,
+                num_predict=1024,
+                debug_label="dream-claim-reconsolidation",
+            )
+        except Exception as exc:
+            return f"Reconsolidation request failed: {type(exc).__name__}"
+        decisions = response.get("decisions", []) if isinstance(response, dict) else []
+        if len(decisions) != 1 or decisions[0].get("incoming_alias") != "N001":
+            return "Reconsolidation response did not account for the incoming claim exactly once"
+        decision = decisions[0]
+        relation = str(decision.get("relation", ""))
+        target_alias = str(decision.get("target_alias", ""))
+        if relation == "additive":
+            if target_alias:
+                return "Additive reconsolidation decision included a target"
+            return relation, incoming, str(decision.get("explanation", "")), float(
+                decision.get("confidence", 0.8)
+            )
+        target = aliases.get(target_alias)
+        if relation not in {"supports", "contradicts", "supersedes"} or target is None:
+            return "Reconsolidation decision used an invalid relation or target"
+        return (
+            relation,
+            target,
+            str(decision.get("explanation", "")).strip(),
+            max(0.0, min(1.0, float(decision.get("confidence", 0.8)))),
+        )
 
-    async def accumulate_signal(self, slug: str, session_id: str, signal: PredictionError) -> None:
-        self._signals[(slug, session_id)].append(signal)
+    @staticmethod
+    def _entities(claim: MemoryClaim) -> set[str]:
+        return {
+            re.sub(r"[^a-z0-9]+", " ", str(item.get("entity", "")).lower()).strip()
+            for item in claim.about
+            if item.get("entity")
+        }
 
-    async def resolve_labile_pages(self, session_id: str) -> List[str]:
-        resolved_slugs = []
-        
-        # Find all keys for this session
-        keys_to_resolve = [k for k in self._signals.keys() if k[1] == session_id]
-        
-        for key in keys_to_resolve:
-            slug, _ = key
-            signals = self._signals[key]
-            
-            if not self.wiki.exists(slug):
-                continue
-                
-            original_page = self.wiki.get(slug)
-            
-            # Format signals
-            signals_str = json.dumps([{
-                "discrepancy_score": s.discrepancy_score,
-                "explanation": s.explanation,
-                "suggested_update": s.suggested_update
-            } for s in signals], indent=2)
-            
-            system, user = prompts.reconsolidation_rewrite_prompt(original_page.content, signals_str)
-            response = await self.llm.call_structured(system, user, ReconsolidationRewriteOutput)
-            
-            if isinstance(response, dict):
-                # Apply updates
-                original_page.title = response.get("title", original_page.title)
-                original_page.content = response.get("content", original_page.content)
-                original_page.tags = response.get("tags", original_page.tags)
-                original_page.confidence = response.get("confidence", original_page.confidence)
-                original_page.importance = response.get("importance", original_page.importance)
-                
-                reason = response.get("update_reason", "Reconsolidated based on recent session context.")
-                max_score = max([s.discrepancy_score for s in signals]) if signals else 0.0
-                
-                # Create log entry
-                log_entry = UpdateLogEntry(
-                    version=original_page.version + 1,
-                    date=datetime.now(),
-                    session_id=session_id,
-                    trigger="reconsolidation",
-                    discrepancy_score=max_score,
-                    reason=reason,
-                    previous_confidence=original_page.confidence,
-                    new_confidence=response.get("confidence", original_page.confidence)
-                )
-                
-                original_page.version += 1
-                original_page.last_updated = datetime.now()
-                original_page.update_log.append(log_entry)
-                # Save it (resolving labile status)
-                self.wiki.save(original_page)
-                self.wiki.resolve_labile(slug, session_id)
-                resolved_slugs.append(slug)
-                
-            # Clean up signals
-            del self._signals[key]
-            
-        return resolved_slugs
+
+class ReconsolidationReviewService:
+    """Apply a reviewed proposal through canonical claims and deterministic projection."""
+
+    def __init__(self, artifacts: ArtifactStore, materializer: PageMaterializer):
+        self.artifacts = artifacts
+        self.materializer = materializer
+
+    def approve(self, proposal_id: str, *, reviewer_note: str | None = None) -> ReviewResult:
+        proposal = self.artifacts.get_reconsolidation_proposal(proposal_id)
+        if proposal.status == "applied":
+            return ReviewResult(proposal, [], [])
+        if proposal.status == "rejected":
+            raise ReviewConflictError("A rejected proposal cannot be approved")
+        try:
+            incoming = self.artifacts.get_claim(proposal.incoming_claim_id)
+            target = self.artifacts.get_claim(proposal.target_claim_id)
+        except FileNotFoundError as exc:
+            self._mark_stale(proposal, "A referenced claim no longer exists")
+            raise ReviewConflictError("A referenced claim no longer exists") from exc
+        already_mutated = self._approved_relation_is_present(proposal, incoming, target)
+        if incoming.status != "active" or (
+            target.status != "active" and not already_mutated
+        ):
+            self._mark_stale(proposal, "A referenced claim is no longer active")
+            raise ReviewConflictError("A referenced claim is no longer active")
+
+        if proposal.status == "pending":
+            proposal.status = "approved"
+            proposal.reviewer_note = reviewer_note
+            proposal.reviewed_at = datetime.now().astimezone().isoformat()
+        proposal.application_error = None
+        self.artifacts.save_reconsolidation_proposal(proposal)
+        try:
+            if not already_mutated:
+                if proposal.proposed_relation == "contradicts":
+                    add_claim_link(incoming, "contradicts", target.claim_id)
+                    add_claim_link(target, "contradicts", incoming.claim_id)
+                else:
+                    target.status = "superseded"
+                    add_claim_link(incoming, "supersedes", target.claim_id)
+                    add_claim_link(target, "superseded_by", incoming.claim_id)
+                self.artifacts.save_claim(incoming)
+                self.artifacts.save_claim(target)
+            pages = self.materializer.regenerate(set(proposal.affected_page_slugs))
+            proposal.status = "applied"
+            proposal.applied_at = datetime.now().astimezone().isoformat()
+            self.artifacts.save_reconsolidation_proposal(proposal)
+            return ReviewResult(
+                proposal,
+                sorted(pages.updated_slugs | pages.created_slugs),
+                sorted(pages.deleted_slugs),
+            )
+        except Exception as exc:
+            proposal.application_error = f"{type(exc).__name__}: {exc}"
+            self.artifacts.save_reconsolidation_proposal(proposal)
+            raise
+
+    def reject(self, proposal_id: str, *, reviewer_note: str | None = None) -> ReviewResult:
+        proposal = self.artifacts.get_reconsolidation_proposal(proposal_id)
+        if proposal.status == "rejected" and not proposal.application_error:
+            return ReviewResult(proposal, [], [])
+        if proposal.status in {"approved", "applied"}:
+            raise ReviewConflictError("An approved proposal cannot be rejected")
+        if proposal.status == "pending":
+            proposal.status = "rejected"
+            proposal.reviewer_note = reviewer_note
+            proposal.reviewed_at = datetime.now().astimezone().isoformat()
+        proposal.application_error = None
+        self.artifacts.save_reconsolidation_proposal(proposal)
+        try:
+            pages = self.materializer.regenerate(set(proposal.affected_page_slugs))
+            self.artifacts.save_reconsolidation_proposal(proposal)
+            return ReviewResult(
+                proposal,
+                sorted(pages.updated_slugs | pages.created_slugs),
+                sorted(pages.deleted_slugs),
+            )
+        except Exception as exc:
+            proposal.application_error = f"{type(exc).__name__}: {exc}"
+            self.artifacts.save_reconsolidation_proposal(proposal)
+            raise
+
+    @staticmethod
+    def _approved_relation_is_present(
+        proposal: ReconsolidationProposal,
+        incoming: MemoryClaim,
+        target: MemoryClaim,
+    ) -> bool:
+        if proposal.status != "approved":
+            return False
+        if proposal.proposed_relation == "contradicts":
+            return (
+                {"relation": "contradicts", "target": target.claim_id} in incoming.links
+                and {"relation": "contradicts", "target": incoming.claim_id} in target.links
+            )
+        return (
+            target.status == "superseded"
+            and {"relation": "supersedes", "target": target.claim_id} in incoming.links
+            and {"relation": "superseded_by", "target": incoming.claim_id} in target.links
+        )
+
+    def _mark_stale(self, proposal: ReconsolidationProposal, reason: str) -> None:
+        proposal.status = "stale"
+        proposal.application_error = reason
+        proposal.reviewed_at = datetime.now().astimezone().isoformat()
+        self.artifacts.save_reconsolidation_proposal(proposal)

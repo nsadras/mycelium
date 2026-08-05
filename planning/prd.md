@@ -2,6 +2,8 @@
 ## Neurobiologically-Inspired Agent Memory System
 ### Product Requirements Document & Technical Specification — v0.2
 
+> **Historical document.** This May 2026 draft describes the retired page-lability architecture. See [`../DESIGN.md`](../DESIGN.md) for the current claim-authoritative design.
+
 **Author:** Nitin  
 **Status:** DRAFT  
 **Date:** May 2026  

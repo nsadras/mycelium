@@ -22,8 +22,7 @@ async def main():
     async with mem.session(query="what did we decide about storage?") as session:
         print("Loaded pages:", [p.slug for p in session.loaded_pages])
         for p in session.loaded_pages:
-            if p.was_flagged:
-                print(f"  ⚠ {p.slug} flagged for reconsolidation (score: {p.discrepancy_score:.2f})")
+            print(f"  loaded {p.slug} at confidence {p.confidence:.2f}")
 
 if __name__ == "__main__":
     asyncio.run(main())

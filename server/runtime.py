@@ -83,7 +83,10 @@ def append_turn(
     record = ensure_session_record(meta[session_id], session_id)
     now = iso_now()
     record["transcript"].append({"role": "user", "content": user_message})
-    assistant_record = {"role": "assistant", "content": assistant_message}
+    assistant_record: dict[str, Any] = {
+        "role": "assistant",
+        "content": assistant_message,
+    }
     if loaded_pages is not None:
         assistant_record["loaded_pages"] = loaded_pages
     if tool_events is not None:
@@ -204,7 +207,7 @@ def start_new_episode(record: dict[str, Any], session_id: str) -> dict[str, Any]
 async def flush_session_episode(session_id: str, reason: str = "manual") -> dict[str, Any]:
     meta = load_meta()
     if session_id not in meta:
-        return {"session_id": session_id, "status": "missing", "entries_encoded": 0, "resolved_pages": []}
+        return {"session_id": session_id, "status": "missing", "entries_encoded": 0}
 
     record = ensure_session_record(meta[session_id], session_id)
     episode = record["active_episode"]
@@ -220,7 +223,6 @@ async def flush_session_episode(session_id: str, reason: str = "manual") -> dict
             "entries_encoded": 0,
             "turn_count": turn_count,
             "transcript_chars": transcript_chars,
-            "resolved_pages": [],
         }
 
     mem = get_mem()
@@ -239,7 +241,6 @@ async def flush_session_episode(session_id: str, reason: str = "manual") -> dict
             "entries_encoded": 0,
             "turn_count": turn_count,
             "transcript_chars": transcript_chars,
-            "resolved_pages": [],
         }
     if not entries:
         save_meta(meta)
@@ -250,10 +251,8 @@ async def flush_session_episode(session_id: str, reason: str = "manual") -> dict
             "entries_encoded": 0,
             "turn_count": turn_count,
             "transcript_chars": transcript_chars,
-            "resolved_pages": [],
         }
 
-    resolved_pages = await mem.reconsolidation_engine.resolve_labile_pages(episode["id"])
     record["encoded_episodes"].append(
         {
             "id": episode["id"],
@@ -261,7 +260,6 @@ async def flush_session_episode(session_id: str, reason: str = "manual") -> dict
             "reason": reason,
             "turn_count": turn_count,
             "entries_encoded": len(entries),
-            "resolved_pages": resolved_pages,
         }
     )
     start_new_episode(record, session_id)
@@ -273,7 +271,6 @@ async def flush_session_episode(session_id: str, reason: str = "manual") -> dict
         "entries_encoded": len(entries),
         "turn_count": turn_count,
         "transcript_chars": transcript_chars,
-        "resolved_pages": resolved_pages,
     }
 
 
@@ -304,22 +301,6 @@ async def flush_idle_episodes(
     return {"flushed": len([r for r in results if r["status"] == "flushed"]), "results": results}
 
 
-async def resolve_session_reconsolidation(session_id: str) -> dict[str, Any]:
-    meta = load_meta()
-    if session_id not in meta:
-        return {"session_id": session_id, "status": "missing", "resolved_pages": []}
-    record = ensure_session_record(meta[session_id], session_id)
-    save_meta(meta)
-    episode_id = record["active_episode"]["id"]
-    resolved_pages = await get_mem().reconsolidation_engine.resolve_labile_pages(episode_id)
-    return {
-        "session_id": session_id,
-        "episode_id": episode_id,
-        "status": "resolved",
-        "resolved_pages": resolved_pages,
-    }
-
-
 async def run_dream() -> dict[str, Any]:
     report = await get_mem().dream()
     return {
@@ -329,6 +310,7 @@ async def run_dream() -> dict[str, Any]:
         "completed_source_ids": report.completed_source_ids,
         "pending_source_ids": report.pending_source_ids,
         "failures": report.failures,
+        "reconsolidation_proposal_ids": report.reconsolidation_proposal_ids,
     }
 
 
@@ -338,7 +320,6 @@ def clear_memory_store() -> dict[str, int]:
         "wiki_pages_deleted": 0,
         "archived_pages_deleted": 0,
         "logs_deleted": 0,
-        "labile_files_deleted": 0,
         "artifact_sources_deleted": 0,
         "artifact_episodes_deleted": 0,
         "artifact_claims_deleted": 0,
@@ -348,7 +329,6 @@ def clear_memory_store() -> dict[str, int]:
     wiki_dir = mem.store_path / "wiki"
     archive_dir = wiki_dir / "_archive"
     logs_dir = mem.store_path / "logs"
-    labile_dir = mem.store_path / "labile"
 
     for path in wiki_dir.glob("*.md"):
         if path.name == "_index.md":
@@ -364,15 +344,14 @@ def clear_memory_store() -> dict[str, int]:
         path.unlink()
         counts["logs_deleted"] += 1
 
-    for path in labile_dir.glob("*.md"):
-        path.unlink()
-        counts["labile_files_deleted"] += 1
-
     artifact_counts = mem.artifacts.clear()
     counts["artifact_sources_deleted"] = artifact_counts["sources"]
     counts["artifact_episodes_deleted"] = artifact_counts["episodes"]
     counts["artifact_claims_deleted"] = artifact_counts["claims"]
     counts["artifact_dream_runs_deleted"] = artifact_counts["dream_runs"]
+    counts["artifact_reconsolidation_proposals_deleted"] = artifact_counts[
+        "reconsolidation_proposals"
+    ]
 
     mem.wiki.save_index("# Wiki Index\n\n_last updated: never_\n\n## Pages\n")
     meta = load_meta()

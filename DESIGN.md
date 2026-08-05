@@ -6,9 +6,9 @@ This document describes how Mycelium is organized and how information moves thro
 
 Mycelium is made of three primary layers:
 
-- A Python memory library that handles retrieval, episodic encoding, consolidation, reconsolidation, and decay
-- A FastAPI backend that owns persistent chat sessions and schedules background memory work
-- A React web UI for chat, memory inspection, editing, and meeting ingestion
+- A Python memory library that handles retrieval, source-grounded encoding, consolidation, and claim-level reconsolidation
+- A FastAPI backend that owns persistent chat sessions and explicit memory operations
+- A React web UI for chat, memory inspection, reconciliation review, and meeting ingestion
 
 Ollama provides the local language-model runtime. The core agent memory is composed of Markdown and JSON files rather than an opaque database; the optional Engram pipeline uses SQLite for meeting-processing state.
 
@@ -19,16 +19,16 @@ mycelium/
 ├── engram/             # Meeting upload, transcription, diarization, and ingestion
 ├── mycelium/           # Core memory library
 │   ├── core.py         # Facade, retrieval, sessions, and dream entry point
-│   ├── encoder.py      # Transcript-to-log persistence
-│   ├── dream.py        # Log-to-wiki consolidation
-│   ├── reconsolidation.py
-│   ├── decay.py
+│   ├── encoder.py      # Transcript-to-source/episode/claim encoding
+│   ├── dream.py        # Claim routing and consolidation orchestration
+│   ├── reconsolidation.py # Evidence-triggered proposal analysis and review
+│   ├── materialization.py # Deterministic claim-to-wiki projection
 │   ├── ollama.py       # Adapter around the official Ollama SDK
 │   ├── prompts.py
 │   ├── store.py        # Markdown wiki and log persistence
 │   └── structured_outputs.py
 ├── server/             # FastAPI backend
-│   ├── main.py         # App setup and background scheduler
+│   ├── main.py         # App setup and API router registration
 │   └── api/            # Session, memory, and Engram routes
 ├── ui/                 # React frontend (Vite, TypeScript, and Tailwind)
 ├── tests/              # Python test suite
@@ -44,11 +44,11 @@ mycelium/
 
 ### 1. Chat and retrieval
 
-When a user sends a message, the backend builds a retrieval query from the chat title, recent thread context, and current message. A routing LLM selects relevant wiki pages from the index. The routing context includes confidence, importance, retrievability, review time, recall sections, and source-log references so fresh, stable memories can be preferred without making older relevant pages unreachable.
+When a user sends a message, the backend builds a retrieval query from the chat title, recent thread context, and current message. A routing LLM selects relevant wiki pages from the index using page summaries, confidence, importance, and recall sections.
 
 Loaded pages are placed in the chat system prompt along with compact snippets from their backlinked raw logs. The entire current session transcript is then passed to the chat model.
 
-After the response, a small structured LLM call determines which loaded pages materially contributed to the answer. Pages judged as used receive a reinforcement event, which increases stability and resets retrievability.
+Retrieval is read-only. It never reinforces, destabilizes, or rewrites a page.
 
 ### 2. Tool observations
 
@@ -57,80 +57,59 @@ The chat model can call Ollama `web_search` and `web_fetch`. Tool calls are:
 - Executed by the internal Ollama adapter
 - Displayed in the UI with expandable arguments and results
 - Stored on the assistant message in session history
-- Written immediately as separate raw log entries, using the truncated result that was supplied to the model
+- Encoded immediately through the same source, episode, and claim pipeline as conversations
 
-Tool logs remain raw observations. They bypass conversational episode encoding, and a later dream pass decides whether they contain durable information.
+The tool-specific extraction policy keeps source-grounded project facts while ignoring transport metadata, failures, and page furniture.
 
 ### 3. Episode encoding
 
-Each web chat keeps an active episode buffer. An episode is flushed:
+Each web chat keeps an active episode buffer. An episode is flushed explicitly:
 
 - Manually through **Flush Current** or **Flush All**
-- Automatically when it has been idle or has grown large
-- On backend shutdown with a forced flush
+- Through **Flush Idle** when the caller wants idle or large episodes processed
 
-The encoder writes the complete conversation episode into a durable raw log. This preserves the canonical source evidence instead of using an initial lossy fact-extraction pass.
+The encoder writes the complete conversation episode into a durable raw log, a structured source document, an episode manifest, and atomic claims. Extraction makes one logical pass and records claimed, ignored, partial, and failed segment coverage.
 
 Encoded episode IDs are tracked in `mycelium_store/sessions_meta.json`, preventing an already-flushed episode from being encoded repeatedly unless the memory store is cleared.
 
 ### 4. Dream consolidation
 
-The dream process converts durable raw logs into semantic wiki pages:
+The dream process converts source-grounded claims into semantic wiki pages:
 
 ```mermaid
 flowchart TD
-    A[Unconsolidated raw logs] --> B[Prepare durable entries]
-    B --> C[Extract durable facts from tool observations]
-    C --> D[Identify candidate wiki targets]
-    D --> E[Canonicalize targets and merge near-duplicates]
-    E --> F[Rewrite or create wiki pages]
-    F --> G[Record memory events]
-    G --> H[Rebuild deterministic wiki index]
-    H --> I[Mark logs consolidated]
-    I --> J[Run decay pass]
+    A[Unconsolidated source-grounded claims] --> B[Route or explicitly ignore every claim]
+    B --> C[Reactivate related existing claims]
+    C --> D[Classify additive, support, contradiction, or supersession]
+    D --> E[Create review proposals for unsafe changes]
+    E --> F[Deterministically materialize active claims]
+    F --> G[Persist assignments and Dream audit]
+    G --> H[Mark completed logs consolidated]
 ```
 
 Important behavior:
 
-- Tool observations go through a source-grounded extraction prompt that discards navigation text, page furniture, rankings, and boilerplate.
-- Target identification is batched by log entries, while canonicalization sees proposed targets from the entire dream pass. This reduces same-pass near-duplicates.
-- Under the default `override` policy, each final canonical target is rewritten once. The `fork` and `merge` policies may require additional calls for existing pages.
-- Session-only or ephemeral entries are marked consolidated without becoming wiki pages.
-- `_index.md` is rebuilt deterministically from existing pages rather than being generated by the LLM.
-- Cross-page references use Obsidian-style `[[page-slug]]` links; source references use `[[log:<entry-id>]]`.
+- Routing uses exact batch-local alias accounting and fails closed on malformed output.
+- Assistant/system conversation claims remain source history rather than durable personalized memory.
+- Active claims are partitioned into memory, timeline, detail, and interaction sections without LLM prose rewriting.
+- `_index.md` is rebuilt deterministically from materialized pages.
+- Dream records source outcomes, claim dispositions, proposal IDs, and failures.
 
 ### 5. Reconsolidation
 
-When a page is loaded into a chat, a prediction-error check can flag it as labile if the new context suggests it is outdated, incomplete, or contradicted. Signals accumulate for the active episode and are resolved either manually or when the episode is flushed.
+New source-grounded claims act as cues that reactivate a bounded set of older active claims. The classifier may mark the relationship additive, supporting, contradictory, or superseding. Additive claims route normally and supporting links apply automatically. Contradictions and supersessions become durable pairwise proposals.
 
-### 6. Memory state and decay
-
-Wiki pages use event-driven memory state rather than a single decay score:
-
-- `retrievability` is recomputed as `exp(-elapsed_days / stability_days)`.
-- `stability_days` grows when a page is retrieved, used, dream-updated, or manually edited.
-- `difficulty` increases with contradictions and falls with reinforcement.
-- Creation, access, and review timestamps—as well as reinforcement and conflict counts—are stored in page frontmatter.
-- Pinned pages are protected from archival.
-
-A decay pass refreshes retrievability and archives only pages that are simultaneously low in retrievability, importance, and confidence; unpinned; and not recently accessed. Raw logs retain a simpler `decay_score` for log-level bookkeeping.
+A pending proposal is the lability window: both claims remain active and generated pages display a pending marker. Approval updates canonical claim links or status and immediately invokes the same deterministic materializer used by Dream. Rejection preserves both claims as unrelated. Pages are never rewritten from a query or from model-authored correction prose.
 
 ## Web sessions and direct library sessions
 
-The web app owns long-lived session transcripts and scheduled episode flushing in `server/runtime.py`. Ordinary chat content is logged when an episode is flushed, while tool observations are logged immediately.
+The web app owns long-lived session transcripts and explicit episode flushing in `server/runtime.py`. Ordinary chat content is logged when an episode is flushed, while tool observations are logged immediately.
 
-The direct Python API uses the `Mycelium.session()` async context manager. It retrieves pages on entry, encodes recorded messages on exit, resolves labile pages, and—under its default schedule—runs dream consolidation. This behavior is convenient for short agent runs but intentionally differs from the persistent web session model.
+The direct Python API uses the `Mycelium.session()` async context manager. It retrieves pages on entry and encodes recorded messages on exit. Dream remains an explicit operation.
 
-## Background automation
+## Memory operations
 
-The FastAPI backend starts an APScheduler instance with these jobs:
-
-- Every 5 minutes: flush episodes that are idle or have reached the turn limit
-- Every 30 minutes: run dream consolidation
-- At the configured decay interval: refresh memory state and archive weak pages
-- On shutdown: force-flush active episodes
-
-The web UI can trigger the same operations manually.
+The backend does not schedule flush, Dream, or shutdown work. The web UI and API expose explicit operations for current, idle, or all episode flushing; Dream consolidation; proposal review; and development resets.
 
 ## Storage layout
 
@@ -142,21 +121,17 @@ mycelium_store/
 ├── logs/               # Daily raw episodic logs
 ├── wiki/               # Semantic memory pages and _index.md
 │   └── _archive/       # Archived wiki pages
-├── labile/             # Pending reconsolidation drafts and signals
+├── artifacts/          # Sources, episodes, claims, Dream audits, and reconciliation proposals
 └── engram/             # SQLite meeting metadata and uploaded audio
 ```
 
-The files are deliberately readable and editable. Normal wiki edits should go through the UI or API so version metadata and update logs remain consistent.
+The files are deliberately readable. Raw logs and claims are canonical; wiki pages are generated views and are read-only in the application.
 
 ## Configuration
 
 Runtime settings live in `mycelium.toml`:
 
 ```toml
-[store]
-path = "./mycelium_store"
-git_commits = false
-
 [llm]
 model = "gemma4:12b"
 url = "http://localhost:11434"
@@ -173,7 +148,7 @@ compute_type = "auto"
 batch_size = 8
 ```
 
-`llm.context_window_tokens` controls token-aware ingestion batching. It is separate from `session.context_budget_tokens`, which limits how much retrieved memory is loaded into a chat. Defaults for dream, reconsolidation, and decay are defined in `mycelium/config.py` when they are not present in the TOML file.
+`llm.context_window_tokens` controls token-aware ingestion batching. It is separate from `session.context_budget_tokens`, which limits how much retrieved memory is loaded into chats. Dream projection defaults live in `mycelium/config.py`.
 
 ## Engram meeting pipeline
 
@@ -319,7 +294,7 @@ scripts/benchmark-all-full.sh
 They accept environment overrides such as:
 
 ```bash
-QA_MODEL=llama3.1:8b MEMORY_MODEL=gemma4:12b RUN_TAG=after-decay-tuning scripts/benchmark-all-full.sh
+QA_MODEL=llama3.1:8b MEMORY_MODEL=gemma4:12b RUN_TAG=claim-pipeline scripts/benchmark-all-full.sh
 ```
 
 Full runs default to `DREAM_POLICY=per-case`; this can be changed, for example, with `DREAM_POLICY=per-batch scripts/benchmark-locomo-full.sh mycelium`. Results are written beneath `benchmark_runs/<run-id>/` as predictions, JSONL rows, and summaries. MemoryAgentBench may require its own dependencies and Hugging Face dataset downloads.
@@ -343,6 +318,5 @@ The UI renders Markdown, GitHub-flavored tables and lists, and KaTeX notation.
 
 Current implementation notes:
 
-- Git commit integration exists in configuration and model fields but is not a primary UI workflow.
 - The backend allows broad CORS access for local development and should be tightened before deployment.
 - The combined `start.sh` launcher is intended for development; the backend can also be started independently with `uv run python -m server.main`.

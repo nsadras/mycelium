@@ -7,10 +7,13 @@ import {
   FileArchive,
   FileJson,
   FileText,
+  GitCompareArrows,
   Layers3,
   Loader2,
   RefreshCw,
   Search,
+  ThumbsDown,
+  ThumbsUp,
 } from 'lucide-react';
 import api, {
   type ArtifactOverview,
@@ -20,12 +23,13 @@ import api, {
   type DreamRunArtifact,
   type EpisodeArtifact,
   type MemoryClaimArtifact,
+  type ReconsolidationProposalArtifact,
   type StoredMemoryFile,
   type StoredMemoryFiles,
 } from '../lib/api';
 
-type InspectorTab = 'overview' | 'chat' | 'sources' | 'episodes' | 'claims' | 'dream-runs' | 'files';
-type StoredFileGroup = 'index' | 'labile' | 'archive';
+type InspectorTab = 'overview' | 'chat' | 'sources' | 'episodes' | 'claims' | 'reconsolidation' | 'dream-runs' | 'files';
+type StoredFileGroup = 'index' | 'archive';
 type SelectedFile = StoredMemoryFile & { group: StoredFileGroup };
 
 const tabs: { id: InspectorTab; label: string; icon: typeof Database }[] = [
@@ -34,6 +38,7 @@ const tabs: { id: InspectorTab; label: string; icon: typeof Database }[] = [
   { id: 'sources', label: 'Sources', icon: FileText },
   { id: 'episodes', label: 'Episodes', icon: Layers3 },
   { id: 'claims', label: 'Claims', icon: FileJson },
+  { id: 'reconsolidation', label: 'Reconciliation', icon: GitCompareArrows },
   { id: 'dream-runs', label: 'Dream runs', icon: FileJson },
   { id: 'files', label: 'Stored files', icon: FileArchive },
 ];
@@ -82,6 +87,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
   const [sources, setSources] = useState<ArtifactSourceSummary[]>([]);
   const [episodes, setEpisodes] = useState<EpisodeArtifact[]>([]);
   const [claims, setClaims] = useState<MemoryClaimArtifact[]>([]);
+  const [proposals, setProposals] = useState<ReconsolidationProposalArtifact[]>([]);
   const [dreamRuns, setDreamRuns] = useState<DreamRunArtifact[]>([]);
   const [files, setFiles] = useState<StoredMemoryFiles | null>(null);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
@@ -91,23 +97,27 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string | null>(null);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [selectedDreamRunId, setSelectedDreamRunId] = useState<string | null>(null);
+  const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [reviewNote, setReviewNote] = useState('');
+  const [reviewing, setReviewing] = useState<'approve' | 'reject' | null>(null);
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       setError(null);
       try {
-        const [overviewResponse, chatResponse, sourceResponse, episodeResponse, claimResponse, dreamRunResponse, fileResponse] = await Promise.all([
+        const [overviewResponse, chatResponse, sourceResponse, episodeResponse, claimResponse, proposalResponse, dreamRunResponse, fileResponse] = await Promise.all([
           api.get<ArtifactOverview>('/memory/artifacts/overview'),
           api.get<ChatEpisodeState[]>('/memory/artifacts/chat-episodes'),
           api.get<ArtifactSourceSummary[]>('/memory/artifacts/sources'),
           api.get<EpisodeArtifact[]>('/memory/artifacts/episodes'),
           api.get<MemoryClaimArtifact[]>('/memory/artifacts/claims'),
+          api.get<ReconsolidationProposalArtifact[]>('/memory/artifacts/reconsolidation-proposals'),
           api.get<DreamRunArtifact[]>('/memory/artifacts/dream-runs'),
           api.get<StoredMemoryFiles>('/memory/artifacts/files'),
         ]);
@@ -117,6 +127,12 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
         setSources(orderedSources);
         setEpisodes(episodeResponse.data);
         setClaims(claimResponse.data);
+        const orderedProposals = [...proposalResponse.data].sort((a, b) => {
+          if (a.status === 'pending' && b.status !== 'pending') return -1;
+          if (b.status === 'pending' && a.status !== 'pending') return 1;
+          return b.created_at.localeCompare(a.created_at);
+        });
+        setProposals(orderedProposals);
         setDreamRuns(dreamRunResponse.data);
         setFiles(fileResponse.data);
         setSelectedSourceId(orderedSources[0]?.source_id ?? null);
@@ -124,6 +140,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
         setSelectedEpisodeId(episodeResponse.data[0]?.episode_id ?? null);
         setSelectedClaimId(claimResponse.data[0]?.claim_id ?? null);
         setSelectedDreamRunId(dreamRunResponse.data[0]?.run_id ?? null);
+        setSelectedProposalId(orderedProposals[0]?.proposal_id ?? null);
         const initialFile = fileResponse.data.wiki_index;
         setSelectedFile(initialFile ? { ...initialFile, group: 'index' } : null);
       } catch (loadError) {
@@ -176,11 +193,14 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
     [run.run_id, run.status, ...run.source_ids, ...run.claim_decisions.flatMap((decision) => [decision.claim_id, decision.disposition, decision.reason])]
       .some((value) => value.toLowerCase().includes(query))
   );
+  const filteredProposals = proposals.filter((proposal) =>
+    [proposal.proposal_id, proposal.incoming_claim_id, proposal.target_claim_id, proposal.proposed_relation, proposal.status, proposal.explanation]
+      .some((value) => value.toLowerCase().includes(query))
+  );
   const allFiles = useMemo<SelectedFile[]>(() => {
     if (!files) return [];
     return [
       ...(files.wiki_index ? [{ ...files.wiki_index, group: 'index' as const }] : []),
-      ...files.labile_pages.map((file) => ({ ...file, group: 'labile' as const })),
       ...files.archived_pages.map((file) => ({ ...file, group: 'archive' as const })),
     ];
   }, [files]);
@@ -192,6 +212,9 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
   const selectedChatEpisode = chatEpisodes.find((session) => session.session_id === selectedChatId) ?? null;
   const selectedClaim = claims.find((claim) => claim.claim_id === selectedClaimId) ?? null;
   const selectedDreamRun = dreamRuns.find((run) => run.run_id === selectedDreamRunId) ?? null;
+  const selectedProposal = proposals.find((proposal) => proposal.proposal_id === selectedProposalId) ?? null;
+  const proposalIncomingClaim = claims.find((claim) => claim.claim_id === selectedProposal?.incoming_claim_id) ?? null;
+  const proposalTargetClaim = claims.find((claim) => claim.claim_id === selectedProposal?.target_claim_id) ?? null;
   const claimedSegmentIds = useMemo(() => new Set(
     claims.flatMap((claim) => claim.provenance.flatMap((item) => item.segment_ids))
   ), [claims]);
@@ -212,6 +235,23 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
   const selectTab = (tab: InspectorTab) => {
     setSearch('');
     setActiveTab(tab);
+  };
+  const reviewProposal = async (decision: 'approve' | 'reject') => {
+    if (!selectedProposal) return;
+    setReviewing(decision);
+    try {
+      await api.post(
+        `/memory/reconsolidation/proposals/${encodeURIComponent(selectedProposal.proposal_id)}/${decision}`,
+        { reviewer_note: reviewNote.trim() || null },
+      );
+      setReviewNote('');
+      setReloadKey((current) => current + 1);
+    } catch (reviewError) {
+      console.error(`Failed to ${decision} reconsolidation proposal`, reviewError);
+      alert(`The proposal could not be ${decision === 'approve' ? 'approved' : 'rejected'}. It may already have been reviewed or become stale.`);
+    } finally {
+      setReviewing(null);
+    }
   };
 
   if (loading) {
@@ -268,7 +308,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                 ['Dream runs', overview.dream_audit.runs],
                 ['Suppressed', overview.coverage.suppressed_claims],
                 ['Segments', overview.coverage.segments],
-                ['Labile files', overview.labile_pages],
+                ['Pending reviews', overview.reconsolidation_proposals.pending ?? 0],
                 ['Archived pages', overview.archived_pages],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-xl border border-slate-200 p-4">
@@ -396,6 +436,12 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                   <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span>{humanize(claim.dream_disposition)}</span><span>{claim.page_slugs.length} pages</span></div>
                 </button>
               ))}
+              {activeTab === 'reconsolidation' && filteredProposals.map((proposal) => (
+                <button key={proposal.proposal_id} onClick={() => { setSelectedProposalId(proposal.proposal_id); setReviewNote(''); }} className={`w-full rounded-lg p-3 text-left ${selectedProposalId === proposal.proposal_id ? 'bg-indigo-100 text-indigo-900' : 'hover:bg-white'}`}>
+                  <div className="line-clamp-2 text-sm font-semibold">{humanize(proposal.proposed_relation)}</div>
+                  <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span>{proposal.status}</span><span>{formatDate(proposal.created_at)}</span></div>
+                </button>
+              ))}
               {activeTab === 'dream-runs' && filteredDreamRuns.map((run) => (
                 <button key={run.run_id} onClick={() => setSelectedDreamRunId(run.run_id)} className={`w-full rounded-lg p-3 text-left ${selectedDreamRunId === run.run_id ? 'bg-indigo-100 text-indigo-900' : 'hover:bg-white'}`}>
                   <div className="truncate text-sm font-semibold">{formatDate(run.completed_at)}</div>
@@ -408,7 +454,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                   <div className="mt-1 text-[11px] capitalize text-slate-500">{file.group}</div>
                 </button>
               ))}
-              {((activeTab === 'chat' && !filteredChatEpisodes.length) || (activeTab === 'sources' && !filteredSources.length) || (activeTab === 'episodes' && !filteredEpisodes.length) || (activeTab === 'claims' && !filteredClaims.length) || (activeTab === 'dream-runs' && !filteredDreamRuns.length) || (activeTab === 'files' && !filteredFiles.length)) && <EmptyState>No matching artifacts.</EmptyState>}
+              {((activeTab === 'chat' && !filteredChatEpisodes.length) || (activeTab === 'sources' && !filteredSources.length) || (activeTab === 'episodes' && !filteredEpisodes.length) || (activeTab === 'claims' && !filteredClaims.length) || (activeTab === 'reconsolidation' && !filteredProposals.length) || (activeTab === 'dream-runs' && !filteredDreamRuns.length) || (activeTab === 'files' && !filteredFiles.length)) && <EmptyState>No matching artifacts.</EmptyState>}
             </div>
           </aside>
 
@@ -503,6 +549,44 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                 <section className="grid gap-4 md:grid-cols-2"><div><h3 className="mb-2 text-sm font-bold">Facets</h3><JsonBlock value={selectedClaim.facets} /></div><div><h3 className="mb-2 text-sm font-bold">Links</h3><JsonBlock value={selectedClaim.links} /></div></section>
               </div>
             ) : <EmptyState>Select a claim.</EmptyState>)}
+
+            {activeTab === 'reconsolidation' && (selectedProposal ? (
+              <div className="mx-auto max-w-5xl space-y-6 p-5 md:p-8">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2"><h2 className="text-xl font-bold">Proposed {humanize(selectedProposal.proposed_relation)}</h2><Badge tone={selectedProposal.status === 'pending' ? 'amber' : selectedProposal.status === 'applied' ? 'green' : selectedProposal.status === 'stale' ? 'red' : 'slate'}>{selectedProposal.status}</Badge><Badge tone="indigo">{percentage(selectedProposal.confidence)} confidence</Badge></div>
+                  <div className="mt-2 break-all font-mono text-xs text-slate-400">{selectedProposal.proposal_id} · {formatDate(selectedProposal.created_at)}</div>
+                </div>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-relaxed text-amber-900">{selectedProposal.explanation}</div>
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <section className="rounded-xl border border-indigo-200 p-4">
+                    <div className="mb-2 text-xs font-bold uppercase tracking-wide text-indigo-600">New source-grounded claim</div>
+                    <p className="text-sm leading-relaxed">{proposalIncomingClaim?.text ?? 'Claim artifact missing'}</p>
+                    <button onClick={() => selectClaim(selectedProposal.incoming_claim_id)} className="mt-3 font-mono text-xs text-indigo-700 hover:underline">{selectedProposal.incoming_claim_id}</button>
+                  </section>
+                  <section className="rounded-xl border border-slate-200 p-4">
+                    <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Existing canonical claim</div>
+                    <p className="text-sm leading-relaxed">{proposalTargetClaim?.text ?? 'Claim artifact missing'}</p>
+                    <button onClick={() => selectClaim(selectedProposal.target_claim_id)} className="mt-3 font-mono text-xs text-indigo-700 hover:underline">{selectedProposal.target_claim_id}</button>
+                  </section>
+                </div>
+                <section className="rounded-xl border border-slate-200 p-4 text-sm">
+                  <div><strong>Affected pages:</strong> {selectedProposal.affected_page_slugs.join(', ') || 'None assigned'}</div>
+                  <div className="mt-2"><strong>Dream run:</strong> {selectedProposal.dream_run_id}</div>
+                  {selectedProposal.reviewer_note && <div className="mt-2"><strong>Reviewer note:</strong> {selectedProposal.reviewer_note}</div>}
+                  {selectedProposal.application_error && <div className="mt-2 text-rose-700"><strong>Application error:</strong> {selectedProposal.application_error}</div>}
+                </section>
+                {selectedProposal.status === 'pending' && (
+                  <section className="rounded-xl border border-slate-200 p-4">
+                    <label className="text-sm font-bold" htmlFor="review-note">Reviewer note</label>
+                    <textarea id="review-note" value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="Optional rationale for the audit record" className="mt-2 min-h-24 w-full rounded-lg border border-slate-200 p-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button disabled={reviewing !== null} onClick={() => void reviewProposal('approve')} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"><ThumbsUp size={16} />{reviewing === 'approve' ? 'Applying…' : 'Approve and apply'}</button>
+                      <button disabled={reviewing !== null} onClick={() => void reviewProposal('reject')} className="flex items-center gap-2 rounded-lg border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-700 disabled:opacity-50"><ThumbsDown size={16} />{reviewing === 'reject' ? 'Rejecting…' : 'Reject proposal'}</button>
+                    </div>
+                  </section>
+                )}
+              </div>
+            ) : <EmptyState>Select a reconciliation proposal.</EmptyState>)}
 
             {activeTab === 'dream-runs' && (selectedDreamRun ? (
               <div className="mx-auto max-w-5xl space-y-6 p-5 md:p-8">

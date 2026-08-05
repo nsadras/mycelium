@@ -67,14 +67,13 @@ class ConsolidationRoutesOutput(BaseModel):
     routes: list[ConsolidationRouteOutput] = Field(default_factory=list, max_length=64)
 
 
-class PredictionErrorOutput(BaseModel):
-    conflict_type: Literal["none", "additive", "partial", "major"]
-    discrepancy_score: float
+class ReconsolidationDecisionOutput(BaseModel):
+    incoming_alias: str
+    relation: Literal["additive", "supports", "contradicts", "supersedes"]
+    target_alias: str = ""
     explanation: str
-    suggested_update: str | None = None
+    confidence: float = 0.8
 
 
-class ReconsolidationRewriteOutput(BaseModel):
-    title: str
-    content: str
-    confidence: float
+class ReconsolidationDecisionsOutput(BaseModel):
+    decisions: list[ReconsolidationDecisionOutput] = Field(default_factory=list, max_length=32)

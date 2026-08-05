@@ -12,9 +12,9 @@ from server.runtime import (
     flush_session_episode,
     get_mem,
     load_meta,
-    resolve_session_reconsolidation,
     run_dream as run_dream_process,
 )
+from mycelium.reconsolidation import ReconsolidationReviewService, ReviewConflictError
 
 router = APIRouter()
 
@@ -27,6 +27,10 @@ class IdleFlushRequest(BaseModel):
     idle_minutes: int = 20
     max_turns: int = 25
     force: bool = False
+
+
+class ProposalReviewRequest(BaseModel):
+    reviewer_note: str | None = None
 
 
 def wiki_page_response(page):
@@ -61,6 +65,7 @@ def _artifact_integrity(mem) -> dict:
     source_by_id = {source.source_id: source for source in sources}
     episode_source_ids = {episode.source_id for episode in episodes}
     claim_by_id = {claim.claim_id: claim for claim in claims}
+    proposals = mem.artifacts.list_reconsolidation_proposals()
 
     issues = {
         "sources_without_episode": sorted(
@@ -112,6 +117,12 @@ def _artifact_integrity(mem) -> dict:
             for source in sources
             if source.raw_log_entry_id and source.raw_log_entry_id not in logs
         ),
+        "proposals_missing_claims": sorted(
+            f"{proposal.proposal_id}:{claim_id}"
+            for proposal in proposals
+            for claim_id in (proposal.incoming_claim_id, proposal.target_claim_id)
+            if claim_id not in claim_by_id
+        ),
     }
     return {
         "healthy": not any(issues.values()),
@@ -133,6 +144,11 @@ async def artifact_overview():
         disposition_counts[claim.dream_disposition] = (
             disposition_counts.get(claim.dream_disposition, 0) + 1
         )
+    proposal_status_counts: dict[str, int] = {}
+    for proposal in mem.artifacts.list_reconsolidation_proposals():
+        proposal_status_counts[proposal.status] = (
+            proposal_status_counts.get(proposal.status, 0) + 1
+        )
     return {
         "coverage": coverage,
         "projection": {
@@ -149,7 +165,7 @@ async def artifact_overview():
             "runs": len(mem.artifacts.list_dream_runs()),
             "claim_dispositions": disposition_counts,
         },
-        "labile_pages": len(list(mem.wiki.labile_dir.glob("*.md"))),
+        "reconsolidation_proposals": proposal_status_counts,
         "archived_pages": len(list(mem.wiki.archive_dir.glob("*.md"))),
     }
 
@@ -234,15 +250,28 @@ async def get_artifact_dream_run(run_id: str):
         raise HTTPException(status_code=404, detail="Dream run artifact not found") from exc
 
 
+@router.get("/artifacts/reconsolidation-proposals")
+async def list_reconsolidation_proposals():
+    return [
+        asdict(proposal)
+        for proposal in get_mem().artifacts.list_reconsolidation_proposals()
+    ]
+
+
+@router.get("/artifacts/reconsolidation-proposals/{proposal_id}")
+async def get_reconsolidation_proposal(proposal_id: str):
+    try:
+        return asdict(get_mem().artifacts.get_reconsolidation_proposal(proposal_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Reconsolidation proposal not found") from exc
+
+
 @router.get("/artifacts/files")
 async def list_stored_memory_files():
     mem = get_mem()
     index_path = mem.wiki.wiki_dir / "_index.md"
     return {
         "wiki_index": _stored_memory_file(index_path) if index_path.exists() else None,
-        "labile_pages": [
-            _stored_memory_file(path) for path in sorted(mem.wiki.labile_dir.glob("*.md"))
-        ],
         "archived_pages": [
             _stored_memory_file(path) for path in sorted(mem.wiki.archive_dir.glob("*.md"))
         ],
@@ -346,11 +375,42 @@ async def flush_all():
     return await flush_idle_episodes(force=True)
 
 
-@router.post("/reconsolidation/resolve")
-async def resolve_reconsolidation(req: FlushRequest):
-    if not req.session_id:
-        raise HTTPException(status_code=400, detail="session_id is required")
-    result = await resolve_session_reconsolidation(req.session_id)
-    if result["status"] == "missing":
-        raise HTTPException(status_code=404, detail="Session not found")
-    return result
+def _review_service():
+    mem = get_mem()
+    return ReconsolidationReviewService(mem.artifacts, mem.dream_process.materializer)
+
+
+def _review_response(result):
+    return {
+        "proposal": asdict(result.proposal),
+        "pages_updated": result.pages_updated,
+        "pages_deleted": result.pages_deleted,
+    }
+
+
+@router.post("/reconsolidation/proposals/{proposal_id}/approve")
+async def approve_reconsolidation_proposal(
+    proposal_id: str, req: ProposalReviewRequest
+):
+    try:
+        return _review_response(
+            _review_service().approve(proposal_id, reviewer_note=req.reviewer_note)
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Reconsolidation proposal not found") from exc
+    except ReviewConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/reconsolidation/proposals/{proposal_id}/reject")
+async def reject_reconsolidation_proposal(
+    proposal_id: str, req: ProposalReviewRequest
+):
+    try:
+        return _review_response(
+            _review_service().reject(proposal_id, reviewer_note=req.reviewer_note)
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Reconsolidation proposal not found") from exc
+    except ReviewConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

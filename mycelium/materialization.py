@@ -26,6 +26,7 @@ class MaterializationResult:
     created_slugs: set[str]
     updated_slugs: set[str]
     claim_pages: dict[str, str]
+    deleted_slugs: set[str]
 
 
 class PageMaterializer:
@@ -60,7 +61,6 @@ class PageMaterializer:
                     date=now,
                     session_id="system",
                     trigger="dream",
-                    discrepancy_score=0.0,
                     reason="Initial deterministic claim projection",
                     previous_confidence=0.0,
                     new_confidence=page.confidence,
@@ -81,7 +81,6 @@ class PageMaterializer:
                 date=now,
                 session_id="system",
                 trigger="dream",
-                discrepancy_score=0.0,
                 reason="Regenerated deterministic claim projection",
                 previous_confidence=existing.confidence,
                 new_confidence=page.confidence,
@@ -89,14 +88,76 @@ class PageMaterializer:
             changed[slug] = page
             updated.add(slug)
 
-        return MaterializationResult(changed, created, updated, claim_pages)
+        return MaterializationResult(changed, created, updated, claim_pages, set())
 
     def persist(self, result: MaterializationResult) -> None:
         for page in result.changed_pages.values():
             self.wiki.save(page)
+        for slug in result.deleted_slugs:
+            self.wiki.delete(slug)
         for claim_id, page_slug in result.claim_pages.items():
             self.artifacts.set_claim_page(claim_id, page_slug)
-        self.rebuild_index(result.changed_pages)
+        self.rebuild_index(result.changed_pages, result.deleted_slugs)
+
+    def regenerate(self, page_slugs: set[str]) -> MaterializationResult:
+        """Regenerate explicit pages after a reviewed canonical-claim change."""
+        changed: dict[str, WikiPage] = {}
+        created: set[str] = set()
+        updated: set[str] = set()
+        deleted: set[str] = set()
+        now = datetime.now()
+        for slug in sorted(page_slugs):
+            claims = self._page_claims(slug, [])
+            existing = self.wiki.get(slug) if self.wiki.exists(slug) else None
+            if not claims:
+                if existing is not None:
+                    deleted.add(slug)
+                continue
+            page_type = "topic"
+            if existing is not None:
+                page_type = next(
+                    (
+                        tag.removeprefix("page-type-")
+                        for tag in existing.tags
+                        if tag.startswith("page-type-")
+                    ),
+                    "topic",
+                )
+            page = self._build_page(slug, page_type, claims, now)
+            if existing is None:
+                page.update_log = [UpdateLogEntry(
+                    version=1,
+                    date=now,
+                    session_id="system",
+                    trigger="reconsolidation",
+                    reason="Initial deterministic claim projection after review",
+                    previous_confidence=0.0,
+                    new_confidence=page.confidence,
+                )]
+                changed[slug] = page
+                created.add(slug)
+                continue
+            page.created = existing.created
+            page.title = existing.title or page.title
+            page.version = existing.version
+            page.update_log = list(existing.update_log)
+            if self._same_page(existing, page):
+                continue
+            page.version += 1
+            page.update_log.append(UpdateLogEntry(
+                version=page.version,
+                date=now,
+                session_id="system",
+                trigger="reconsolidation",
+                reason="Regenerated deterministic claim projection after review",
+                previous_confidence=existing.confidence,
+                new_confidence=page.confidence,
+            ))
+            changed[slug] = page
+            updated.add(slug)
+        result = MaterializationResult(changed, created, updated, {}, deleted)
+        self.persist(result)
+        return result
 
     def _page_claims(self, page_slug: str, incoming_ids: list[str]) -> list[MemoryClaim]:
         claims = {
@@ -137,17 +198,24 @@ class PageMaterializer:
         )
 
     def render(self, claims: list[MemoryClaim]) -> str:
+        pending_claim_ids = self.artifacts.pending_reconsolidation_claim_ids()
         projected = partition_claims(
             claims, main_claim_limit=self.config.dream.main_page_claim_limit
         )
-        lines = self._section("Memory", projected["main"])
-        lines.extend(self._section("Timeline", projected["timeline"], date_grouped=True))
-        lines.extend(self._section("Detailed Facts", projected["details"]))
+        lines = self._section("Memory", projected["main"], pending_claim_ids=pending_claim_ids)
+        lines.extend(self._section(
+            "Timeline", projected["timeline"], date_grouped=True,
+            pending_claim_ids=pending_claim_ids,
+        ))
+        lines.extend(self._section(
+            "Detailed Facts", projected["details"], pending_claim_ids=pending_claim_ids
+        ))
         lines.extend(self._section(
             "Interaction Archive",
             projected["interaction_archive"],
             date_grouped=True,
             interactions=True,
+            pending_claim_ids=pending_claim_ids,
         ))
         return "\n".join(lines).strip()
 
@@ -158,6 +226,7 @@ class PageMaterializer:
         *,
         date_grouped: bool = False,
         interactions: bool = False,
+        pending_claim_ids: set[str] | None = None,
     ) -> list[str]:
         if not items:
             return [f"## {title}"] if title == "Memory" else []
@@ -180,15 +249,25 @@ class PageMaterializer:
                     continue
                 seen.add(normalized)
                 qualifiers = compact_record_qualifiers(item, include_date=not date_grouped)
+                if pending_claim_ids and any(
+                    claim_id in pending_claim_ids for claim_id in item.claim_ids
+                ):
+                    qualifiers.append("pending reconciliation")
                 suffix = f" _({'; '.join(qualifiers)})_" if qualifiers else ""
                 rendered.append(f"- {text}{suffix}")
             if rendered:
                 lines.extend(["", f"### {heading}", *rendered])
         return lines
 
-    def rebuild_index(self, changed_pages: dict[str, WikiPage]) -> None:
+    def rebuild_index(
+        self,
+        changed_pages: dict[str, WikiPage],
+        deleted_slugs: set[str] | None = None,
+    ) -> None:
         pages = {page.slug: page for page in self.wiki.list_all()}
         pages.update(changed_pages)
+        for slug in deleted_slugs or set():
+            pages.pop(slug, None)
         lines = [
             "# Wiki Index",
             "",

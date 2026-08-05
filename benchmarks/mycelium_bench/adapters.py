@@ -152,7 +152,6 @@ class MyceliumMemorySystem:
         config_path: Path | None = None,
         context_budget_tokens: int = 32768,
         dream_policy: str = "per-batch",
-        reconsolidate: bool = False,
     ) -> None:
         self.run_dir = run_dir
         self.qa_client = qa_client
@@ -161,7 +160,6 @@ class MyceliumMemorySystem:
         self.config_path = config_path
         self.context_budget_tokens = context_budget_tokens
         self.dream_policy = dream_policy
-        self.reconsolidate = reconsolidate
         self.case_id = "uninitialized"
         self.mem: Mycelium | None = None
         self._encoded_batches = 0
@@ -182,7 +180,6 @@ class MyceliumMemorySystem:
             config_path=self.config_path,
             memory_profile="none",
         )
-        self.mem.config.reconsolidation.check_on_load = self.reconsolidate
         self._encoded_batches = 0
         self._dream_runs = 0
         self._memory_construction_seconds = 0.0
@@ -221,7 +218,6 @@ class MyceliumMemorySystem:
             loaded_pages = await mem.load_context(
                 question,
                 budget_tokens=self.context_budget_tokens,
-                reconsolidate=self.reconsolidate,
                 session_id=str(metadata.get("query_id") or f"{self.case_id}-query"),
             )
         except Exception as exc:
@@ -349,7 +345,6 @@ def build_memory_system(
     config_path: Path | None,
     context_budget_tokens: int,
     dream_policy: str,
-    reconsolidate: bool = False,
 ) -> MemorySystem:
     qa_client = OllamaQaClient(model=qa_model, url=ollama_url)
     if system_name == "mycelium":
@@ -361,7 +356,6 @@ def build_memory_system(
             config_path=config_path,
             context_budget_tokens=context_budget_tokens,
             dream_policy=dream_policy,
-            reconsolidate=reconsolidate,
         )
     if system_name == "full_wiki":
         return FullWikiMemorySystem(
@@ -372,7 +366,6 @@ def build_memory_system(
             config_path=config_path,
             context_budget_tokens=context_budget_tokens,
             dream_policy=dream_policy,
-            reconsolidate=reconsolidate,
         )
     if system_name == "null":
         return NullMemorySystem(qa_client)

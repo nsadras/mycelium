@@ -1,7 +1,9 @@
 # Mycelium — Developer Spec
 ## For use with Claude Code / Cursor
 
-This document is the implementation spec for **Mycelium** (internally: Mycelium), a neurobiologically-inspired agent memory library. Use it as the authoritative reference for all implementation decisions. When in doubt, refer back here.
+> **Historical document.** This implementation draft describes the retired page-lability architecture and is not authoritative. See [`../DESIGN.md`](../DESIGN.md) for the current design.
+
+This document records the original implementation specification for **Mycelium**, a neurobiologically-inspired agent memory library.
 
 ---
 

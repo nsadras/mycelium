@@ -36,6 +36,8 @@ DREAM_DISPOSITIONS = {
     "excluded_assistant",
     "routing_failed",
 }
+RECONSOLIDATION_RELATIONS = {"contradicts", "supersedes"}
+RECONSOLIDATION_STATUSES = {"pending", "approved", "rejected", "applied", "stale"}
 
 def _normalized_label(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
@@ -156,6 +158,39 @@ class DreamRunAudit:
     pages_updated: int
     claim_decisions: list[DreamClaimDecision] = field(default_factory=list)
     failures: list[dict[str, str]] = field(default_factory=list)
+    reconsolidation_proposal_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ReconsolidationProposal:
+    proposal_id: str
+    incoming_claim_id: str
+    target_claim_id: str
+    proposed_relation: str
+    explanation: str
+    confidence: float
+    dream_run_id: str
+    created_at: str
+    affected_page_slugs: list[str] = field(default_factory=list)
+    status: str = "pending"
+    reviewer_note: str | None = None
+    reviewed_at: str | None = None
+    applied_at: str | None = None
+    application_error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.incoming_claim_id == self.target_claim_id:
+            raise ValueError("A reconsolidation proposal must reference two distinct claims")
+        relation = str(self.proposed_relation).strip().lower()
+        if relation not in RECONSOLIDATION_RELATIONS:
+            raise ValueError(f"Unsupported reconsolidation relation: {relation}")
+        self.proposed_relation = relation
+        status = str(self.status).strip().lower()
+        if status not in RECONSOLIDATION_STATUSES:
+            raise ValueError(f"Unsupported reconsolidation status: {status}")
+        self.status = status
+        self.confidence = max(0.0, min(1.0, float(self.confidence)))
+        self.affected_page_slugs = sorted(set(self.affected_page_slugs))
 
 
 @dataclass
@@ -196,11 +231,13 @@ class ArtifactStore:
         self.episodes_dir = root / "episodes"
         self.claims_dir = root / "claims"
         self.dream_runs_dir = root / "dream-runs"
+        self.reconsolidation_proposals_dir = root / "reconsolidation-proposals"
         for directory in (
             self.sources_dir,
             self.episodes_dir,
             self.claims_dir,
             self.dream_runs_dir,
+            self.reconsolidation_proposals_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -248,6 +285,48 @@ class ArtifactStore:
             for path in sorted(self.dream_runs_dir.glob("*.json"), reverse=True)
         ]
 
+    def save_reconsolidation_proposal(self, proposal: ReconsolidationProposal) -> None:
+        _atomic_json(
+            self.reconsolidation_proposals_dir / f"{_safe_id(proposal.proposal_id)}.json",
+            asdict(proposal),
+        )
+
+    def get_reconsolidation_proposal(self, proposal_id: str) -> ReconsolidationProposal:
+        return ReconsolidationProposal(**self._read(
+            self.reconsolidation_proposals_dir / f"{_safe_id(proposal_id)}.json"
+        ))
+
+    def list_reconsolidation_proposals(
+        self, *, status: str | None = None
+    ) -> list[ReconsolidationProposal]:
+        proposals = [
+            self.get_reconsolidation_proposal(path.stem)
+            for path in sorted(
+                self.reconsolidation_proposals_dir.glob("*.json"), reverse=True
+            )
+        ]
+        return [
+            proposal for proposal in proposals
+            if status is None or proposal.status == status
+        ]
+
+    def find_reconsolidation_proposal(
+        self, incoming_claim_id: str, target_claim_id: str, relation: str
+    ) -> ReconsolidationProposal | None:
+        return next((
+            proposal for proposal in self.list_reconsolidation_proposals()
+            if proposal.incoming_claim_id == incoming_claim_id
+            and proposal.target_claim_id == target_claim_id
+            and proposal.proposed_relation == relation
+        ), None)
+
+    def pending_reconsolidation_claim_ids(self) -> set[str]:
+        return {
+            claim_id
+            for proposal in self.list_reconsolidation_proposals(status="pending")
+            for claim_id in (proposal.incoming_claim_id, proposal.target_claim_id)
+        }
+
     def persist_dream_audit(self, run: DreamRunAudit) -> None:
         """Commit current claim dispositions, then write the immutable run record."""
         decided_at = run.completed_at
@@ -268,12 +347,19 @@ class ArtifactStore:
 
     def clear(self) -> dict[str, int]:
         """Delete all derived artifacts while leaving canonical UI conversations untouched."""
-        counts = {"sources": 0, "episodes": 0, "claims": 0, "dream_runs": 0}
+        counts = {
+            "sources": 0,
+            "episodes": 0,
+            "claims": 0,
+            "dream_runs": 0,
+            "reconsolidation_proposals": 0,
+        }
         for label, directory in (
             ("sources", self.sources_dir),
             ("episodes", self.episodes_dir),
             ("claims", self.claims_dir),
             ("dream_runs", self.dream_runs_dir),
+            ("reconsolidation_proposals", self.reconsolidation_proposals_dir),
         ):
             for path in directory.glob("*.json"):
                 path.unlink()
@@ -536,13 +622,6 @@ class ClaimReconciler:
                 existing.facets.update(incoming.facets)
                 self.store.save_claim(existing)
                 return existing
-        if incoming.slot and incoming_entities:
-            for existing in current:
-                if existing.slot == incoming.slot and self._entities(existing) == incoming_entities:
-                    existing.status = "superseded"
-                    existing.links.append({"relation": "superseded_by", "target": incoming.claim_id})
-                    incoming.links.append({"relation": "supersedes", "target": existing.claim_id})
-                    self.store.save_claim(existing)
         self.store.save_claim(incoming)
         return incoming
 

@@ -1,89 +1,157 @@
-import pytest
-from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
+from unittest.mock import AsyncMock
 
-from mycelium.reconsolidation import ReconsolidationEngine
-from mycelium.models import WikiPage, PredictionError
+import pytest
+
+from mycelium.artifacts import (
+    ArtifactStore,
+    ClaimProvenance,
+    MemoryClaim,
+    ReconsolidationProposal,
+)
 from mycelium.config import Config
+from mycelium.consolidation import ClaimRoute
+from mycelium.materialization import PageMaterializer
+from mycelium.reconsolidation import (
+    ClaimReconsolidator,
+    ReconsolidationReviewService,
+    ReviewConflictError,
+)
+from mycelium.store import WikiStore
 
-@pytest.fixture
-def mock_llm():
-    return AsyncMock()
 
-@pytest.fixture
-def mock_wiki():
-    return MagicMock()
-
-@pytest.fixture
-def engine(mock_llm, mock_wiki):
-    return ReconsolidationEngine(mock_llm, mock_wiki, Config.defaults())
-
-@pytest.fixture
-def sample_page():
-    return WikiPage(
-        slug="test-page",
-        title="Test Page",
-        content="Old belief",
-        created=datetime.now(),
-        last_updated=datetime.now(),
-        version=1,
-        confidence=0.9,
-        importance=0.5
+def claim(
+    claim_id: str,
+    text: str,
+    *,
+    page: str = "user-profile",
+    slot: str | None = "favorite_drink",
+    recorded_at: str = "2026-08-01T12:00:00",
+) -> MemoryClaim:
+    return MemoryClaim(
+        claim_id=claim_id,
+        text=text,
+        kind="preference",
+        about=[{"entity": "user"}],
+        provenance=[ClaimProvenance(
+            source_id=f"source-{claim_id}",
+            segment_ids=[f"source-{claim_id}#seg-0001"],
+            raw_log_entry_id=f"2026-08-01#session-{claim_id}",
+            speaker="user",
+        )],
+        recorded_at=recorded_at,
+        slot=slot,
+        page_slugs=[page] if page else [],
+        claim_type="preference",
+        predicate="prefers",
     )
 
-@pytest.mark.asyncio
-async def test_check(engine, mock_llm, sample_page):
-    mock_llm.call_structured.return_value = {
-        "conflict_type": "partial",
-        "discrepancy_score": 0.45,
-        "explanation": "Context says something new.",
-        "suggested_update": "Add new thing."
-    }
-    
-    error = await engine.check(sample_page, "New context")
-    
-    assert error.conflict_type == "partial"
-    assert error.discrepancy_score == 0.45
-    assert error.explanation == "Context says something new."
-    assert error.suggested_update == "Add new thing."
-    mock_llm.call_structured.assert_called_once()
 
 @pytest.mark.asyncio
-async def test_flag_and_accumulate(engine, mock_wiki, sample_page):
-    await engine.flag_labile(sample_page, "ses-123")
-    mock_wiki.mark_labile.assert_called_once_with("test-page", "ses-123")
-    
-    error = PredictionError("partial", 0.45, "expl", "sugg")
-    await engine.accumulate_signal("test-page", "ses-123", error)
-    
-    assert engine._signals[("test-page", "ses-123")] == [error]
+async def test_contradiction_creates_durable_review_proposal(tmp_path):
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    target = claim("old", "The user prefers tea.")
+    incoming = claim(
+        "new", "The user dislikes tea.", page="", recorded_at="2026-08-05T12:00:00"
+    )
+    artifacts.save_claim(target)
+    artifacts.save_claim(incoming)
+    llm = AsyncMock()
+    llm.call_structured.return_value = {"decisions": [{
+        "incoming_alias": "N001",
+        "relation": "contradicts",
+        "target_alias": "E001",
+        "explanation": "The preferences conflict.",
+        "confidence": 0.91,
+    }]}
+
+    result = await ClaimReconsolidator(llm, artifacts).analyze(
+        [ClaimRoute("new", "user-profile", "entity", "2026-08-05#session-new")],
+        current_claim_ids={"new"},
+        dream_run_id="dream-1",
+    )
+
+    assert result.failures == []
+    assert len(result.proposals) == 1
+    assert result.proposals[0].target_claim_id == "old"
+    assert result.proposals[0].proposed_relation == "contradicts"
+    assert artifacts.get_claim("old").status == "active"
+    assert artifacts.get_claim("new").status == "active"
+
 
 @pytest.mark.asyncio
-async def test_resolve_labile_pages(engine, mock_llm, mock_wiki, sample_page):
-    # Setup state
-    error = PredictionError("partial", 0.45, "expl", "sugg")
-    engine._signals[("test-page", "ses-123")] = [error]
-    mock_wiki.exists.return_value = True
-    mock_wiki.get.return_value = sample_page
-    
-    mock_llm.call_structured.return_value = {
-        "title": "New Title",
-        "content": "New belief",
-        "tags": ["new"],
-        "confidence": 0.95,
-        "importance": 0.6,
-        "update_reason": "Updated due to new context"
-    }
-    
-    resolved = await engine.resolve_labile_pages("ses-123")
-    
-    assert resolved == ["test-page"]
-    assert sample_page.title == "New Title"
-    assert sample_page.content == "New belief"
-    assert sample_page.version == 2
-    assert len(sample_page.update_log) == 1
-    assert sample_page.update_log[0].reason == "Updated due to new context"
-    
-    mock_wiki.save.assert_called_once_with(sample_page)
-    mock_wiki.resolve_labile.assert_called_once_with("test-page", "ses-123")
-    assert ("test-page", "ses-123") not in engine._signals
+async def test_support_is_safe_automatic_relation(tmp_path):
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    artifacts.save_claim(claim("old", "The user prefers tea."))
+    artifacts.save_claim(claim("new", "Tea is the user's preferred drink.", page=""))
+    llm = AsyncMock()
+    llm.call_structured.return_value = {"decisions": [{
+        "incoming_alias": "N001",
+        "relation": "supports",
+        "target_alias": "E001",
+        "explanation": "Independent support.",
+        "confidence": 0.88,
+    }]}
+
+    result = await ClaimReconsolidator(llm, artifacts).analyze(
+        [ClaimRoute("new", "user-profile", "entity", "log-new")],
+        current_claim_ids={"new"},
+        dream_run_id="dream-1",
+    )
+
+    assert [(item.incoming_claim_id, item.target_claim_id) for item in result.supporting_relations] == [("new", "old")]
+    assert result.proposals == []
+
+
+def review_setup(tmp_path, relation: str):
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    wiki = WikiStore(tmp_path / "wiki")
+    target = claim("old", "The user prefers tea.")
+    incoming = claim("new", "The user prefers coffee.")
+    artifacts.save_claim(target)
+    artifacts.save_claim(incoming)
+    materializer = PageMaterializer(wiki, artifacts, Config.defaults())
+    materializer.regenerate({"user-profile"})
+    proposal = ReconsolidationProposal(
+        proposal_id="recon-1",
+        incoming_claim_id="new",
+        target_claim_id="old",
+        proposed_relation=relation,
+        explanation="The newer preference may replace the old one.",
+        confidence=0.9,
+        dream_run_id="dream-1",
+        created_at=datetime.now().astimezone().isoformat(),
+        affected_page_slugs=["user-profile"],
+    )
+    artifacts.save_reconsolidation_proposal(proposal)
+    materializer.regenerate({"user-profile"})
+    return artifacts, wiki, ReconsolidationReviewService(artifacts, materializer)
+
+
+def test_approve_supersession_updates_claims_and_projection(tmp_path):
+    artifacts, wiki, service = review_setup(tmp_path, "supersedes")
+    assert "pending reconciliation" in wiki.get("user-profile").content
+
+    result = service.approve("recon-1", reviewer_note="Confirmed by user")
+
+    assert result.proposal.status == "applied"
+    assert artifacts.get_claim("old").status == "superseded"
+    assert artifacts.get_claim("new").links == [{"relation": "supersedes", "target": "old"}]
+    page = wiki.get("user-profile")
+    assert "prefers coffee" in page.content
+    assert "prefers tea" not in page.content
+    assert "pending reconciliation" not in page.content
+    assert service.approve("recon-1").proposal.status == "applied"
+
+
+def test_reject_leaves_claims_active_and_removes_pending_annotation(tmp_path):
+    artifacts, wiki, service = review_setup(tmp_path, "contradicts")
+
+    result = service.reject("recon-1")
+
+    assert result.proposal.status == "rejected"
+    assert artifacts.get_claim("old").status == "active"
+    assert artifacts.get_claim("new").status == "active"
+    assert "pending reconciliation" not in wiki.get("user-profile").content
+    with pytest.raises(ReviewConflictError):
+        service.approve("recon-1")

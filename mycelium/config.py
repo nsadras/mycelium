@@ -11,11 +11,6 @@ class LLMConfig:
     context_window_tokens: int = 32768
 
 @dataclass
-class ReconsolidationConfig:
-    lability_threshold: float = 0.35
-    check_on_load: bool = True
-
-@dataclass
 class DreamConfig:
     main_page_claim_limit: int = 18
 
@@ -23,7 +18,6 @@ class DreamConfig:
 class Config:
     context_budget_tokens: int = 32768
     llm: LLMConfig = field(default_factory=LLMConfig)
-    reconsolidation: ReconsolidationConfig = field(default_factory=ReconsolidationConfig)
     dream: DreamConfig = field(default_factory=DreamConfig)
 
     @classmethod
@@ -46,12 +40,6 @@ class Config:
             context_window_tokens=int(llm_data.get('context_window_tokens', 32768)),
         )
         
-        recon_data = data.get('reconsolidation', {})
-        reconsolidation = ReconsolidationConfig(
-            lability_threshold=recon_data.get('lability_threshold', 0.35),
-            check_on_load=recon_data.get('check_on_load', True)
-        )
-        
         dream_data = data.get('dream', {})
         dream = DreamConfig(
             main_page_claim_limit=int(dream_data.get('main_page_claim_limit', 18)),
@@ -60,7 +48,6 @@ class Config:
         return cls(
             context_budget_tokens=context_budget_tokens,
             llm=llm,
-            reconsolidation=reconsolidation,
             dream=dream,
         )
 

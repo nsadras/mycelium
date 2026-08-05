@@ -27,18 +27,27 @@ SOURCE-GROUNDED CLAIMS:
     return system, user
 
 
-def prediction_error_prompt(wiki_page: str, current_context: str) -> tuple[str, str]:
-    system = """Assess whether current context makes a retrieved memory page inaccurate or incomplete.
-Return JSON with conflict_type (none/additive/partial/major), discrepancy_score from 0 to 1,
-explanation, and suggested_update. Do not treat merely related information as contradiction."""
-    return system, f"STORED PAGE:\n{wiki_page}\n\nCURRENT CONTEXT:\n{current_context}"
+def claim_reconsolidation_prompt(
+    incoming_alias: str,
+    incoming_claim: str,
+    candidates: str,
+) -> tuple[str, str]:
+    system = """Compare one new source-grounded claim with existing canonical memory claims.
 
+Return exactly one decision for the supplied incoming alias. Choose:
+- additive: the new claim adds independent information;
+- supports: it independently supports the same fact as one existing claim;
+- contradicts: both claims cannot be true as stated, but the new claim is not clearly a replacement;
+- supersedes: the new claim is an explicit correction or a newer value of the same replaceable state.
 
-def reconsolidation_rewrite_prompt(original_page: str, update_signals: str) -> tuple[str, str]:
-    system = """Rewrite a flagged wiki page using the supplied update signals. Preserve grounded facts,
-resolve actual contradictions explicitly, and do not invent information. Return JSON with title,
-content, and confidence only."""
-    return system, f"ORIGINAL PAGE:\n{original_page}\n\nUPDATE SIGNALS:\n{update_signals}"
+For additive, target_alias must be empty. For every other relation, copy exactly one supplied existing
+alias. Do not infer a conflict merely from different wording, dates, or adjacent facts. Supersedes
+requires clear replacement semantics, not simple recency. Return JSON only."""
+    user = (
+        f"INCOMING {incoming_alias}:\n{incoming_claim}\n\n"
+        f"EXISTING CANDIDATES:\n{candidates}"
+    )
+    return system, user
 
 
 def routing_prompt(index_content: str, query: str, budget_tokens: int) -> tuple[str, str]:

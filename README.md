@@ -6,24 +6,24 @@
 
 Mycelium is a plaintext memory system for local AI agents. It keeps the original conversation as a durable record, turns useful information into an organized Markdown wiki, and brings the relevant parts back when they are needed later.
 
-It is designed for users who want a local assistant that can build context over time without hiding its memory in an opaque database. You can chat with it through the included web app, inspect what it remembers, edit its knowledge directly, or add the Python library to another agent.
+It is designed for users who want a local assistant that can build context over time without hiding its memory in an opaque database. You can chat with it through the included web app, inspect the complete evidence-to-claim pipeline, review proposed memory updates, or add the Python library to another agent.
 
 ## Why use it?
 
 Most chat assistants either forget everything between sessions or require the entire conversation history to be sent again. Mycelium takes a different approach:
 
 - **Memory persists across conversations.** Projects, preferences, decisions, research, and prior discussions can carry into a new session.
-- **Everything stays inspectable.** Raw experiences and consolidated knowledge are stored as ordinary Markdown files.
+- **Everything stays inspectable.** Raw experiences and generated wiki views are Markdown; source documents, episode manifests, claims, and audits are JSON.
 - **Local models do the work.** Chat, retrieval, and memory consolidation run through Ollama on your machine.
-- **You stay in control.** The UI shows the memories used for a response and lets you browse or edit the wiki and source logs.
+- **You stay in control.** The UI shows the memories used for a response and requires review before contradictions or replacements change canonical claims.
 
 ## Features
 
 - Multi-session chat with a local Ollama model
 - Automatic retrieval of relevant long-term memories
 - Plain-text episodic logs and an Obsidian-compatible Markdown wiki
-- Reconsolidation when a conversation contradicts or extends an existing memory
-- Memory reinforcement and decay based on use, confidence, and importance
+- Evidence-triggered, claim-level reconsolidation with human review
+- Deterministic, read-only wiki projections with exact source provenance
 - Meeting ingestion pipeline - upload meeting audio to have it transcribed, diarized, and consolidated into the memory system
 - A Python API for adding Mycelium memory to other agents and frameworks
 
@@ -64,24 +64,31 @@ Open [http://localhost:5173](http://localhost:5173) to use the app. The FastAPI 
 
 ## Using the app
 
-The UI is organized around four main areas:
+The UI is organized around five main areas:
 
 | Area | What it is for |
 | --- | --- |
 | **Chat** | Create, rename, resume, and continue conversations. Each answer can show which memory pages were loaded and which tools were called. |
-| **Wiki** | Browse and edit the durable knowledge Mycelium has consolidated from earlier experiences. |
+| **Memory** | Inspect sources, segments, claims, Dream audits, and pending reconciliation proposals. |
+| **Wiki** | Browse the read-only views deterministically generated from canonical claims. |
 | **Logs** | Inspect the original episodic records that serve as source evidence for the wiki. |
 | **Engram** | Upload meeting audio, review the transcript and speakers, then save the finished meeting into memory. |
 
 A typical workflow is simple:
 
 1. Start a chat and use the assistant normally.
-2. Let Mycelium flush the conversation automatically, or use **Flush Current** to save the active episode immediately.
-3. Run **Dream Pass** to turn useful details from raw logs into organized wiki pages. A scheduled dream pass also runs every 30 minutes while the backend is active.
+2. Use **Flush Current**, **Flush Idle**, or **Flush All** to encode an episode into source-grounded claims.
+3. Run **Dream Pass** to route useful claims and regenerate organized wiki pages.
 4. Start another chat about the same subject. Mycelium retrieves relevant pages and includes them in the assistant's context.
-5. Open **Wiki** or **Logs** whenever you want to see, correct, or trace what was remembered.
+5. Open **Memory** to trace what was remembered and approve or reject proposed contradictions and replacements.
 
-The sidebar also provides manual controls for flushing episodes, resolving updated memories, running memory decay, and clearing the development store.
+The sidebar provides manual controls for flushing episodes, running Dream, and clearing the development store. Memory work is not scheduled automatically.
+
+### Memory lifecycle
+
+Encoding preserves the complete raw transcript, splits it into exact source segments, and extracts atomic claims in one logical pass. Each claim cites its supporting segment IDs. Dream routes every admitted claim exactly once and generates affected wiki pages deterministically from active claims.
+
+When a new claim may update existing memory, Dream reactivates a bounded set of related claims. Additive information routes normally and supporting relationships are linked automatically. Contradictions and supersessions create durable proposals in the Memory Inspector. Both claims remain visible with a pending marker until review. Approval immediately updates canonical claim links or status and regenerates every affected page; rejection keeps both claims active and unrelated. Retrieval itself is read-only.
 
 ### Web search
 
@@ -163,5 +170,10 @@ context_window_tokens = 32768
 context_budget_tokens = 32768
 ```
 
-The default memory store is `./mycelium_store`. Because it consists primarily of Markdown and JSON, it can be inspected with normal text tools or opened as a wiki outside the app. For ordinary edits, the UI is preferable because it also maintains version and memory-state metadata.
+The default memory store is `./mycelium_store`. Because it consists primarily of Markdown and JSON, it can be inspected with normal text tools or opened as a wiki outside the app. Raw logs and claim artifacts are canonical; wiki Markdown is a generated view and should not be edited directly.
 
+Stores created by older raw, hybrid, or page-rewrite reconsolidation pipelines are not migrated. Clear and re-encode them before using this version.
+
+## License
+
+Mycelium is available under the MIT License. See [LICENSE](LICENSE).

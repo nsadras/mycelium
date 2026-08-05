@@ -388,32 +388,6 @@ export default function MycoAvatar({ activity }: AvatarProps) {
             {/* Tiny pencil */}
             <polygon points="77,101 73,100 74,103" fill="#fbbf24" />
           </g>
-        ) : activity === 'reconsolidating' ? (
-          // Holding glowing wiki page/book
-          <g>
-            {/* Left normal arm (chubby, overlapped) */}
-            <path
-              d="M 54,91 C 38,91 34,97 34,103 C 34,110 40,111 54,107 Z"
-              fill="url(#bodyGrad)"
-            />
-
-            {/* Glowing book */}
-            <g transform="translate(2, 4)">
-              {/* Book */}
-              <rect x="114" y="62" width="20" height="26" rx="2" fill="#3d5248" stroke="#faf8f2" strokeWidth="1" />
-              {/* Gold star symbol */}
-              <polygon points="124,72 125,75 128,75 126,77 127,80 124,78 121,80 122,77 120,75 123,75" fill="#fbbf24" />
-              {/* Sparkles */}
-              <path d="M 110,58 L 111.5,60.5 L 114,60.5 L 112,62 L 113,64.5 L 110,63 L 107,64.5 L 108,62 L 106,60.5 L 108.5,60.5 Z" fill="#fbbf24" opacity="0.8" style={{ animation: "sparkle-glow 1.5s infinite alternate" }} />
-              <path d="M 134,56 L 135,58 L 137,58 L 135,59.5 L 136,62 L 134,60.5 L 132,62 L 133,59.5 L 131,58 L 133,58 Z" fill="#fbbf24" opacity="0.8" style={{ animation: "sparkle-glow 1.5s infinite alternate 0.75s" }} />
-            </g>
-
-            {/* Right arm holding the book up (chubby, overlapped) */}
-            <path
-              d="M 106,91 C 120,78 128,74 130,78 C 130,83 120,95 106,95 Z"
-              fill="url(#bodyGrad)"
-            />
-          </g>
         ) : activity === 'wiki' ? (
           // Wiki Reading Pose: Holding open book
           <g>

@@ -41,7 +41,7 @@ async def test_entity_aware_retrieval_fallback(temp_mycelium):
     temp_mycelium.llm.call_structured.return_value = []
     
     # Query mentions "Gina" but not "Jon"
-    loaded = await temp_mycelium.load_context(query="When did Gina get her tattoo?", reconsolidate=False)
+    loaded = await temp_mycelium.load_context(query="When did Gina get her tattoo?")
     
     # The entity fallback should match "Gina" in query against "person-gina" slug component or "Gina" in title,
     # loading person-gina but NOT person-jon
@@ -65,7 +65,7 @@ async def test_entity_fallback_does_not_expand_every_derived_page(temp_mycelium)
     temp_mycelium.llm.call_structured.return_value = []
 
     loaded = await temp_mycelium.load_context(
-        query="What does Gina enjoy?", reconsolidate=False
+        query="What does Gina enjoy?"
     )
 
     assert [page.slug for page in loaded] == ["person-gina"]

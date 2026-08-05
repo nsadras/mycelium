@@ -1,7 +1,7 @@
 from dataclasses import fields
 
 from engram.config import EngramConfig
-from mycelium.config import Config, DreamConfig, LLMConfig, ReconsolidationConfig
+from mycelium.config import Config, DreamConfig, LLMConfig
 
 
 def test_config_surface_contains_only_runtime_settings():
@@ -12,15 +12,10 @@ def test_config_surface_contains_only_runtime_settings():
         "timeout_seconds",
         "context_window_tokens",
     }
-    assert {field.name for field in fields(ReconsolidationConfig)} == {
-        "lability_threshold",
-        "check_on_load",
-    }
     assert {field.name for field in fields(DreamConfig)} == {"main_page_claim_limit"}
     assert {field.name for field in fields(Config)} == {
         "context_budget_tokens",
         "llm",
-        "reconsolidation",
         "dream",
     }
 

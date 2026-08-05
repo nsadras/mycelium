@@ -11,20 +11,19 @@ import SporeBackground from './components/SporeBackground';
 import { idleStatus, type AssistantActivity, type AssistantStatus } from './lib/assistantStatus';
 
 const memoryOperationStatus: Record<
-  'flush-current' | 'flush-idle' | 'flush-all' | 'reconsolidate-current' | 'dream' | 'clear-memory' | 'clear-wiki',
+  'flush-current' | 'flush-idle' | 'flush-all' | 'dream' | 'clear-memory' | 'clear-wiki',
   AssistantStatus
 > = {
   'flush-current': { activity: 'flushing', label: 'Flushing', detail: 'Encoding selected episode' },
   'flush-idle': { activity: 'flushing', label: 'Flushing', detail: 'Encoding idle episodes' },
   'flush-all': { activity: 'flushing', label: 'Flushing', detail: 'Encoding all episodes' },
-  'reconsolidate-current': { activity: 'reconsolidating', label: 'Resolving', detail: 'Applying memory updates' },
   dream: { activity: 'dreaming', label: 'Dreaming', detail: 'Consolidating logs' },
   'clear-memory': { activity: 'flushing', label: 'Clearing', detail: 'Resetting memory store' },
   'clear-wiki': { activity: 'flushing', label: 'Clearing Wiki', detail: 'Resetting wiki index' },
 };
 
 function isMemoryActivity(activity: AssistantActivity) {
-  return activity === 'flushing' || activity === 'dreaming' || activity === 'reconsolidating';
+  return activity === 'flushing' || activity === 'dreaming';
 }
 
 function App() {
@@ -82,7 +81,7 @@ function App() {
   };
 
   const handleMemoryOperation = async (
-    operation: 'flush-current' | 'flush-idle' | 'flush-all' | 'reconsolidate-current' | 'dream' | 'clear-memory' | 'clear-wiki'
+    operation: 'flush-current' | 'flush-idle' | 'flush-all' | 'dream' | 'clear-memory' | 'clear-wiki'
   ) => {
     let shouldResetStatus = true;
     try {
@@ -103,11 +102,6 @@ function App() {
           alert('Select a chat session first.');
           return;
         }
-      } else if (operation === 'reconsolidate-current') {
-        if (!selectedSessionId) {
-          alert('Select a chat session first.');
-          return;
-        }
       }
 
       setRunningMemoryOperation(operation);
@@ -119,8 +113,6 @@ function App() {
         res = await api.post('/memory/episodes/flush-idle', { idle_minutes: 20, max_turns: 25 });
       } else if (operation === 'flush-all') {
         res = await api.post('/memory/episodes/flush-all');
-      } else if (operation === 'reconsolidate-current') {
-        res = await api.post('/memory/reconsolidation/resolve', { session_id: selectedSessionId! });
       } else if (operation === 'clear-memory') {
         res = await api.post('/memory/dev/clear');
       } else if (operation === 'clear-wiki') {

@@ -275,11 +275,103 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
 
     _, source_two = add_source(logs, artifacts, suffix="second")
     add_claim(artifacts, source_two, claim_id="claim-second", text="The user prefers coffee.")
-    llm.call_structured.return_value = {"routes": [route("C001", "stable-page")]}
+    llm.call_structured.side_effect = [
+        {"routes": [route("C001", "stable-page")]},
+        {"decisions": [{
+            "incoming_alias": "N001",
+            "relation": "additive",
+            "target_alias": "",
+            "explanation": "A separate preference.",
+            "confidence": 0.9,
+        }]},
+    ]
     report = await dream.run()
 
     assert report.pages_updated == 1
     page = wiki.get("stable-page")
     assert "prefers tea" in page.content
     assert "prefers coffee" in page.content
-    assert llm.call_structured.await_count == 2
+    assert llm.call_structured.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_dream_persists_contradiction_proposal_and_marks_both_claims_pending(tmp_path):
+    dream, llm, wiki, logs, artifacts = build_dream(
+        tmp_path, llm_response={"routes": [route("C001", "user-profile", "entity")]}
+    )
+    _, first_source = add_source(logs, artifacts, suffix="first")
+    add_claim(
+        artifacts,
+        first_source,
+        claim_id="claim-old",
+        text="The user prefers tea.",
+    )
+    await dream.run()
+
+    second_entry, second_source = add_source(logs, artifacts, suffix="second")
+    add_claim(
+        artifacts,
+        second_source,
+        claim_id="claim-new",
+        text="The user dislikes tea.",
+    )
+    llm.call_structured.side_effect = [
+        {"routes": [route("C001", "user-profile", "entity")]},
+        {"decisions": [{
+            "incoming_alias": "N001",
+            "relation": "contradicts",
+            "target_alias": "E001",
+            "explanation": "The new preference conflicts with the existing preference.",
+            "confidence": 0.94,
+        }]},
+    ]
+
+    report = await dream.run()
+
+    assert report.completed_source_ids == [second_entry.entry_id]
+    assert len(report.reconsolidation_proposal_ids) == 1
+    proposal = artifacts.get_reconsolidation_proposal(
+        report.reconsolidation_proposal_ids[0]
+    )
+    assert proposal.status == "pending"
+    assert proposal.incoming_claim_id == "claim-new"
+    assert proposal.target_claim_id == "claim-old"
+    assert proposal.proposed_relation == "contradicts"
+    assert proposal.affected_page_slugs == ["user-profile"]
+    assert artifacts.get_claim("claim-old").status == "active"
+    assert artifacts.get_claim("claim-new").status == "active"
+    page = wiki.get("user-profile")
+    assert "prefers tea" in page.content
+    assert "dislikes tea" in page.content
+    assert page.content.count("pending reconciliation") == 2
+
+
+@pytest.mark.asyncio
+async def test_dream_fails_source_closed_when_reconsolidation_response_is_invalid(tmp_path):
+    dream, llm, wiki, logs, artifacts = build_dream(
+        tmp_path, llm_response={"routes": [route("C001", "user-profile", "entity")]}
+    )
+    _, first_source = add_source(logs, artifacts, suffix="first")
+    add_claim(artifacts, first_source, claim_id="claim-old")
+    await dream.run()
+
+    second_entry, second_source = add_source(logs, artifacts, suffix="second")
+    add_claim(
+        artifacts,
+        second_source,
+        claim_id="claim-new",
+        text="The user no longer prefers deterministic memory views.",
+    )
+    llm.call_structured.side_effect = [
+        {"routes": [route("C001", "user-profile", "entity")]},
+        {"decisions": []},
+    ]
+
+    report = await dream.run()
+
+    assert report.completed_source_ids == []
+    assert report.pending_source_ids == [second_entry.entry_id]
+    assert report.failures[0]["stage"] == "reconsolidation"
+    assert logs.get(second_entry.entry_id).consolidated is False
+    assert "no longer" not in wiki.get("user-profile").content
+    assert artifacts.list_reconsolidation_proposals() == []

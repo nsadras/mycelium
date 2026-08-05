@@ -22,7 +22,6 @@ def test_wiki_store_save_and_get(tmp_path):
                 date=datetime(2026, 5, 10, 10, 0, 0),
                 session_id="ses-123",
                 trigger="manual",
-                discrepancy_score=0.0,
                 reason="Initial creation",
                 previous_confidence=0.0,
                 new_confidence=0.9
@@ -64,21 +63,13 @@ def test_wiki_store_archive(tmp_path):
     assert not store.exists("archive-me")
     assert (tmp_path / "wiki" / "_archive" / "archive-me.md").exists()
 
-def test_wiki_store_labile(tmp_path):
+def test_wiki_store_delete(tmp_path):
     store = WikiStore(tmp_path / "wiki")
-    store.save(WikiPage(slug="labile-page", title="L", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
-    
-    store.mark_labile("labile-page", "ses-123")
-    assert (tmp_path / "labile" / "labile-page.ses-123.md").exists()
-    page = store.get("labile-page")
-    assert page.labile
-    assert page.labile_session == "ses-123"
-    
-    store.resolve_labile("labile-page", "ses-123")
-    assert not (tmp_path / "labile" / "labile-page.ses-123.md").exists()
-    page = store.get("labile-page")
-    assert not page.labile
-    assert page.labile_session is None
+    store.save(WikiPage(slug="delete-page", title="L", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
+
+    store.delete("delete-page")
+
+    assert not store.exists("delete-page")
 
 def test_log_store_append_and_get(tmp_path):
     store = LogStore(tmp_path / "logs")

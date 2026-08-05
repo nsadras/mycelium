@@ -165,6 +165,24 @@ export interface DreamRunArtifact {
   pages_updated: number;
   claim_decisions: DreamClaimDecisionArtifact[];
   failures: Record<string, string>[];
+  reconsolidation_proposal_ids: string[];
+}
+
+export interface ReconsolidationProposalArtifact {
+  proposal_id: string;
+  incoming_claim_id: string;
+  target_claim_id: string;
+  proposed_relation: 'contradicts' | 'supersedes';
+  explanation: string;
+  confidence: number;
+  dream_run_id: string;
+  created_at: string;
+  affected_page_slugs: string[];
+  status: 'pending' | 'approved' | 'rejected' | 'applied' | 'stale';
+  reviewer_note?: string | null;
+  reviewed_at?: string | null;
+  applied_at?: string | null;
+  application_error?: string | null;
 }
 
 export interface ArtifactCoverage {
@@ -204,7 +222,7 @@ export interface ArtifactOverview {
     runs: number;
     claim_dispositions: Record<string, number>;
   };
-  labile_pages: number;
+  reconsolidation_proposals: Record<string, number>;
   archived_pages: number;
 }
 
@@ -215,7 +233,6 @@ export interface StoredMemoryFile {
 
 export interface StoredMemoryFiles {
   wiki_index?: StoredMemoryFile | null;
-  labile_pages: StoredMemoryFile[];
   archived_pages: StoredMemoryFile[];
 }
 

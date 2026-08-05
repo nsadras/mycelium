@@ -23,7 +23,6 @@ class Mycelium:
         ollama_model: str = 'gemma3:12b',
         ollama_url: str = 'http://localhost:11434',
         context_budget_tokens: int = 32768,
-        lability_threshold: float = 0.35,
         config_path: str | Path | None = None,
         memory_profile: Literal["user", "none"] = "user",
     ):
@@ -36,7 +35,6 @@ class Mycelium:
             self.config.llm.model = ollama_model
             self.config.llm.url = ollama_url
             self.config.context_budget_tokens = context_budget_tokens
-            self.config.reconsolidation.lability_threshold = lability_threshold
 
         self._init_store()
             
@@ -51,8 +49,6 @@ class Mycelium:
             timeout=self.config.llm.timeout_seconds,
             context_window_tokens=self.config.llm.context_window_tokens,
         )
-        from mycelium.reconsolidation import ReconsolidationEngine
-        self.reconsolidation_engine = ReconsolidationEngine(self.llm, self._wiki, self.config)
         self.encoder = Encoder(self.llm, self._log_store, self.config, self.artifacts)
         
         from mycelium.dream import DreamProcess
@@ -115,7 +111,6 @@ class Mycelium:
         self.store_path.mkdir(parents=True, exist_ok=True)
         (self.store_path / "wiki").mkdir(exist_ok=True)
         (self.store_path / "logs").mkdir(exist_ok=True)
-        (self.store_path / "labile").mkdir(exist_ok=True)
         (self.store_path / "artifacts").mkdir(exist_ok=True)
         (self.store_path / "wiki" / "_archive").mkdir(exist_ok=True)
         
@@ -136,7 +131,6 @@ class Mycelium:
         self,
         query: str,
         budget_tokens: Optional[int] = None,
-        reconsolidate: bool = True,
         session_id: Optional[str] = None
     ) -> List[WikiPage]:
         
@@ -208,16 +202,6 @@ class Mycelium:
             
             if budget.fits(content):
                 budget.consume(content)
-                if reconsolidate and self.config.reconsolidation.check_on_load:
-                    error = await self.reconsolidation_engine.check(page, query)
-                    if error.discrepancy_score > self.config.reconsolidation.lability_threshold:
-                        page.was_flagged = True
-                        page.discrepancy_score = error.discrepancy_score
-                        page.discrepancy_explanation = error.explanation
-                        if session_id:
-                            await self.reconsolidation_engine.flag_labile(page, session_id)
-                            await self.reconsolidation_engine.accumulate_signal(page.slug, session_id, error)
-                            
                 loaded_pages.append(page)
 
         source_contexts = source_contexts_for_pages(loaded_pages, self.log_store, query)
@@ -264,8 +248,6 @@ class Mycelium:
             if sess.transcript:
                 transcript_str = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in sess.transcript])
                 await self.encoder.encode_session(transcript_str, session_id)
-            
-            await self.reconsolidation_engine.resolve_labile_pages(session_id)
             
     async def dream(self, *, dry_run: bool = False) -> DreamReport:
         return await self.dream_process.run(dry_run=dry_run)

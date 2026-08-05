@@ -1,4 +1,3 @@
-import os
 import shutil
 import frontmatter
 from datetime import datetime
@@ -27,7 +26,6 @@ def _update_log_to_dict(log: UpdateLogEntry) -> dict:
         "date": log.date.isoformat(),
         "session_id": log.session_id,
         "trigger": log.trigger,
-        "discrepancy_score": log.discrepancy_score,
         "reason": log.reason,
         "previous_confidence": log.previous_confidence,
         "new_confidence": log.new_confidence
@@ -39,7 +37,6 @@ def _update_log_from_dict(d: dict) -> UpdateLogEntry:
         date=datetime.fromisoformat(d["date"]) if isinstance(d["date"], str) else d["date"],
         session_id=d["session_id"],
         trigger=d["trigger"],
-        discrepancy_score=d["discrepancy_score"],
         reason=d["reason"],
         previous_confidence=d["previous_confidence"],
         new_confidence=d["new_confidence"]
@@ -49,11 +46,9 @@ class WikiStore:
     def __init__(self, wiki_dir: Path):
         self.wiki_dir = wiki_dir
         self.archive_dir = wiki_dir / "_archive"
-        self.labile_dir = wiki_dir.parent / "labile"
         
         self.wiki_dir.mkdir(parents=True, exist_ok=True)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
-        self.labile_dir.mkdir(parents=True, exist_ok=True)
 
     def get(self, slug: str) -> WikiPage:
         path = self.wiki_dir / f"{slug}.md"
@@ -89,8 +84,6 @@ class WikiStore:
             tags=post.metadata.get("tags", []),
             related=related,
             source_log_entries=post.metadata.get("source_log_entries", []),
-            labile=post.metadata.get("labile", False),
-            labile_session=post.metadata.get("labile_session", None),
             update_log=update_log
         )
 
@@ -108,8 +101,6 @@ class WikiStore:
         post.metadata["tags"] = page.tags
         post.metadata["related"] = [_edge_to_dict(r) for r in page.related]
         post.metadata["source_log_entries"] = page.source_log_entries
-        post.metadata["labile"] = page.labile
-        post.metadata["labile_session"] = page.labile_session
         post.metadata["update_log"] = [_update_log_to_dict(u) for u in page.update_log]
         
         with open(path, "wb") as f:
@@ -156,29 +147,10 @@ class WikiStore:
         if src.exists():
             shutil.move(str(src), str(dst))
 
-    def mark_labile(self, slug: str, session_id: str) -> None:
-        src = self.wiki_dir / f"{slug}.md"
-        dst = self.labile_dir / f"{slug}.{session_id}.md"
-        if src.exists():
-            shutil.copy2(str(src), str(dst))
-            
-        page = self.get(slug)
-        page.labile = True
-        page.labile_session = session_id
-        self.save(page)
-
-    def resolve_labile(self, slug: str, session_id: str) -> None:
-        dst = self.labile_dir / f"{slug}.{session_id}.md"
-        if dst.exists():
-            os.remove(dst)
-            
-        try:
-            page = self.get(slug)
-            page.labile = False
-            page.labile_session = None
-            self.save(page)
-        except FileNotFoundError:
-            pass
+    def delete(self, slug: str) -> None:
+        path = self.wiki_dir / f"{slug}.md"
+        if path.exists():
+            path.unlink()
 
     def exists(self, slug: str) -> bool:
         return (self.wiki_dir / f"{slug}.md").exists()

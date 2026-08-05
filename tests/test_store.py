@@ -1,4 +1,3 @@
-import pytest
 from datetime import datetime
 from mycelium.models import WikiPage, LogEntry, Edge, UpdateLogEntry
 from mycelium.store import WikiStore, LogStore
@@ -341,25 +340,3 @@ def test_clear_memory_store_removes_artifacts_and_preserves_conversations(tmp_pa
     assert session["transcript"] == transcript
     assert session["encoded_episodes"] == []
     assert session["active_episode"]["buffer"] == transcript
-
-@pytest.mark.asyncio
-async def test_delete_individual_wiki_page_api(tmp_path, monkeypatch):
-    from mycelium.core import Mycelium
-    from server.api.memory import delete_wiki_page
-    
-    myc = Mycelium(store_path=tmp_path)
-    monkeypatch.setattr("server.api.memory.get_mem", lambda: myc)
-    
-    from mycelium.models import WikiPage
-    myc.wiki.save(WikiPage(slug="target-page", title="Target", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
-    myc.wiki.save_index("# Wiki Index\n\n## Pages\n- [[user-profile]]\n- [[target-page]]")
-    
-    assert myc.wiki.exists("target-page")
-    
-    await delete_wiki_page("target-page")
-    
-    assert not myc.wiki.exists("target-page")
-    
-    index_content = myc.wiki.get_index()
-    assert "[[target-page]]" not in index_content
-    assert "[[user-profile]]" in index_content

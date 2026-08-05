@@ -63,6 +63,18 @@ class FakeToolSdkClient:
             )
         return SimpleNamespace(message={"role": "assistant", "content": "final answer"})
 
+    async def web_search(self, query: str, max_results: int = 3):
+        return {
+            "results": [{
+                "title": "Result One",
+                "url": "https://example.com/one",
+                "content": f"result for {query}\\nsecond line",
+            }]
+        }
+
+    async def web_fetch(self, url: str):
+        return f"content for {url}"
+
 
 class FakeWebClient:
     def web_search(self, query: str, max_results: int = 3):
@@ -174,7 +186,6 @@ async def test_call_messages_executes_web_tools(monkeypatch):
     client = OllamaClient("http://localhost:11434", "test-model")
     fake_sdk = FakeToolSdkClient()
     client.client = fake_sdk
-    client.web_client = FakeWebClient()
     messages = [{"role": "user", "content": "search"}]
 
     response = await client.call_messages(messages)
@@ -222,6 +233,38 @@ async def test_call_structured_passes_schema_to_sdk_and_parses_content():
     ]
     assert fake_sdk.generate_calls == []
     assert client._call_log[-1]["metadata"]["done_reason"] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_call_log_is_bounded_and_contains_metadata_only():
+    client = OllamaClient("http://localhost:11434", "test-model")
+    client.client = FakeSdkClient("private response")
+
+    for index in range(105):
+        await client.call("private system", f"private user {index}")
+
+    assert len(client._call_log) == 100
+    serialized = json.dumps(list(client._call_log))
+    assert "private system" not in serialized
+    assert "private user" not in serialized
+    assert "private response" not in serialized
+    assert client._call_log[-1]["response_chars"] == len("private response")
+
+
+@pytest.mark.asyncio
+async def test_info_logs_do_not_include_llm_payloads(caplog):
+    client = OllamaClient("http://localhost:11434", "test-model")
+    client.client = FakeSdkClient("private response")
+
+    with caplog.at_level("INFO", logger="mycelium.ollama"):
+        await client.call("private system", "private user")
+
+    output = caplog.text
+    assert "private system" not in output
+    assert "private user" not in output
+    assert "private response" not in output
+    assert "request_chars" in output
+    assert "response_chars" in output
 
 
 class AnswerOutput(BaseModel):

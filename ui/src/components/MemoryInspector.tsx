@@ -173,7 +173,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
       .some((value) => value.toLowerCase().includes(query))
   );
   const filteredDreamRuns = dreamRuns.filter((run) =>
-    [run.run_id, run.status, run.strategy, run.evidence_mode, ...run.source_ids, ...run.claim_decisions.flatMap((decision) => [decision.claim_id, decision.disposition, decision.reason])]
+    [run.run_id, run.status, ...run.source_ids, ...run.claim_decisions.flatMap((decision) => [decision.claim_id, decision.disposition, decision.reason])]
       .some((value) => value.toLowerCase().includes(query))
   );
   const allFiles = useMemo<SelectedFile[]>(() => {
@@ -510,9 +510,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                   <div className="flex flex-wrap items-center gap-2"><h2 className="break-all text-xl font-bold">{selectedDreamRun.run_id}</h2><Badge tone={selectedDreamRun.status === 'completed' ? 'green' : selectedDreamRun.status === 'failed' ? 'red' : 'amber'}>{selectedDreamRun.status}</Badge></div>
                   <div className="mt-2 text-xs text-slate-500">{formatDate(selectedDreamRun.started_at)} → {formatDate(selectedDreamRun.completed_at)}</div>
                 </div>
-                <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
-                  <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Evidence mode</div><strong>{selectedDreamRun.evidence_mode}</strong></div>
-                  <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Strategy</div><strong>{selectedDreamRun.strategy}</strong></div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
                   <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Pages created</div><strong>{selectedDreamRun.pages_created}</strong></div>
                   <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Pages updated</div><strong>{selectedDreamRun.pages_updated}</strong></div>
                 </div>

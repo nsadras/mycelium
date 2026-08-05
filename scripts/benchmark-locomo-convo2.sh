@@ -13,7 +13,6 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-benchmark_runs}"
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d-%H%M%S)}"
 DREAM_POLICY="${DREAM_POLICY:-per-batch}"
 SAMPLE_INDEX="${SAMPLE_INDEX:-2}"
-EVIDENCE_MODE="${EVIDENCE_MODE:-hybrid}"
 
 if [ "$#" -gt 0 ]; then
   SYSTEMS=("$@")
@@ -38,7 +37,6 @@ for system in "${SYSTEMS[@]}"; do
     --ollama-url "${OLLAMA_URL}" \
     --output-root "${OUTPUT_ROOT}" \
     --dream-policy "${DREAM_POLICY}" \
-    --evidence-mode "${EVIDENCE_MODE}" \
     --run-id "${run_id}" \
     "${extra_args[@]}"
 done

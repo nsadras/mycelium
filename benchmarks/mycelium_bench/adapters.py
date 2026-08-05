@@ -153,7 +153,6 @@ class MyceliumMemorySystem:
         context_budget_tokens: int = 32768,
         dream_policy: str = "per-batch",
         reconsolidate: bool = False,
-        evidence_mode: str = "hybrid",
     ) -> None:
         self.run_dir = run_dir
         self.qa_client = qa_client
@@ -163,12 +162,10 @@ class MyceliumMemorySystem:
         self.context_budget_tokens = context_budget_tokens
         self.dream_policy = dream_policy
         self.reconsolidate = reconsolidate
-        self.evidence_mode = evidence_mode
         self.case_id = "uninitialized"
         self.mem: Mycelium | None = None
         self._encoded_batches = 0
         self._dream_runs = 0
-        self._compaction_runs = 0
         self._memory_construction_seconds = 0.0
         self._errors: list[dict[str, Any]] = []
         self._dream_failures: list[dict[str, Any]] = []
@@ -184,12 +181,10 @@ class MyceliumMemorySystem:
             context_budget_tokens=self.context_budget_tokens,
             config_path=self.config_path,
             memory_profile="none",
-            evidence_mode=self.evidence_mode,
         )
         self.mem.config.reconsolidation.check_on_load = self.reconsolidate
         self._encoded_batches = 0
         self._dream_runs = 0
-        self._compaction_runs = 0
         self._memory_construction_seconds = 0.0
         self._errors = []
         self._dream_failures = []
@@ -273,14 +268,6 @@ class MyceliumMemorySystem:
             except Exception as exc:
                 self._errors.append({"stage": "dream", "case_id": self.case_id, "error": str(exc)})
             self._memory_construction_seconds += time.perf_counter() - start
-        if self.mem is not None:
-            start = time.perf_counter()
-            try:
-                await self.mem.compact()
-                self._compaction_runs += 1
-            except Exception as exc:
-                self._errors.append({"stage": "compact", "case_id": self.case_id, "error": str(exc)})
-            self._memory_construction_seconds += time.perf_counter() - start
 
     def stats(self) -> dict[str, Any]:
         page_count = 0
@@ -293,13 +280,11 @@ class MyceliumMemorySystem:
             "system": self.name,
             "encoded_batches": self._encoded_batches,
             "dream_runs": self._dream_runs,
-            "compaction_runs": self._compaction_runs,
             "wiki_pages": page_count,
             "unconsolidated_logs": log_count,
             "memory_construction_seconds": self._memory_construction_seconds,
             "errors": self._errors,
             "dream_failures": self._dream_failures,
-            "evidence_mode": self.evidence_mode,
             "artifact_coverage": coverage,
         }
 
@@ -365,7 +350,6 @@ def build_memory_system(
     context_budget_tokens: int,
     dream_policy: str,
     reconsolidate: bool = False,
-    evidence_mode: str = "hybrid",
 ) -> MemorySystem:
     qa_client = OllamaQaClient(model=qa_model, url=ollama_url)
     if system_name == "mycelium":
@@ -378,7 +362,6 @@ def build_memory_system(
             context_budget_tokens=context_budget_tokens,
             dream_policy=dream_policy,
             reconsolidate=reconsolidate,
-            evidence_mode=evidence_mode,
         )
     if system_name == "full_wiki":
         return FullWikiMemorySystem(
@@ -390,7 +373,6 @@ def build_memory_system(
             context_budget_tokens=context_budget_tokens,
             dream_policy=dream_policy,
             reconsolidate=reconsolidate,
-            evidence_mode=evidence_mode,
         )
     if system_name == "null":
         return NullMemorySystem(qa_client)

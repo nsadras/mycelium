@@ -166,7 +166,7 @@ async def test_encoder_fills_missing_about_and_requires_inference_basis(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_encoder_repairs_substantive_unclaimed_segments(tmp_path):
+async def test_encoder_records_uncovered_segments_without_repair(tmp_path):
     llm = AsyncMock()
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
@@ -177,26 +177,7 @@ async def test_encoder_repairs_substantive_unclaimed_segments(tmp_path):
     )
 
     async def response(system, user, output_type, **kwargs):
-        repairing = kwargs.get("debug_label", "").startswith("claim-coverage-repair")
-        if repairing:
-            segment_ids = [
-                part.split("]", 1)[0].removeprefix("TARGET ")
-                for part in user.split("[")[1:]
-                if part.startswith("TARGET ")
-            ]
-        else:
-            segment_ids = [part.split("]", 1)[0] for part in user.split("[")[1:]]
-        if repairing:
-            return {
-                "claims": [{
-                    "text": "Ava visited Paris yesterday.",
-                    "kind": "event",
-                    "about": [{"entity": "Ava"}],
-                    "segment_ids": segment_ids,
-                    "facets": {"when": "yesterday", "location": "Paris"},
-                }],
-                "ignored_segment_ids": [],
-            }
+        segment_ids = [part.split("]", 1)[0] for part in user.split("[")[1:]]
         return {
             "claims": [{
                 "text": "Ava likes tea.",
@@ -218,25 +199,13 @@ async def test_encoder_repairs_substantive_unclaimed_segments(tmp_path):
     )
 
     report = artifacts.coverage_report()
-    assert llm.call_structured.call_count == 2
-    assert report["segment_coverage"] == 1.0
-    assert artifacts.list_episodes()[0].extraction_status == "complete"
+    assert llm.call_structured.call_count == 1
+    assert report["segment_coverage"] == 0.5
+    assert len(report["unaccounted_segment_ids"]) == 1
+    assert artifacts.list_episodes()[0].extraction_status == "partial"
 
 
-def test_repair_rendering_includes_neighbor_context_but_marks_only_gap_as_target():
-    segments = [
-        SourceSegment("source-1#seg-0001", 0, "Who said it?", speaker="Jon"),
-        SourceSegment("source-1#seg-0002", 1, "It's Shia LaBeouf.", speaker="Gina"),
-        SourceSegment("source-1#seg-0003", 2, "Really?", speaker="Jon"),
-    ]
-
-    rendered = Encoder._render_repair_segments(
-        segments, {"source-1#seg-0002"}
-    )
-
-    assert "[CONTEXT source-1#seg-0001]" in rendered
-    assert "[TARGET source-1#seg-0002]" in rendered
-    assert "[CONTEXT source-1#seg-0003]" in rendered
+def test_dialogue_shaped_claims_are_rejected_without_repair():
     assert Encoder._is_direct_atomic_claim("It's Shia LaBeouf.") is False
     assert Encoder._is_direct_atomic_claim("The phrase is attributed to Shia LaBeouf.") is True
 
@@ -302,7 +271,7 @@ def test_labeled_multi_party_turns_are_split_for_atomic_coverage(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_encoder_repairs_dialogue_shaped_claim_as_atomic_fact(tmp_path):
+async def test_encoder_does_not_retry_dialogue_shaped_claim(tmp_path):
     llm = AsyncMock()
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
@@ -313,16 +282,10 @@ async def test_encoder_repairs_dialogue_shaped_claim_as_atomic_fact(tmp_path):
     )
 
     async def response(system, user, output_type, **kwargs):
-        repairing = kwargs.get("debug_label", "").startswith("claim-coverage-repair")
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        if repairing:
-            segment_id = segment_id.removeprefix("TARGET ")
-            text = "Ava prefers tea."
-        else:
-            text = "I prefer tea."
         return {
             "claims": [{
-                "text": text,
+                "text": "I prefer tea.",
                 "kind": "preference",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": [segment_id],
@@ -339,13 +302,13 @@ async def test_encoder_repairs_dialogue_shaped_claim_as_atomic_fact(tmp_path):
         occurred_at="2024-01-10",
     )
 
-    assert llm.call_structured.call_count == 2
-    assert [claim.text for claim in artifacts.list_claims()] == ["Ava prefers tea."]
-    assert artifacts.list_episodes()[0].extraction_status == "complete"
+    assert llm.call_structured.call_count == 1
+    assert artifacts.list_claims() == []
+    assert artifacts.list_episodes()[0].extraction_status == "partial"
 
 
 @pytest.mark.asyncio
-async def test_encoder_runs_bounded_final_normalization_for_rejected_repair(tmp_path):
+async def test_encoder_never_runs_final_normalization_pass(tmp_path):
     llm = AsyncMock()
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
@@ -356,17 +319,10 @@ async def test_encoder_runs_bounded_final_normalization_for_rejected_repair(tmp_
     )
 
     async def response(system, user, output_type, **kwargs):
-        label = kwargs.get("debug_label", "")
-        raw_id = user.split("[", 1)[1].split("]", 1)[0]
-        segment_id = raw_id.removeprefix("TARGET ")
-        text = (
-            "Ava's store is doing well."
-            if label.startswith("claim-final-repair")
-            else "My store is doing great!"
-        )
+        segment_id = user.split("[", 1)[1].split("]", 1)[0]
         return {
             "claims": [{
-                "text": text,
+                "text": "My store is doing great!",
                 "kind": "state",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": [segment_id],
@@ -383,11 +339,9 @@ async def test_encoder_runs_bounded_final_normalization_for_rejected_repair(tmp_
         occurred_at="2024-01-10",
     )
 
-    assert llm.call_structured.call_count == 3
-    assert [claim.text for claim in artifacts.list_claims()] == [
-        "Ava's store is doing well."
-    ]
-    assert artifacts.list_episodes()[0].extraction_status == "complete"
+    assert llm.call_structured.call_count == 1
+    assert artifacts.list_claims() == []
+    assert artifacts.list_episodes()[0].extraction_status == "partial"
 
 
 @pytest.mark.asyncio

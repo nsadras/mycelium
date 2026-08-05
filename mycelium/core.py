@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import List, Optional, Literal
 import uuid
+from contextlib import asynccontextmanager
 
 from mycelium.models import WikiPage, DreamReport
 from mycelium.store import WikiStore, LogStore
@@ -23,10 +24,8 @@ class Mycelium:
         ollama_url: str = 'http://localhost:11434',
         context_budget_tokens: int = 32768,
         lability_threshold: float = 0.35,
-        conflict_policy: Literal['fork', 'override', 'merge'] = 'override',
         config_path: str | Path | None = None,
         memory_profile: Literal["user", "none"] = "user",
-        evidence_mode: Literal["raw", "claims", "hybrid"] | None = None,
     ):
         self.store_path = Path(store_path)
         
@@ -38,10 +37,6 @@ class Mycelium:
             self.config.llm.url = ollama_url
             self.config.context_budget_tokens = context_budget_tokens
             self.config.reconsolidation.lability_threshold = lability_threshold
-            self.config.dream.conflict_policy = conflict_policy
-
-        if evidence_mode is not None:
-            self.config.dream.evidence_mode = evidence_mode
 
         self._init_store()
             
@@ -256,8 +251,6 @@ class Mycelium:
             parts.append(recall_index)
         return "\n\n".join(parts)
 
-    from contextlib import asynccontextmanager
-    
     @asynccontextmanager
     async def session(self, query: str, session_id: Optional[str] = None):
         session_id = session_id or str(uuid.uuid4())
@@ -274,10 +267,5 @@ class Mycelium:
             
             await self.reconsolidation_engine.resolve_labile_pages(session_id)
             
-    async def dream(self, **kwargs) -> DreamReport:
-        kwargs.setdefault('conflict_policy', self.config.dream.conflict_policy)
-        return await self.dream_process.run(**kwargs)
-
-    async def compact(self, slugs: list[str] | None = None, **kwargs) -> DreamReport:
-        """Run a compaction pass that fully rewrites wiki pages to deduplicate and reorganize."""
-        return await self.dream_process.compact(slugs=slugs, **kwargs)
+    async def dream(self, *, dry_run: bool = False) -> DreamReport:
+        return await self.dream_process.run(dry_run=dry_run)

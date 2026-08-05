@@ -68,8 +68,6 @@ class DreamReport:
     pages_updated: int
     pages_created: int
     entries_consolidated: int
-    conflicts_found: list[str]           # page slugs
-    conflicts_resolved: int
     completed_source_ids: list[str] = field(default_factory=list)
     pending_source_ids: list[str] = field(default_factory=list)
     failures: list[dict[str, str]] = field(default_factory=list)

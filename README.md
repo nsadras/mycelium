@@ -16,9 +16,9 @@ The project includes a Python memory library, a FastAPI backend, and a React web
 - **Source-grounded episodic logs:** Active chat episodes flush into raw durable logs that remain the canonical source evidence.
 - **Engram meeting uploads:** Upload raw meeting recordings, post-process diarized speaker labels, and ingest completed meetings as raw episodic logs.
 - **Tool-aware chat:** The assistant can call Ollama `web_search` and `web_fetch`; tool calls are shown in the UI and stored as separate raw log entries using the truncated result seen by the model.
-- **Dream consolidation:** Raw logs are consolidated into readable semantic wiki pages with source tracking, `[[log:<entry-id>]]` backlinks, and Obsidian-style `[[page-slug]]` cross-links.
+- **Dream consolidation:** Source-grounded claims are routed into deterministic semantic wiki pages with provenance retained in page metadata.
 - **Reconsolidation:** Retrieved pages can be flagged as labile when current context appears to contradict or extend them, then resolved into updated wiki pages.
-- **Wiki editor:** Wiki pages can be viewed and manually edited from the web UI.
+- **Generated wiki views:** Deterministic, source-grounded wiki pages can be inspected from the web UI.
 - **Log explorer:** Daily episodic log files can be inspected from the web UI.
 - **Memory inspector:** Trace chat episode state through source segments, extraction manifests,
   atomic claims, provenance, wiki assignments, and stored intermediate files.
@@ -364,7 +364,7 @@ The web UI has five main tabs:
 - **Memory:** Inspect the complete processing chain: active and encoded chat episodes, canonical
   source segments, extraction manifests, atomic claims, exact provenance, projection coverage,
   integrity warnings, the wiki index, labile snapshots, and archived pages.
-- **Wiki:** Browse semantic memory pages, inspect source log references and update history, and edit page content.
+- **Wiki:** Browse generated semantic memory pages and inspect source log references and update history.
 - **Logs:** Browse daily raw episodic log files.
 
 The sidebar exposes manual memory operations:
@@ -393,7 +393,7 @@ Chat responses may use Ollama `web_search` and `web_fetch`. Tool calls are:
 - persisted on the assistant message in session history,
 - written immediately as separate raw log entries with the truncated result supplied to the model.
 
-These tool logs are raw observations. They do not require an encoding LLM call; the dream cycle decides later whether they should affect wiki memory.
+Tool observations pass through the same source segmentation and one-pass claim extraction pipeline as conversations. Their dedicated source policy keeps only specific, source-grounded facts and treats transport metadata, errors, and page furniture as scaffolding.
 
 ### 3. Episode Encoding
 
@@ -402,7 +402,7 @@ Chat sessions maintain an active episode buffer. Encoding happens when an episod
 - manually through the API or the **Flush Current**, **Flush Idle**, and **Flush All** UI controls.
 
 The encoder writes the full conversation transcript into one raw durable log. This log remains the
-canonical source evidence. In claim-evidence mode, the encoder also creates atomic claim artifacts;
+canonical source evidence. The encoder also creates atomic claim artifacts;
 these are an auditable intermediate representation, not a replacement for the transcript. Each claim
 points back to exact source segment IDs, and extraction coverage records which segments produced a
 claim or were intentionally ignored.
@@ -417,35 +417,33 @@ Atomic claims use a compact semantic envelope:
 - `about`, open-ended `facets`, and exact provenance retain entities, qualifiers, and source support.
 
 Deterministic wiki projection uses these fields rather than matching verbs or nouns in claim prose.
-Unknown classifications fail closed into detail pages. Existing stores without the envelope are loaded
-through a conservative mapping from their stored `kind`; new claims are never classified from prose.
+Unknown classifications fail closed into detail sections. Existing development stores from earlier
+pipeline versions should be cleared and re-encoded; the claims-only pipeline has no compatibility path.
 
 Encoded episode IDs are stored in `mycelium_store/sessions_meta.json`. This prevents already-flushed active episodes from being repeatedly encoded unless memory is cleared/reset.
 
 ### 4. Dream Consolidation
 
-The dream process is the offline consolidation pass that turns durable raw logs into semantic wiki pages. It filters unsuitable logs, extracts durable facts from tool observations, batches target identification, canonicalizes proposed page targets to avoid near-duplicates, rewrites one page per final target, records source-log backlinks, updates the deterministic wiki index, and marks raw logs consolidated.
+The dream process is the offline consolidation pass that turns source-grounded claims into semantic wiki pages. It routes each eligible claim exactly once, regenerates every affected page deterministically from canonical claims, records source-log provenance, updates the deterministic wiki index, and marks successfully handled raw logs consolidated.
 
-Generated wiki content is intended to be Obsidian-compatible: cross-page references should use `[[page-slug]]`, and source references should use `[[log:<entry-id>]]`.
+Generated wiki content is plain Markdown; exact source-log IDs are retained in page metadata and exposed by the inspectors.
 
 ```mermaid
 flowchart TD
-    A[Unconsolidated raw logs] --> B[Prepare durable entries]
-    B --> C[Extract durable facts from tool observations]
-    C --> D[Route every evidence alias or explicitly ignore it]
-    D --> E[Canonicalize routed targets and merge near-duplicates]
-    E --> F[Rewrite or create wiki pages]
-    F --> G[Rebuild deterministic wiki index]
-    G --> H[Mark logs consolidated]
+    A[One-pass claim extraction] --> B[Unconsolidated source-grounded claims]
+    B --> C[Route every claim alias or explicitly ignore it]
+    C --> D[Regenerate affected pages deterministically]
+    D --> E[Persist claim assignments and run audit]
+    E --> F[Rebuild deterministic wiki index]
+    F --> G[Mark logs consolidated]
 ```
 
 Key behavior:
 
-- Tool observations are not consolidated directly. A tool-specific extraction prompt first keeps only source-grounded durable facts and discards page furniture, navigation text, ranking labels, and boilerplate.
-- Target identification uses short batch-local aliases (`C001`, `C002`, ...) constrained by a dynamic JSON schema. The model must route or explicitly ignore every alias exactly once; canonical claim and log IDs never cross the LLM protocol boundary.
-- Incomplete, duplicated, invalid, or over-broad routing responses fail closed and leave their source logs unconsolidated. Canonicalization then sees all valid proposed targets from the full dream pass at once, preventing same-pass near-duplicates such as `llm-selection` and `local-llm-deployment` from becoming separate pages.
-- Page rewrites happen once per final canonical target under the default `override` policy. `fork` and `merge` can add extra LLM calls for existing-page updates.
-- Session-only and ephemeral logs are marked consolidated but do not become durable wiki pages.
+- Extraction makes one batched pass over each source. Model-declared scaffolding is recorded as ignored; uncovered segments remain visible as partial coverage and are not automatically re-fed to the model.
+- Target identification uses short batch-local aliases (`C001`, `C002`, ...). The model must route or explicitly ignore every alias exactly once; canonical claim and log IDs never cross the LLM protocol boundary.
+- Incomplete, duplicated, invalid, or over-broad routing responses fail closed and leave their source logs unconsolidated.
+- Wiki bodies are generated read-only projections. Facts, timeline entries, detailed records, and interaction history are rendered from structured claim semantics rather than LLM-authored prose.
 - `_index.md` is generated deterministically from actual wiki pages rather than rewritten by the LLM.
 
 ### 5. Reconsolidation
@@ -472,7 +470,7 @@ mycelium_store/
 └── labile/             # Pending reconsolidation drafts/signals
 ```
 
-The memory store is meant to be readable and editable, but prefer the UI/API for normal wiki edits so version metadata and update logs stay consistent.
+The memory store is human-readable. Raw logs and claim artifacts are canonical; wiki Markdown files are generated views and should not be edited directly.
 
 ## Configuration
 
@@ -496,6 +494,8 @@ from the TOML file. Engram has its own `engram.store_path` setting.
 `session.context_budget_tokens`, which limits how much retrieved memory is loaded into chats.
 
 Additional defaults for reconsolidation and dream live in `mycelium/config.py`.
+
+Set `MYCELIUM_LLM_DEBUG_DIR` only during explicit debugging. Files written there include full prompts and responses and should be handled as sensitive data; normal INFO logs and the bounded in-memory call history contain metadata only.
 
 ## Library Usage
 
@@ -548,3 +548,7 @@ The UI supports Markdown, GitHub-flavored Markdown tables/lists, and KaTeX-rende
 
 - The web app owns long-lived chat sessions; active episodes remain buffered until manually flushed. The direct library session context manager still encodes on context exit.
 - Tool observations are logged immediately, while ordinary chat content is logged only when an episode is flushed.
+
+## License
+
+Mycelium is available under the [MIT License](LICENSE).

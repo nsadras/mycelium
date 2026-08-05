@@ -158,9 +158,6 @@ export interface DreamRunArtifact {
   started_at: string;
   completed_at: string;
   status: string;
-  strategy: string;
-  conflict_policy: string;
-  evidence_mode: string;
   source_ids: string[];
   completed_source_ids: string[];
   pending_source_ids: string[];

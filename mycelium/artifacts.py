@@ -149,9 +149,6 @@ class DreamRunAudit:
     started_at: str
     completed_at: str
     status: str
-    strategy: str
-    conflict_policy: str
-    evidence_mode: str
     source_ids: list[str]
     completed_source_ids: list[str]
     pending_source_ids: list[str]
@@ -303,6 +300,12 @@ class ArtifactStore:
             if page_slug not in claim.page_slugs:
                 claim.page_slugs.append(page_slug)
                 self.save_claim(claim)
+
+    def set_claim_page(self, claim_id: str, page_slug: str) -> None:
+        """Assign one canonical materialized page to a routed claim."""
+        claim = self.get_claim(claim_id)
+        claim.page_slugs = [page_slug]
+        self.save_claim(claim)
 
     def claims_for_page(self, page_slug: str) -> list[MemoryClaim]:
         return [claim for claim in self.list_claims(status="active") if page_slug in claim.page_slugs]

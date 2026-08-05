@@ -1,7 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
-
 import tomllib
 
 @dataclass
@@ -19,25 +17,14 @@ class ReconsolidationConfig:
 
 @dataclass
 class DreamConfig:
-    conflict_policy: str = 'override'
-    evidence_mode: str = 'hybrid'
     main_page_claim_limit: int = 18
-    derived_insights_enabled: bool = True
 
 @dataclass
 class Config:
     context_budget_tokens: int = 32768
-    llm: Optional[LLMConfig] = None
-    reconsolidation: Optional[ReconsolidationConfig] = None
-    dream: Optional[DreamConfig] = None
-
-    def __post_init__(self):
-        if self.llm is None:
-            self.llm = LLMConfig()
-        if self.reconsolidation is None:
-            self.reconsolidation = ReconsolidationConfig()
-        if self.dream is None:
-            self.dream = DreamConfig()
+    llm: LLMConfig = field(default_factory=LLMConfig)
+    reconsolidation: ReconsolidationConfig = field(default_factory=ReconsolidationConfig)
+    dream: DreamConfig = field(default_factory=DreamConfig)
 
     @classmethod
     def from_toml(cls, path: Path) -> 'Config':
@@ -67,10 +54,7 @@ class Config:
         
         dream_data = data.get('dream', {})
         dream = DreamConfig(
-            conflict_policy=dream_data.get('conflict_policy', 'override'),
-            evidence_mode=dream_data.get('evidence_mode', 'hybrid'),
             main_page_claim_limit=int(dream_data.get('main_page_claim_limit', 18)),
-            derived_insights_enabled=bool(dream_data.get('derived_insights_enabled', True)),
         )
         
         return cls(

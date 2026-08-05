@@ -138,7 +138,9 @@ async def chat(session_id: str, req: ChatRequest):
     ]
     append_turn(meta, session_id, req.message, response_text, loaded_page_meta, tool_events)
     turn_count = int(meta[session_id]["active_episode"].get("turn_count", 0))
-    tool_log_entries = append_tool_event_logs(session_id, episode_id, tool_events, turn_count)
+    tool_log_entries = await append_tool_event_logs(
+        session_id, episode_id, tool_events, turn_count
+    )
     save_meta(meta)
 
     return {

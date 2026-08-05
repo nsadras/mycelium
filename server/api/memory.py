@@ -1,12 +1,10 @@
 from dataclasses import asdict
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
 from pydantic import BaseModel
 
-from mycelium.models import UpdateLogEntry
 from server.runtime import (
     clear_memory_store,
     clear_wiki_store,
@@ -29,14 +27,6 @@ class IdleFlushRequest(BaseModel):
     idle_minutes: int = 20
     max_turns: int = 25
     force: bool = False
-
-
-class WikiPageUpdate(BaseModel):
-    title: str
-    content: str
-    tags: list[str] = []
-    confidence: float | None = None
-    importance: float | None = None
 
 
 def wiki_page_response(page):
@@ -282,59 +272,6 @@ async def get_wiki_page(slug: str):
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Page not found")
 
-
-@router.put("/wiki/{slug}")
-async def update_wiki_page(slug: str, req: WikiPageUpdate):
-    mem = get_mem()
-    try:
-        page = mem.wiki.get(slug)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="Page not found")
-
-    previous_confidence = page.confidence
-    page.title = req.title.strip() or page.title
-    page.content = req.content
-    page.tags = req.tags
-    if req.confidence is not None:
-        page.confidence = max(0.0, min(1.0, req.confidence))
-    if req.importance is not None:
-        page.importance = max(0.0, min(1.0, req.importance))
-    page.version += 1
-    page.last_updated = datetime.now()
-    page.update_log.append(
-        UpdateLogEntry(
-            version=page.version,
-            date=page.last_updated,
-            session_id="manual",
-            trigger="manual",
-            discrepancy_score=0.0,
-            reason="Manual edit from web UI",
-            previous_confidence=previous_confidence,
-            new_confidence=page.confidence,
-        )
-    )
-    mem.wiki.save(page)
-    return wiki_page_response(page)
-
-@router.delete("/wiki/{slug}")
-async def delete_wiki_page(slug: str):
-    mem = get_mem()
-    if not mem.wiki.exists(slug):
-        raise HTTPException(status_code=404, detail="Page not found")
-    
-    # Archive/soft-delete
-    mem.wiki.archive(slug)
-    
-    # Remove from index file
-    index_content = mem.wiki.get_index()
-    lines = index_content.splitlines()
-    new_lines = []
-    for line in lines:
-        if f"[[{slug}]]" not in line:
-            new_lines.append(line)
-    mem.wiki.save_index("\n".join(new_lines))
-    
-    return {"slug": slug, "status": "success"}
 
 @router.get("/logs")
 async def list_logs():

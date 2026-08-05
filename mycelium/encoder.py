@@ -95,8 +95,7 @@ class Encoder:
         )
         self.artifacts.save_source(source)
         self.artifacts.save_episode(episode)
-        if self.config.dream.evidence_mode != "raw":
-            await self._extract_claims(source, episode)
+        await self._extract_claims(source, episode)
         return [entry]
 
     def _normalize_segments(
@@ -210,91 +209,13 @@ class Encoder:
                 except Exception as exc:
                     extraction_errors.append(f"batch {batch_index}: {exc}")
 
-            # `ignored_segment_ids` is an explicit extraction result, not a hint.
-            # Re-feeding ignored conversational scaffolding to the repair pass
-            # caused it to be reconstructed as low-value "facts". The raw source
-            # remains canonical and auditable even when a segment is intentionally
-            # absent from the claim/wiki projection.
-            repair_ids = allowed_ids - covered_ids - ignored_ids
-            repair_errors: list[str] = []
-            if repair_ids:
-                for batch_index, batch_ids in enumerate(
-                    self._repair_id_batches(
-                        source.segments, repair_ids, batch_size=32
-                    ),
-                    start=1,
-                ):
-                    repair_system, repair_user = prompts.claim_coverage_repair_prompt(
-                        source.source_type,
-                        source.source_id,
-                        source.occurred_at,
-                        self._render_repair_segments(source.segments, batch_ids),
-                    )
-                    try:
-                        repair = await self.llm.call_structured(
-                            repair_system,
-                            repair_user,
-                            ExtractedEpisodeOutput,
-                            num_predict=4096,
-                            debug_label=(
-                                f"claim-coverage-repair-{source.source_id}-batch-{batch_index}"
-                            ),
-                        )
-                        if not isinstance(repair, dict):
-                            raise ValueError("claim coverage repair did not return an object")
-                        covered_ids.update(self._persist_extracted_claims(
-                            source, repair, batch_ids, reconciler, claim_ids
-                        ))
-                        ignored_ids.update(
-                            value for value in repair.get("ignored_segment_ids", [])
-                            if value in batch_ids
-                        )
-                    except Exception as exc:
-                        repair_errors.append(f"repair batch {batch_index}: {exc}")
-            final_repair_ids = allowed_ids - covered_ids - ignored_ids
-            final_errors: list[str] = []
-            if final_repair_ids:
-                for batch_index, batch_ids in enumerate(
-                    self._repair_id_batches(source.segments, final_repair_ids), start=1
-                ):
-                    final_system, final_user = prompts.claim_final_repair_prompt(
-                        source.source_type,
-                        source.source_id,
-                        source.occurred_at,
-                        self._render_repair_segments(source.segments, batch_ids),
-                    )
-                    try:
-                        final_repair = await self.llm.call_structured(
-                            final_system,
-                            final_user,
-                            ExtractedEpisodeOutput,
-                            num_predict=4096,
-                            debug_label=(
-                                f"claim-final-repair-{source.source_id}-batch-{batch_index}"
-                            ),
-                        )
-                        if not isinstance(final_repair, dict):
-                            raise ValueError("final claim repair did not return an object")
-                        covered_ids.update(self._persist_extracted_claims(
-                            source, final_repair, batch_ids, reconciler, claim_ids
-                        ))
-                        ignored_ids.update(
-                            value for value in final_repair.get("ignored_segment_ids", [])
-                            if value in batch_ids
-                        )
-                    except Exception as exc:
-                        final_errors.append(str(exc))
-                if not (allowed_ids - covered_ids - ignored_ids):
-                    extraction_errors = []
-                    repair_errors = []
             episode.claim_ids = claim_ids
             remaining_ids = allowed_ids - covered_ids
             substantive_remaining = remaining_ids - ignored_ids
             episode.ignored_segment_ids = sorted((ignored_ids & allowed_ids) - covered_ids)
             episode.extraction_status = "partial" if substantive_remaining else "complete"
             if substantive_remaining:
-                errors = [*extraction_errors, *repair_errors, *final_errors]
-                episode.extraction_error = "; ".join(errors) or (
+                episode.extraction_error = "; ".join(extraction_errors) or (
                     f"{len(substantive_remaining)} substantive segments remain unclaimed"
                 )
             else:
@@ -324,45 +245,6 @@ class Encoder:
             segments[index:index + batch_size]
             for index in range(0, len(segments), batch_size)
         ]
-
-    @staticmethod
-    def _repair_id_batches(
-        segments: list[SourceSegment], target_ids: set[str], batch_size: int = 8
-    ) -> list[set[str]]:
-        ordered = [
-            segment.segment_id for segment in segments
-            if segment.segment_id in target_ids
-        ]
-        return [
-            set(ordered[index:index + batch_size])
-            for index in range(0, len(ordered), batch_size)
-        ]
-
-    @staticmethod
-    def _render_repair_segments(
-        segments: list[SourceSegment], target_ids: set[str]
-    ) -> str:
-        """Give fragmentary repair targets local context without citing it."""
-        target_indexes = {
-            index for index, segment in enumerate(segments)
-            if segment.segment_id in target_ids
-        }
-        included_indexes = {
-            neighbor
-            for index in target_indexes
-            for neighbor in (index - 1, index, index + 1)
-            if 0 <= neighbor < len(segments)
-        }
-        rendered = []
-        for index in sorted(included_indexes):
-            segment = segments[index]
-            label = "TARGET" if segment.segment_id in target_ids else "CONTEXT"
-            rendered.append(
-                f"[{label} {segment.segment_id}] "
-                f"speaker={segment.speaker or 'unknown'}; role={segment.role or 'unknown'}; "
-                f"time={segment.timestamp or 'unknown'}\n{segment.content}"
-            )
-        return "\n\n".join(rendered)
 
     @staticmethod
     def _is_direct_atomic_claim(text: str) -> bool:

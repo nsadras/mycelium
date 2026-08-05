@@ -16,12 +16,7 @@ def test_config_surface_contains_only_runtime_settings():
         "lability_threshold",
         "check_on_load",
     }
-    assert {field.name for field in fields(DreamConfig)} == {
-        "conflict_policy",
-        "evidence_mode",
-        "main_page_claim_limit",
-        "derived_insights_enabled",
-    }
+    assert {field.name for field in fields(DreamConfig)} == {"main_page_claim_limit"}
     assert {field.name for field in fields(Config)} == {
         "context_budget_tokens",
         "llm",

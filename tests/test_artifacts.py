@@ -14,6 +14,8 @@ from mycelium.artifacts import (
     SourceDocument,
     SourceSegment,
     normalize_temporal_facets,
+    query_temporal_record,
+    temporal_intervals_overlap,
 )
 from mycelium.config import Config
 from mycelium.encoder import Encoder
@@ -146,6 +148,46 @@ async def test_encoder_persists_general_semantics_across_source_types(
     assert stored.predicate == predicate
     assert stored.evidence_modality == "speech"
     assert stored.temporal_status == temporal_status
+
+
+@pytest.mark.asyncio
+async def test_meeting_encoder_anchors_deadline_to_meeting_time(tmp_path):
+    llm = AsyncMock()
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    encoder = Encoder(
+        llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts,
+    )
+
+    async def response(system, user, output_type, **kwargs):
+        segment_id = next(
+            part.split("]", 1)[0]
+            for part in user.split("[")[1:]
+            if part.startswith("source-")
+        )
+        return {
+            "claims": [{
+                "text": "Ava committed to sending the report by Friday.",
+                "claim_type": "commitment",
+                "temporal_status": "future",
+                "about": [{"entity": "Ava"}],
+                "segment_ids": [segment_id],
+                "facets": {"deadline": "Friday"},
+            }],
+            "ignored_segment_ids": [],
+        }
+
+    llm.call_structured.side_effect = response
+    await encoder.encode_session(
+        "[M1] Ava: I will send the report by Friday.",
+        "meeting-1",
+        source_type="meeting_transcript",
+        occurred_at="2024-01-10T14:00:00-08:00",
+    )
+
+    temporal = artifacts.list_claims()[0].facets["temporal"]
+    assert temporal["anchor"] == "2024-01-10T14:00:00-08:00"
+    assert temporal["role"] == "deadline"
+    assert temporal["start"] == "2024-01-12"
 
 
 @pytest.mark.asyncio
@@ -544,6 +586,73 @@ def test_reconciler_merges_duplicates_but_leaves_slot_changes_for_review(tmp_pat
     assert replacement.links == []
 
 
+def test_reconciler_does_not_merge_changed_deadline(tmp_path):
+    store = ArtifactStore(tmp_path / "artifacts")
+    common = dict(
+        text="Ava will send the report.",
+        kind="commitment",
+        about=[{"entity": "Ava"}],
+        recorded_at="2024-01-10",
+        claim_type="commitment",
+        predicate="send_report",
+    )
+    first = MemoryClaim(
+        claim_id="first",
+        provenance=[ClaimProvenance("source-1", ["segment-1"])],
+        facets={"temporal": {
+            "expression": "Friday", "role": "deadline", "status": "resolved",
+            "certainty": "exact", "start": "2024-01-12", "end": "2024-01-12",
+        }},
+        **common,
+    )
+    changed = MemoryClaim(
+        claim_id="changed",
+        provenance=[ClaimProvenance("source-2", ["segment-2"])],
+        facets={"temporal": {
+            "expression": "next Friday", "role": "deadline", "status": "resolved",
+            "certainty": "exact", "start": "2024-01-19", "end": "2024-01-19",
+        }},
+        **common,
+    )
+
+    reconciler = ClaimReconciler(store)
+    reconciler.reconcile(first)
+    reconciled = reconciler.reconcile(changed)
+
+    assert reconciled.claim_id == "changed"
+    assert {claim.claim_id for claim in store.list_claims()} == {"first", "changed"}
+
+
+def test_reconciler_merges_same_normalized_deadline_from_different_wording(tmp_path):
+    store = ArtifactStore(tmp_path / "artifacts")
+    common = dict(
+        text="Ava will send the report.", kind="commitment",
+        about=[{"entity": "Ava"}], recorded_at="2024-01-10",
+        claim_type="commitment", predicate="send_report",
+    )
+    first = MemoryClaim(
+        claim_id="first", provenance=[ClaimProvenance("source-1", ["segment-1"])],
+        facets={"temporal": {
+            "expression": "Friday", "role": "deadline", "status": "resolved",
+            "certainty": "exact", "start": "2024-01-12", "end": "2024-01-12",
+        }}, **common,
+    )
+    duplicate = MemoryClaim(
+        claim_id="duplicate", provenance=[ClaimProvenance("source-2", ["segment-2"])],
+        facets={"temporal": {
+            "expression": "tomorrow", "role": "deadline", "status": "resolved",
+            "certainty": "exact", "start": "2024-01-12", "end": "2024-01-12",
+        }}, **common,
+    )
+
+    reconciler = ClaimReconciler(store)
+    reconciler.reconcile(first)
+    reconciled = reconciler.reconcile(duplicate)
+
+    assert reconciled.claim_id == "first"
+    assert len(reconciled.provenance) == 2
+
+
 def test_semantic_envelope_does_not_infer_from_kind_or_prose():
     provenance = [ClaimProvenance("source-1", ["source-1#seg-0001"])]
     unknown = MemoryClaim(
@@ -561,7 +670,17 @@ def test_human_readable_timestamp_anchors_relative_dates():
         {"when": "yesterday"}, "4:24 pm on 16 March, 2023"
     )
     assert facets["observed_at"] == "4:24 pm on 16 March, 2023"
-    assert facets["normalized_date"] == "2023-03-15"
+    assert facets["temporal"] == {
+        "expression": "yesterday",
+        "anchor": "4:24 pm on 16 March, 2023",
+        "anchor_date": "2023-03-16",
+        "role": "event_time",
+        "start": "2023-03-15",
+        "end": "2023-03-15",
+        "precision": "day",
+        "status": "resolved",
+        "certainty": "exact",
+    }
 
 
 def test_temporal_facets_recover_relative_phrase_from_claim_text():
@@ -569,9 +688,9 @@ def test_temporal_facets_recover_relative_phrase_from_claim_text():
         {}, "4:24 pm on 16 March, 2023", "Ava visited Paris yesterday."
     )
 
-    assert facets["when"] == "yesterday"
-    assert facets["normalized_date"] == "2023-03-15"
-    assert facets["date_precision"] == "day"
+    assert facets["temporal"]["expression"] == "yesterday"
+    assert facets["temporal"]["start"] == "2023-03-15"
+    assert facets["temporal"]["precision"] == "day"
 
 
 def test_month_relative_time_preserves_month_precision():
@@ -579,8 +698,91 @@ def test_month_relative_time_preserves_month_precision():
         {"when": "this month"}, "4:24 pm on 16 March, 2023"
     )
 
-    assert facets["normalized_date"] == "2023-03"
-    assert facets["date_precision"] == "month"
+    assert facets["temporal"]["start"] == "2023-03-01"
+    assert facets["temporal"]["end"] == "2023-03-31"
+    assert facets["temporal"]["precision"] == "month"
+
+
+@pytest.mark.parametrize(
+    ("expression", "start", "end"),
+    [
+        ("last week", "2023-03-06", "2023-03-12"),
+        ("this week", "2023-03-13", "2023-03-19"),
+        ("next week", "2023-03-20", "2023-03-26"),
+        ("last month", "2023-02-01", "2023-02-28"),
+        ("next month", "2023-04-01", "2023-04-30"),
+    ],
+)
+def test_calendar_relative_periods_preserve_full_bounds(expression, start, end):
+    facets = normalize_temporal_facets(
+        {"when": expression}, "4:24 pm on 16 March, 2023"
+    )
+
+    assert facets["temporal"]["start"] == start
+    assert facets["temporal"]["end"] == end
+
+
+def test_next_month_crosses_year_boundary():
+    facets = normalize_temporal_facets(
+        {"when": "next month"}, "10:00 am on 20 December, 2023"
+    )
+
+    assert facets["temporal"]["start"] == "2024-01-01"
+    assert facets["temporal"]["end"] == "2024-01-31"
+
+
+def test_this_weekday_resolves_within_anchor_calendar_week():
+    facets = normalize_temporal_facets(
+        {"when": "this Friday"}, "4:24 pm on 16 March, 2023"
+    )
+
+    assert facets["temporal"]["start"] == "2023-03-17"
+    assert facets["temporal"]["precision"] == "day"
+
+
+def test_last_and_next_weekdays_use_adjacent_calendar_weeks():
+    last = normalize_temporal_facets(
+        {"when": "last Monday"}, "4:24 pm on 16 March, 2023"
+    )
+    next_ = normalize_temporal_facets(
+        {"when": "next Friday"}, "4:24 pm on 16 March, 2023"
+    )
+
+    assert last["temporal"]["start"] == "2023-03-06"
+    assert next_["temporal"]["start"] == "2023-03-24"
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("Friday", "2023-03-17"),
+        ("by Friday", "2023-03-17"),
+        ("end of this week", "2023-03-19"),
+        ("end of next week", "2023-03-26"),
+        ("end of next month", "2023-04-30"),
+        ("in three days", "2023-03-19"),
+    ],
+)
+def test_meeting_deadlines_resolve_as_due_dates(expression, expected):
+    facets = normalize_temporal_facets(
+        {"deadline": expression}, "4:24 pm on 16 March, 2023"
+    )
+
+    assert facets["temporal"]["role"] == "deadline"
+    assert facets["temporal"]["start"] == expected
+    assert facets["temporal"]["end"] == expected
+
+
+def test_deadline_can_be_recovered_from_claim_text():
+    facets = normalize_temporal_facets(
+        {},
+        "4:24 pm on 16 March, 2023",
+        "Ava committed to sending the report by Friday.",
+    )
+
+    assert facets["temporal"]["expression"] == "Friday"
+    assert facets["temporal"]["role"] == "deadline"
+    assert facets["temporal"]["start"] == "2023-03-17"
 
 
 def test_year_relative_time_preserves_year_precision():
@@ -588,8 +790,82 @@ def test_year_relative_time_preserves_year_precision():
         {"when": "three years ago"}, "4:24 pm on 16 March, 2023"
     )
 
-    assert facets["normalized_date"] == "2020"
-    assert facets["date_precision"] == "year"
+    assert facets["temporal"]["start"] == "2020-01-01"
+    assert facets["temporal"]["end"] == "2020-12-31"
+    assert facets["temporal"]["precision"] == "year"
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("in three days from now", "2023-03-19"),
+        ("two weeks ago", "2023-03-02"),
+        ("the day after tomorrow", "2023-03-18"),
+        ("the day before yesterday", "2023-03-14"),
+    ],
+)
+def test_exact_relative_offsets_resolve_against_source_time(expression, expected):
+    facets = normalize_temporal_facets(
+        {"when": expression}, "4:24 pm on 16 March, 2023"
+    )
+
+    assert facets["temporal"]["start"] == expected
+    assert facets["temporal"]["end"] == expected
+    assert facets["temporal"]["certainty"] == "exact"
+
+
+@pytest.mark.parametrize(
+    ("expression", "start", "end"),
+    [
+        ("a few days ago", "2023-03-11", "2023-03-14"),
+        ("in several weeks from now", "2023-04-06", "2023-05-04"),
+        ("early next week", "2023-03-20", "2023-03-22"),
+        ("late next week", "2023-03-24", "2023-03-26"),
+        ("later this week", "2023-03-17", "2023-03-19"),
+    ],
+)
+def test_vague_but_bounded_time_is_marked_approximate(expression, start, end):
+    facets = normalize_temporal_facets(
+        {"when": expression}, "4:24 pm on 16 March, 2023"
+    )
+
+    assert facets["temporal"]["start"] == start
+    assert facets["temporal"]["end"] == end
+    assert facets["temporal"]["status"] == "bounded"
+    assert facets["temporal"]["certainty"] == "approximate"
+
+
+@pytest.mark.parametrize(("expression", "direction"), [("soon", "future"), ("recently", "past")])
+def test_unbounded_vague_time_remains_unresolved(expression, direction):
+    facets = normalize_temporal_facets(
+        {"when": expression}, "4:24 pm on 16 March, 2023"
+    )
+
+    assert facets["temporal"]["status"] == "unresolved"
+    assert facets["temporal"]["certainty"] == "vague"
+    assert facets["temporal"]["direction"] == direction
+    assert "start" not in facets["temporal"]
+
+
+def test_temporal_query_resolves_deadline_range_at_query_time():
+    temporal = query_temporal_record(
+        "What deadlines are due next week?",
+        datetime.fromisoformat("2026-08-11T10:00:00-07:00"),
+    )
+
+    assert temporal is not None
+    assert temporal["role"] == "deadline"
+    assert temporal["start"] == "2026-08-17"
+    assert temporal["end"] == "2026-08-23"
+
+
+def test_temporal_interval_overlap_is_inclusive():
+    query = {"start": "2026-08-17", "end": "2026-08-23"}
+
+    assert temporal_intervals_overlap(query, {"start": "2026-08-23", "end": "2026-08-23"})
+    assert not temporal_intervals_overlap(
+        query, {"start": "2026-08-24", "end": "2026-08-24"}
+    )
 
 
 def test_reconciler_merges_identical_text_despite_kind_label_drift(tmp_path):

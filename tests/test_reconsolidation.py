@@ -47,6 +47,46 @@ def claim(
     )
 
 
+def temporal_claim(
+    claim_id: str,
+    date: str,
+    *,
+    role: str = "deadline",
+    page: str = "project-alpha",
+) -> MemoryClaim:
+    item = claim(
+        claim_id,
+        "The user will send the report.",
+        page=page,
+        slot="report_deadline",
+    )
+    item.claim_type = "commitment"
+    item.predicate = "send_report"
+    item.facets = {"temporal": {
+        "expression": date,
+        "role": role,
+        "status": "resolved",
+        "certainty": "exact",
+        "start": date,
+        "end": date,
+    }}
+    return item
+
+
+def test_reconsolidation_candidates_do_not_mix_deadline_and_event_time(tmp_path):
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    incoming = temporal_claim("incoming", "2026-08-20", page="")
+    old_deadline = temporal_claim("old-deadline", "2026-08-15")
+    event = temporal_claim("event", "2026-08-20", role="event_time")
+    reconsolidator = ClaimReconsolidator(AsyncMock(), artifacts)
+
+    candidates = reconsolidator._candidates(
+        incoming, "project-alpha", [event, old_deadline]
+    )
+
+    assert [candidate.claim_id for candidate in candidates] == ["old-deadline"]
+
+
 @pytest.mark.asyncio
 async def test_contradiction_creates_durable_review_proposal(tmp_path):
     artifacts = ArtifactStore(tmp_path / "artifacts")
@@ -142,6 +182,36 @@ def test_approve_supersession_updates_claims_and_projection(tmp_path):
     assert "prefers tea" not in page.content
     assert "pending reconciliation" not in page.content
     assert service.approve("recon-1").proposal.status == "applied"
+
+
+def test_approve_deadline_supersession_reprojects_only_new_due_date(tmp_path):
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    wiki = WikiStore(tmp_path / "wiki")
+    old = temporal_claim("old", "2026-08-15")
+    incoming = temporal_claim("incoming", "2026-08-20")
+    artifacts.save_claim(old)
+    artifacts.save_claim(incoming)
+    materializer = PageMaterializer(wiki, artifacts, Config.defaults())
+    materializer.regenerate({"project-alpha"})
+    artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
+        proposal_id="deadline-change",
+        incoming_claim_id="incoming",
+        target_claim_id="old",
+        proposed_relation="supersedes",
+        explanation="The deadline moved.",
+        confidence=0.95,
+        dream_run_id="dream-1",
+        created_at=datetime.now().astimezone().isoformat(),
+        affected_page_slugs=["project-alpha"],
+    ))
+    service = ReconsolidationReviewService(artifacts, materializer)
+
+    service.approve("deadline-change")
+
+    content = wiki.get("project-alpha").content
+    assert "deadline: 2026-08-20" in content
+    assert "deadline: 2026-08-15" not in content
+    assert artifacts.get_claim("old").status == "superseded"
 
 
 def test_reject_leaves_claims_active_and_removes_pending_annotation(tmp_path):

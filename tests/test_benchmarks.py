@@ -10,12 +10,14 @@ import pytest
 from benchmarks.mycelium_bench.adapters import (
     BenchmarkAnswer,
     BenchmarkMessage,
+    GoldEvidenceMemorySystem,
     OllamaQaClient,
     format_messages_for_memory,
     format_page_for_prompt,
 )
 from benchmarks.mycelium_bench.adapters import MyceliumMemorySystem
 from benchmarks.mycelium_bench.locomo import (
+    _record_evidence_survival,
     iter_locomo_sessions,
     run_locomo,
     select_questions_per_category,
@@ -187,6 +189,30 @@ async def test_run_locomo_counts_empty_retrieval_context_as_zero_recall(tmp_path
     }
 
 
+def test_evidence_survival_records_each_pipeline_stage():
+    answer = BenchmarkAnswer(
+        output="Pixel",
+        input_len=1,
+        output_len=1,
+        memory_construction_time=0.0,
+        query_time_len=0.0,
+        metadata={"_evidence_stage_labels": {
+            "source": ["D1:1", "D1:2"],
+            "claim": ["D1:1"],
+            "wiki": [],
+            "context": ["D1:1"],
+        }},
+    )
+
+    _record_evidence_survival(answer, ["D1:1", "D1:2"])
+
+    assert "_evidence_stage_labels" not in answer.metadata
+    assert answer.metadata["evidence_survival"]["source"]["recall"] == 1.0
+    assert answer.metadata["evidence_survival"]["claim"]["recall"] == 0.5
+    assert answer.metadata["evidence_survival"]["wiki"]["recall"] == 0.0
+    assert answer.metadata["evidence_survival"]["context"]["recall"] == 0.5
+
+
 @pytest.mark.asyncio
 async def test_run_locomo_sample_index_selects_one_based_sample(tmp_path):
     data_path = tmp_path / "locomo_two_samples.json"
@@ -260,6 +286,49 @@ async def test_qa_client_returns_consistent_refusal_for_unsupported_premise():
     )
 
     assert answer.output == "I do not have enough information to answer this question."
+
+
+@pytest.mark.asyncio
+async def test_gold_evidence_system_uses_only_requested_labeled_turns():
+    qa_client = type(
+        "QaClient",
+        (),
+        {"answer": AsyncMock(return_value=BenchmarkAnswer(
+            output="19 January, 2023",
+            input_len=10,
+            output_len=3,
+            memory_construction_time=0.0,
+            query_time_len=0.1,
+        ))},
+    )()
+    system = GoldEvidenceMemorySystem(qa_client)
+    await system.reset("case")
+    await system.memorize([
+        BenchmarkMessage(
+            role="user",
+            speaker="Jon",
+            content="I lost my job yesterday.",
+            timestamp="20 January, 2023",
+            message_id="D1:2",
+        ),
+        BenchmarkMessage(
+            role="user",
+            speaker="Gina",
+            content="I opened a store.",
+            timestamp="20 January, 2023",
+            message_id="D1:3",
+        ),
+    ])
+
+    answer = await system.answer(
+        "When did Jon lose his job?", {"gold_evidence": ["D1:2"]}
+    )
+
+    context = qa_client.answer.await_args.args[1]
+    assert "[D1:2]" in context
+    assert "conversation_time=20 January, 2023" in context
+    assert "[D1:3]" not in context
+    assert answer.metadata["oracle"] == "gold_evidence"
 
 
 @pytest.mark.asyncio

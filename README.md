@@ -177,6 +177,12 @@ pages. BM25 selects two page candidates, title/entity matches can add explicitly
 then are page-linked source windows ranked and attached. The index is disposable and automatically refreshes
 when page versions or content change; the Markdown wiki remains the durable human-readable memory store.
 
+Relative dates are normalized once at encoding against the source occurrence time and retained with their
+original wording, bounds, certainty, and semantic role (event time or deadline). Temporal questions such as
+“What deadlines are due next week?” resolve against the query time and select active claims whose intervals
+overlap, then load those claims' wiki pages and provenance-linked source logs. This structured temporal branch
+augments page FTS; it does not introduce a second durable index or guess dates for phrases such as “soon.”
+
 Stores created by older raw, hybrid, or page-rewrite reconsolidation pipelines are not migrated. Clear and re-encode them before using this version.
 
 ## Benchmarking taxonomy and projection changes
@@ -210,6 +216,12 @@ INCLUDE_RETRIEVAL_CONTEXT=1 QA_MODEL=gemma4:12b MEMORY_MODEL=gemma4:12b \
 RUN_TAG=retrieval-check SAMPLE_INDEX=2 DREAM_POLICY=none \
 scripts/benchmark-locomo-convo2.sh mycelium
 ```
+
+Benchmark diagnostics include source → active claim → assigned wiki → rendered context evidence-survival
+rates. The benchmark-only `gold_evidence` system answers from the exact labeled source turns and is useful as
+a qualitative encoding/retrieval control, not a numerical ceiling: cited turns can omit adjacent context and
+technically correct paraphrases can still receive low scorer values. Neither diagnostic path exposes labels to
+the production memory system.
 
 ## License
 

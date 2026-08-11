@@ -130,3 +130,27 @@ def test_source_snippets_respect_narrow_evidence_window():
 
     assert len(snippet.text) <= 90
     assert "Shia Labeouf" in snippet.text
+
+
+def test_structured_temporal_match_prioritizes_its_source_log():
+    entries = [
+        LogEntry(
+            entry_id="lexical", session_id="one", timestamp=datetime.now(),
+            content="The report is due and the deadline is under discussion.",
+            importance=0.8, status="raw",
+        ),
+        LogEntry(
+            entry_id="matched-claim", session_id="two", timestamp=datetime.now(),
+            content="Ava committed to sending it by Friday.",
+            importance=0.8, status="raw",
+        ),
+    ]
+
+    snippets = select_source_snippets(
+        entries,
+        "What is due next week?",
+        max_entries=1,
+        preferred_entry_ids={"matched-claim"},
+    )
+
+    assert [snippet.entry_id for snippet in snippets] == ["matched-claim"]

@@ -83,7 +83,11 @@ def main() -> None:
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--system", choices=["mycelium", "null", "full_context", "full_wiki"], default="mycelium")
+    parser.add_argument(
+        "--system",
+        choices=["mycelium", "null", "full_context", "full_wiki", "gold_evidence"],
+        default="mycelium",
+    )
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--output-root", type=Path, default=Path("benchmark_runs"))
     parser.add_argument("--qa-model", default="gemma4:latest")

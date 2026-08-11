@@ -32,6 +32,10 @@ source question indices. Graduate promising changes to all questions before reta
 
    `source → segments/coverage → claims → wiki → retrieved context → answer`
 
+   Use the reported evidence-survival stages to locate provenance loss, then inspect the actual claim and
+   prose at the first failing stage. Survival proves that cited evidence remained reachable, not that the
+   claim preserved its meaning completely.
+
 4. Classify the earliest failing stage: ingestion, extraction/attribution, reconciliation, projection,
    retrieval, answering, or scoring.
 5. State one cause, one proposed change, and its expected observable effect.
@@ -51,13 +55,15 @@ commonsense/open-domain (4), and adversarial (5). Compare:
   or duplicate claims;
 - wiki completeness, concision, organization, and readability;
 - whether correct memory existed but retrieval or answering failed.
+- whether a low scorer value is merely a wording false negative despite a technically correct answer.
 
 Prefer the shortest wiki that preserves useful, answerable information. High coverage alone does not
 imply good memory, and score movement is not causal when multiple variables or conversations changed.
 
-For source/claim/wiki information-loss questions, compare `raw`, `claims`, and `hybrid` with
-`scripts/benchmark-locomo-ablation.sh`. Run broader or full evaluations only after a change survives
-several conversations.
+Use the benchmark-only `gold_evidence` adapter when you need an answer-generation control over exact labeled
+turns. Treat its responses qualitatively: labels may omit adjacent conversational context, and the scorer may
+penalize sound paraphrases. Run broader or full evaluations only after a change survives focused panels and
+artifact inspection.
 
 ## Guardrails
 

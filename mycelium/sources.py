@@ -53,6 +53,7 @@ def source_contexts_for_pages(
     *,
     max_entries: int = 6,
     max_chars_per_entry: int = 1400,
+    preferred_entry_ids: set[str] | None = None,
 ) -> dict[str, str]:
     """Select source evidence once across all loaded pages.
 
@@ -73,6 +74,7 @@ def source_contexts_for_pages(
         query,
         max_entries=max_entries,
         max_chars_per_entry=max_chars_per_entry,
+        preferred_entry_ids=preferred_entry_ids,
     )
     grouped: dict[str, list[SourceSnippet]] = {}
     for snippet in snippets:
@@ -100,6 +102,7 @@ def select_source_snippets(
     *,
     max_entries: int = 4,
     max_chars_per_entry: int = 1800,
+    preferred_entry_ids: set[str] | None = None,
 ) -> list[SourceSnippet]:
     query_terms = terms(query)
     term_weights = query_term_weights(
@@ -127,7 +130,13 @@ def select_source_snippets(
             )
         )
 
-    ranked.sort(key=lambda item: (item.score, len(item.text)), reverse=True)
+    preferred = preferred_entry_ids or set()
+    ranked.sort(
+        key=lambda item: (
+            int(item.entry_id in preferred), item.score, len(item.text)
+        ),
+        reverse=True,
+    )
     return ranked[:max_entries]
 
 

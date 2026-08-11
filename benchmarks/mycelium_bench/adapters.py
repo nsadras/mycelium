@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import re
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -143,6 +144,65 @@ class FullContextMemorySystem:
         return {"system": self.name, "context_batches": len(self.context_parts)}
 
 
+class GoldEvidenceMemorySystem:
+    """Benchmark oracle that answers from exactly the labeled source turns."""
+
+    name = "gold_evidence"
+
+    def __init__(self, qa_client: OllamaQaClient) -> None:
+        self.qa_client = qa_client
+        self.messages_by_id: dict[str, BenchmarkMessage] = {}
+
+    async def reset(self, case_id: str) -> None:
+        self.case_id = case_id
+        self.messages_by_id = {}
+
+    async def memorize(
+        self,
+        messages: list[BenchmarkMessage],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        for message in messages:
+            if message.message_id:
+                self.messages_by_id[message.message_id] = message
+
+    async def answer(
+        self, question: str, metadata: dict[str, Any] | None = None
+    ) -> BenchmarkAnswer:
+        metadata = metadata or {}
+        evidence_ids = [str(value) for value in metadata.get("gold_evidence", [])]
+        context = "\n".join(
+            _format_gold_evidence(message)
+            for evidence_id in evidence_ids
+            if (message := self.messages_by_id.get(evidence_id)) is not None
+        )
+        answer = await self.qa_client.answer(question, context)
+        answer.metadata.update(
+            {
+                "oracle": "gold_evidence",
+                "requested_evidence": evidence_ids,
+                "retrieval_context": context,
+            }
+        )
+        return answer
+
+    async def finalize_case(self) -> None:
+        return None
+
+    def stats(self) -> dict[str, Any]:
+        return {"system": self.name, "indexed_messages": len(self.messages_by_id)}
+
+
+def _format_gold_evidence(message: BenchmarkMessage) -> str:
+    pieces = [f"[{message.message_id}]" if message.message_id else ""]
+    if message.timestamp:
+        pieces.append(f"(conversation_time={message.timestamp})")
+    if message.speaker:
+        pieces.append(f"{message.speaker}:")
+    pieces.append(message.content)
+    return " ".join(piece for piece in pieces if piece)
+
+
 class MyceliumMemorySystem:
     name = "mycelium"
 
@@ -181,6 +241,7 @@ class MyceliumMemorySystem:
         self._dream_failures: list[dict[str, Any]] = []
         self._taxonomy_failures: list[dict[str, Any]] = []
         self._replay_page_kinds: dict[str, str] = {}
+        self._evidence_stage_labels_cache: dict[str, set[str]] | None = None
 
     async def reset(self, case_id: str) -> None:
         self.case_id = sanitize_path_part(case_id)
@@ -219,6 +280,7 @@ class MyceliumMemorySystem:
         self._errors = []
         self._dream_failures = []
         self._taxonomy_failures = []
+        self._evidence_stage_labels_cache = None
 
     async def memorize(self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None) -> None:
         if not messages:
@@ -293,11 +355,53 @@ class MyceliumMemorySystem:
                     }
                     for page in loaded_pages
                 ],
+                "_evidence_stage_labels": self._evidence_stage_labels(context),
             }
         )
         if self.include_retrieval_context:
             answer.metadata["retrieval_context"] = context
         return answer
+
+    def _evidence_stage_labels(self, context: str) -> dict[str, list[str]]:
+        if self._evidence_stage_labels_cache is None:
+            mem = self._require_mem()
+            label_by_segment = {
+                segment.segment_id: str(label)
+                for source in mem.artifacts.list_sources()
+                for segment in source.segments
+                if (label := segment.metadata.get("source_label"))
+            }
+            source_labels = set(label_by_segment.values())
+            claim_labels: set[str] = set()
+            wiki_labels: set[str] = set()
+            for claim in mem.artifacts.list_claims(status="active"):
+                labels = {
+                    label_by_segment[segment_id]
+                    for provenance in claim.provenance
+                    for segment_id in provenance.segment_ids
+                    if segment_id in label_by_segment
+                }
+                claim_labels.update(labels)
+                if any(mem.wiki.exists(slug) for slug in claim.page_slugs):
+                    wiki_labels.update(labels)
+            self._evidence_stage_labels_cache = {
+                "source": source_labels,
+                "claim": claim_labels,
+                "wiki": wiki_labels,
+            }
+        stage_labels = {
+            stage: sorted(labels)
+            for stage, labels in self._evidence_stage_labels_cache.items()
+        }
+        stage_labels["context"] = sorted(
+            label
+            for label in self._evidence_stage_labels_cache["source"]
+            if re.search(
+                rf"(?<![A-Za-z0-9]){re.escape(label)}(?![A-Za-z0-9])",
+                context,
+            )
+        )
+        return stage_labels
 
     async def finalize_case(self) -> None:
         if self.frozen_store is not None:
@@ -538,6 +642,8 @@ def build_memory_system(
         return NullMemorySystem(qa_client)
     if system_name == "full_context":
         return FullContextMemorySystem(qa_client)
+    if system_name == "gold_evidence":
+        return GoldEvidenceMemorySystem(qa_client)
     raise ValueError(f"Unknown benchmark system: {system_name}")
 
 

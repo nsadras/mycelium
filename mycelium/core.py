@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import List, Optional, Literal
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from mycelium.models import WikiPage, DreamReport
 from mycelium.store import WikiStore, LogStore
@@ -13,7 +14,12 @@ from mycelium.session import Session
 from mycelium.facts import routing_recall_index
 from mycelium.sources import source_contexts_for_pages
 from mycelium.page_search import PageSearchIndex
-from mycelium.artifacts import ArtifactStore
+from mycelium.artifacts import (
+    ArtifactStore,
+    query_temporal_record,
+    temporal_intervals_overlap,
+    temporal_record,
+)
 
 class Mycelium:
     def __init__(
@@ -133,7 +139,8 @@ class Mycelium:
         self,
         query: str,
         budget_tokens: Optional[int] = None,
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        query_time: datetime | None = None,
     ) -> List[WikiPage]:
         
         budget_tokens = budget_tokens or self.config.context_budget_tokens
@@ -143,12 +150,35 @@ class Mycelium:
         if not pages:
             return []
 
-        selections = [
-            (rank, hit.slug)
+        selection_priorities = {
+            hit.slug: rank
             for rank, hit in enumerate(
                 self._page_search.search(pages, query, limit=2), start=1
             )
-        ]
+        }
+
+        query_temporal = query_temporal_record(
+            query, query_time or datetime.now().astimezone()
+        )
+        temporal_source_ids: set[str] = set()
+        if query_temporal and query_temporal.get("start"):
+            for claim in self.artifacts.list_claims(status="active"):
+                claim_temporal = temporal_record(claim.facets)
+                if claim_temporal is None:
+                    continue
+                requested_role = query_temporal.get("role")
+                if requested_role == "deadline" and claim_temporal.get("role") != "deadline":
+                    continue
+                if not temporal_intervals_overlap(query_temporal, claim_temporal):
+                    continue
+                for slug in claim.page_slugs:
+                    if self.wiki.exists(slug):
+                        selection_priorities[slug] = 0
+                temporal_source_ids.update(
+                    provenance.raw_log_entry_id
+                    for provenance in claim.provenance
+                    if provenance.raw_log_entry_id
+                )
 
         # Explicit page names augment the lexical candidates. Keeping this
         # decision separate from BM25 prevents a named participant from
@@ -158,7 +188,7 @@ class Mycelium:
         exclude_words = {"person", "place", "event", "topic", "project", "meeting", "convo", "chat", "page", "new"}
 
         existing_slugs = {p.slug: p for p in pages}
-        selected_slugs = {slug for _, slug in selections}
+        selected_slugs = set(selection_priorities)
 
         for slug, page in existing_slugs.items():
             if slug in selected_slugs or "derived-memory" in page.tags:
@@ -166,9 +196,12 @@ class Mycelium:
             slug_parts = set(slug.split("-")) - exclude_words
             title_words = set(re.findall(r'\b\w+\b', page.title.lower())) - exclude_words
             if (slug_parts & query_words) or (title_words & query_words):
-                selections.append((8, slug))
+                selection_priorities[slug] = 8
 
-        selections.sort(key=lambda item: item[0])
+        selections = sorted(
+            ((priority, slug) for slug, priority in selection_priorities.items()),
+            key=lambda item: (item[0], item[1]),
+        )
 
         loaded_pages = []
         for priority, slug in selections:
@@ -186,7 +219,12 @@ class Mycelium:
                 budget.consume(content)
                 loaded_pages.append(page)
 
-        source_contexts = source_contexts_for_pages(loaded_pages, self.log_store, query)
+        source_contexts = source_contexts_for_pages(
+            loaded_pages,
+            self.log_store,
+            query,
+            preferred_entry_ids=temporal_source_ids,
+        )
         for page in loaded_pages:
             source_context = source_contexts.get(page.slug, "")
             if source_context and budget.fits(source_context):

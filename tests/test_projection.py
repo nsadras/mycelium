@@ -112,7 +112,10 @@ def test_display_claim_text_removes_conflicting_model_added_date():
         "event",
         "Ava visited Kyoto yesterday, on January 9, 2023.",
         "event",
-        facets={"when": "yesterday", "normalized_date": "2024-01-09"},
+        facets={"temporal": {
+            "expression": "yesterday", "start": "2024-01-09", "end": "2024-01-09",
+            "precision": "day", "status": "resolved", "certainty": "exact",
+        }},
     )
 
     rendered = display_claim_text(item)
@@ -159,7 +162,10 @@ def test_compact_qualifiers_hide_provenance_and_redundant_values():
         "location",
         "Ava moved to Paris.",
         "event",
-        facets={"location": "Paris", "when": "last week", "normalized_date": "2024-01-03"},
+        facets={"location": "Paris", "temporal": {
+            "expression": "last week", "start": "2024-01-03", "end": "2024-01-03",
+            "precision": "week", "status": "resolved", "certainty": "exact",
+        }},
     )
 
     qualifiers = compact_qualifiers(item, include_date=True)
@@ -167,3 +173,44 @@ def test_compact_qualifiers_hide_provenance_and_redundant_values():
     assert "location: Paris" not in qualifiers
     assert "stated: last week" in qualifiers
     assert all("source" not in value for value in qualifiers)
+
+
+def test_projection_labels_approximate_temporal_range_honestly():
+    item = claim(
+        "plan",
+        "Ava plans to send the report in a few days.",
+        "plan",
+        facets={"temporal": {
+            "expression": "in a few days",
+            "start": "2024-01-12",
+            "end": "2024-01-15",
+            "precision": "range",
+            "status": "bounded",
+            "certainty": "approximate",
+        }},
+    )
+
+    projected = project_claim(item)
+    qualifiers = compact_qualifiers(item, include_date=True)
+
+    assert projected.date_key == "Approx. 2024-01-12 to 2024-01-15"
+    assert "approximate interval: 2024-01-12 to 2024-01-15" in qualifiers
+
+
+def test_projection_labels_deadline_separately_from_event_date():
+    item = claim(
+        "commitment",
+        "Ava will send the report by Friday.",
+        "commitment",
+        facets={"temporal": {
+            "expression": "Friday",
+            "role": "deadline",
+            "start": "2024-01-12",
+            "end": "2024-01-12",
+            "precision": "day",
+            "status": "resolved",
+            "certainty": "exact",
+        }},
+    )
+
+    assert "deadline: 2024-01-12" in compact_qualifiers(item, include_date=True)

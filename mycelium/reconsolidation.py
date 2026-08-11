@@ -12,6 +12,7 @@ from mycelium.artifacts import (
     ArtifactStore,
     MemoryClaim,
     ReconsolidationProposal,
+    temporal_record,
 )
 from mycelium.consolidation import ClaimRoute
 from mycelium.materialization import PageMaterializer
@@ -134,6 +135,7 @@ class ClaimReconsolidator:
         candidates = [
             claim for claim in existing
             if incoming_entities & self._entities(claim)
+            and self._temporal_roles_compatible(incoming, claim)
             and (
                 page_slug in claim.page_slugs
                 or bool(incoming.slot and claim.slot == incoming.slot)
@@ -146,12 +148,33 @@ class ClaimReconsolidator:
         )[:12]
 
     @staticmethod
-    def _candidate_rank(incoming: MemoryClaim, candidate: MemoryClaim) -> tuple[int, int, int, str]:
+    def _candidate_rank(
+        incoming: MemoryClaim, candidate: MemoryClaim
+    ) -> tuple[int, int, int, int, str]:
+        incoming_temporal = temporal_record(incoming.facets)
+        candidate_temporal = temporal_record(candidate.facets)
         return (
             int(bool(incoming.slot and candidate.slot == incoming.slot)),
             int(bool(incoming.predicate and candidate.predicate == incoming.predicate)),
             int(incoming.claim_type == candidate.claim_type),
+            int(bool(
+                incoming_temporal
+                and candidate_temporal
+                and incoming_temporal.get("role") == candidate_temporal.get("role")
+            )),
             candidate.recorded_at,
+        )
+
+    @staticmethod
+    def _temporal_roles_compatible(
+        incoming: MemoryClaim, candidate: MemoryClaim
+    ) -> bool:
+        incoming_temporal = temporal_record(incoming.facets)
+        candidate_temporal = temporal_record(candidate.facets)
+        if incoming_temporal is None or candidate_temporal is None:
+            return True
+        return incoming_temporal.get("role", "event_time") == candidate_temporal.get(
+            "role", "event_time"
         )
 
     async def _classify(
@@ -160,14 +183,16 @@ class ClaimReconsolidator:
         aliases = {f"E{index:03d}": claim for index, claim in enumerate(candidates, start=1)}
         candidate_text = "\n".join(
             f"[{alias}] type={claim.claim_type}; predicate={claim.predicate or 'unknown'}; "
-            f"slot={claim.slot or 'none'}; recorded_at={claim.recorded_at}\n{claim.text}"
+            f"slot={claim.slot or 'none'}; recorded_at={claim.recorded_at}; "
+            f"temporal={self._temporal_summary(claim)}\n{claim.text}"
             for alias, claim in aliases.items()
         )
         system, user = prompts.claim_reconsolidation_prompt(
             "N001",
             (
                 f"type={incoming.claim_type}; predicate={incoming.predicate or 'unknown'}; "
-                f"slot={incoming.slot or 'none'}; recorded_at={incoming.recorded_at}\n"
+                f"slot={incoming.slot or 'none'}; recorded_at={incoming.recorded_at}; "
+                f"temporal={self._temporal_summary(incoming)}\n"
                 f"{incoming.text}"
             ),
             candidate_text,
@@ -202,6 +227,17 @@ class ClaimReconsolidator:
             target,
             str(decision.get("explanation", "")).strip(),
             max(0.0, min(1.0, float(decision.get("confidence", 0.8)))),
+        )
+
+    @staticmethod
+    def _temporal_summary(claim: MemoryClaim) -> str:
+        temporal = temporal_record(claim.facets)
+        if temporal is None:
+            return "none"
+        return ",".join(
+            f"{key}={temporal[key]}"
+            for key in ("role", "status", "start", "end", "certainty", "expression")
+            if temporal.get(key) is not None
         )
 
     @staticmethod

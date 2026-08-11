@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Literal
 
-from mycelium.artifacts import MemoryClaim, parse_source_datetime
+from mycelium.artifacts import MemoryClaim, parse_source_datetime, temporal_record
 
 ProjectionScope = Literal["main", "timeline", "details", "insights", "interaction_archive"]
 
@@ -58,11 +58,22 @@ def presentation_bucket(claim: MemoryClaim) -> str:
 
 
 def claim_date_key(claim: MemoryClaim) -> str:
-    normalized = claim.facets.get("normalized_date")
-    if normalized:
-        if claim.facets.get("date_precision") == "week":
-            return f"Week of {normalized}"
-        return str(normalized)
+    temporal = temporal_record(claim.facets)
+    if temporal and temporal.get("status") in {"resolved", "bounded"}:
+        start = str(temporal.get("start") or "")
+        end = str(temporal.get("end") or start)
+        precision = temporal.get("precision")
+        if precision == "week":
+            return f"Week of {start}"
+        if precision == "month":
+            return start[:7]
+        if precision == "year":
+            return start[:4]
+        if start and end and start != end:
+            prefix = "Approx. " if temporal.get("certainty") == "approximate" else ""
+            return f"{prefix}{start} to {end}"
+        if start:
+            return start
     observed = claim.facets.get("observed_at")
     parsed = parse_source_datetime(str(observed)) if observed else None
     if parsed:
@@ -87,7 +98,10 @@ def project_claim(claim: MemoryClaim) -> ProjectedClaim:
         score += 0.18
     if is_timeline:
         score += 0.08
-    if claim.facets.get("normalized_date") or claim.facets.get("deadline"):
+    temporal = temporal_record(claim.facets)
+    if (
+        temporal and temporal.get("status") in {"resolved", "bounded"}
+    ) or claim.facets.get("deadline"):
         score += 0.08
     if claim.slot:
         score += 0.10
@@ -283,14 +297,21 @@ def compact_qualifiers(claim: MemoryClaim, *, include_date: bool = False) -> lis
     facets = claim.facets
     qualifiers: list[str] = []
     claim_terms = _diversity_terms(display_claim_text(claim))
-    when = facets.get("when") or facets.get("time_expression")
-    normalized = facets.get("normalized_date")
-    if include_date and normalized:
-        label = "event week" if facets.get("date_precision") == "week" else "event date"
-        qualifiers.append(f"{label}: {normalized}")
-    if when and str(when).lower() != str(normalized).lower():
-        qualifiers.append(f"stated: {when}")
-    for key in ("location", "reason", "deadline", "owner", "value", "quantity"):
+    temporal = temporal_record(facets)
+    expression = str(temporal.get("expression") or "") if temporal else ""
+    if include_date and temporal and temporal.get("status") in {"resolved", "bounded"}:
+        start = str(temporal.get("start") or "")
+        end = str(temporal.get("end") or start)
+        if temporal.get("role") == "deadline":
+            label = "deadline"
+        elif temporal.get("certainty") == "approximate":
+            label = "approximate interval"
+        else:
+            label = "event interval" if start != end else "event date"
+        qualifiers.append(f"{label}: {start}" + (f" to {end}" if start != end else ""))
+    if expression:
+        qualifiers.append(f"stated: {expression}")
+    for key in ("location", "reason", "owner", "value", "quantity"):
         value = facets.get(key)
         if isinstance(value, (str, int, float)) and str(value).strip():
             value_terms = _diversity_terms(str(value))
@@ -322,8 +343,10 @@ def compact_record_qualifiers(
 def display_claim_text(claim: MemoryClaim) -> str:
     """Remove model-added calendar dates that conflict with normalized relative time."""
     text = claim.text.strip()
-    when = str(claim.facets.get("when") or claim.facets.get("time_expression") or "").strip()
-    if claim.facets.get("normalized_date") and when.lower() in {"today", "yesterday", "tomorrow"}:
+    temporal = temporal_record(claim.facets)
+    when = str(temporal.get("expression") or "").strip() if temporal else ""
+    normalized_date = str(temporal.get("start") or "") if temporal else ""
+    if normalized_date and when.lower() in {"today", "yesterday", "tomorrow"}:
         month = (
             r"(?:january|february|march|april|may|june|july|august|september|"
             r"october|november|december)"
@@ -337,7 +360,6 @@ def display_claim_text(claim: MemoryClaim) -> str:
             text,
             flags=re.I,
         )
-    normalized_date = str(claim.facets.get("normalized_date") or "")
     relative_time = re.fullmatch(
         r"(?:today|yesterday|tomorrow|last week|next week|this month|"
         r"(?:last|next) (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))",

@@ -81,15 +81,19 @@ async def run_locomo(
                 f"(source index {question_index})",
                 flush=True,
             )
+            answer_metadata = {
+                "sample_id": sample_id,
+                "query_id": f"{sample_id}-q{question_index}",
+                "category": qa.get("category"),
+            }
+            if system.name == "gold_evidence":
+                answer_metadata["gold_evidence"] = qa.get("evidence") or []
             answer = await system.answer(
                 question,
-                {
-                    "sample_id": sample_id,
-                    "query_id": f"{sample_id}-q{question_index}",
-                    "category": qa.get("category"),
-                },
+                answer_metadata,
             )
             _record_retrieval_evidence(answer, qa.get("evidence"))
+            _record_evidence_survival(answer, qa.get("evidence"))
             score = locomo_score(answer.output, qa.get("answer", ""), int(qa.get("category", 0)))
             qa[prediction_key] = answer.output
             qa[f"{prediction_key}_score"] = round(score, 4)
@@ -205,6 +209,33 @@ def summarize_locomo_run(rows: list[dict[str, Any]], started: float, prediction_
                 1.0 if metric["all_evidence_present"] else 0.0 for metric in measured
             ),
         }
+    survival_reports = [
+        row.get("metadata", {}).get("evidence_survival")
+        for row in rows
+    ]
+    measured_survival = [
+        report for report in survival_reports if isinstance(report, dict)
+    ]
+    if measured_survival:
+        stages = sorted({
+            stage for report in measured_survival for stage in report
+        })
+        summary["evidence_survival"] = {
+            stage: {
+                "question_count": len(stage_reports),
+                "mean_recall": mean(item["recall"] for item in stage_reports),
+                "all_evidence_question_rate": mean(
+                    1.0 if item["all_evidence_present"] else 0.0
+                    for item in stage_reports
+                ),
+            }
+            for stage in stages
+            if (stage_reports := [
+                report[stage]
+                for report in measured_survival
+                if isinstance(report.get(stage), dict)
+            ])
+        }
     return summary
 
 
@@ -227,6 +258,26 @@ def _record_retrieval_evidence(answer: Any, evidence: Any) -> None:
         "recall": len(present) / len(required),
         "all_evidence_present": len(present) == len(required),
     }
+
+
+def _record_evidence_survival(answer: Any, evidence: Any) -> None:
+    stage_labels = answer.metadata.pop("_evidence_stage_labels", None)
+    if not isinstance(stage_labels, dict):
+        return
+    required = [str(label) for label in evidence or [] if str(label)]
+    if not required:
+        return
+    report = {}
+    for stage, raw_labels in stage_labels.items():
+        labels = {str(label) for label in raw_labels or []}
+        present = [label for label in required if label in labels]
+        report[str(stage)] = {
+            "required": required,
+            "present": present,
+            "recall": len(present) / len(required),
+            "all_evidence_present": len(present) == len(required),
+        }
+    answer.metadata["evidence_survival"] = report
 
 
 def mean(values: Any) -> float:

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 from mycelium.core import Mycelium
 from mycelium.models import WikiPage
 from datetime import datetime
+from mycelium.artifacts import ClaimProvenance, MemoryClaim
 
 @pytest.fixture
 def temp_mycelium(tmp_path):
@@ -82,3 +83,34 @@ async def test_full_page_search_routes_without_llm(temp_mycelium):
 
     assert loaded[0].slug == "person-jon"
     temp_mycelium.llm.call_structured.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_temporal_claim_routes_generic_deadline_query(temp_mycelium):
+    now = datetime.fromisoformat("2026-08-11T10:00:00-07:00")
+    temp_mycelium.wiki.save(WikiPage(
+        slug="project-alpha", title="Project Alpha", content="Quarterly report work.",
+        created=now, last_updated=now, version=1, confidence=0.9, importance=0.8,
+        page_type="project",
+    ))
+    temp_mycelium.artifacts.save_claim(MemoryClaim(
+        claim_id="deadline",
+        text="Ava will send the report.",
+        kind="commitment",
+        about=[{"entity": "Ava"}],
+        provenance=[ClaimProvenance("source-1", ["segment-1"])],
+        recorded_at=now.isoformat(),
+        page_slugs=["project-alpha"],
+        claim_type="commitment",
+        facets={"temporal": {
+            "expression": "next Thursday", "role": "deadline",
+            "status": "resolved", "certainty": "exact",
+            "start": "2026-08-20", "end": "2026-08-20",
+        }},
+    ))
+
+    loaded = await temp_mycelium.load_context(
+        "What is due next week?", query_time=now
+    )
+
+    assert [page.slug for page in loaded] == ["project-alpha"]

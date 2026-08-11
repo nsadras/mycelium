@@ -90,7 +90,9 @@ segment IDs that directly support the claim. Do not invent context or combine un
 Populate claim_type (identity/state/event/preference/plan/belief/relationship/decision/commitment/
 interaction/observation/unknown), an open predicate, evidence_modality, temporal_status, about,
 speaker, confidence, optional replaceable-state slot, and open facets. Put exact time wording in
-facets.when. Use inferred only for a strong implication with facets.inference_basis and confidence at
+facets.when for event times and facets.deadline for due dates. Never convert relative time yourself;
+preserve phrases such as “by Friday” or “in three days” exactly so the deterministic resolver can anchor
+them to OCCURRED AT. Use inferred only for a strong implication with facets.inference_basis and confidence at
 most 0.7.
 
 Account for every segment once: cite it from claims when substantive, or put it in

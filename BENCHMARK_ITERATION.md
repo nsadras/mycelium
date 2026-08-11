@@ -16,6 +16,14 @@ RUN_TAG=<hypothesis> SAMPLE_INDEX=2 scripts/benchmark-locomo-convo2.sh
 Inspect `summary.json`, `predictions.jsonl`, and `stores/*/{artifacts,wiki}` under the resulting
 `benchmark_runs/locomo-mycelium-convo-<index>-<tag>/` directory.
 
+For retrieval and answer-context experiments, set `FROZEN_STORE` to an exact completed case store and
+`DREAM_POLICY=none`. This skips ingestion and consolidation so only retrieval and answering can vary.
+Use `INCLUDE_RETRIEVAL_CONTEXT=1` only for synthetic or otherwise approved data; it intentionally writes
+the rendered memory context into benchmark metadata for qualitative inspection.
+
+For fast hypothesis screening, set `QUESTIONS_PER_CATEGORY` to run the same balanced panel while preserving
+source question indices. Graduate promising changes to all questions before retaining them.
+
 ## Iteration Loop
 
 1. Record the tag, git state, models/configuration, sample, scores, coverage, failures, and wiki size.

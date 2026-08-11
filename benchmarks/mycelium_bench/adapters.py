@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,7 +11,6 @@ from typing import Any, Protocol
 from mycelium.core import Mycelium
 from mycelium.artifacts import ArtifactStore, MemoryClaim
 from mycelium.consolidation import ClaimRoute
-from mycelium.facts import page_recall_context
 from mycelium.store import LogStore, WikiStore
 from mycelium.ollama import OllamaClient
 from mycelium.structured_outputs import GroundedAnswerOutput
@@ -158,6 +158,8 @@ class MyceliumMemorySystem:
         dream_policy: str = "per-batch",
         replay_store: Path | None = None,
         replay_assignments: bool = False,
+        frozen_store: Path | None = None,
+        include_retrieval_context: bool = False,
     ) -> None:
         self.run_dir = run_dir
         self.qa_client = qa_client
@@ -168,6 +170,8 @@ class MyceliumMemorySystem:
         self.dream_policy = dream_policy
         self.replay_store = replay_store
         self.replay_assignments = replay_assignments
+        self.frozen_store = frozen_store
+        self.include_retrieval_context = include_retrieval_context
         self.case_id = "uninitialized"
         self.mem: Mycelium | None = None
         self._encoded_batches = 0
@@ -181,6 +185,8 @@ class MyceliumMemorySystem:
     async def reset(self, case_id: str) -> None:
         self.case_id = sanitize_path_part(case_id)
         store_path = self.run_dir / "stores" / self.case_id
+        if self.frozen_store is not None:
+            shutil.copytree(self.frozen_store, store_path, dirs_exist_ok=True)
         store_path.mkdir(parents=True, exist_ok=True)
         self.mem = Mycelium(
             store_path=store_path,
@@ -216,6 +222,8 @@ class MyceliumMemorySystem:
 
     async def memorize(self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None) -> None:
         if not messages:
+            return
+        if self.frozen_store is not None:
             return
         mem = self._require_mem()
         metadata = metadata or {}
@@ -287,9 +295,13 @@ class MyceliumMemorySystem:
                 ],
             }
         )
+        if self.include_retrieval_context:
+            answer.metadata["retrieval_context"] = context
         return answer
 
     async def finalize_case(self) -> None:
+        if self.frozen_store is not None:
+            return
         if (
             self.dream_policy == "per-case"
             and self.mem is not None
@@ -480,6 +492,8 @@ def build_memory_system(
     dream_policy: str,
     replay_store: Path | None = None,
     replay_assignments: bool = False,
+    frozen_store: Path | None = None,
+    include_retrieval_context: bool = False,
 ) -> MemorySystem:
     if replay_store is not None and system_name not in {"mycelium", "full_wiki"}:
         raise ValueError("--replay-store is only supported by mycelium and full_wiki")
@@ -487,6 +501,10 @@ def build_memory_system(
         raise ValueError(f"Replay store does not exist: {replay_store}")
     if replay_assignments and replay_store is None:
         raise ValueError("--replay-assignments requires --replay-store")
+    if frozen_store is not None and replay_store is not None:
+        raise ValueError("--frozen-store and --replay-store are mutually exclusive")
+    if frozen_store is not None and not frozen_store.is_dir():
+        raise ValueError(f"Frozen store does not exist: {frozen_store}")
     qa_client = OllamaQaClient(model=qa_model, url=ollama_url)
     if system_name == "mycelium":
         return MyceliumMemorySystem(
@@ -499,6 +517,8 @@ def build_memory_system(
             dream_policy=dream_policy,
             replay_store=replay_store,
             replay_assignments=replay_assignments,
+            frozen_store=frozen_store,
+            include_retrieval_context=include_retrieval_context,
         )
     if system_name == "full_wiki":
         return FullWikiMemorySystem(
@@ -511,6 +531,8 @@ def build_memory_system(
             dream_policy=dream_policy,
             replay_store=replay_store,
             replay_assignments=replay_assignments,
+            frozen_store=frozen_store,
+            include_retrieval_context=include_retrieval_context,
         )
     if system_name == "null":
         return NullMemorySystem(qa_client)
@@ -543,8 +565,7 @@ def format_messages_for_memory(messages: list[BenchmarkMessage], metadata: dict[
 
 
 def format_page_for_prompt(page: Any, *, include_source: bool = False) -> str:
-    recall_context = page_recall_context(page)
-    body = f"{recall_context}\n\n{page.content}" if recall_context else page.content
+    body = page.content
     source_context = getattr(page, "source_context", "") if include_source else ""
     if source_context:
         return f"{body}\n\n{source_context}"

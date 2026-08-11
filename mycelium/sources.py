@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from mycelium.lexical import query_term_weights, terms
 from mycelium.models import LogEntry, WikiPage
 from mycelium.store import LogStore
 
@@ -13,7 +14,7 @@ class SourceSnippet:
     session_id: str
     timestamp: str
     text: str
-    score: int
+    score: float
 
 
 def source_context_for_page(
@@ -38,7 +39,8 @@ def source_context_for_page(
     for snippet in snippets:
         lines.append(
             f"- {snippet.entry_id} "
-            f"(session={snippet.session_id or 'unknown'}, time={snippet.timestamp}, score={snippet.score})"
+            f"(session={snippet.session_id or 'unknown'}, time={snippet.timestamp}, "
+            f"score={snippet.score:.3f})"
         )
         lines.append(_indent(snippet.text.strip()))
     return "\n".join(lines)
@@ -50,7 +52,7 @@ def source_contexts_for_pages(
     query: str,
     *,
     max_entries: int = 6,
-    max_chars_per_entry: int = 2200,
+    max_chars_per_entry: int = 1400,
 ) -> dict[str, str]:
     """Select source evidence once across all loaded pages.
 
@@ -85,7 +87,7 @@ def source_contexts_for_pages(
             lines.append(
                 f"- {snippet.entry_id} "
                 f"(session={snippet.session_id or 'unknown'}, conversation_time={snippet.timestamp}, "
-                f"score={snippet.score})"
+                f"score={snippet.score:.3f})"
             )
             lines.append(_indent(snippet.text.strip()))
         contexts[slug] = "\n".join(lines)
@@ -99,11 +101,19 @@ def select_source_snippets(
     max_entries: int = 4,
     max_chars_per_entry: int = 1800,
 ) -> list[SourceSnippet]:
-    query_terms = _terms(query)
+    query_terms = terms(query)
+    term_weights = query_term_weights(
+        [entry.content for entry in entries], query
+    )
     ranked: list[SourceSnippet] = []
 
     for entry in entries:
-        text, score = _best_window(entry.content, query_terms, max_chars=max_chars_per_entry)
+        text, score = _best_window(
+            entry.content,
+            query_terms,
+            term_weights=term_weights,
+            max_chars=max_chars_per_entry,
+        )
         if not text:
             continue
         ranked.append(
@@ -121,7 +131,13 @@ def select_source_snippets(
     return ranked[:max_entries]
 
 
-def _best_window(content: str, query_terms: set[str], *, max_chars: int) -> tuple[str, int]:
+def _best_window(
+    content: str,
+    query_terms: set[str],
+    *,
+    term_weights: dict[str, float],
+    max_chars: int,
+) -> tuple[str, float]:
     content = content.strip()
     if not content:
         return "", 0
@@ -132,8 +148,8 @@ def _best_window(content: str, query_terms: set[str], *, max_chars: int) -> tupl
 
     scored_lines = []
     for idx, line in enumerate(lines):
-        line_terms = _terms(line)
-        overlap = len(query_terms & line_terms)
+        line_terms = terms(line)
+        overlap = sum(term_weights[term] for term in query_terms & line_terms)
         scored_lines.append((overlap, idx))
 
     best_score, best_idx = max(scored_lines, key=lambda item: item[0])
@@ -171,14 +187,6 @@ def _window_around(lines: list[str], center_idx: int, *, max_chars: int) -> str:
     return current
 
 
-def _terms(text: str) -> set[str]:
-    return {
-        token
-        for token in re.findall(r"[a-z0-9][a-z0-9'-]{2,}", text.lower())
-        if token not in _STOPWORDS
-    }
-
-
 def _clip(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
@@ -192,46 +200,3 @@ def _indent(text: str) -> str:
 def _conversation_timestamp(text: str) -> str | None:
     match = re.search(r"^Timestamp:\s*(.+?)\s*$", text, re.MULTILINE | re.IGNORECASE)
     return match.group(1).strip() if match else None
-
-
-_STOPWORDS = {
-    "about",
-    "after",
-    "also",
-    "and",
-    "are",
-    "because",
-    "but",
-    "can",
-    "did",
-    "does",
-    "for",
-    "from",
-    "had",
-    "has",
-    "have",
-    "her",
-    "him",
-    "his",
-    "how",
-    "into",
-    "not",
-    "that",
-    "the",
-    "their",
-    "then",
-    "there",
-    "they",
-    "this",
-    "was",
-    "were",
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "why",
-    "with",
-    "you",
-    "your",
-}

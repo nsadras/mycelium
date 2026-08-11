@@ -12,9 +12,14 @@ from benchmarks.mycelium_bench.adapters import (
     BenchmarkMessage,
     OllamaQaClient,
     format_messages_for_memory,
+    format_page_for_prompt,
 )
 from benchmarks.mycelium_bench.adapters import MyceliumMemorySystem
-from benchmarks.mycelium_bench.locomo import iter_locomo_sessions, run_locomo
+from benchmarks.mycelium_bench.locomo import (
+    iter_locomo_sessions,
+    run_locomo,
+    select_questions_per_category,
+)
 from benchmarks.mycelium_bench.scoring import locomo_score
 from mycelium.core import Mycelium
 from mycelium.artifacts import (
@@ -59,6 +64,20 @@ class FakeMemorySystem:
         return {"messages": len(self.messages)}
 
 
+class EvidenceMemorySystem(FakeMemorySystem):
+    async def answer(self, question: str, metadata=None) -> BenchmarkAnswer:
+        answer = await super().answer(question, metadata)
+        answer.metadata["retrieval_context"] = "[D1:1] Avery adopted Pixel."
+        return answer
+
+
+class EmptyEvidenceMemorySystem(FakeMemorySystem):
+    async def answer(self, question: str, metadata=None) -> BenchmarkAnswer:
+        answer = await super().answer(question, metadata)
+        answer.metadata["retrieval_context"] = ""
+        return answer
+
+
 def test_locomo_session_parser_orders_sessions():
     sample = {
         "conversation": {
@@ -73,6 +92,19 @@ def test_locomo_session_parser_orders_sessions():
     assert [session_id for session_id, _, _ in sessions] == ["session_1", "session_2", "session_10"]
 
 
+def test_select_questions_per_category_preserves_source_indices():
+    questions = [
+        (0, {"category": 1}),
+        (1, {"category": 1}),
+        (2, {"category": 2}),
+        (3, {"category": 2}),
+    ]
+
+    selected = select_questions_per_category(questions, 1)
+
+    assert [index for index, _ in selected] == [0, 2]
+
+
 def test_format_messages_includes_metadata_and_speaker():
     text = format_messages_for_memory(
         [BenchmarkMessage(role="user", speaker="Avery", content="I adopted Pixel.", message_id="D1:1")],
@@ -82,6 +114,18 @@ def test_format_messages_includes_metadata_and_speaker():
     assert "Sample: s1" in text
     assert "Session: session_1" in text
     assert "[D1:1] Avery: I adopted Pixel." in text
+
+
+def test_benchmark_page_rendering_renders_nested_recall_fact_once():
+    page = type(
+        "Page", (),
+        {
+            "content": "## Key Facts\n\n### Current Context\n- A single useful fact.",
+            "source_context": "",
+        },
+    )()
+
+    assert format_page_for_prompt(page).count("A single useful fact") == 1
 
 
 def test_locomo_score_matches_multi_answer_parts():
@@ -102,6 +146,45 @@ async def test_run_locomo_writes_predictions(tmp_path):
     assert (tmp_path / "predictions.json").exists()
     assert (tmp_path / "predictions.jsonl").exists()
     assert (tmp_path / "summary.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_run_locomo_reports_labeled_retrieval_evidence_recall(tmp_path):
+    summary = await run_locomo(
+        data_path=Path("tests/fixtures/locomo_tiny.json"),
+        output_dir=tmp_path,
+        system=EvidenceMemorySystem(),
+        prediction_key="fake_prediction",
+    )
+
+    row = json.loads((tmp_path / "predictions.jsonl").read_text(encoding="utf-8"))
+    assert row["metadata"]["retrieval_evidence"] == {
+        "required": ["D1:1"],
+        "present": ["D1:1"],
+        "recall": 1.0,
+        "all_evidence_present": True,
+    }
+    assert summary["retrieval_evidence"] == {
+        "question_count": 1,
+        "mean_recall": 1.0,
+        "all_evidence_question_rate": 1.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_locomo_counts_empty_retrieval_context_as_zero_recall(tmp_path):
+    summary = await run_locomo(
+        data_path=Path("tests/fixtures/locomo_tiny.json"),
+        output_dir=tmp_path,
+        system=EmptyEvidenceMemorySystem(),
+        prediction_key="fake_prediction",
+    )
+
+    assert summary["retrieval_evidence"] == {
+        "question_count": 1,
+        "mean_recall": 0.0,
+        "all_evidence_question_rate": 0.0,
+    }
 
 
 @pytest.mark.asyncio
@@ -202,6 +285,30 @@ async def test_mycelium_benchmark_adapter_surfaces_encode_failure_without_fallba
         ])
 
     system.mem.encoder.encode_session.assert_awaited_once()
+    assert system.stats()["encoded_batches"] == 0
+
+
+@pytest.mark.asyncio
+async def test_frozen_store_is_copied_exactly_and_skips_memorization(tmp_path):
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "marker.txt").write_text("exact fixture", encoding="utf-8")
+    system = MyceliumMemorySystem(
+        run_dir=tmp_path / "run",
+        qa_client=object(),
+        memory_model="test",
+        ollama_url="http://localhost:11434",
+        dream_policy="none",
+        frozen_store=fixture,
+    )
+
+    await system.reset("case-1")
+    system.mem.encoder.encode_session = AsyncMock()
+    await system.memorize([BenchmarkMessage(role="user", content="must be skipped")])
+
+    copied = tmp_path / "run" / "stores" / "case-1" / "marker.txt"
+    assert copied.read_text(encoding="utf-8") == "exact fixture"
+    system.mem.encoder.encode_session.assert_not_awaited()
     assert system.stats()["encoded_batches"] == 0
 
 

@@ -19,6 +19,12 @@ def main() -> None:
     locomo.add_argument("--locomo-path", type=Path, default=Path("../locomo/data/locomo10.json"))
     locomo.add_argument("--max-samples", type=int, default=None)
     locomo.add_argument("--max-questions", type=int, default=None)
+    locomo.add_argument(
+        "--questions-per-category",
+        type=int,
+        default=None,
+        help="Run the first N questions in each category as a balanced diagnostic panel.",
+    )
     locomo.add_argument("--sample-index", type=int, default=None, help="Run one 1-based LoCoMo sample index.")
 
     mab = subparsers.add_parser("mab", help="Run MemoryAgentBench through its data/metric utilities.")
@@ -42,6 +48,8 @@ def main() -> None:
         dream_policy=args.dream_policy,
         replay_store=args.replay_store,
         replay_assignments=args.replay_assignments,
+        frozen_store=args.frozen_store,
+        include_retrieval_context=args.include_retrieval_context,
     )
 
     if args.benchmark == "locomo":
@@ -53,6 +61,7 @@ def main() -> None:
                 prediction_key=args.prediction_key or f"{args.system}_prediction",
                 max_samples=args.max_samples,
                 max_questions=args.max_questions,
+                questions_per_category=args.questions_per_category,
                 sample_index=args.sample_index,
             )
         )
@@ -91,9 +100,20 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         help="Reuse frozen source, episode, claim, and log artifacts instead of extracting again.",
     )
     parser.add_argument(
+        "--frozen-store",
+        type=Path,
+        default=None,
+        help="Copy an exact completed store and benchmark retrieval/answering only.",
+    )
+    parser.add_argument(
         "--replay-assignments",
         action="store_true",
         help="Preserve fixture claim-to-page assignments and benchmark projection only.",
+    )
+    parser.add_argument(
+        "--include-retrieval-context",
+        action="store_true",
+        help="Persist rendered benchmark context for qualitative inspection.",
     )
 
 

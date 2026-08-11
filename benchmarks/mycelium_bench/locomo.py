@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -18,6 +19,7 @@ async def run_locomo(
     prediction_key: str,
     max_samples: int | None = None,
     max_questions: int | None = None,
+    questions_per_category: int | None = None,
     sample_index: int | None = None,
 ) -> dict[str, Any]:
     samples = json.loads(data_path.read_text(encoding="utf-8"))
@@ -58,16 +60,25 @@ async def run_locomo(
         print(f"[locomo] sample {sample_id} finalize memory", flush=True)
         await system.finalize_case()
 
-        output_sample = {"sample_id": sample_id, "qa": deepcopy(sample.get("qa", [])), "system_stats": system.stats()}
-        qas = output_sample["qa"]
+        all_qas = deepcopy(sample.get("qa", []))
+        indexed_qas = list(enumerate(all_qas))
+        if questions_per_category is not None:
+            indexed_qas = select_questions_per_category(
+                indexed_qas, questions_per_category
+            )
         if max_questions is not None:
-            qas = qas[:max_questions]
-            output_sample["qa"] = qas
+            indexed_qas = indexed_qas[:max_questions]
+        output_sample = {
+            "sample_id": sample_id,
+            "qa": [qa for _, qa in indexed_qas],
+            "system_stats": system.stats(),
+        }
 
-        for question_index, qa in enumerate(qas):
+        for panel_index, (question_index, qa) in enumerate(indexed_qas):
             question = str(qa.get("question", ""))
             print(
-                f"[locomo] sample {sample_id} answer question {question_index + 1}/{len(qas)}",
+                f"[locomo] sample {sample_id} answer question {panel_index + 1}/{len(indexed_qas)} "+
+                f"(source index {question_index})",
                 flush=True,
             )
             answer = await system.answer(
@@ -78,6 +89,7 @@ async def run_locomo(
                     "category": qa.get("category"),
                 },
             )
+            _record_retrieval_evidence(answer, qa.get("evidence"))
             score = locomo_score(answer.output, qa.get("answer", ""), int(qa.get("category", 0)))
             qa[prediction_key] = answer.output
             qa[f"{prediction_key}_score"] = round(score, 4)
@@ -150,6 +162,23 @@ def session_sort_key(key: str) -> tuple[int, str]:
         return (10**9, key)
 
 
+def select_questions_per_category(
+    indexed_qas: list[tuple[int, dict[str, Any]]], limit: int
+) -> list[tuple[int, dict[str, Any]]]:
+    if limit <= 0:
+        raise ValueError("--questions-per-category must be positive")
+    counts: dict[str, int] = {}
+    selected = []
+    for question_index, qa in indexed_qas:
+        category = str(qa.get("category"))
+        count = counts.get(category, 0)
+        if count >= limit:
+            continue
+        selected.append((question_index, qa))
+        counts[category] = count + 1
+    return selected
+
+
 def summarize_locomo_run(rows: list[dict[str, Any]], started: float, prediction_key: str) -> dict[str, Any]:
     summary = summarize_scores(rows)
     summary.update(
@@ -163,7 +192,41 @@ def summarize_locomo_run(rows: list[dict[str, Any]], started: float, prediction_
             "mean_query_time": mean(row["query_time_len"] for row in rows),
         }
     )
+    evidence_metrics = [
+        row.get("metadata", {}).get("retrieval_evidence")
+        for row in rows
+    ]
+    measured = [metric for metric in evidence_metrics if isinstance(metric, dict)]
+    if measured:
+        summary["retrieval_evidence"] = {
+            "question_count": len(measured),
+            "mean_recall": mean(metric["recall"] for metric in measured),
+            "all_evidence_question_rate": mean(
+                1.0 if metric["all_evidence_present"] else 0.0 for metric in measured
+            ),
+        }
     return summary
+
+
+def _record_retrieval_evidence(answer: Any, evidence: Any) -> None:
+    """Measure labeled-source recall when a synthetic benchmark context is retained."""
+    context = answer.metadata.get("retrieval_context")
+    if not isinstance(context, str):
+        return
+    required = [str(label) for label in evidence or [] if str(label)]
+    if not required:
+        return
+    present = [
+        label
+        for label in required
+        if re.search(rf"(?<![A-Za-z0-9]){re.escape(label)}(?![A-Za-z0-9])", context)
+    ]
+    answer.metadata["retrieval_evidence"] = {
+        "required": required,
+        "present": present,
+        "recall": len(present) / len(required),
+        "all_evidence_present": len(present) == len(required),
+    }
 
 
 def mean(values: Any) -> float:

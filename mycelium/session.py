@@ -1,7 +1,6 @@
 from typing import List, Dict, TYPE_CHECKING
 
 from mycelium.models import WikiPage
-from mycelium.facts import page_recall_context
 
 if TYPE_CHECKING:
     from mycelium.core import Mycelium
@@ -33,8 +32,7 @@ class Session:
         blocks = []
         for page in self.loaded_pages:
             header = f"=== MEMORY: {page.title} (confidence: {page.confidence:.2f}, v{page.version}) ==="
-            recall_context = page_recall_context(page)
-            body = f"{recall_context}\n\n{page.content}" if recall_context else page.content
+            body = page.content
             if page.source_context:
                 body = f"{body}\n\n{page.source_context}"
             blocks.append(f"{header}\n{body}")

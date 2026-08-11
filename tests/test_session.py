@@ -45,3 +45,18 @@ async def test_session_lifecycle(temp_mycelium):
         assert "USER: Hello assistant" in args[0]
         assert "ASSISTANT: Hello user" in args[0]
         assert args[1] == "ses-123"
+
+
+def test_memory_context_renders_nested_recall_fact_once(temp_mycelium):
+    page = WikiPage(
+        slug="test-page", title="Test Page",
+        content="## Key Facts\n\n### Current Context\n- A single useful fact.",
+        created=None, last_updated=None, version=1, confidence=0.8,
+        importance=0.5,
+    )
+    from mycelium.session import Session
+
+    session = Session(temp_mycelium, "test", "question")
+    session.loaded_pages = [page]
+
+    assert session.memory_context.count("A single useful fact") == 1

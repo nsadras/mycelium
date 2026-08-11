@@ -1,7 +1,11 @@
 from datetime import datetime
 
 from mycelium.models import LogEntry, WikiPage
-from mycelium.sources import source_context_for_page, source_contexts_for_pages
+from mycelium.sources import (
+    select_source_snippets,
+    source_context_for_page,
+    source_contexts_for_pages,
+)
 from mycelium.store import LogStore
 
 
@@ -79,3 +83,50 @@ def test_source_contexts_for_pages_deduplicates_logs_and_preserves_conversation_
     assert combined.count(entry.entry_id) == 1
     assert "conversation_time=4:04 pm on 20 January, 2023" in combined
     assert "Jon: I lost my banker job yesterday." in combined
+
+
+def test_source_ranking_uses_rare_terms_without_losing_named_entity_weight():
+    entries = [
+        LogEntry(
+            entry_id="common", session_id="one", timestamp=datetime.now(),
+            content="Gina discussed her store.\nGina discussed her weekly plans.",
+            importance=0.8, status="raw",
+        ),
+        LogEntry(
+            entry_id="specific", session_id="two", timestamp=datetime.now(),
+            content="Gina mentioned Shia Labeouf during the interview.",
+            importance=0.8, status="raw",
+        ),
+        LogEntry(
+            entry_id="wrong-person", session_id="three", timestamp=datetime.now(),
+            content="Jon mentioned Shia Labeouf during the interview.",
+            importance=0.8, status="raw",
+        ),
+    ]
+
+    snippets = select_source_snippets(
+        entries, "When did Gina mention Shia Labeouf?", max_entries=3
+    )
+
+    assert snippets[0].entry_id == "specific"
+    assert snippets[0].score > snippets[1].score
+
+
+def test_source_snippets_respect_narrow_evidence_window():
+    entry = LogEntry(
+        entry_id="long", session_id="one", timestamp=datetime.now(),
+        content="\n".join([
+            "Gina discussed unrelated plans." * 10,
+            "Gina mentioned Shia Labeouf during the interview.",
+            "Jon discussed unrelated plans." * 10,
+        ]),
+        importance=0.8, status="raw",
+    )
+
+    snippet = select_source_snippets(
+        [entry], "When did Gina mention Shia Labeouf?",
+        max_entries=1, max_chars_per_entry=90,
+    )[0]
+
+    assert len(snippet.text) <= 90
+    assert "Shia Labeouf" in snippet.text

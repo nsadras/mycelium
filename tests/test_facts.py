@@ -32,6 +32,27 @@ Readable summary.
     assert "| 7 May 2023 | Caroline attended an LGBTQ support group." in sections["Event Timeline"][1]
 
 
+def test_extract_recall_sections_preserves_nested_subsections():
+    content = """## Key Facts
+
+### Current Context
+- Gina owns a clothing store.
+
+### Goals & Plans
+- Gina plans to expand online.
+
+## Detailed Facts
+- This is outside the recall section.
+"""
+
+    sections = extract_recall_sections(content)
+
+    assert sections["Key Facts"] == [
+        "- Gina owns a clothing store.",
+        "- Gina plans to expand online.",
+    ]
+
+
 def test_page_recall_context_is_prompt_ready():
     page = WikiPage(
         slug="caroline-profile",

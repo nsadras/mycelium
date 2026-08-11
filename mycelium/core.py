@@ -10,10 +10,9 @@ from mycelium.ollama import OllamaClient
 from mycelium.encoder import Encoder
 from mycelium.budget import ContextBudget
 from mycelium.session import Session
-from mycelium import prompts
-from mycelium.facts import page_recall_context, routing_recall_index
+from mycelium.facts import routing_recall_index
 from mycelium.sources import source_contexts_for_pages
-from mycelium.structured_outputs import RoutingOutput
+from mycelium.page_search import PageSearchIndex
 from mycelium.artifacts import ArtifactStore
 
 class Mycelium:
@@ -41,6 +40,7 @@ class Mycelium:
         self._wiki = WikiStore(self.store_path / "wiki")
         self._log_store = LogStore(self.store_path / "logs")
         self.artifacts = ArtifactStore(self.store_path / "artifacts")
+        self._page_search = PageSearchIndex()
         self._ensure_seed_profile(memory_profile)
         self.llm = OllamaClient(
             url=self.config.llm.url,
@@ -139,67 +139,47 @@ class Mycelium:
         budget_tokens = budget_tokens or self.config.context_budget_tokens
         budget = ContextBudget(budget_tokens)
         
-        if not self.wiki.list_all():
+        pages = self.wiki.list_all()
+        if not pages:
             return []
 
-        index_content = self._routing_index()
-        budget.consume(index_content)
-        
-        if budget.remaining() <= 0:
-            return []
-            
-        system, user = prompts.routing_prompt(index_content, query, budget.remaining())
-        response = await self.llm.call_structured(system, user, RoutingOutput)
-        if not isinstance(response, list):
-            response = [response] if isinstance(response, dict) else []
-            
-        selections = []
-        for item in response:
-            if isinstance(item, dict) and "page" in item:
-                priority = int(item.get("priority", 5))
-                page_slug = item["page"].strip()
-                if page_slug.startswith("[[") and page_slug.endswith("]]"):
-                    page_slug = page_slug[2:-2]
-                page_slug = page_slug.replace(".md", "").strip().lower()
-                selections.append((priority, page_slug))
-                
-        # Entity-aware fallback: if a known entity/page matches the query, load it
+        selections = [
+            (rank, hit.slug)
+            for rank, hit in enumerate(
+                self._page_search.search(pages, query, limit=2), start=1
+            )
+        ]
+
+        # Explicit page names augment the lexical candidates. Keeping this
+        # decision separate from BM25 prevents a named participant from
+        # displacing the page that best matches the question's subject.
         import re
         query_words = set(re.findall(r'\b\w+\b', query.lower()))
         exclude_words = {"person", "place", "event", "topic", "project", "meeting", "convo", "chat", "page", "new"}
-        
-        existing_slugs = {p.slug: p for p in self.wiki.list_all()}
+
+        existing_slugs = {p.slug: p for p in pages}
         selected_slugs = {slug for _, slug in selections}
-        
-        for slug, p in existing_slugs.items():
-            if slug in selected_slugs:
-                continue
-            # Derived timeline/detail/archive pages should be selected explicitly
-            # by the router. Loading every child merely because its parent entity
-            # appears in the query recreates the original monolithic context.
-            if "derived-memory" in p.tags:
+
+        for slug, page in existing_slugs.items():
+            if slug in selected_slugs or "derived-memory" in page.tags:
                 continue
             slug_parts = set(slug.split("-")) - exclude_words
-            title_words = set(re.findall(r'\b\w+\b', p.title.lower())) - exclude_words
-            
-            # Match if slug parts or title words are in the query
+            title_words = set(re.findall(r'\b\w+\b', page.title.lower())) - exclude_words
             if (slug_parts & query_words) or (title_words & query_words):
                 selections.append((8, slug))
 
-        selections.sort(key=lambda x: x[0])
-        
+        selections.sort(key=lambda item: item[0])
+
         loaded_pages = []
         for priority, slug in selections:
             if not self.wiki.exists(slug):
                 continue
                 
             page = self.wiki.get(slug)
-            recall_context = page_recall_context(page)
-            recall_block = f"{recall_context}\n\n" if recall_context else ""
             content = (
                 f"=== MEMORY: {page.title} "
                 f"(confidence: {page.confidence:.2f}, v{page.version}) ===\n"
-                f"{recall_block}{page.content}\n=== END MEMORY ==="
+                f"{page.content}\n=== END MEMORY ==="
             )
             
             if budget.fits(content):

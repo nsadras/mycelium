@@ -13,10 +13,22 @@ def extract_recall_sections(content: str) -> dict[str, list[str]]:
 
     for raw_line in content.splitlines():
         line = raw_line.rstrip()
-        heading = re.match(r"^#{2,6}\s+(.+?)\s*$", line)
+        heading = re.match(r"^(#{2,6})\s+(.+?)\s*$", line)
         if heading:
-            title = _normalize_heading(heading.group(1))
-            current = next((name for name in RECALL_SECTION_NAMES if _normalize_heading(name) == title), None)
+            level = len(heading.group(1))
+            title = _normalize_heading(heading.group(2))
+            recall_section = next(
+                (
+                    name
+                    for name in RECALL_SECTION_NAMES
+                    if _normalize_heading(name) == title
+                ),
+                None,
+            )
+            if recall_section is not None:
+                current = recall_section
+            elif level <= 2:
+                current = None
             continue
         if current is None:
             continue

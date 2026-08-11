@@ -24,11 +24,20 @@ extra_args=()
 if [ -n "${MAX_QUESTIONS:-}" ]; then
   extra_args+=(--max-questions "${MAX_QUESTIONS}")
 fi
+if [ -n "${QUESTIONS_PER_CATEGORY:-}" ]; then
+  extra_args+=(--questions-per-category "${QUESTIONS_PER_CATEGORY}")
+fi
 if [ -n "${REPLAY_STORE:-}" ]; then
   extra_args+=(--replay-store "${REPLAY_STORE}")
 fi
+if [ -n "${FROZEN_STORE:-}" ]; then
+  extra_args+=(--frozen-store "${FROZEN_STORE}")
+fi
 if [ "${REPLAY_ASSIGNMENTS:-0}" = "1" ]; then
   extra_args+=(--replay-assignments)
+fi
+if [ "${INCLUDE_RETRIEVAL_CONTEXT:-0}" = "1" ]; then
+  extra_args+=(--include-retrieval-context)
 fi
 
 for system in "${SYSTEMS[@]}"; do

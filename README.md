@@ -172,6 +172,11 @@ context_budget_tokens = 32768
 
 The default memory store is `./mycelium_store`. Because it consists primarily of Markdown and JSON, it can be inspected with normal text tools or opened as a wiki outside the app. Raw logs and claim artifacts are canonical; wiki Markdown is a generated view and should not be edited directly.
 
+At retrieval time, Mycelium builds a lazy in-memory SQLite FTS5 projection over complete non-derived wiki
+pages. BM25 selects two page candidates, title/entity matches can add explicitly mentioned pages, and only
+then are page-linked source windows ranked and attached. The index is disposable and automatically refreshes
+when page versions or content change; the Markdown wiki remains the durable human-readable memory store.
+
 Stores created by older raw, hybrid, or page-rewrite reconsolidation pipelines are not migrated. Clear and re-encode them before using this version.
 
 ## Benchmarking taxonomy and projection changes
@@ -194,6 +199,17 @@ Use a normal run without `REPLAY_STORE` for the final end-to-end check.
 For a projection-only comparison, add `REPLAY_ASSIGNMENTS=1`. This preserves the fixture's primary
 claim-to-page assignments, skips routing and reconsolidation, and rebuilds page taxonomy and Markdown in
 a clean store. Use the same replay store for both sides of a renderer comparison.
+
+For retrieval-only comparisons against an exact completed store, use `FROZEN_STORE` instead. The
+benchmark copies that store verbatim, skips ingestion and Dream, and runs only retrieval and answering.
+Set `INCLUDE_RETRIEVAL_CONTEXT=1` when synthetic benchmark contexts need qualitative inspection:
+
+```bash
+FROZEN_STORE=benchmark_runs/<baseline>/stores/conv-30 \
+INCLUDE_RETRIEVAL_CONTEXT=1 QA_MODEL=gemma4:12b MEMORY_MODEL=gemma4:12b \
+RUN_TAG=retrieval-check SAMPLE_INDEX=2 DREAM_POLICY=none \
+scripts/benchmark-locomo-convo2.sh mycelium
+```
 
 ## License
 

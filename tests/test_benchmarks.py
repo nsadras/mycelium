@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+from datetime import datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -16,6 +17,16 @@ from benchmarks.mycelium_bench.adapters import MyceliumMemorySystem
 from benchmarks.mycelium_bench.locomo import iter_locomo_sessions, run_locomo
 from benchmarks.mycelium_bench.scoring import locomo_score
 from mycelium.core import Mycelium
+from mycelium.artifacts import (
+    ArtifactStore,
+    ClaimProvenance,
+    EpisodeManifest,
+    MemoryClaim,
+    SourceDocument,
+    SourceSegment,
+)
+from mycelium.models import LogEntry
+from mycelium.store import LogStore
 
 
 class FakeMemorySystem:
@@ -192,3 +203,167 @@ async def test_mycelium_benchmark_adapter_surfaces_encode_failure_without_fallba
 
     system.mem.encoder.encode_session.assert_awaited_once()
     assert system.stats()["encoded_batches"] == 0
+
+
+@pytest.mark.asyncio
+async def test_mycelium_benchmark_replays_frozen_extraction_artifacts(tmp_path):
+    fixture = tmp_path / "fixture"
+    artifacts = ArtifactStore(fixture / "artifacts")
+    logs = LogStore(fixture / "logs")
+    source = SourceDocument(
+        source_id="source-one",
+        source_type="multi_party_conversation",
+        session_id="session_1",
+        recorded_at="2026-08-05T10:00:00",
+        occurred_at="2023-01-01T10:00:00",
+        participants=["Jon"],
+        segments=[SourceSegment(
+            segment_id="source-one#seg-0001",
+            index=0,
+            speaker="Jon",
+            content="Jon likes dancing.",
+        )],
+        raw_log_entry_id="2026-08-05#session-one",
+    )
+    claim = MemoryClaim(
+        claim_id="claim-one",
+        text="Jon likes dancing.",
+        kind="fact",
+        about=[{"entity": "Jon"}],
+        provenance=[ClaimProvenance(
+            source_id=source.source_id,
+            segment_ids=[source.segments[0].segment_id],
+            raw_log_entry_id=source.raw_log_entry_id,
+            speaker="Jon",
+        )],
+        recorded_at=source.recorded_at,
+        page_slugs=["jon"],
+        links=[{"relation": "supports", "claim_id": "other"}],
+        dream_disposition="routed",
+        dream_run_id="old-run",
+    )
+    artifacts.save_source(source)
+    artifacts.save_claim(claim)
+    artifacts.save_episode(EpisodeManifest(
+        episode_id="episode-one",
+        source_id=source.source_id,
+        source_type=source.source_type,
+        occurred_at=source.occurred_at,
+        participants=source.participants,
+        segment_ids=[source.segments[0].segment_id],
+        claim_ids=[claim.claim_id],
+        extraction_status="complete",
+    ))
+    logs.append(LogEntry(
+        entry_id=source.raw_log_entry_id,
+        session_id=source.session_id,
+        timestamp=datetime(2026, 8, 5, 10, 0),
+        content="Frozen transcript",
+        importance=0.8,
+        status="consolidated",
+        consolidated=True,
+    ))
+
+    system = MyceliumMemorySystem(
+        run_dir=tmp_path / "run",
+        qa_client=object(),
+        memory_model="test",
+        ollama_url="http://localhost:11434",
+        dream_policy="none",
+        replay_store=fixture,
+    )
+    await system.reset("case-1")
+    await system.memorize(
+        [BenchmarkMessage(role="user", content="Ignored because replay is enabled.")],
+        {"session_id": "session_1"},
+    )
+
+    replayed = system.mem.artifacts.get_claim("claim-one")
+    assert replayed.text == claim.text
+    assert replayed.page_slugs == []
+    assert replayed.links == []
+    assert replayed.dream_disposition == "pending"
+    assert replayed.dream_run_id is None
+    assert system.mem.log_store.get(source.raw_log_entry_id).consolidated is False
+
+
+@pytest.mark.asyncio
+async def test_assignment_replay_preserves_routes_and_rebuilds_pages(tmp_path):
+    fixture = tmp_path / "fixture"
+    artifacts = ArtifactStore(fixture / "artifacts")
+    logs = LogStore(fixture / "logs")
+    source = SourceDocument(
+        source_id="source-one",
+        source_type="multi_party_conversation",
+        session_id="session_1",
+        recorded_at="2026-08-05T10:00:00",
+        occurred_at=None,
+        participants=["Jon"],
+        segments=[SourceSegment(
+            segment_id="source-one#seg-0001",
+            index=0,
+            speaker="Jon",
+            content="Jon likes dancing.",
+        )],
+        raw_log_entry_id="2026-08-05#session-one",
+    )
+    claim = MemoryClaim(
+        claim_id="claim-one",
+        text="Jon likes dancing.",
+        kind="fact",
+        about=[{"entity": "Jon"}],
+        provenance=[ClaimProvenance(
+            source_id=source.source_id,
+            segment_ids=[source.segments[0].segment_id],
+            raw_log_entry_id=source.raw_log_entry_id,
+            speaker="Jon",
+        )],
+        recorded_at=source.recorded_at,
+        page_slugs=["jon"],
+    )
+    artifacts.save_source(source)
+    artifacts.save_claim(claim)
+    artifacts.save_episode(EpisodeManifest(
+        episode_id="episode-one",
+        source_id=source.source_id,
+        source_type=source.source_type,
+        occurred_at=None,
+        participants=source.participants,
+        segment_ids=[source.segments[0].segment_id],
+        claim_ids=[claim.claim_id],
+        extraction_status="complete",
+    ))
+    logs.append(LogEntry(
+        entry_id=source.raw_log_entry_id,
+        session_id=source.session_id,
+        timestamp=datetime(2026, 8, 5, 10, 0),
+        content="Frozen transcript",
+        importance=0.8,
+        status="consolidated",
+        consolidated=True,
+    ))
+
+    system = MyceliumMemorySystem(
+        run_dir=tmp_path / "run",
+        qa_client=object(),
+        memory_model="test",
+        ollama_url="http://localhost:11434",
+        dream_policy="per-batch",
+        replay_store=fixture,
+        replay_assignments=True,
+    )
+    await system.reset("case-1")
+    system.mem.dream_process.taxonomist.classify = AsyncMock(return_value=type(
+        "Result",
+        (),
+        {"assignments": {"jon": "person"}, "failures": []},
+    )())
+    await system.memorize(
+        [BenchmarkMessage(role="user", content="Ignored.")],
+        {"session_id": "session_1"},
+    )
+
+    assert system.mem.artifacts.get_claim("claim-one").page_slugs == ["jon"]
+    assert system.mem.wiki.get("jon").page_type == "person"
+    assert system.mem.log_store.get(source.raw_log_entry_id).consolidated is True
+    assert system.stats()["dream_runs"] == 0

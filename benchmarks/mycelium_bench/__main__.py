@@ -40,6 +40,8 @@ def main() -> None:
         config_path=args.config_path,
         context_budget_tokens=args.context_budget_tokens,
         dream_policy=args.dream_policy,
+        replay_store=args.replay_store,
+        replay_assignments=args.replay_assignments,
     )
 
     if args.benchmark == "locomo":
@@ -82,6 +84,17 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--context-budget-tokens", type=int, default=32768)
     parser.add_argument("--dream-policy", choices=["none", "per-batch", "per-case"], default="per-batch")
     parser.add_argument("--prediction-key", default=None)
+    parser.add_argument(
+        "--replay-store",
+        type=Path,
+        default=None,
+        help="Reuse frozen source, episode, claim, and log artifacts instead of extracting again.",
+    )
+    parser.add_argument(
+        "--replay-assignments",
+        action="store_true",
+        help="Preserve fixture claim-to-page assignments and benchmark projection only.",
+    )
 
 
 def default_run_id(benchmark: str, system: str) -> str:

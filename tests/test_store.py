@@ -1,5 +1,7 @@
 from datetime import datetime
 from mycelium.models import WikiPage, LogEntry, Edge, UpdateLogEntry
+import pytest
+
 from mycelium.store import WikiStore, LogStore
 
 def test_wiki_store_save_and_get(tmp_path):
@@ -37,10 +39,22 @@ def test_wiki_store_save_and_get(tmp_path):
     assert loaded.content == "This is the content."
     assert loaded.version == 1
     assert loaded.confidence == 0.9
+    assert loaded.page_type is None
     assert len(loaded.related) == 1
     assert loaded.related[0].target == "other-page"
     assert len(loaded.update_log) == 1
     assert loaded.update_log[0].session_id == "ses-123"
+
+
+def test_wiki_store_rejects_pre_taxonomy_page_schema(tmp_path):
+    store = WikiStore(tmp_path / "wiki")
+    (store.wiki_dir / "legacy.md").write_text(
+        "---\nid: legacy\ntitle: Legacy\n---\nOld content\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="pre-taxonomy schema"):
+        store.get("legacy")
 
 def test_wiki_store_list_all(tmp_path):
     store = WikiStore(tmp_path / "wiki")
@@ -188,7 +202,8 @@ def test_mycelium_init_seeds_user_profile(tmp_path):
     assert myc.wiki.exists("user-profile")
     
     page = myc.wiki.get("user-profile")
-    assert page.title == "User Profile"
+    assert page.title == "You"
+    assert page.page_type == "you"
     assert page.confidence == 0.8
     assert "profile" in page.tags
     

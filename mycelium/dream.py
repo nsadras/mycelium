@@ -23,6 +23,7 @@ from mycelium.reconsolidation import ClaimReconsolidator, add_claim_link
 from mycelium.models import DreamReport, LogEntry
 from mycelium.ollama import OllamaClient
 from mycelium.store import LogStore, WikiStore
+from mycelium.taxonomy import PageTaxonomist
 
 
 class DreamProcess:
@@ -41,6 +42,7 @@ class DreamProcess:
         self.artifacts = artifacts
         self.router = ClaimRouter(llm, wiki)
         self.materializer = PageMaterializer(wiki, artifacts, config)
+        self.taxonomist = PageTaxonomist(llm)
         self.reconsolidator = ClaimReconsolidator(llm, artifacts)
 
     async def run(self, *, dry_run: bool = False) -> DreamReport:
@@ -170,6 +172,11 @@ class DreamProcess:
                 self.artifacts.save_reconsolidation_proposal(proposal)
 
         materialized = self.materializer.stage(successful_routes)
+        taxonomy = await self.taxonomist.classify(
+            self.materializer.taxonomy_candidates(materialized)
+        )
+        self.materializer.apply_page_types(materialized, taxonomy.assignments)
+        self.materializer.refresh_you_memory_map(materialized)
         for route in successful_routes:
             self._set_decision(
                 decisions,
@@ -218,6 +225,7 @@ class DreamProcess:
             completed_source_ids=completed_source_ids,
             pending_source_ids=pending_source_ids,
             failures=failures,
+            taxonomy_failures=taxonomy.failures,
             reconsolidation_proposal_ids=[
                 proposal.proposal_id for proposal in proposals
             ],
@@ -338,5 +346,6 @@ class DreamProcess:
             pages_updated=report.pages_updated,
             claim_decisions=sorted(decisions.values(), key=lambda item: item.claim_id),
             failures=list(report.failures),
+            taxonomy_failures=list(report.taxonomy_failures),
             reconsolidation_proposal_ids=list(report.reconsolidation_proposal_ids),
         ))

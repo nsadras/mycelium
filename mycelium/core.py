@@ -59,12 +59,13 @@ class Mycelium:
             return
 
         slug = "user-profile"
-        title = "User Profile"
+        title = "You"
         content = (
-            "Central repository for user preferences, background, plans, and custom instructions.\n\n"
             "## Key Facts\n"
-            "- The page tracks durable user-specific details and preferences.\n\n"
-            "## Event Timeline\n"
+            "\n_No personal facts recorded yet._\n\n"
+            "## Event Timeline\n\n"
+            "## Memory Map\n"
+            "\n_No focused pages yet._\n"
         )
         tags = ["profile", "personalization"]
         summary = "Central repository for user preferences, background, plans, and custom instructions."
@@ -82,6 +83,7 @@ class Mycelium:
                 version=1,
                 confidence=0.8,
                 importance=1.0,
+                page_type="you",
                 tags=tags,
                 related=[]
             )

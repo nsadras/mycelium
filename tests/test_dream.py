@@ -16,7 +16,10 @@ from mycelium.config import Config
 from mycelium.dream import DreamProcess
 from mycelium.models import LogEntry
 from mycelium.store import LogStore, WikiStore
-from mycelium.structured_outputs import consolidation_output_model
+from mycelium.structured_outputs import (
+    consolidation_output_model,
+    page_taxonomy_output_model,
+)
 
 
 def route(alias: str, page: str, page_type: str = "topic") -> dict:
@@ -42,6 +45,23 @@ def test_consolidation_schema_requires_one_destination_for_every_exact_alias():
         {"routes": []},
         {"C001": {"page": "", "page_type": "entity"}, **route("C002", "tea")},
         {"C001": {"page": "ava"}, **route("C002", "tea")},
+    ):
+        with pytest.raises(ValidationError):
+            output_model.model_validate(invalid)
+
+
+def test_page_taxonomy_schema_requires_exact_aliases_and_known_types():
+    output_model = page_taxonomy_output_model(["P001", "P002"])
+    valid = {
+        "P001": {"page_type": "person"},
+        "P002": {"page_type": "project"},
+    }
+
+    assert output_model.model_validate(valid).model_dump() == valid
+    for invalid in (
+        {"P001": {"page_type": "person"}},
+        {**valid, "P003": {"page_type": "topic"}},
+        {"P001": {"page_type": "entity"}, **{"P002": valid["P002"]}},
     ):
         with pytest.raises(ValidationError):
             output_model.model_validate(invalid)
@@ -161,7 +181,9 @@ async def test_dream_routes_claim_and_materializes_deterministic_page(tmp_path):
     assert page.tags == ["page-type-topic"]
     assert artifacts.get_claim(claim.claim_id).page_slugs == ["memory-design"]
     assert logs.get(entry.entry_id).consolidated is True
-    assert llm.call_structured.await_count == 1
+    assert llm.call_structured.await_count == 2
+    assert report.taxonomy_failures
+    assert page.page_type is None
 
 
 @pytest.mark.asyncio
@@ -212,7 +234,7 @@ async def test_dream_routes_sources_separately_so_one_invalid_response_is_isolat
     assert logs.get(first_entry.entry_id).consolidated is False
     assert logs.get(second_entry.entry_id).consolidated is True
     assert wiki.exists("coffee")
-    assert llm.call_structured.await_count == 2
+    assert llm.call_structured.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -227,7 +249,7 @@ async def test_partial_extraction_routes_available_claims_without_repair(tmp_pat
 
     assert report.completed_source_ids == [entry.entry_id]
     assert wiki.exists("partial-memory")
-    assert llm.call_structured.await_count == 1
+    assert llm.call_structured.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -319,7 +341,53 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
     page = wiki.get("stable-page")
     assert "prefers tea" in page.content
     assert "prefers coffee" in page.content
-    assert llm.call_structured.await_count == 3
+    assert llm.call_structured.await_count == 5
+
+
+@pytest.mark.asyncio
+async def test_page_taxonomy_is_non_blocking_and_retries_pending_pages(tmp_path):
+    dream, llm, wiki, logs, artifacts = build_dream(
+        tmp_path, llm_response=route("C001", "memory-design")
+    )
+    entry, source = add_source(logs, artifacts)
+    add_claim(artifacts, source)
+
+    first = await dream.run()
+
+    assert first.completed_source_ids == [entry.entry_id]
+    assert first.taxonomy_failures
+    assert wiki.get("memory-design").page_type is None
+
+    llm.call_structured.return_value = {"P001": {"page_type": "project"}}
+    second = await dream.run()
+
+    page = wiki.get("memory-design")
+    assert second.entries_consolidated == 0
+    assert second.pages_updated == 1
+    assert second.taxonomy_failures == []
+    assert page.page_type == "project"
+    assert page.title == "Memory Design"
+    assert "## Key Facts" in page.content
+    assert "### Design Choices" in page.content
+
+
+@pytest.mark.asyncio
+async def test_user_profile_taxonomy_does_not_require_an_llm_call(tmp_path):
+    dream, llm, wiki, logs, artifacts = build_dream(
+        tmp_path, llm_response=route("C001", "user-profile", "entity")
+    )
+    entry, source = add_source(logs, artifacts)
+    add_claim(artifacts, source)
+
+    report = await dream.run()
+
+    assert report.completed_source_ids == [entry.entry_id]
+    assert report.taxonomy_failures == []
+    assert wiki.get("user-profile").page_type == "you"
+    assert wiki.get("user-profile").title == "You"
+    assert "## Key Facts" in wiki.get("user-profile").content
+    assert "## Memory Map" in wiki.get("user-profile").content
+    assert llm.call_structured.await_count == 1
 
 
 @pytest.mark.asyncio

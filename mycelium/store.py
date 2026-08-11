@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from mycelium.models import WikiPage, LogEntry, Edge, UpdateLogEntry
+from mycelium.models import PAGE_TYPES, WikiPage, LogEntry, Edge, UpdateLogEntry
 
 def _edge_to_dict(edge: Edge) -> dict:
     return {
@@ -56,6 +56,15 @@ class WikiStore:
             raise FileNotFoundError(f"Wiki page {slug} not found.")
         
         post = frontmatter.load(path)
+
+        if "page_type" not in post.metadata:
+            raise ValueError(
+                f"Wiki page {slug} uses the pre-taxonomy schema. "
+                "Clear and rebuild the wiki from canonical memory artifacts."
+            )
+        page_type = post.metadata["page_type"]
+        if page_type is not None and page_type not in PAGE_TYPES:
+            raise ValueError(f"Wiki page {slug} has invalid page_type: {page_type!r}")
         
         related = [_edge_from_dict(r) for r in post.metadata.get("related", [])]
         update_log = [_update_log_from_dict(u) for u in post.metadata.get("update_log", [])]
@@ -81,6 +90,7 @@ class WikiStore:
             version=post.metadata.get("version", 1),
             confidence=post.metadata.get("confidence", 0.0),
             importance=post.metadata.get("importance", 0.5),
+            page_type=page_type,
             tags=post.metadata.get("tags", []),
             related=related,
             source_log_entries=post.metadata.get("source_log_entries", []),
@@ -98,6 +108,7 @@ class WikiStore:
         post.metadata["version"] = page.version
         post.metadata["confidence"] = page.confidence
         post.metadata["importance"] = page.importance
+        post.metadata["page_type"] = page.page_type
         post.metadata["tags"] = page.tags
         post.metadata["related"] = [_edge_to_dict(r) for r in page.related]
         post.metadata["source_log_entries"] = page.source_log_entries

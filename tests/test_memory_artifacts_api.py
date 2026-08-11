@@ -164,9 +164,10 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
             "claims_missing_source": [],
             "claims_missing_segments": [],
             "claims_missing_pages": [],
-            "sources_missing_raw_log": [],
-            "proposals_missing_claims": [],
-        },
+                "sources_missing_raw_log": [],
+                "proposals_missing_claims": [],
+                "pages_unclassified": [],
+            },
     }
     assert chat_episodes == [{
         "session_id": "chat-1",

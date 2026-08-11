@@ -41,6 +41,8 @@ export interface Session {
   transcript?: Message[];
 }
 
+export type PageType = 'you' | 'person' | 'project' | 'topic' | 'organization' | 'place' | 'event';
+
 export interface WikiPage {
   slug: string;
   title: string;
@@ -48,6 +50,7 @@ export interface WikiPage {
   version?: number;
   confidence: number;
   importance?: number;
+  page_type: PageType | null;
   tags: string[];
   related?: { target: string; relation: string }[];
   update_log?: { version: number; reason: string; date: string }[];

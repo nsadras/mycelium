@@ -158,6 +158,7 @@ class DreamRunAudit:
     pages_updated: int
     claim_decisions: list[DreamClaimDecision] = field(default_factory=list)
     failures: list[dict[str, str]] = field(default_factory=list)
+    taxonomy_failures: list[dict[str, str]] = field(default_factory=list)
     reconsolidation_proposal_ids: list[str] = field(default_factory=list)
 
 

@@ -24,6 +24,12 @@ extra_args=()
 if [ -n "${MAX_QUESTIONS:-}" ]; then
   extra_args+=(--max-questions "${MAX_QUESTIONS}")
 fi
+if [ -n "${REPLAY_STORE:-}" ]; then
+  extra_args+=(--replay-store "${REPLAY_STORE}")
+fi
+if [ "${REPLAY_ASSIGNMENTS:-0}" = "1" ]; then
+  extra_args+=(--replay-assignments)
+fi
 
 for system in "${SYSTEMS[@]}"; do
   run_id="locomo-${system}-convo-${SAMPLE_INDEX}-${RUN_TAG}"

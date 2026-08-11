@@ -310,6 +310,7 @@ async def run_dream() -> dict[str, Any]:
         "completed_source_ids": report.completed_source_ids,
         "pending_source_ids": report.pending_source_ids,
         "failures": report.failures,
+        "taxonomy_failures": report.taxonomy_failures,
         "reconsolidation_proposal_ids": report.reconsolidation_proposal_ids,
     }
 

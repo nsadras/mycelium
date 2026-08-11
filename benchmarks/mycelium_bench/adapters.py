@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 from mycelium.core import Mycelium
+from mycelium.artifacts import ArtifactStore, MemoryClaim
+from mycelium.consolidation import ClaimRoute
 from mycelium.facts import page_recall_context
+from mycelium.store import LogStore, WikiStore
 from mycelium.ollama import OllamaClient
 from mycelium.structured_outputs import GroundedAnswerOutput
 
@@ -152,6 +156,8 @@ class MyceliumMemorySystem:
         config_path: Path | None = None,
         context_budget_tokens: int = 32768,
         dream_policy: str = "per-batch",
+        replay_store: Path | None = None,
+        replay_assignments: bool = False,
     ) -> None:
         self.run_dir = run_dir
         self.qa_client = qa_client
@@ -160,6 +166,8 @@ class MyceliumMemorySystem:
         self.config_path = config_path
         self.context_budget_tokens = context_budget_tokens
         self.dream_policy = dream_policy
+        self.replay_store = replay_store
+        self.replay_assignments = replay_assignments
         self.case_id = "uninitialized"
         self.mem: Mycelium | None = None
         self._encoded_batches = 0
@@ -167,6 +175,8 @@ class MyceliumMemorySystem:
         self._memory_construction_seconds = 0.0
         self._errors: list[dict[str, Any]] = []
         self._dream_failures: list[dict[str, Any]] = []
+        self._taxonomy_failures: list[dict[str, Any]] = []
+        self._replay_page_kinds: dict[str, str] = {}
 
     async def reset(self, case_id: str) -> None:
         self.case_id = sanitize_path_part(case_id)
@@ -180,11 +190,29 @@ class MyceliumMemorySystem:
             config_path=self.config_path,
             memory_profile="none",
         )
+        self._replay_page_kinds = {}
+        if self.replay_assignments:
+            replay_store = self._require_replay_store()
+            fixture = ArtifactStore(replay_store / "artifacts")
+            for proposal in fixture.list_reconsolidation_proposals():
+                self.mem.artifacts.save_reconsolidation_proposal(copy.deepcopy(proposal))
+            self._replay_page_kinds = {
+                page.slug: next(
+                    (
+                        tag.removeprefix("page-type-")
+                        for tag in page.tags
+                        if tag.startswith("page-type-")
+                    ),
+                    "topic",
+                )
+                for page in WikiStore(replay_store / "wiki").list_all()
+            }
         self._encoded_batches = 0
         self._dream_runs = 0
         self._memory_construction_seconds = 0.0
         self._errors = []
         self._dream_failures = []
+        self._taxonomy_failures = []
 
     async def memorize(self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None) -> None:
         if not messages:
@@ -192,16 +220,23 @@ class MyceliumMemorySystem:
         mem = self._require_mem()
         metadata = metadata or {}
         session_id = str(metadata.get("session_id") or f"{self.case_id}-batch-{self._encoded_batches + 1}")
-        transcript = format_messages_for_memory(messages, metadata)
         start = time.perf_counter()
-        await mem.encoder.encode_session(
-            transcript, session_id,
-            source_type="multi_party_conversation",
-            occurred_at=metadata.get("timestamp"),
-            metadata={key: value for key, value in metadata.items() if value is not None},
-        )
+        if self.replay_store is not None:
+            replayed_claims = self._replay_session(mem, session_id)
+            if self.replay_assignments:
+                await self._materialize_replayed_assignments(
+                    mem, replayed_claims, session_id=session_id
+                )
+        else:
+            transcript = format_messages_for_memory(messages, metadata)
+            await mem.encoder.encode_session(
+                transcript, session_id,
+                source_type="multi_party_conversation",
+                occurred_at=metadata.get("timestamp"),
+                metadata={key: value for key, value in metadata.items() if value is not None},
+            )
         self._encoded_batches += 1
-        if self.dream_policy == "per-batch":
+        if self.dream_policy == "per-batch" and not self.replay_assignments:
             try:
                 report = await mem.dream()
                 self._record_dream_report(report, session_id=session_id)
@@ -255,7 +290,11 @@ class MyceliumMemorySystem:
         return answer
 
     async def finalize_case(self) -> None:
-        if self.dream_policy == "per-case" and self.mem is not None:
+        if (
+            self.dream_policy == "per-case"
+            and self.mem is not None
+            and not self.replay_assignments
+        ):
             start = time.perf_counter()
             try:
                 report = await self.mem.dream()
@@ -281,17 +320,111 @@ class MyceliumMemorySystem:
             "memory_construction_seconds": self._memory_construction_seconds,
             "errors": self._errors,
             "dream_failures": self._dream_failures,
+            "taxonomy_failures": self._taxonomy_failures,
             "artifact_coverage": coverage,
         }
 
     def _record_dream_report(self, report: Any, *, session_id: str) -> None:
         for failure in getattr(report, "failures", []) or []:
             self._dream_failures.append({"session_id": session_id, **failure})
+        for failure in getattr(report, "taxonomy_failures", []) or []:
+            self._taxonomy_failures.append({"session_id": session_id, **failure})
 
     def _require_mem(self) -> Mycelium:
         if self.mem is None:
             raise RuntimeError("Memory system has not been reset for a benchmark case.")
         return self.mem
+
+    def _require_replay_store(self) -> Path:
+        if self.replay_store is None:
+            raise RuntimeError("Replay store is not configured")
+        return self.replay_store
+
+    def _replay_session(self, mem: Mycelium, session_id: str) -> list[MemoryClaim]:
+        """Inject frozen extraction artifacts while resetting downstream Dream state."""
+        replay_store = self._require_replay_store()
+        fixture_artifacts = ArtifactStore(replay_store / "artifacts")
+        fixture_logs = LogStore(replay_store / "logs")
+        sources = [
+            source for source in fixture_artifacts.list_sources()
+            if source.session_id == session_id
+            or str(source.metadata.get("session_id", "")) == session_id
+        ]
+        if not sources:
+            raise ValueError(f"Replay store has no source for session {session_id}")
+        episodes = {
+            episode.source_id: episode for episode in fixture_artifacts.list_episodes()
+        }
+        replayed_claims: list[MemoryClaim] = []
+        for source in sources:
+            mem.artifacts.save_source(copy.deepcopy(source))
+            episode = episodes.get(source.source_id)
+            if episode is None:
+                raise ValueError(f"Replay source {source.source_id} has no episode")
+            mem.artifacts.save_episode(copy.deepcopy(episode))
+            for claim_id in episode.claim_ids:
+                claim = copy.deepcopy(fixture_artifacts.get_claim(claim_id))
+                claim.links = []
+                if not self.replay_assignments:
+                    claim.page_slugs = []
+                claim.dream_disposition = "pending"
+                claim.dream_disposition_reason = None
+                claim.dream_run_id = None
+                claim.dream_disposition_at = None
+                mem.artifacts.save_claim(claim)
+                replayed_claims.append(claim)
+            if not source.raw_log_entry_id:
+                raise ValueError(f"Replay source {source.source_id} has no raw log entry")
+            entry = copy.deepcopy(fixture_logs.get(source.raw_log_entry_id))
+            entry.status = "raw"
+            entry.consolidated = False
+            mem.log_store.append(entry)
+        return replayed_claims
+
+    async def _materialize_replayed_assignments(
+        self,
+        mem: Mycelium,
+        claims: list[MemoryClaim],
+        *,
+        session_id: str,
+    ) -> None:
+        routes = [
+            ClaimRoute(
+                claim_id=claim.claim_id,
+                page_slug=page_slug,
+                page_type=self._replay_page_kinds.get(page_slug, "topic"),
+                raw_log_entry_id=(
+                    claim.provenance[0].raw_log_entry_id
+                    or claim.provenance[0].source_id
+                ),
+            )
+            for claim in claims
+            for page_slug in claim.page_slugs
+        ]
+        materialized = mem.dream_process.materializer.stage(routes)
+        taxonomy = await mem.dream_process.taxonomist.classify(
+            mem.dream_process.materializer.taxonomy_candidates(materialized)
+        )
+        mem.dream_process.materializer.apply_page_types(
+            materialized, taxonomy.assignments
+        )
+        mem.dream_process.materializer.refresh_you_memory_map(materialized)
+        mem.dream_process.materializer.persist(materialized)
+        for failure in taxonomy.failures:
+            self._taxonomy_failures.append({"session_id": session_id, **failure})
+
+        eligible = [
+            claim for claim in claims
+            if claim.status == "active" and not claim.derivation_operation
+        ]
+        if eligible and all(len(claim.page_slugs) == 1 for claim in eligible):
+            raw_ids = {
+                provenance.raw_log_entry_id
+                for claim in eligible
+                for provenance in claim.provenance
+                if provenance.raw_log_entry_id
+            }
+            mem.log_store.mark_consolidated(sorted(raw_ids))
 
 
 class FullWikiMemorySystem(MyceliumMemorySystem):
@@ -345,7 +478,15 @@ def build_memory_system(
     config_path: Path | None,
     context_budget_tokens: int,
     dream_policy: str,
+    replay_store: Path | None = None,
+    replay_assignments: bool = False,
 ) -> MemorySystem:
+    if replay_store is not None and system_name not in {"mycelium", "full_wiki"}:
+        raise ValueError("--replay-store is only supported by mycelium and full_wiki")
+    if replay_store is not None and not replay_store.is_dir():
+        raise ValueError(f"Replay store does not exist: {replay_store}")
+    if replay_assignments and replay_store is None:
+        raise ValueError("--replay-assignments requires --replay-store")
     qa_client = OllamaQaClient(model=qa_model, url=ollama_url)
     if system_name == "mycelium":
         return MyceliumMemorySystem(
@@ -356,6 +497,8 @@ def build_memory_system(
             config_path=config_path,
             context_budget_tokens=context_budget_tokens,
             dream_policy=dream_policy,
+            replay_store=replay_store,
+            replay_assignments=replay_assignments,
         )
     if system_name == "full_wiki":
         return FullWikiMemorySystem(
@@ -366,6 +509,8 @@ def build_memory_system(
             config_path=config_path,
             context_budget_tokens=context_budget_tokens,
             dream_policy=dream_policy,
+            replay_store=replay_store,
+            replay_assignments=replay_assignments,
         )
     if system_name == "null":
         return NullMemorySystem(qa_client)

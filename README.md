@@ -174,6 +174,27 @@ The default memory store is `./mycelium_store`. Because it consists primarily of
 
 Stores created by older raw, hybrid, or page-rewrite reconsolidation pipelines are not migrated. Clear and re-encode them before using this version.
 
+## Benchmarking taxonomy and projection changes
+
+Use frozen extraction artifacts when comparing routing, taxonomy, or wiki presentation so claim-extraction
+variance does not obscure the result. `REPLAY_STORE` must point to one benchmark case store containing
+`artifacts/` and `logs/`:
+
+```bash
+REPLAY_STORE=benchmark_runs/<baseline>/stores/conv-30 \
+QA_MODEL=gemma4:12b MEMORY_MODEL=gemma4:12b \
+RUN_TAG=taxonomy-replay SAMPLE_INDEX=2 \
+scripts/benchmark-locomo-convo2.sh mycelium
+```
+
+Replay copies the original source, episode, claim, and raw-log artifacts into a clean run store, resets
+only downstream Dream assignments and links, and then runs the current routing and materialization code.
+Use a normal run without `REPLAY_STORE` for the final end-to-end check.
+
+For a projection-only comparison, add `REPLAY_ASSIGNMENTS=1`. This preserves the fixture's primary
+claim-to-page assignments, skips routing and reconsolidation, and rebuilds page taxonomy and Markdown in
+a clean store. Use the same replay store for both sides of a renderer comparison.
+
 ## License
 
 Mycelium is available under the MIT License. See [LICENSE](LICENSE).

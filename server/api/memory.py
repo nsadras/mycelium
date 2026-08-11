@@ -41,6 +41,7 @@ def wiki_page_response(page):
         "version": page.version,
         "confidence": page.confidence,
         "importance": page.importance,
+        "page_type": page.page_type,
         "tags": page.tags,
         "source_log_entries": page.source_log_entries,
         "related": [{"target": r.target, "relation": r.relation} for r in page.related],
@@ -59,7 +60,8 @@ def _artifact_integrity(mem) -> dict:
     sources = mem.artifacts.list_sources()
     episodes = mem.artifacts.list_episodes()
     claims = mem.artifacts.list_claims()
-    pages = {page.slug for page in mem.wiki.list_all()}
+    wiki_pages = mem.wiki.list_all()
+    pages = {page.slug for page in wiki_pages}
     logs = {entry.entry_id for entry in mem.log_store.list_entries(days=None)}
 
     source_by_id = {source.source_id: source for source in sources}
@@ -122,6 +124,9 @@ def _artifact_integrity(mem) -> dict:
             for proposal in proposals
             for claim_id in (proposal.incoming_claim_id, proposal.target_claim_id)
             if claim_id not in claim_by_id
+        ),
+        "pages_unclassified": sorted(
+            page.slug for page in wiki_pages if page.page_type is None
         ),
     }
     return {
@@ -287,6 +292,7 @@ async def list_wiki():
             "title": p.title,
             "confidence": p.confidence,
             "importance": p.importance,
+            "page_type": p.page_type,
             "tags": p.tags,
         }
         for p in pages

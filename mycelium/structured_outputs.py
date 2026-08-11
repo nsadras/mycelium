@@ -3,6 +3,8 @@
 from collections.abc import Collection
 from typing import Any, Literal
 
+from mycelium.models import PageType
+
 from pydantic import BaseModel, ConfigDict, Field, RootModel, create_model
 
 
@@ -104,6 +106,28 @@ def consolidation_output_model(
     }
     return create_model(
         "SourceConsolidationOutput",
+        __config__=ConfigDict(extra="forbid"),
+        **fields,
+    )
+
+
+class PageTaxonomyDecisionOutput(BaseModel):
+    page_type: PageType
+
+
+def page_taxonomy_output_model(
+    page_aliases: Collection[str],
+) -> type[BaseModel]:
+    """Build an exact contract for classifying already-formed wiki pages."""
+    aliases = tuple(dict.fromkeys(str(value) for value in page_aliases if value))
+    if not aliases:
+        raise ValueError("Page taxonomy output requires at least one page alias")
+    fields: dict[str, Any] = {
+        alias: (PageTaxonomyDecisionOutput, ...)
+        for alias in aliases
+    }
+    return create_model(
+        "PageTaxonomyOutput",
         __config__=ConfigDict(extra="forbid"),
         **fields,
     )

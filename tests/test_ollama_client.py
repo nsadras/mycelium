@@ -205,6 +205,33 @@ async def test_call_messages_executes_web_tools(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_messages_executes_injected_tools_with_custom_runner():
+    client = OllamaClient("http://localhost:11434", "test-model")
+    fake_sdk = FakeToolSdkClient()
+    client.client = fake_sdk
+    calls = []
+    definitions = [{
+        "type": "function",
+        "function": {"name": "memory_search", "parameters": {"type": "object"}},
+    }]
+
+    def run_tool(name, arguments):
+        calls.append((name, arguments))
+        return "canonical memory result"
+
+    response = await client.call_messages(
+        [{"role": "user", "content": "search"}],
+        tool_definitions=definitions,
+        tool_runner=run_tool,
+    )
+
+    assert response.content == "final answer"
+    assert calls == [("web_search", {"query": "ollama"})]
+    assert fake_sdk.chat_calls[0]["tools"] == definitions
+    assert response.tool_events[0].result == "canonical memory result"
+
+
+@pytest.mark.asyncio
 async def test_call_structured_passes_schema_to_sdk_and_parses_content():
     schema = {
         "type": "object",

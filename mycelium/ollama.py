@@ -1,4 +1,5 @@
 import json
+import inspect
 import logging
 import os
 import time
@@ -7,6 +8,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import Any, Union, Optional
 
 from dotenv import load_dotenv
@@ -177,6 +179,10 @@ class OllamaClient:
         num_ctx: int | None = None,
         num_predict: int | None = None,
         think: bool | None = None,
+        tool_definitions: list[Any] | None = None,
+        tool_runner: Callable[
+            [str, dict[str, Any]], str | Awaitable[str]
+        ] | None = None,
     ) -> ChatResponse:
         """
         Makes a chat completion call using an explicit message history.
@@ -214,6 +220,8 @@ class OllamaClient:
                     tool_result_chars=tool_result_chars,
                     tool_events=tool_events,
                     think=think,
+                    tool_definitions=tool_definitions,
+                    tool_runner=tool_runner,
                 )
                 latency_ms = int((time.time() - start_time) * 1000)
                 self._log_call(
@@ -254,8 +262,16 @@ class OllamaClient:
         tool_result_chars: int,
         tool_events: list[ToolEvent],
         think: bool | None,
+        tool_definitions: list[Any] | None,
+        tool_runner: Callable[
+            [str, dict[str, Any]], str | Awaitable[str]
+        ] | None,
     ) -> tuple[str, dict[str, Any]]:
-        tools = [web_search, web_fetch] if enable_tools else None
+        tools = (
+            tool_definitions
+            if enable_tools and tool_definitions is not None
+            else [web_search, web_fetch] if enable_tools else None
+        )
         think_enabled = think if think is not None else bool(enable_tools)
         for round_idx in range(max_tool_rounds + 1):
             response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
@@ -278,7 +294,16 @@ class OllamaClient:
                 return content, metadata
             for tool_call in tool_calls:
                 tool_name, tool_args = self._tool_call_name_args(tool_call)
-                result = await self._run_tool(tool_name, tool_args)
+                raw_result = (
+                    tool_runner(tool_name, tool_args)
+                    if tool_runner is not None
+                    else self._run_tool(tool_name, tool_args)
+                )
+                result = (
+                    await raw_result
+                    if inspect.isawaitable(raw_result)
+                    else raw_result
+                )
                 truncated = result[:tool_result_chars]
                 failed = result.startswith(f"Tool {tool_name} failed:") or result == f"Tool {tool_name} not found"
                 tool_events.append(

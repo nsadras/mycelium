@@ -7,13 +7,16 @@ import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
+
+from pydantic import BaseModel, Field
 
 from mycelium.core import Mycelium
 from mycelium.artifacts import ArtifactStore, MemoryClaim
 from mycelium.consolidation import ClaimRoute
 from mycelium.store import LogStore, WikiStore
 from mycelium.ollama import OllamaClient
+from mycelium.memory_tools import MemoryToolset
 from mycelium.structured_outputs import GroundedAnswerOutput
 
 
@@ -35,6 +38,23 @@ class BenchmarkAnswer:
     memory_construction_time: float
     query_time_len: float
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+RetrievalQuery = Annotated[str, Field(min_length=1, max_length=160)]
+MAX_PLANNED_EVIDENCE_CHARS = 12_000
+MAX_PLANNED_SOURCE_SEGMENT_CHARS = 1_400
+
+
+class MemoryRetrievalPlan(BaseModel):
+    """A small executable plan for questions that require composed evidence."""
+
+    searches: list[RetrievalQuery] = Field(
+        min_length=1,
+        max_length=4,
+        description="Distinct complementary searches, never paraphrases of one another.",
+    )
+    expand_top_hits: bool
+    inspect_sources: bool
 
 
 class MemorySystem(Protocol):
@@ -543,6 +563,230 @@ class MyceliumMemorySystem:
             mem.log_store.mark_consolidated(sorted(raw_ids))
 
 
+class MemoryAgentSystem(MyceliumMemorySystem):
+    """Selectively gather composed evidence before the normal grounded QA call."""
+
+    name = "memory_agent"
+
+    async def reset(self, case_id: str) -> None:
+        await super().reset(case_id)
+        self._memory_tools = MemoryToolset(self._require_mem().artifacts)
+
+    async def answer(
+        self, question: str, metadata: dict[str, Any] | None = None
+    ) -> BenchmarkAnswer:
+        mem = self._require_mem()
+        metadata = metadata or {}
+        started = time.perf_counter()
+        loaded_pages = await mem.load_context(
+            question,
+            budget_tokens=self.context_budget_tokens,
+            session_id=str(metadata.get("query_id") or f"{self.case_id}-query"),
+        )
+        wiki_context = "\n\n".join(
+            f"=== MEMORY: {page.title} ({page.slug}) ===\n{format_page_for_prompt(page)}"
+            for page in loaded_pages
+        )
+        source_context = "\n\n".join(
+            page.source_context for page in loaded_pages if page.source_context
+        )
+        initial_context = wiki_context
+        if source_context:
+            initial_context = (
+                f"SYNTHESIZED MEMORY PAGES:\n{wiki_context}\n\n"
+                f"CANONICAL SOURCE EVIDENCE:\n{source_context}"
+            )
+
+        escalation_reason = memory_escalation_reason(question)
+        context = initial_context
+        plan: MemoryRetrievalPlan | None = None
+        plan_trace: dict[str, Any] | None = None
+        planner_input_tokens = 0
+        if escalation_reason:
+            planner_system = (
+                "Create a small read-only retrieval plan for a private personal-memory archive. "
+                "Do not answer the question. Produce one focused search for each named subject, "
+                "event, relation, or component whose evidence must be combined. Preserve names "
+                "from the question and include the relevant relation terms in every search. Use "
+                "at most four searches, and never emit paraphrases of the same search. For an "
+                "open-ended shared-property question, search each subject separately using the "
+                "same relevant dimensions, such as major events, work or projects, and interests. "
+                "For a causal question, separate the triggering event, motivation, and resulting "
+                "decision. For a multi-attribute description, search distinct dimensions implied "
+                "by the question, such as setting, physical features, and constraints, without "
+                "inventing their values. Set expand_top_hits=true for comparisons, shared-property "
+                "questions, causes, sequences, or when related claims may supply another required "
+                "fact. Set inspect_sources=true only when exact attribution, chronology, or source "
+                "wording must be verified. Never request outside information."
+            )
+            planner_input = f"QUESTION:\n{question}"
+            planner_input_tokens = count_tokens(
+                planner_system + "\n" + planner_input
+            )
+            raw_plan = await self.qa_client.llm.call_structured(
+                planner_system,
+                planner_input,
+                MemoryRetrievalPlan,
+                num_predict=384,
+            )
+            plan = MemoryRetrievalPlan.model_validate(raw_plan)
+            planned_context, plan_trace = execute_memory_plan(
+                self._memory_tools, plan
+            )
+            context = (
+                f"PLANNED CANONICAL MEMORY EVIDENCE:\n{planned_context}\n\n"
+                f"INITIAL MEMORY EVIDENCE:\n{initial_context}"
+            ).strip()
+
+        exploration_seconds = time.perf_counter() - started
+        answer = await self.qa_client.answer(question, context)
+        answer.memory_construction_time = exploration_seconds
+        answer.query_time_len += exploration_seconds
+        answer.input_len += planner_input_tokens
+        answer.metadata.update({
+            "loaded_pages": [
+                {
+                    "slug": page.slug,
+                    "title": page.title,
+                    "confidence": page.confidence,
+                    "importance": page.importance,
+                }
+                for page in loaded_pages
+            ],
+            "memory_agent": {
+                "escalated": bool(escalation_reason),
+                "reason": escalation_reason,
+                "plan": plan.model_dump() if plan else None,
+                "trace": plan_trace,
+            },
+            "_evidence_stage_labels": self._evidence_stage_labels(context),
+        })
+        if self.include_retrieval_context:
+            answer.metadata["retrieval_context"] = context
+        return answer
+
+
+_QUESTION_LEAD_WORDS = {
+    "are", "can", "could", "did", "do", "does", "how", "is", "was", "were",
+    "what", "when", "where", "which", "who", "why", "will", "would",
+}
+_COMPOSITION_CUES = re.compile(
+    r"\b(both|common|shared|same|different|difference|between|each|respectively)\b",
+    re.IGNORECASE,
+)
+_CAUSAL_CUES = re.compile(
+    r"^(why\b|how did\b)|\b(what led to|as a result|because of)\b",
+    re.IGNORECASE,
+)
+_MULTI_ATTRIBUTE_CUES = re.compile(
+    r"\b(look like|requirements?|features?|qualities|reasons|ways)\b",
+    re.IGNORECASE,
+)
+
+
+def memory_escalation_reason(question: str) -> str | None:
+    """Return the structural reason a question needs composed memory evidence."""
+    normalized = " ".join(question.split()).strip()
+    if not normalized:
+        return None
+    if _COMPOSITION_CUES.search(normalized):
+        return "composition"
+    if _CAUSAL_CUES.search(normalized):
+        return "causal"
+    if _MULTI_ATTRIBUTE_CUES.search(normalized):
+        return "multi_attribute"
+    names = [
+        value
+        for value in re.findall(r"\b[A-Z][a-z]+\b", normalized)
+        if value.lower() not in _QUESTION_LEAD_WORDS
+    ]
+    if len(set(names)) >= 2 and re.search(r"\band\b", normalized, re.IGNORECASE):
+        return "multiple_subjects"
+    return None
+
+
+def execute_memory_plan(
+    tools: MemoryToolset,
+    plan: MemoryRetrievalPlan,
+) -> tuple[str, dict[str, Any]]:
+    """Execute a validated plan with fixed result and provenance bounds."""
+    selected_claims: dict[str, dict[str, Any]] = {}
+    search_trace: list[dict[str, Any]] = []
+    seed_ids: list[str] = []
+    for query in plan.searches:
+        hits = tools.search(query, limit=5)
+        hit_ids = [str(hit["claim_id"]) for hit in hits]
+        search_trace.append({"query": query, "claim_ids": hit_ids})
+        for hit in hits:
+            selected_claims.setdefault(str(hit["claim_id"]), hit)
+        seed_ids.extend(hit_ids[:2])
+
+    expanded_ids: list[str] = []
+    if plan.expand_top_hits and seed_ids:
+        expansions = tools.expand(list(dict.fromkeys(seed_ids))[:6], limit=8)
+        expanded_ids = [str(hit["claim_id"]) for hit in expansions]
+        for hit in expansions:
+            selected_claims.setdefault(str(hit["claim_id"]), hit)
+
+    source_results: list[dict[str, Any]] = []
+    if plan.inspect_sources and selected_claims:
+        source_results = tools.sources(list(selected_claims)[:4], neighbor_count=1)
+
+    lines = [
+        _format_planned_claim(claim)
+        for claim in list(selected_claims.values())[:24]
+    ]
+    if source_results:
+        lines.append("\nVERIFIED SOURCE SEGMENTS:")
+        for source in source_results:
+            occurred_at = source.get("occurred_at") or "unknown time"
+            for segment in source.get("segments", []):
+                label = segment.get("source_label") or segment.get("segment_id")
+                speaker = segment.get("speaker") or "unknown speaker"
+                content = str(segment.get("content", ""))[
+                    :MAX_PLANNED_SOURCE_SEGMENT_CHARS
+                ]
+                lines.append(
+                    f"- [{label}] ({occurred_at}) {speaker}: {content}"
+                )
+    rendered, truncated = _bounded_evidence(lines)
+    trace = {
+        "searches": search_trace,
+        "expanded_claim_ids": expanded_ids,
+        "selected_claim_ids": list(selected_claims)[:24],
+        "source_ids": [str(source.get("source_id")) for source in source_results],
+        "evidence_chars": len(rendered),
+        "truncated": truncated,
+    }
+    return rendered, trace
+
+
+def _format_planned_claim(claim: dict[str, Any]) -> str:
+    subjects = ", ".join(str(value) for value in claim.get("subjects", []))
+    temporal = claim.get("temporal") or {}
+    bounds = ""
+    if temporal.get("start") or temporal.get("end"):
+        bounds = f"; time={temporal.get('start') or '?'}..{temporal.get('end') or '?'}"
+    return (
+        f"- [{claim['claim_id']}] {str(claim['text'])[:1000]} "
+        f"(subjects={subjects or 'unknown'}{bounds})"
+    )
+
+
+def _bounded_evidence(lines: list[str]) -> tuple[str, bool]:
+    if not lines:
+        return "No canonical claims matched the retrieval plan.", False
+    selected: list[str] = []
+    used = 0
+    for line in lines:
+        added = len(line) + (1 if selected else 0)
+        if used + added > MAX_PLANNED_EVIDENCE_CHARS:
+            return "\n".join(selected), True
+        selected.append(line)
+        used += added
+    return "\n".join(selected), False
+
+
 class FullWikiMemorySystem(MyceliumMemorySystem):
     name = "full_wiki"
 
@@ -599,8 +843,12 @@ def build_memory_system(
     frozen_store: Path | None = None,
     include_retrieval_context: bool = False,
 ) -> MemorySystem:
-    if replay_store is not None and system_name not in {"mycelium", "full_wiki"}:
-        raise ValueError("--replay-store is only supported by mycelium and full_wiki")
+    if replay_store is not None and system_name not in {
+        "mycelium", "memory_agent", "full_wiki"
+    }:
+        raise ValueError(
+            "--replay-store is only supported by mycelium, memory_agent, and full_wiki"
+        )
     if replay_store is not None and not replay_store.is_dir():
         raise ValueError(f"Replay store does not exist: {replay_store}")
     if replay_assignments and replay_store is None:
@@ -612,6 +860,20 @@ def build_memory_system(
     qa_client = OllamaQaClient(model=qa_model, url=ollama_url)
     if system_name == "mycelium":
         return MyceliumMemorySystem(
+            run_dir=run_dir,
+            qa_client=qa_client,
+            memory_model=memory_model,
+            ollama_url=ollama_url,
+            config_path=config_path,
+            context_budget_tokens=context_budget_tokens,
+            dream_policy=dream_policy,
+            replay_store=replay_store,
+            replay_assignments=replay_assignments,
+            frozen_store=frozen_store,
+            include_retrieval_context=include_retrieval_context,
+        )
+    if system_name == "memory_agent":
+        return MemoryAgentSystem(
             run_dir=run_dir,
             qa_client=qa_client,
             memory_model=memory_model,

@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from server.runtime import (
     clear_memory_store,
@@ -13,8 +13,10 @@ from server.runtime import (
     get_mem,
     load_meta,
     run_dream as run_dream_process,
+    run_dream_if_ready as run_dream_if_ready_process,
 )
 from mycelium.reconsolidation import ReconsolidationReviewService, ReviewConflictError
+from mycelium.organization import EntityCurationService, OrganizationReviewService
 
 router = APIRouter()
 
@@ -33,6 +35,31 @@ class ProposalReviewRequest(BaseModel):
     reviewer_note: str | None = None
 
 
+class EntityUpdateRequest(BaseModel):
+    title: str | None = None
+    slug: str | None = None
+    aliases: list[str] | None = None
+    entity_type: str | None = None
+
+
+class EntityMergeRequest(BaseModel):
+    target_entity_id: str
+
+
+class EntitySplitRequest(BaseModel):
+    claim_ids: list[str] = Field(min_length=1)
+    title: str
+    entity_type: str
+    aliases: list[str] = Field(default_factory=list)
+
+
+class PlacementUpdateRequest(BaseModel):
+    owner_entity_id: str | None = None
+    section_key: str | None = None
+    linked_entity_ids: list[str] = Field(default_factory=list)
+    reason: str = "Manual wiki organization"
+
+
 def wiki_page_response(page):
     return {
         "slug": page.slug,
@@ -46,6 +73,10 @@ def wiki_page_response(page):
         "source_log_entries": page.source_log_entries,
         "related": [{"target": r.target, "relation": r.relation} for r in page.related],
         "update_log": [{"version": u.version, "reason": u.reason, "date": u.date.isoformat()} for u in page.update_log],
+        "entity_id": page.entity_id,
+        "entity_status": page.entity_status,
+        "aliases": page.aliases,
+        "sections": page.sections,
     }
 
 
@@ -68,6 +99,8 @@ def _artifact_integrity(mem) -> dict:
     episode_source_ids = {episode.source_id for episode in episodes}
     claim_by_id = {claim.claim_id: claim for claim in claims}
     proposals = mem.artifacts.list_reconsolidation_proposals()
+    entities = {entity.entity_id: entity for entity in mem.artifacts.list_entities()}
+    placements = {item.claim_id: item for item in mem.artifacts.list_placements()}
 
     issues = {
         "sources_without_episode": sorted(
@@ -108,11 +141,18 @@ def _artifact_integrity(mem) -> dict:
                 segment.segment_id for segment in source_by_id[provenance.source_id].segments
             }
         ),
-        "claims_missing_pages": sorted(
-            f"{claim.claim_id}:{page_slug}"
-            for claim in claims
-            for page_slug in claim.page_slugs
-            if page_slug not in pages
+        "placements_missing_claims": sorted(
+            claim_id for claim_id in placements if claim_id not in claim_by_id
+        ),
+        "placements_missing_entities": sorted(
+            f"{placement.claim_id}:{placement.owner_entity_id}"
+            for placement in placements.values()
+            if placement.owner_entity_id and placement.owner_entity_id not in entities
+        ),
+        "entities_missing_pages": sorted(
+            f"{entity.entity_id}:{entity.slug}"
+            for entity in entities.values()
+            if entity.status == "active" and entity.slug not in pages
         ),
         "sources_missing_raw_log": sorted(
             source.source_id
@@ -141,9 +181,8 @@ async def artifact_overview():
     claims = mem.artifacts.list_claims()
     coverage = mem.artifacts.coverage_report()
     coverage["suppressed_claims"] = len(claims) - coverage["active_claims"]
-    page_counts = [len(claim.page_slugs) for claim in claims]
-    assigned_page_counts = [count for count in page_counts if count]
-    page_assignments = sum(page_counts)
+    placements = mem.artifacts.list_placements()
+    assigned = [placement for placement in placements if placement.status == "placed"]
     disposition_counts: dict[str, int] = {}
     for claim in claims:
         disposition_counts[claim.dream_disposition] = (
@@ -156,14 +195,15 @@ async def artifact_overview():
         )
     return {
         "coverage": coverage,
+        "short_term_memory": mem.short_term_memory_status().as_dict(),
         "projection": {
-            "page_assignments": page_assignments,
-            "assigned_claims": len(assigned_page_counts),
-            "multi_page_claims": sum(count > 1 for count in page_counts),
+            "page_assignments": len(assigned),
+            "assigned_claims": len(assigned),
+            "multi_page_claims": 0,
             "average_pages_per_claim": (
-                page_assignments / len(assigned_page_counts) if assigned_page_counts else 0.0
+                1.0 if assigned else 0.0
             ),
-            "max_pages_per_claim": max(page_counts, default=0),
+            "max_pages_per_claim": 1 if assigned else 0,
         },
         "integrity": _artifact_integrity(mem),
         "dream_audit": {
@@ -171,6 +211,13 @@ async def artifact_overview():
             "claim_dispositions": disposition_counts,
         },
         "reconsolidation_proposals": proposal_status_counts,
+        "organization_proposals": {
+            status: sum(
+                proposal.status == status
+                for proposal in mem.artifacts.list_organization_proposals()
+            )
+            for status in {proposal.status for proposal in mem.artifacts.list_organization_proposals()}
+        },
         "archived_pages": len(list(mem.wiki.archive_dir.glob("*.md"))),
     }
 
@@ -231,13 +278,22 @@ async def get_artifact_episode(episode_id: str):
 
 @router.get("/artifacts/claims")
 async def list_artifact_claims():
-    return [asdict(claim) for claim in get_mem().artifacts.list_claims()]
+    artifacts = get_mem().artifacts
+    return [
+        {**asdict(claim), "placement": (
+            asdict(placement) if (placement := artifacts.placement_for_claim(claim.claim_id)) else None
+        )}
+        for claim in artifacts.list_claims()
+    ]
 
 
 @router.get("/artifacts/claims/{claim_id}")
 async def get_artifact_claim(claim_id: str):
     try:
-        return asdict(get_mem().artifacts.get_claim(claim_id))
+        artifacts = get_mem().artifacts
+        claim = artifacts.get_claim(claim_id)
+        placement = artifacts.placement_for_claim(claim_id)
+        return {**asdict(claim), "placement": asdict(placement) if placement else None}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Claim artifact not found") from exc
 
@@ -271,6 +327,23 @@ async def get_reconsolidation_proposal(proposal_id: str):
         raise HTTPException(status_code=404, detail="Reconsolidation proposal not found") from exc
 
 
+@router.get("/artifacts/entities")
+async def list_artifact_entities(status: str | None = None):
+    return [asdict(entity) for entity in get_mem().artifacts.list_entities(status=status)]
+
+
+@router.get("/artifacts/placements")
+async def list_artifact_placements(status: str | None = None):
+    return [asdict(item) for item in get_mem().artifacts.list_placements(status=status)]
+
+
+@router.get("/artifacts/organization-proposals")
+async def list_organization_proposals(status: str | None = None):
+    return [
+        asdict(item) for item in get_mem().artifacts.list_organization_proposals(status=status)
+    ]
+
+
 @router.get("/artifacts/files")
 async def list_stored_memory_files():
     mem = get_mem()
@@ -294,6 +367,9 @@ async def list_wiki():
             "importance": p.importance,
             "page_type": p.page_type,
             "tags": p.tags,
+            "entity_id": p.entity_id,
+            "entity_status": p.entity_status,
+            "aliases": p.aliases,
         }
         for p in pages
     ]
@@ -305,6 +381,11 @@ async def get_wiki_page(slug: str):
         page = mem.wiki.get(slug)
         return wiki_page_response(page)
     except FileNotFoundError:
+        entity = mem.artifacts.entity_for_slug(slug)
+        if entity and entity.status == "merged" and entity.merged_into_entity_id:
+            target = mem.artifacts.get_entity(entity.merged_into_entity_id)
+            page = mem.wiki.get(target.slug)
+            return {**wiki_page_response(page), "redirected_from": slug}
         raise HTTPException(status_code=404, detail="Page not found")
 
 
@@ -347,6 +428,16 @@ async def run_dream():
     return await run_dream_process()
 
 
+@router.get("/dream/readiness")
+async def dream_readiness():
+    return get_mem().short_term_memory_status().as_dict()
+
+
+@router.post("/dream/run-if-ready")
+async def run_dream_if_ready():
+    return await run_dream_if_ready_process()
+
+
 @router.post("/dev/clear")
 async def clear_memory():
     return clear_memory_store()
@@ -384,6 +475,115 @@ async def flush_all():
 def _review_service():
     mem = get_mem()
     return ReconsolidationReviewService(mem.artifacts, mem.dream_process.materializer)
+
+
+def _curation_service():
+    mem = get_mem()
+    return EntityCurationService(mem.artifacts, mem.wiki, mem.dream_process.materializer)
+
+
+def _curation_response(result):
+    if result is None:
+        return {"entity": None, "pages_updated": [], "pages_deleted": []}
+    return {
+        "entity": asdict(result.entity),
+        "pages_updated": result.pages_updated,
+        "pages_deleted": result.pages_deleted,
+    }
+
+
+@router.patch("/entities/{entity_id}")
+async def update_entity(entity_id: str, req: EntityUpdateRequest):
+    try:
+        return _curation_response(_curation_service().update_entity(
+            entity_id,
+            title=req.title,
+            slug=req.slug,
+            aliases=req.aliases,
+            entity_type=req.entity_type,
+        ))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Entity not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/entities/{entity_id}/archive")
+async def archive_entity(entity_id: str):
+    try:
+        return _curation_response(_curation_service().set_status(entity_id, "archived"))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Entity not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/entities/{entity_id}/reactivate")
+async def reactivate_entity(entity_id: str):
+    try:
+        return _curation_response(_curation_service().set_status(entity_id, "active"))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Entity not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/entities/{entity_id}/merge")
+async def merge_entity(entity_id: str, req: EntityMergeRequest):
+    try:
+        return _curation_response(_curation_service().merge(entity_id, req.target_entity_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Entity not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/entities/{entity_id}/split")
+async def split_entity(entity_id: str, req: EntitySplitRequest):
+    try:
+        return _curation_response(_curation_service().split(
+            entity_id,
+            req.claim_ids,
+            title=req.title,
+            entity_type=req.entity_type,
+            aliases=req.aliases,
+        ))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Entity or claim not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/placements/{claim_id}")
+async def update_placement(claim_id: str, req: PlacementUpdateRequest):
+    try:
+        return _curation_response(_curation_service().move_claim(
+            claim_id,
+            req.owner_entity_id,
+            req.section_key,
+            linked_entity_ids=req.linked_entity_ids,
+            reason=req.reason,
+        ))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Claim or entity not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/organization/proposals/{proposal_id}/{decision}")
+async def review_organization_proposal(
+    proposal_id: str, decision: str, req: ProposalReviewRequest
+):
+    mem = get_mem()
+    try:
+        proposal = OrganizationReviewService(mem.artifacts, _curation_service()).review(
+            proposal_id, decision, reviewer_note=req.reviewer_note
+        )
+        return asdict(proposal)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Organization proposal not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _review_response(result):

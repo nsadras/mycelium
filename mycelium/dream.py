@@ -1,12 +1,9 @@
-"""Offline consolidation orchestration.
-
-Dream deliberately has one path: source-grounded claims are routed once and affected
-wiki pages are regenerated deterministically from canonical claim artifacts.
-"""
+"""Offline consolidation from durable short-term claims into the canonical wiki."""
 
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import datetime
 
 from mycelium.artifacts import (
@@ -19,11 +16,12 @@ from mycelium.artifacts import (
 from mycelium.config import Config
 from mycelium.consolidation import ClaimEvidence, ClaimRouter
 from mycelium.materialization import PageMaterializer
+from mycelium.organization import OrganizationAuditor
 from mycelium.reconsolidation import ClaimReconsolidator, add_claim_link
+from mycelium.short_term import ShortTermMemoryQueue
 from mycelium.models import DreamReport, LogEntry
 from mycelium.ollama import OllamaClient
 from mycelium.store import LogStore, WikiStore
-from mycelium.taxonomy import PageTaxonomist
 
 
 class DreamProcess:
@@ -40,24 +38,36 @@ class DreamProcess:
         self.logs = logs
         self.config = config
         self.artifacts = artifacts
-        self.router = ClaimRouter(llm, wiki)
+        self.router = ClaimRouter(llm, artifacts)
         self.materializer = PageMaterializer(wiki, artifacts, config)
-        self.taxonomist = PageTaxonomist(llm)
         self.reconsolidator = ClaimReconsolidator(llm, artifacts)
+        self.short_term = ShortTermMemoryQueue(artifacts, config.dream)
 
-    async def run(self, *, dry_run: bool = False) -> DreamReport:
+    async def run(
+        self, *, dry_run: bool = False, include_deferred: bool = False
+    ) -> DreamReport:
         started_at = datetime.now().astimezone().isoformat()
         run_id = f"dream-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        queued_claims = self.short_term.claims_for_dream(
+            include_deferred=include_deferred
+        )
+        queued_claim_ids = {claim.claim_id for claim in queued_claims}
+        queued_source_ids = {
+            provenance.source_id
+            for claim in queued_claims
+            for provenance in claim.provenance
+        }
         raw_entries = [
             entry
-            for entry in self.logs.get_unconsolidated()
+            for entry in self.logs.get_unconsolidated(days=None)
             if entry.durability == "durable" and entry.content.strip()
         ]
         raw_ids = {entry.entry_id for entry in raw_entries}
         sources = [
             source
             for source in self.artifacts.list_sources()
-            if source.raw_log_entry_id in raw_ids
+            if source.source_id in queued_source_ids
+            or source.raw_log_entry_id in raw_ids
         ]
         sources_by_log = {
             source.raw_log_entry_id: source
@@ -100,7 +110,7 @@ class DreamProcess:
                     ),
                 })
 
-        evidence, decisions = self._build_evidence(sources, raw_ids)
+        evidence, decisions = self._build_evidence(sources, queued_claim_ids)
         routing = await self.router.route(evidence) if evidence else None
         if routing is not None:
             for failure in routing.failures:
@@ -125,7 +135,7 @@ class DreamProcess:
             successful_routes = []
 
         reconciliation = await self.reconsolidator.analyze(
-            successful_routes,
+            [route for route in successful_routes if route.placed],
             current_claim_ids={item.claim.claim_id for item in evidence},
             dream_run_id=run_id,
         ) if successful_routes else None
@@ -171,20 +181,47 @@ class DreamProcess:
             for proposal in proposals:
                 self.artifacts.save_reconsolidation_proposal(proposal)
 
-        materialized = self.materializer.stage(successful_routes)
-        taxonomy = await self.taxonomist.classify(
-            self.materializer.taxonomy_candidates(materialized)
-        )
-        self.materializer.apply_page_types(materialized, taxonomy.assignments)
-        self.materializer.refresh_you_memory_map(materialized)
+        referenced_entity_ids = {
+            route.owner_entity_id for route in successful_routes if route.owner_entity_id
+        }
+        retained_new_entities = [
+            entity for entity in (routing.new_entities if routing is not None else [])
+            if entity.entity_id in referenced_entity_ids
+        ]
+        discarded_new_ids = {
+            entity.entity_id for entity in (routing.new_entities if routing is not None else [])
+        } - referenced_entity_ids
+        if discarded_new_ids:
+            successful_routes = [
+                replace(route, linked_entity_ids=tuple(
+                    entity_id for entity_id in route.linked_entity_ids
+                    if entity_id not in discarded_new_ids
+                ))
+                for route in successful_routes
+            ]
+        materialized = self.materializer.stage(successful_routes, retained_new_entities)
+        routed_entities = {
+            entity.entity_id: entity
+            for entity in [
+                *self.artifacts.list_entities(),
+                *retained_new_entities,
+            ]
+        }
         for route in successful_routes:
-            self._set_decision(
-                decisions,
-                route.claim_id,
-                "routed",
-                f"Routed to wiki page: {route.page_slug}.",
-                page_slugs=[route.page_slug],
-            )
+            if route.placed:
+                assert route.owner_entity_id is not None
+                entity = routed_entities[route.owner_entity_id]
+                self._set_decision(
+                    decisions,
+                    route.claim_id,
+                    "routed",
+                    f"Owned by {entity.entity_id} in {route.section_key}.",
+                    page_slugs=[entity.slug],
+                )
+            else:
+                self._set_decision(
+                    decisions, route.claim_id, "deferred", route.reason
+                )
 
         for decision in decisions.values():
             if decision.raw_log_entry_id in failed_source_ids and decision.disposition != "excluded_assistant":
@@ -204,19 +241,22 @@ class DreamProcess:
 
         if not dry_run:
             self.materializer.persist(materialized)
-            routed_slugs = {route.page_slug for route in successful_routes}
-            pending_related_slugs = {
-                slug for proposal in proposals for slug in proposal.affected_page_slugs
-                if slug not in routed_slugs
+            routed_entity_ids = {
+                route.owner_entity_id for route in successful_routes if route.owner_entity_id
             }
-            if pending_related_slugs:
-                related_pages = self.materializer.regenerate(pending_related_slugs)
+            pending_related_ids = {
+                entity_id for proposal in proposals for entity_id in proposal.affected_entity_ids
+                if entity_id not in routed_entity_ids
+            }
+            if pending_related_ids:
+                related_pages = self.materializer.regenerate(pending_related_ids)
                 materialized.changed_pages.update(related_pages.changed_pages)
                 materialized.created_slugs.update(related_pages.created_slugs)
                 materialized.updated_slugs.update(related_pages.updated_slugs)
                 materialized.deleted_slugs.update(related_pages.deleted_slugs)
             if completed_source_ids:
                 self.logs.mark_consolidated(completed_source_ids)
+            OrganizationAuditor(self.artifacts).audit()
 
         report = DreamReport(
             pages_updated=len(materialized.updated_slugs),
@@ -225,7 +265,7 @@ class DreamProcess:
             completed_source_ids=completed_source_ids,
             pending_source_ids=pending_source_ids,
             failures=failures,
-            taxonomy_failures=taxonomy.failures,
+            taxonomy_failures=[],
             reconsolidation_proposal_ids=[
                 proposal.proposal_id for proposal in proposals
             ],
@@ -237,18 +277,19 @@ class DreamProcess:
     def _build_evidence(
         self,
         sources: list[SourceDocument],
-        raw_ids: set[str],
+        queued_claim_ids: set[str],
     ) -> tuple[list[ClaimEvidence], dict[str, DreamClaimDecision]]:
         source_by_id = {source.source_id: source for source in sources}
         evidence: list[ClaimEvidence] = []
         decisions: dict[str, DreamClaimDecision] = {}
         for claim in self.artifacts.list_claims(status="active"):
+            if claim.claim_id not in queued_claim_ids:
+                continue
             matching_source = next(
                 (
                     source_by_id.get(provenance.source_id)
                     for provenance in claim.provenance
-                    if provenance.raw_log_entry_id in raw_ids
-                    and provenance.source_id in source_by_id
+                    if provenance.source_id in source_by_id
                 ),
                 None,
             )
@@ -339,7 +380,14 @@ class DreamProcess:
             started_at=started_at,
             completed_at=completed_at,
             status=status,
-            source_ids=[entry.entry_id for entry in raw_entries],
+            source_ids=sorted({
+                *[entry.entry_id for entry in raw_entries],
+                *[
+                    decision.raw_log_entry_id
+                    for decision in decisions.values()
+                    if decision.raw_log_entry_id
+                ],
+            }),
             completed_source_ids=list(report.completed_source_ids),
             pending_source_ids=list(report.pending_source_ids),
             pages_created=report.pages_created,

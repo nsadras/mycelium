@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from mycelium.artifacts import (
     ClaimProvenance,
+    ClaimPlacement,
     EpisodeManifest,
     MemoryClaim,
     ReconsolidationProposal,
@@ -66,7 +67,6 @@ def artifact_memory(tmp_path, monkeypatch):
             speaker="user",
         )],
         recorded_at="2026-07-22T12:00:00",
-        page_slugs=["user-profile"],
         claim_type="preference",
         evidence_modality="speech",
         temporal_status="atemporal",
@@ -83,7 +83,6 @@ def artifact_memory(tmp_path, monkeypatch):
             speaker="user",
         )],
         recorded_at="2026-07-21T12:00:00",
-        page_slugs=["user-profile"],
         claim_type="preference",
         evidence_modality="speech",
         temporal_status="atemporal",
@@ -92,6 +91,17 @@ def artifact_memory(tmp_path, monkeypatch):
     mem.artifacts.save_episode(episode)
     mem.artifacts.save_claim(claim)
     mem.artifacts.save_claim(old_claim)
+    for item in (claim, old_claim):
+        mem.artifacts.save_placement(ClaimPlacement(
+            claim_id=item.claim_id,
+            owner_entity_id="you",
+            section_key="preferences_working_style",
+            linked_entity_ids=[],
+            status="placed",
+            reason="fixture",
+            created_at="2026-07-22T12:00:00",
+            updated_at="2026-07-22T12:00:00",
+        ))
     mem.wiki.save(WikiPage(
         slug="archived-page",
         title="Archived",
@@ -101,6 +111,8 @@ def artifact_memory(tmp_path, monkeypatch):
         version=1,
         confidence=0.8,
         importance=0.5,
+        page_type="topic",
+        entity_id="topic-archived-page",
     ))
     mem.wiki.archive("archived-page")
     mem.artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
@@ -112,7 +124,7 @@ def artifact_memory(tmp_path, monkeypatch):
         confidence=0.5,
         dream_run_id="dream-test",
         created_at="2026-07-22T12:00:00",
-        affected_page_slugs=["user-profile"],
+        affected_entity_ids=["you"],
     ))
     monkeypatch.setattr(memory, "get_mem", lambda: mem)
     monkeypatch.setattr(memory, "load_meta", lambda: {
@@ -163,7 +175,9 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
             "claims_missing_provenance": [],
             "claims_missing_source": [],
             "claims_missing_segments": [],
-            "claims_missing_pages": [],
+            "placements_missing_claims": [],
+            "placements_missing_entities": [],
+            "entities_missing_pages": [],
                 "sources_missing_raw_log": [],
                 "proposals_missing_claims": [],
                 "pages_unclassified": [],

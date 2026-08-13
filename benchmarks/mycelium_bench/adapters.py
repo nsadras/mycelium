@@ -13,8 +13,7 @@ from pydantic import BaseModel, Field
 
 from mycelium.core import Mycelium
 from mycelium.artifacts import ArtifactStore, MemoryClaim
-from mycelium.consolidation import ClaimRoute
-from mycelium.store import LogStore, WikiStore
+from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.memory_tools import MemoryToolset
 from mycelium.structured_outputs import GroundedAnswerOutput
@@ -260,7 +259,6 @@ class MyceliumMemorySystem:
         self._errors: list[dict[str, Any]] = []
         self._dream_failures: list[dict[str, Any]] = []
         self._taxonomy_failures: list[dict[str, Any]] = []
-        self._replay_page_kinds: dict[str, str] = {}
         self._evidence_stage_labels_cache: dict[str, set[str]] | None = None
 
     async def reset(self, case_id: str) -> None:
@@ -277,23 +275,13 @@ class MyceliumMemorySystem:
             config_path=self.config_path,
             memory_profile="none",
         )
-        self._replay_page_kinds = {}
         if self.replay_assignments:
             replay_store = self._require_replay_store()
             fixture = ArtifactStore(replay_store / "artifacts")
             for proposal in fixture.list_reconsolidation_proposals():
                 self.mem.artifacts.save_reconsolidation_proposal(copy.deepcopy(proposal))
-            self._replay_page_kinds = {
-                page.slug: next(
-                    (
-                        tag.removeprefix("page-type-")
-                        for tag in page.tags
-                        if tag.startswith("page-type-")
-                    ),
-                    "topic",
-                )
-                for page in WikiStore(replay_store / "wiki").list_all()
-            }
+            for entity in fixture.list_entities():
+                self.mem.artifacts.save_entity(copy.deepcopy(entity))
         self._encoded_batches = 0
         self._dream_runs = 0
         self._memory_construction_seconds = 0.0
@@ -402,8 +390,11 @@ class MyceliumMemorySystem:
                     if segment_id in label_by_segment
                 }
                 claim_labels.update(labels)
-                if any(mem.wiki.exists(slug) for slug in claim.page_slugs):
-                    wiki_labels.update(labels)
+                placement = mem.artifacts.placement_for_claim(claim.claim_id)
+                if placement and placement.owner_entity_id:
+                    entity = mem.artifacts.get_entity(placement.owner_entity_id)
+                    if mem.wiki.exists(entity.slug):
+                        wiki_labels.update(labels)
             self._evidence_stage_labels_cache = {
                 "source": source_labels,
                 "claim": claim_labels,
@@ -501,13 +492,15 @@ class MyceliumMemorySystem:
             for claim_id in episode.claim_ids:
                 claim = copy.deepcopy(fixture_artifacts.get_claim(claim_id))
                 claim.links = []
-                if not self.replay_assignments:
-                    claim.page_slugs = []
                 claim.dream_disposition = "pending"
                 claim.dream_disposition_reason = None
                 claim.dream_run_id = None
                 claim.dream_disposition_at = None
                 mem.artifacts.save_claim(claim)
+                if self.replay_assignments:
+                    placement = fixture_artifacts.placement_for_claim(claim.claim_id)
+                    if placement:
+                        mem.artifacts.save_placement(copy.deepcopy(placement))
                 replayed_claims.append(claim)
             if not source.raw_log_entry_id:
                 raise ValueError(f"Replay source {source.source_id} has no raw log entry")
@@ -524,36 +517,23 @@ class MyceliumMemorySystem:
         *,
         session_id: str,
     ) -> None:
-        routes = [
-            ClaimRoute(
-                claim_id=claim.claim_id,
-                page_slug=page_slug,
-                page_type=self._replay_page_kinds.get(page_slug, "topic"),
-                raw_log_entry_id=(
-                    claim.provenance[0].raw_log_entry_id
-                    or claim.provenance[0].source_id
-                ),
-            )
+        owner_ids = {
+            placement.owner_entity_id
             for claim in claims
-            for page_slug in claim.page_slugs
-        ]
-        materialized = mem.dream_process.materializer.stage(routes)
-        taxonomy = await mem.dream_process.taxonomist.classify(
-            mem.dream_process.materializer.taxonomy_candidates(materialized)
-        )
-        mem.dream_process.materializer.apply_page_types(
-            materialized, taxonomy.assignments
-        )
-        mem.dream_process.materializer.refresh_you_memory_map(materialized)
-        mem.dream_process.materializer.persist(materialized)
-        for failure in taxonomy.failures:
-            self._taxonomy_failures.append({"session_id": session_id, **failure})
+            if (placement := mem.artifacts.placement_for_claim(claim.claim_id))
+            and placement.owner_entity_id
+        }
+        mem.dream_process.materializer.regenerate(owner_ids)
 
         eligible = [
             claim for claim in claims
             if claim.status == "active" and not claim.derivation_operation
         ]
-        if eligible and all(len(claim.page_slugs) == 1 for claim in eligible):
+        if eligible and all(
+            (placement := mem.artifacts.placement_for_claim(claim.claim_id)) is not None
+            and placement.status in {"placed", "unassigned"}
+            for claim in eligible
+        ):
             raw_ids = {
                 provenance.raw_log_entry_id
                 for claim in eligible

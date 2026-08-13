@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 from mycelium.core import Mycelium
 from mycelium.models import WikiPage
 from datetime import datetime
-from mycelium.artifacts import ClaimProvenance, MemoryClaim
+from mycelium.artifacts import ClaimPlacement, ClaimProvenance, EntityRecord, MemoryClaim
 
 @pytest.fixture
 def temp_mycelium(tmp_path):
@@ -23,7 +23,7 @@ async def test_page_search_retrieves_named_entity(temp_mycelium):
         last_updated=datetime.now(),
         version=1,
         confidence=0.8,
-        importance=0.5
+        importance=0.5, page_type="person", entity_id="person-gina"
     )
     page_jon = WikiPage(
         slug="person-jon",
@@ -33,7 +33,7 @@ async def test_page_search_retrieves_named_entity(temp_mycelium):
         last_updated=datetime.now(),
         version=1,
         confidence=0.8,
-        importance=0.5
+        importance=0.5, page_type="person", entity_id="person-jon"
     )
     temp_mycelium.wiki.save(page_gina)
     temp_mycelium.wiki.save(page_jon)
@@ -53,11 +53,13 @@ async def test_page_search_does_not_expand_every_derived_page(temp_mycelium):
     temp_mycelium.wiki.save(WikiPage(
         slug="person-gina", title="Gina", content="Gina is a dancer.",
         created=now, last_updated=now, version=1, confidence=0.8, importance=0.5,
+        page_type="person", entity_id="person-gina",
     ))
     temp_mycelium.wiki.save(WikiPage(
         slug="person-gina-timeline", title="Gina: Timeline", content="A dated event.",
         created=now, last_updated=now, version=1, confidence=1.0, importance=0.4,
         tags=["derived-memory", "timeline", "parent:person-gina"],
+        page_type="person", entity_id="person-gina-timeline",
     ))
     loaded = await temp_mycelium.load_context(
         query="What does Gina enjoy?"
@@ -72,12 +74,12 @@ async def test_full_page_search_routes_without_llm(temp_mycelium):
     temp_mycelium.wiki.save(WikiPage(
         slug="person-gina", title="Gina", content="Gina owns a clothing store.",
         created=now, last_updated=now, version=1, confidence=0.8,
-        importance=0.5,
+        importance=0.5, page_type="person", entity_id="person-gina",
     ))
     temp_mycelium.wiki.save(WikiPage(
         slug="person-jon", title="Jon", content="Jon owns a dance studio.",
         created=now, last_updated=now, version=1, confidence=0.8,
-        importance=0.5,
+        importance=0.5, page_type="person", entity_id="person-jon",
     ))
     loaded = await temp_mycelium.load_context(query="Who owns the dance studio?")
 
@@ -91,22 +93,32 @@ async def test_temporal_claim_routes_generic_deadline_query(temp_mycelium):
     temp_mycelium.wiki.save(WikiPage(
         slug="project-alpha", title="Project Alpha", content="Quarterly report work.",
         created=now, last_updated=now, version=1, confidence=0.9, importance=0.8,
-        page_type="project",
+        page_type="project", entity_id="project-alpha",
     ))
-    temp_mycelium.artifacts.save_claim(MemoryClaim(
+    deadline = MemoryClaim(
         claim_id="deadline",
         text="Ava will send the report.",
         kind="commitment",
         about=[{"entity": "Ava"}],
         provenance=[ClaimProvenance("source-1", ["segment-1"])],
         recorded_at=now.isoformat(),
-        page_slugs=["project-alpha"],
         claim_type="commitment",
         facets={"temporal": {
             "expression": "next Thursday", "role": "deadline",
             "status": "resolved", "certainty": "exact",
             "start": "2026-08-20", "end": "2026-08-20",
         }},
+    )
+    temp_mycelium.artifacts.save_claim(deadline)
+    temp_mycelium.artifacts.save_entity(EntityRecord(
+        entity_id="project-alpha", entity_type="project", title="Project Alpha",
+        slug="project-alpha", aliases=[], status="active",
+        created_at=now.isoformat(), updated_at=now.isoformat(),
+    ))
+    temp_mycelium.artifacts.save_placement(ClaimPlacement(
+        claim_id="deadline", owner_entity_id="project-alpha",
+        section_key="next_steps_deadlines", linked_entity_ids=[], status="placed",
+        reason="test", created_at=now.isoformat(), updated_at=now.isoformat(),
     ))
 
     loaded = await temp_mycelium.load_context(
@@ -114,3 +126,26 @@ async def test_temporal_claim_routes_generic_deadline_query(temp_mycelium):
     )
 
     assert [page.slug for page in loaded] == ["project-alpha"]
+
+
+@pytest.mark.asyncio
+async def test_load_context_exposes_relevant_short_term_memory_without_wiki_write(
+    temp_mycelium,
+):
+    claim = MemoryClaim(
+        claim_id="recent-claim",
+        text="Gina plans to take a ceramics class.",
+        kind="plan",
+        about=[{"entity": "Gina", "role": "subject"}],
+        provenance=[ClaimProvenance("source-recent", ["segment-recent"])],
+        recorded_at=datetime.now().astimezone().isoformat(),
+        claim_type="plan",
+        predicate="take_ceramics_class",
+    )
+    temp_mycelium.artifacts.save_claim(claim)
+
+    loaded = await temp_mycelium.load_context("What class does Gina plan to take?")
+
+    recent = next(page for page in loaded if page.slug == "_short-term-memory")
+    assert claim.text in recent.content
+    assert not temp_mycelium.wiki.exists("_short-term-memory")

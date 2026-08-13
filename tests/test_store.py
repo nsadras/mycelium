@@ -18,6 +18,8 @@ def test_wiki_store_save_and_get(tmp_path):
         importance=0.8,
         tags=["test"],
         related=[Edge(target="other-page", relation="causes", weight=0.5)],
+        page_type="topic",
+        entity_id="topic-test-page",
         update_log=[
             UpdateLogEntry(
                 version=1,
@@ -39,7 +41,8 @@ def test_wiki_store_save_and_get(tmp_path):
     assert loaded.content == "This is the content."
     assert loaded.version == 1
     assert loaded.confidence == 0.9
-    assert loaded.page_type is None
+    assert loaded.page_type == "topic"
+    assert loaded.entity_id == "topic-test-page"
     assert len(loaded.related) == 1
     assert loaded.related[0].target == "other-page"
     assert len(loaded.update_log) == 1
@@ -59,8 +62,8 @@ def test_wiki_store_rejects_pre_taxonomy_page_schema(tmp_path):
 def test_wiki_store_list_all(tmp_path):
     store = WikiStore(tmp_path / "wiki")
     
-    store.save(WikiPage(slug="page1", title="1", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
-    store.save(WikiPage(slug="page2", title="2", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
+    store.save(WikiPage(slug="page1", title="1", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0, page_type="topic", entity_id="topic-page1"))
+    store.save(WikiPage(slug="page2", title="2", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0, page_type="topic", entity_id="topic-page2"))
     store.save_index("# Index")
     
     pages = store.list_all()
@@ -71,7 +74,7 @@ def test_wiki_store_list_all(tmp_path):
 
 def test_wiki_store_archive(tmp_path):
     store = WikiStore(tmp_path / "wiki")
-    store.save(WikiPage(slug="archive-me", title="A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
+    store.save(WikiPage(slug="archive-me", title="A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0, page_type="topic", entity_id="topic-archive-me"))
     assert store.exists("archive-me")
     store.archive("archive-me")
     assert not store.exists("archive-me")
@@ -79,7 +82,7 @@ def test_wiki_store_archive(tmp_path):
 
 def test_wiki_store_delete(tmp_path):
     store = WikiStore(tmp_path / "wiki")
-    store.save(WikiPage(slug="delete-page", title="L", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
+    store.save(WikiPage(slug="delete-page", title="L", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0, page_type="topic", entity_id="topic-delete-page"))
 
     store.delete("delete-page")
 
@@ -194,21 +197,22 @@ def test_log_store_markdown_headings_inside_body_are_not_entries(tmp_path):
     store.mark_consolidated(["2026-05-10#tool-abc123"])
     assert store.get_unconsolidated() == []
 
-def test_mycelium_init_seeds_user_profile(tmp_path):
+def test_mycelium_init_seeds_you_entity(tmp_path):
     from mycelium.core import Mycelium
     
     myc = Mycelium(store_path=tmp_path)
     
-    assert myc.wiki.exists("user-profile")
+    assert myc.wiki.exists("you")
     
-    page = myc.wiki.get("user-profile")
+    page = myc.wiki.get("you")
     assert page.title == "You"
     assert page.page_type == "you"
     assert page.confidence == 0.8
     assert "profile" in page.tags
+    assert page.entity_id == "you"
     
     index_content = myc.wiki.get_index()
-    assert "[[user-profile]]" in index_content
+    assert "[[you]]" in index_content
 
 def test_log_store_mark_unconsolidated(tmp_path):
     store = LogStore(tmp_path / "logs")
@@ -260,22 +264,22 @@ def test_clear_wiki_store(tmp_path, monkeypatch):
     assert len(myc.log_store.get_unconsolidated()) == 0
     
     from mycelium.models import WikiPage
-    myc.wiki.save(WikiPage(slug="page-a", title="Page A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
-    myc.wiki.save(WikiPage(slug="page-b", title="Page B", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0))
-    myc.wiki.save_index("# Wiki Index\n\n## Pages\n- [[user-profile]]\n- [[page-a]]\n- [[page-b]]")
+    myc.wiki.save(WikiPage(slug="page-a", title="Page A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0, page_type="topic", entity_id="topic-page-a"))
+    myc.wiki.save(WikiPage(slug="page-b", title="Page B", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0, page_type="topic", entity_id="topic-page-b"))
+    myc.wiki.save_index("# Wiki Index\n\n## Pages\n- [[you]]\n- [[page-a]]\n- [[page-b]]")
     
     assert myc.wiki.exists("page-a")
     assert myc.wiki.exists("page-b")
-    assert myc.wiki.exists("user-profile")
+    assert myc.wiki.exists("you")
     
     clear_wiki_store()
     
     assert not myc.wiki.exists("page-a")
     assert not myc.wiki.exists("page-b")
-    assert myc.wiki.exists("user-profile")
+    assert myc.wiki.exists("you")
     
     index_content = myc.wiki.get_index()
-    assert "[[user-profile]]" in index_content
+    assert "[[you]]" in index_content
     assert "[[page-a]]" not in index_content
     assert "[[page-b]]" not in index_content
     

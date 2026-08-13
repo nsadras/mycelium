@@ -8,6 +8,7 @@ from benchmarks.mycelium_bench.adapters import (
 )
 from mycelium.artifacts import (
     ArtifactStore,
+    ClaimPlacement,
     ClaimProvenance,
     MemoryClaim,
     SourceDocument,
@@ -36,7 +37,6 @@ def _claim(
             speaker=entity,
         )],
         recorded_at="2026-01-01T12:00:00",
-        page_slugs=[page],
         claim_type="event",
         predicate="lost_job" if "lost" in text else "started_business",
     )
@@ -89,6 +89,21 @@ def _toolset(tmp_path) -> MemoryToolset:
         ),
     ):
         store.save_claim(claim)
+    jon = store.create_entity("person", "Jon")
+    gina = store.create_entity("person", "Gina")
+    for claim_id, owner in (
+        ("claim-job", jon), ("claim-business", jon), ("claim-gina", gina)
+    ):
+        store.save_placement(ClaimPlacement(
+            claim_id=claim_id,
+            owner_entity_id=owner.entity_id,
+            section_key="timeline",
+            linked_entity_ids=[],
+            status="placed",
+            reason="fixture",
+            created_at="2026-01-01T12:00:00",
+            updated_at="2026-01-01T12:00:00",
+        ))
     return MemoryToolset(store)
 
 
@@ -100,6 +115,25 @@ def test_memory_search_returns_ranked_canonical_claims(tmp_path):
     assert results[0]["claim_id"] == "claim-job"
     assert results[0]["subjects"] == ["jon"]
     assert results[0]["source_ids"] == ["source-1"]
+    assert results[0]["memory_tier"] == "canonical"
+
+
+def test_memory_search_labels_unconsolidated_claims_as_short_term(tmp_path):
+    tools = _toolset(tmp_path)
+    claim = _claim(
+        "claim-recent",
+        "Jon plans a new ceramics class.",
+        entity="Jon",
+        segment_ids=["source-1#seg-0003"],
+        page="jon",
+    )
+    tools.artifacts.save_claim(claim)
+
+    results = tools.search("Jon ceramics", limit=2)
+
+    recent = next(item for item in results if item["claim_id"] == claim.claim_id)
+    assert recent["memory_tier"] == "short_term"
+    assert recent["consolidation_status"] == "pending"
 
 
 def test_memory_expand_follows_shared_entity_page_and_source(tmp_path):

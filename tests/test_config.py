@@ -12,7 +12,13 @@ def test_config_surface_contains_only_runtime_settings():
         "timeout_seconds",
         "context_window_tokens",
     }
-    assert {field.name for field in fields(DreamConfig)} == {"main_page_claim_limit"}
+    assert {field.name for field in fields(DreamConfig)} == {
+        "main_page_claim_limit",
+        "queue_claim_threshold",
+        "max_pending_hours",
+        "deferred_revisit_hours",
+        "lifecycle_poll_seconds",
+    }
     assert {field.name for field in fields(Config)} == {
         "context_budget_tokens",
         "llm",

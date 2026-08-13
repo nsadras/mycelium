@@ -9,6 +9,80 @@ PAGE_TYPES: tuple[PageType, ...] = (
     'you', 'person', 'project', 'topic', 'organization', 'place', 'event'
 )
 
+PAGE_SECTION_KEYS: dict[PageType, tuple[tuple[str, str], ...]] = {
+    "you": (
+        ("profile", "Profile"),
+        ("current_context", "Current Context"),
+        ("priorities_plans", "Priorities & Plans"),
+        ("preferences_working_style", "Preferences & Working Style"),
+        ("important_relationships", "Important Relationships"),
+        ("memory_map", "Memory Map"),
+        ("recent_changes", "Recent Changes"),
+        ("needs_review", "Needs Review"),
+    ),
+    "person": (
+        ("relationship_to_you", "Relationship to You"),
+        ("profile", "Profile"),
+        ("current_context", "Current Context"),
+        ("interests_views", "Interests & Views"),
+        ("goals_plans", "Goals & Plans"),
+        ("shared_projects", "Shared Projects"),
+        ("timeline", "Timeline"),
+        ("research_references", "Research & References"),
+        ("needs_review", "Needs Review"),
+    ),
+    "project": (
+        ("overview", "Overview"),
+        ("objective", "Objective"),
+        ("current_status", "Current Status"),
+        ("requirements_constraints", "Requirements & Constraints"),
+        ("decisions", "Decisions"),
+        ("next_steps_deadlines", "Next Steps & Deadlines"),
+        ("people_organizations", "People & Organizations"),
+        ("timeline", "Timeline"),
+        ("research_references", "Research & References"),
+        ("needs_review", "Needs Review"),
+    ),
+    "topic": (
+        ("why_it_matters", "Why It Matters"),
+        ("current_understanding", "Current Understanding"),
+        ("preferences_positions", "Preferences & Positions"),
+        ("related_projects", "Related Projects"),
+        ("timeline", "Timeline"),
+        ("research_references", "Research & References"),
+        ("needs_review", "Needs Review"),
+    ),
+    "organization": (
+        ("overview", "Overview"),
+        ("relationship_to_you", "Relationship to You"),
+        ("people", "People"),
+        ("related_projects", "Related Projects"),
+        ("current_context", "Current Context"),
+        ("timeline", "Timeline"),
+        ("research_references", "Research & References"),
+        ("needs_review", "Needs Review"),
+    ),
+    "place": (
+        ("overview", "Overview"),
+        ("why_it_matters", "Why It Matters"),
+        ("current_context", "Current Context"),
+        ("associated_people_projects", "Associated People & Projects"),
+        ("visits_events", "Visits & Events"),
+        ("research_references", "Research & References"),
+        ("needs_review", "Needs Review"),
+    ),
+    "event": (
+        ("summary", "Summary"),
+        ("date_location", "Date & Location"),
+        ("participants", "Participants"),
+        ("what_happened", "What Happened"),
+        ("outcomes_decisions", "Outcomes & Decisions"),
+        ("follow_ups", "Follow-ups"),
+        ("evidence", "Evidence"),
+        ("needs_review", "Needs Review"),
+    ),
+}
+
 @dataclass
 class Edge:
     target: str                          # slug of target wiki page
@@ -44,6 +118,10 @@ class WikiPage:
     source_log_entries: list[str] = field(default_factory=list)
     update_log: list[UpdateLogEntry] = field(default_factory=list)
     source_context: str = field(default='', repr=False)
+    entity_id: str = ""
+    entity_status: Literal["active", "archived", "merged"] = "active"
+    aliases: list[str] = field(default_factory=list)
+    sections: list[dict] = field(default_factory=list)
 
 @dataclass
 class LogEntry:

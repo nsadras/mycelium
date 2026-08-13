@@ -55,6 +55,83 @@ export interface WikiPage {
   related?: { target: string; relation: string }[];
   update_log?: { version: number; reason: string; date: string }[];
   source_log_entries?: string[];
+  entity_id: string;
+  entity_status: 'active' | 'archived' | 'merged';
+  aliases: string[];
+  sections?: WikiSection[];
+  redirected_from?: string;
+}
+
+export interface WikiSourceReference {
+  source_id: string;
+  segment_ids: string[];
+  raw_log_entry_id?: string | null;
+  speaker?: string | null;
+}
+
+export interface WikiFactItem {
+  kind: 'fact';
+  text: string;
+  claim_ids: string[];
+  qualifiers: string[];
+  evidence_modality: string;
+  sources: WikiSourceReference[];
+  links: { entity_id: string; slug: string; title: string }[];
+  authoritative: boolean;
+}
+
+export interface WikiLinkItem {
+  kind: 'link';
+  entity_id: string;
+  slug: string;
+  title: string;
+  entity_type: PageType;
+}
+
+export interface WikiSection {
+  key: string;
+  title: string;
+  items: (WikiFactItem | WikiLinkItem)[];
+}
+
+export interface EntityRecord {
+  entity_id: string;
+  entity_type: PageType;
+  title: string;
+  slug: string;
+  aliases: string[];
+  status: 'active' | 'archived' | 'merged';
+  created_at: string;
+  updated_at: string;
+  merged_into_entity_id?: string | null;
+}
+
+export interface ClaimPlacementArtifact {
+  claim_id: string;
+  owner_entity_id?: string | null;
+  section_key?: string | null;
+  linked_entity_ids: string[];
+  status: 'placed' | 'deferred';
+  reason: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrganizationProposalArtifact {
+  proposal_id: string;
+  proposal_type: 'assign_claim' | 'merge_entities';
+  explanation: string;
+  confidence: number;
+  created_at: string;
+  claim_id?: string | null;
+  proposed_owner_entity_id?: string | null;
+  proposed_section_key?: string | null;
+  proposed_new_entity_type?: PageType | null;
+  proposed_new_entity_title?: string | null;
+  source_entity_id?: string | null;
+  target_entity_id?: string | null;
+  status: 'pending' | 'rejected' | 'applied' | 'stale';
+  reviewer_note?: string | null;
 }
 
 export interface LogFile {
@@ -133,7 +210,7 @@ export interface MemoryClaimArtifact {
   slot?: string | null;
   facets: Record<string, unknown>;
   links: Record<string, string>[];
-  page_slugs: string[];
+  placement?: ClaimPlacementArtifact | null;
   salience: number;
   claim_type: string;
   predicate?: string | null;
@@ -180,7 +257,7 @@ export interface ReconsolidationProposalArtifact {
   confidence: number;
   dream_run_id: string;
   created_at: string;
-  affected_page_slugs: string[];
+  affected_entity_ids: string[];
   status: 'pending' | 'approved' | 'rejected' | 'applied' | 'stale';
   reviewer_note?: string | null;
   reviewed_at?: string | null;
@@ -202,7 +279,7 @@ export interface ArtifactCoverage {
   accounted_coverage: number;
   unassigned_segment_ids: string[];
   unaccounted_segment_ids: string[];
-  unassigned_claim_ids: string[];
+  unplaced_claim_ids: string[];
   unresolved_provenance_ids: string[];
   failed_episode_ids: string[];
   partial_episode_ids: string[];
@@ -210,6 +287,17 @@ export interface ArtifactCoverage {
 
 export interface ArtifactOverview {
   coverage: ArtifactCoverage;
+  short_term_memory: {
+    pending_claims: number;
+    deferred_claims: number;
+    retryable_failures: number;
+    total_claims: number;
+    oldest_pending_at?: string | null;
+    oldest_deferred_at?: string | null;
+    ready: boolean;
+    reasons: string[];
+    include_deferred: boolean;
+  };
   projection: {
     page_assignments: number;
     assigned_claims: number;
@@ -226,6 +314,7 @@ export interface ArtifactOverview {
     claim_dispositions: Record<string, number>;
   };
   reconsolidation_proposals: Record<string, number>;
+  organization_proposals: Record<string, number>;
   archived_pages: number;
 }
 

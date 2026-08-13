@@ -21,6 +21,7 @@ Most chat assistants either forget everything between sessions or require the en
 
 - Multi-session chat with a local Ollama model
 - Automatic retrieval of relevant long-term memories
+- Durable short-term memory that is retrievable before wiki consolidation
 - Plain-text episodic logs and an Obsidian-compatible Markdown wiki
 - Evidence-triggered, claim-level reconsolidation with human review
 - Deterministic, read-only wiki projections with exact source provenance
@@ -70,25 +71,48 @@ The UI is organized around five main areas:
 | --- | --- |
 | **Chat** | Create, rename, resume, and continue conversations. Each answer can show which memory pages were loaded and which tools were called. |
 | **Memory** | Inspect sources, segments, claims, Dream audits, and pending reconciliation proposals. |
-| **Wiki** | Browse the read-only views deterministically generated from canonical claims. |
+| **Wiki** | Browse and curate entity-owned views deterministically generated from canonical claims. |
 | **Logs** | Inspect the original episodic records that serve as source evidence for the wiki. |
 | **Engram** | Upload meeting audio, review the transcript and speakers, then save the finished meeting into memory. |
 
 A typical workflow is simple:
 
 1. Start a chat and use the assistant normally.
-2. Use **Flush Current**, **Flush Idle**, or **Flush All** to encode an episode into source-grounded claims.
-3. Run **Dream Pass** to route useful claims and regenerate organized wiki pages.
+2. The server flushes idle episodes into source-grounded claims, which enter inspectable short-term memory.
+3. Dream runs when the queue reaches its size or age threshold; **Dream Pass** remains available for an
+   immediate manual consolidation and deferred-memory review.
 4. Start another chat about the same subject. Mycelium retrieves relevant pages and includes them in the assistant's context.
 5. Open **Memory** to trace what was remembered and approve or reject proposed contradictions and replacements.
 
-The sidebar provides manual controls for flushing episodes, running Dream, and clearing the development store. Memory work is not scheduled automatically.
+The sidebar provides manual controls for flushing episodes, running Dream, and clearing the development
+store. While the server is running, its lifecycle task checks idle conversations and Dream readiness every
+five minutes. It invokes the same public Encoder and Dream mechanisms as the manual controls.
 
 ### Memory lifecycle
 
-Encoding preserves the complete raw transcript, splits it into exact source segments, and extracts atomic claims in one logical pass. Each claim cites its supporting segment IDs. Dream routes every admitted claim exactly once and generates affected wiki pages deterministically from active claims.
+Encoding preserves the complete raw transcript, splits it into exact source segments, and extracts atomic
+claims in one logical pass. Each claim cites its supporting segment IDs and is persisted immediately with a
+`pending` disposition. This is durable short-term memory: retrieval can use relevant pending or deferred
+claims immediately, but labels them as recent and unconsolidated rather than presenting them as canonical
+wiki knowledge.
 
-When a new claim may update existing memory, Dream reactivates a bounded set of related claims. Additive information routes normally and supporting relationships are linked automatically. Contradictions and supersessions create durable proposals in the Memory Inspector. Both claims remain visible with a pending marker until review. Approval immediately updates canonical claim links or status and regenerates every affected page; rejection keeps both claims active and unrelated. Retrieval itself is read-only.
+Dream is the only transition from short-term claims into the wiki. It considers the accumulated claim cohort
+across source episodes, discovers sparse durable entities, and assigns every admitted claim one existing
+semantic owner. The owner's typed section is derived deterministically from claim semantics, and affected
+wiki pages are generated from active placed claims. When current evidence cannot establish a page or owner,
+the claim becomes `deferred` instead of being discarded or permanently unassigned. A later Dream can revisit
+it alongside newly accumulated evidence.
+
+The default server policy runs Dream at 50 pending/retryable claims or when the oldest has waited 24 hours.
+Deferred claims receive a broader review after seven days. Queue thresholds only choose when to invoke Dream;
+they do not introduce another consolidation path. Failed routing remains retryable, and manual assignment
+uses the same placement and deterministic materialization records.
+
+Page identity lives in the plaintext entity registry under `artifacts/entities/`; claim ownership lives separately under `artifacts/placements/`. Entity IDs survive title and slug changes. The seven page types—You, Person, Project, Topic, Organization, Place, and Event—have stable ordered section contracts. Claims have one canonical owner; explicitly referenced entities become compact reciprocal links instead of receiving copied facts. Tool and web evidence is labeled and kept in Research & References (or Event evidence).
+
+When a new claim may update existing memory, Dream compares it with a bounded set of related claims. Additive information routes normally and supporting relationships are linked automatically. Contradictions and supersessions create durable proposals in the Memory Inspector. Until review, both alternatives are withheld from authoritative sections and shown under Needs Review. Approval immediately updates canonical claim links or status and regenerates every affected page; rejection keeps both claims active and unrelated. Retrieval itself is read-only.
+
+The Wiki curation controls edit organization rather than evidence: rename entities, manage aliases, correct a type, move facts between owners or sections, merge duplicate identities, split selected facts, and archive subjects. Generated Markdown is not directly editable; factual correction and source retraction remain claim-level operations.
 
 ### Web search
 
@@ -151,7 +175,11 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-The context manager retrieves relevant pages on entry and records the exchange on exit. `dream()` then consolidates new logs into the wiki. See [`examples/basic_session.py`](examples/basic_session.py) for a runnable example and [`examples/langgraph_integration.py`](examples/langgraph_integration.py) for a LangGraph integration pattern.
+The context manager retrieves relevant canonical pages and short-term claims on entry and records the
+exchange on exit. `dream()` manually consolidates pending and deferred claims. Library integrations can call
+`dream_if_ready()` to apply the configured queue policy. See [`examples/basic_session.py`](examples/basic_session.py)
+for a runnable example and [`examples/langgraph_integration.py`](examples/langgraph_integration.py) for a
+LangGraph integration pattern.
 
 ## Configuration
 
@@ -168,6 +196,13 @@ context_window_tokens = 32768
 
 [session]
 context_budget_tokens = 32768
+
+[dream]
+main_page_claim_limit = 18
+queue_claim_threshold = 50
+max_pending_hours = 24
+deferred_revisit_hours = 168
+lifecycle_poll_seconds = 300
 ```
 
 The default memory store is `./mycelium_store`. Because it consists primarily of Markdown and JSON, it can be inspected with normal text tools or opened as a wiki outside the app. Raw logs and claim artifacts are canonical; wiki Markdown is a generated view and should not be edited directly.
@@ -183,18 +218,21 @@ original wording, bounds, certainty, and semantic role (event time or deadline).
 overlap, then load those claims' wiki pages and provenance-linked source logs. This structured temporal branch
 augments page FTS; it does not introduce a second durable index or guess dates for phrases such as “soon.”
 
-Stores created by older raw, hybrid, or page-rewrite reconsolidation pipelines are not migrated. Clear and re-encode them before using this version.
+Stores with the old slug-owned or terminal-`unassigned` wiki schema are not loaded. Use **Clear Wiki** in the
+UI to remove old derived pages and assignments, requeue preserved active claims, then run Dream to rebuild
+the entity registry and placements. Older raw, hybrid, or page-rewrite claim schemas still require a full
+clear and re-encode.
 
-## Benchmarking taxonomy and projection changes
+## Benchmarking ownership and projection changes
 
-Use frozen extraction artifacts when comparing routing, taxonomy, or wiki presentation so claim-extraction
+Use frozen extraction artifacts when comparing ownership, entity creation, or wiki presentation so claim-extraction
 variance does not obscure the result. `REPLAY_STORE` must point to one benchmark case store containing
 `artifacts/` and `logs/`:
 
 ```bash
 REPLAY_STORE=benchmark_runs/<baseline>/stores/conv-30 \
 QA_MODEL=gemma4:12b MEMORY_MODEL=gemma4:12b \
-RUN_TAG=taxonomy-replay SAMPLE_INDEX=2 \
+RUN_TAG=ownership-replay SAMPLE_INDEX=2 \
 scripts/benchmark-locomo-convo2.sh mycelium
 ```
 
@@ -202,9 +240,10 @@ Replay copies the original source, episode, claim, and raw-log artifacts into a 
 only downstream Dream assignments and links, and then runs the current routing and materialization code.
 Use a normal run without `REPLAY_STORE` for the final end-to-end check.
 
-For a projection-only comparison, add `REPLAY_ASSIGNMENTS=1`. This preserves the fixture's primary
-claim-to-page assignments, skips routing and reconsolidation, and rebuilds page taxonomy and Markdown in
-a clean store. Use the same replay store for both sides of a renderer comparison.
+For a projection-only comparison, add `REPLAY_ASSIGNMENTS=1`. This requires a fixture already using the
+current entity/placement schema. It preserves registry identities and placements, skips ownership planning
+and reconsolidation, and rebuilds typed Markdown in a clean store. Use the same replay store for both sides
+of a renderer comparison.
 
 For retrieval-only comparisons against an exact completed store, use `FROZEN_STORE` instead. The
 benchmark copies that store verbatim, skips ingestion and Dream, and runs only retrieval and answering.

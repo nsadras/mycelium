@@ -5,6 +5,7 @@ import pytest
 
 from mycelium.artifacts import (
     ArtifactStore,
+    ClaimPlacement,
     ClaimProvenance,
     MemoryClaim,
     ReconsolidationProposal,
@@ -41,7 +42,6 @@ def claim(
         )],
         recorded_at=recorded_at,
         slot=slot,
-        page_slugs=[page] if page else [],
         claim_type="preference",
         predicate="prefers",
     )
@@ -106,7 +106,7 @@ async def test_contradiction_creates_durable_review_proposal(tmp_path):
     }]}
 
     result = await ClaimReconsolidator(llm, artifacts).analyze(
-        [ClaimRoute("new", "user-profile", "entity", "2026-08-05#session-new")],
+        [ClaimRoute("new", "you", "preferences_working_style", (), "2026-08-05#session-new", "test")],
         current_claim_ids={"new"},
         dream_run_id="dream-1",
     )
@@ -134,7 +134,7 @@ async def test_support_is_safe_automatic_relation(tmp_path):
     }]}
 
     result = await ClaimReconsolidator(llm, artifacts).analyze(
-        [ClaimRoute("new", "user-profile", "entity", "log-new")],
+        [ClaimRoute("new", "you", "preferences_working_style", (), "log-new", "test")],
         current_claim_ids={"new"},
         dream_run_id="dream-1",
     )
@@ -150,8 +150,14 @@ def review_setup(tmp_path, relation: str):
     incoming = claim("new", "The user prefers coffee.")
     artifacts.save_claim(target)
     artifacts.save_claim(incoming)
+    artifacts.create_entity("you", "You")
+    for item in (target, incoming):
+        artifacts.save_placement(ClaimPlacement(
+            item.claim_id, "you", "preferences_working_style", [], "placed", "test",
+            "2026-08-01T12:00:00", "2026-08-01T12:00:00",
+        ))
     materializer = PageMaterializer(wiki, artifacts, Config.defaults())
-    materializer.regenerate({"user-profile"})
+    materializer.regenerate({"you"})
     proposal = ReconsolidationProposal(
         proposal_id="recon-1",
         incoming_claim_id="new",
@@ -161,23 +167,23 @@ def review_setup(tmp_path, relation: str):
         confidence=0.9,
         dream_run_id="dream-1",
         created_at=datetime.now().astimezone().isoformat(),
-        affected_page_slugs=["user-profile"],
+        affected_entity_ids=["you"],
     )
     artifacts.save_reconsolidation_proposal(proposal)
-    materializer.regenerate({"user-profile"})
+    materializer.regenerate({"you"})
     return artifacts, wiki, ReconsolidationReviewService(artifacts, materializer)
 
 
 def test_approve_supersession_updates_claims_and_projection(tmp_path):
     artifacts, wiki, service = review_setup(tmp_path, "supersedes")
-    assert "pending reconciliation" in wiki.get("user-profile").content
+    assert "pending reconciliation" in wiki.get("you").content
 
     result = service.approve("recon-1", reviewer_note="Confirmed by user")
 
     assert result.proposal.status == "applied"
     assert artifacts.get_claim("old").status == "superseded"
     assert artifacts.get_claim("new").links == [{"relation": "supersedes", "target": "old"}]
-    page = wiki.get("user-profile")
+    page = wiki.get("you")
     assert "prefers coffee" in page.content
     assert "prefers tea" not in page.content
     assert "pending reconciliation" not in page.content
@@ -191,8 +197,14 @@ def test_approve_deadline_supersession_reprojects_only_new_due_date(tmp_path):
     incoming = temporal_claim("incoming", "2026-08-20")
     artifacts.save_claim(old)
     artifacts.save_claim(incoming)
+    project = artifacts.create_entity("project", "Project Alpha")
+    for item in (old, incoming):
+        artifacts.save_placement(ClaimPlacement(
+            item.claim_id, project.entity_id, "next_steps_deadlines", [], "placed", "test",
+            "2026-08-01T12:00:00", "2026-08-01T12:00:00",
+        ))
     materializer = PageMaterializer(wiki, artifacts, Config.defaults())
-    materializer.regenerate({"project-alpha"})
+    materializer.regenerate({project.entity_id})
     artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
         proposal_id="deadline-change",
         incoming_claim_id="incoming",
@@ -202,7 +214,7 @@ def test_approve_deadline_supersession_reprojects_only_new_due_date(tmp_path):
         confidence=0.95,
         dream_run_id="dream-1",
         created_at=datetime.now().astimezone().isoformat(),
-        affected_page_slugs=["project-alpha"],
+        affected_entity_ids=[project.entity_id],
     ))
     service = ReconsolidationReviewService(artifacts, materializer)
 
@@ -222,6 +234,6 @@ def test_reject_leaves_claims_active_and_removes_pending_annotation(tmp_path):
     assert result.proposal.status == "rejected"
     assert artifacts.get_claim("old").status == "active"
     assert artifacts.get_claim("new").status == "active"
-    assert "pending reconciliation" not in wiki.get("user-profile").content
+    assert "pending reconciliation" not in wiki.get("you").content
     with pytest.raises(ReviewConflictError):
         service.approve("recon-1")

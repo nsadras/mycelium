@@ -86,7 +86,7 @@ class ClaimReconsolidator:
                     "Incoming claim artifact is missing",
                 ))
                 continue
-            candidates = self._candidates(incoming, route.page_slug, existing)
+            candidates = self._candidates(incoming, route.owner_entity_id, existing)
             if not candidates:
                 continue
             relation = await self._classify(incoming, candidates)
@@ -117,8 +117,14 @@ class ClaimReconsolidator:
                 confidence=confidence,
                 dream_run_id=dream_run_id,
                 created_at=datetime.now().astimezone().isoformat(),
-                affected_page_slugs=sorted({
-                    route.page_slug, *incoming.page_slugs, *target.page_slugs
+                affected_entity_ids=sorted({
+                    entity_id
+                    for entity_id in (
+                        route.owner_entity_id,
+                        self._owner_id(incoming.claim_id),
+                        self._owner_id(target.claim_id),
+                    )
+                    if entity_id
                 }),
             ))
         return result
@@ -126,7 +132,7 @@ class ClaimReconsolidator:
     def _candidates(
         self,
         incoming: MemoryClaim,
-        page_slug: str,
+        owner_entity_id: str | None,
         existing: list[MemoryClaim],
     ) -> list[MemoryClaim]:
         incoming_entities = self._entities(incoming)
@@ -137,7 +143,7 @@ class ClaimReconsolidator:
             if incoming_entities & self._entities(claim)
             and self._temporal_roles_compatible(incoming, claim)
             and (
-                page_slug in claim.page_slugs
+                self._owner_id(claim.claim_id) == owner_entity_id
                 or bool(incoming.slot and claim.slot == incoming.slot)
             )
         ]
@@ -146,6 +152,10 @@ class ClaimReconsolidator:
             key=lambda claim: self._candidate_rank(incoming, claim),
             reverse=True,
         )[:12]
+
+    def _owner_id(self, claim_id: str) -> str | None:
+        placement = self.artifacts.placement_for_claim(claim_id)
+        return placement.owner_entity_id if placement else None
 
     @staticmethod
     def _candidate_rank(
@@ -292,7 +302,7 @@ class ReconsolidationReviewService:
                     add_claim_link(target, "superseded_by", incoming.claim_id)
                 self.artifacts.save_claim(incoming)
                 self.artifacts.save_claim(target)
-            pages = self.materializer.regenerate(set(proposal.affected_page_slugs))
+            pages = self.materializer.regenerate(set(proposal.affected_entity_ids))
             proposal.status = "applied"
             proposal.applied_at = datetime.now().astimezone().isoformat()
             self.artifacts.save_reconsolidation_proposal(proposal)
@@ -319,7 +329,7 @@ class ReconsolidationReviewService:
         proposal.application_error = None
         self.artifacts.save_reconsolidation_proposal(proposal)
         try:
-            pages = self.materializer.regenerate(set(proposal.affected_page_slugs))
+            pages = self.materializer.regenerate(set(proposal.affected_entity_ids))
             self.artifacts.save_reconsolidation_proposal(proposal)
             return ReviewResult(
                 proposal,

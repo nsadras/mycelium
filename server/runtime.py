@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,9 @@ DEFAULT_MAX_TURNS = 25
 
 _mem: mycelium.Mycelium | None = None
 _engram: EngramService | None = None
+_dream_lock: asyncio.Lock | None = None
+
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> datetime:
@@ -301,8 +306,14 @@ async def flush_idle_episodes(
     return {"flushed": len([r for r in results if r["status"] == "flushed"]), "results": results}
 
 
-async def run_dream() -> dict[str, Any]:
-    report = await get_mem().dream()
+def _get_dream_lock() -> asyncio.Lock:
+    global _dream_lock
+    if _dream_lock is None:
+        _dream_lock = asyncio.Lock()
+    return _dream_lock
+
+
+def _dream_report_response(report) -> dict[str, Any]:
     return {
         "pages_updated": report.pages_updated,
         "pages_created": report.pages_created,
@@ -313,6 +324,44 @@ async def run_dream() -> dict[str, Any]:
         "taxonomy_failures": report.taxonomy_failures,
         "reconsolidation_proposal_ids": report.reconsolidation_proposal_ids,
     }
+
+
+async def run_dream() -> dict[str, Any]:
+    async with _get_dream_lock():
+        report = await get_mem().dream(include_deferred=True)
+    return _dream_report_response(report)
+
+
+async def run_dream_if_ready() -> dict[str, Any]:
+    mem = get_mem()
+    status = mem.short_term_memory_status()
+    if not status.ready:
+        return {"status": "not_ready", "queue": status.as_dict(), "report": None}
+    async with _get_dream_lock():
+        # Recheck after acquiring the lock because another request may have
+        # consolidated the queue while this task was waiting.
+        status = mem.short_term_memory_status()
+        if not status.ready:
+            return {"status": "not_ready", "queue": status.as_dict(), "report": None}
+        report = await mem.dream_if_ready()
+    return {
+        "status": "consolidated" if report is not None else "not_ready",
+        "queue": status.as_dict(),
+        "report": _dream_report_response(report) if report is not None else None,
+    }
+
+
+async def memory_lifecycle_loop() -> None:
+    """Periodically flush idle episodes and enforce queue age/size policies."""
+    while True:
+        try:
+            await flush_idle_episodes()
+            await run_dream_if_ready()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Automatic memory lifecycle iteration failed")
+        await asyncio.sleep(get_mem().config.dream.lifecycle_poll_seconds)
 
 
 def clear_memory_store() -> dict[str, int]:
@@ -379,6 +428,11 @@ def clear_wiki_store() -> dict[str, int]:
         "wiki_pages_deleted": 0,
         "archived_pages_deleted": 0,
         "logs_marked_unconsolidated": 0,
+        "entities_deleted": 0,
+        "placements_deleted": 0,
+        "organization_proposals_deleted": 0,
+        "legacy_claim_assignments_removed": 0,
+        "claims_requeued": 0,
     }
 
     wiki_dir = mem.store_path / "wiki"
@@ -400,6 +454,14 @@ def clear_wiki_store() -> dict[str, int]:
     counts["logs_marked_unconsolidated"] = len(log_files)
 
     mem.wiki.save_index("# Wiki Index\n\n_last updated: never_\n\n## Pages\n")
-    mem._ensure_user_profile() # Auto-seed the profile page immediately
+    projection_counts = mem.artifacts.clear_projection()
+    counts["entities_deleted"] = projection_counts["entities"]
+    counts["placements_deleted"] = projection_counts["placements"]
+    counts["organization_proposals_deleted"] = projection_counts["organization_proposals"]
+    counts["legacy_claim_assignments_removed"] = projection_counts[
+        "legacy_claim_assignments_removed"
+    ]
+    counts["claims_requeued"] = projection_counts["claims_requeued"]
+    mem._ensure_user_profile()
 
     return counts

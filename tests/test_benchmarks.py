@@ -413,7 +413,6 @@ async def test_mycelium_benchmark_replays_frozen_extraction_artifacts(tmp_path):
             speaker="Jon",
         )],
         recorded_at=source.recorded_at,
-        page_slugs=["jon"],
         links=[{"relation": "supports", "claim_id": "other"}],
         dream_disposition="routed",
         dream_run_id="old-run",
@@ -456,7 +455,7 @@ async def test_mycelium_benchmark_replays_frozen_extraction_artifacts(tmp_path):
 
     replayed = system.mem.artifacts.get_claim("claim-one")
     assert replayed.text == claim.text
-    assert replayed.page_slugs == []
+    assert system.mem.artifacts.placement_for_claim("claim-one") is None
     assert replayed.links == []
     assert replayed.dream_disposition == "pending"
     assert replayed.dream_run_id is None
@@ -495,10 +494,21 @@ async def test_assignment_replay_preserves_routes_and_rebuilds_pages(tmp_path):
             speaker="Jon",
         )],
         recorded_at=source.recorded_at,
-        page_slugs=["jon"],
     )
     artifacts.save_source(source)
     artifacts.save_claim(claim)
+    person = artifacts.create_entity("person", "Jon")
+    from mycelium.artifacts import ClaimPlacement
+    artifacts.save_placement(ClaimPlacement(
+        claim_id=claim.claim_id,
+        owner_entity_id=person.entity_id,
+        section_key="timeline",
+        linked_entity_ids=[],
+        status="placed",
+        reason="fixture",
+        created_at="2026-08-05T10:00:00",
+        updated_at="2026-08-05T10:00:00",
+    ))
     artifacts.save_episode(EpisodeManifest(
         episode_id="episode-one",
         source_id=source.source_id,
@@ -529,17 +539,12 @@ async def test_assignment_replay_preserves_routes_and_rebuilds_pages(tmp_path):
         replay_assignments=True,
     )
     await system.reset("case-1")
-    system.mem.dream_process.taxonomist.classify = AsyncMock(return_value=type(
-        "Result",
-        (),
-        {"assignments": {"jon": "person"}, "failures": []},
-    )())
     await system.memorize(
         [BenchmarkMessage(role="user", content="Ignored.")],
         {"session_id": "session_1"},
     )
 
-    assert system.mem.artifacts.get_claim("claim-one").page_slugs == ["jon"]
+    assert system.mem.artifacts.get_placement("claim-one").owner_entity_id == person.entity_id
     assert system.mem.wiki.get("jon").page_type == "person"
     assert system.mem.log_store.get(source.raw_log_entry_id).consolidated is True
     assert system.stats()["dream_runs"] == 0

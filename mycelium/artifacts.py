@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 
 CLAIM_TYPES = {
@@ -48,11 +48,13 @@ DERIVATION_OPERATIONS = {
 }
 DREAM_DISPOSITIONS = {
     "pending",
+    "deferred",
     "routed",
     "ignored_semantic",
     "excluded_assistant",
     "routing_failed",
 }
+SHORT_TERM_DISPOSITIONS = {"pending", "deferred", "routing_failed"}
 RECONSOLIDATION_RELATIONS = {"contradicts", "supersedes"}
 RECONSOLIDATION_STATUSES = {"pending", "approved", "rejected", "applied", "stale"}
 
@@ -109,7 +111,6 @@ class MemoryClaim:
     slot: str | None = None
     facets: dict[str, Any] = field(default_factory=dict)
     links: list[dict[str, str]] = field(default_factory=list)
-    page_slugs: list[str] = field(default_factory=list)
     salience: float = 0.5
     claim_type: str = "unknown"
     predicate: str | None = None
@@ -163,6 +164,104 @@ class DreamClaimDecision:
 
 
 @dataclass
+class EntityRecord:
+    entity_id: str
+    entity_type: str
+    title: str
+    slug: str
+    aliases: list[str]
+    status: str
+    created_at: str
+    updated_at: str
+    merged_into_entity_id: str | None = None
+
+    def __post_init__(self) -> None:
+        from mycelium.models import PAGE_TYPES
+
+        if self.entity_type not in PAGE_TYPES:
+            raise ValueError(f"Unsupported entity type: {self.entity_type}")
+        if self.status not in {"active", "archived", "merged"}:
+            raise ValueError(f"Unsupported entity status: {self.status}")
+        if self.entity_id == "you" and self.entity_type != "you":
+            raise ValueError("The singleton you entity must have type 'you'")
+        if self.entity_type == "you" and self.entity_id != "you":
+            raise ValueError("Only the singleton entity ID 'you' may use type 'you'")
+        if self.status == "merged" and not self.merged_into_entity_id:
+            raise ValueError("Merged entities require merged_into_entity_id")
+        if self.status != "merged" and self.merged_into_entity_id:
+            raise ValueError("Only merged entities may redirect")
+        self.title = " ".join(self.title.split()).strip()
+        self.slug = _slugify(self.slug)
+        if not self.title or not self.slug:
+            raise ValueError("Entity title and slug are required")
+        self.aliases = sorted({" ".join(value.split()).strip() for value in self.aliases if value.strip()})
+
+
+@dataclass
+class ClaimPlacement:
+    claim_id: str
+    owner_entity_id: str | None
+    section_key: str | None
+    linked_entity_ids: list[str]
+    status: str
+    reason: str
+    created_at: str
+    updated_at: str
+
+    def __post_init__(self) -> None:
+        if self.status not in {"placed", "deferred"}:
+            raise ValueError(f"Unsupported placement status: {self.status}")
+        if self.status == "placed" and (not self.owner_entity_id or not self.section_key):
+            raise ValueError("Placed claims require an owner and section")
+        if self.status == "deferred" and (self.owner_entity_id or self.section_key):
+            raise ValueError("Deferred claims cannot name an owner or section")
+        self.linked_entity_ids = sorted({
+            value for value in self.linked_entity_ids
+            if value and value != self.owner_entity_id
+        })
+
+
+@dataclass
+class OrganizationProposal:
+    proposal_id: str
+    proposal_type: str
+    explanation: str
+    confidence: float
+    created_at: str
+    claim_id: str | None = None
+    proposed_owner_entity_id: str | None = None
+    proposed_section_key: str | None = None
+    proposed_new_entity_type: str | None = None
+    proposed_new_entity_title: str | None = None
+    source_entity_id: str | None = None
+    target_entity_id: str | None = None
+    status: str = "pending"
+    reviewer_note: str | None = None
+    reviewed_at: str | None = None
+    applied_at: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.proposal_type not in {"assign_claim", "merge_entities"}:
+            raise ValueError(f"Unsupported organization proposal: {self.proposal_type}")
+        if self.status not in {"pending", "rejected", "applied", "stale"}:
+            raise ValueError(f"Unsupported organization proposal status: {self.status}")
+        if self.proposal_type == "assign_claim":
+            has_existing = bool(self.proposed_owner_entity_id)
+            has_new = bool(self.proposed_new_entity_type and self.proposed_new_entity_title)
+            if not self.claim_id or not self.proposed_section_key or has_existing == has_new:
+                raise ValueError(
+                    "Claim assignment proposals require one existing or new owner and a section"
+                )
+        if self.proposal_type == "merge_entities" and not (
+            self.source_entity_id and self.target_entity_id
+        ):
+            raise ValueError("Merge proposals require source and target entities")
+        if self.source_entity_id and self.source_entity_id == self.target_entity_id:
+            raise ValueError("An entity cannot be merged into itself")
+        self.confidence = max(0.0, min(1.0, float(self.confidence)))
+
+
+@dataclass
 class DreamRunAudit:
     run_id: str
     started_at: str
@@ -189,7 +288,7 @@ class ReconsolidationProposal:
     confidence: float
     dream_run_id: str
     created_at: str
-    affected_page_slugs: list[str] = field(default_factory=list)
+    affected_entity_ids: list[str] = field(default_factory=list)
     status: str = "pending"
     reviewer_note: str | None = None
     reviewed_at: str | None = None
@@ -208,7 +307,7 @@ class ReconsolidationProposal:
             raise ValueError(f"Unsupported reconsolidation status: {status}")
         self.status = status
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
-        self.affected_page_slugs = sorted(set(self.affected_page_slugs))
+        self.affected_entity_ids = sorted(set(self.affected_entity_ids))
 
 
 @dataclass
@@ -227,6 +326,10 @@ class EpisodeManifest:
 
 def _safe_id(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-") or str(uuid.uuid4())
+
+
+def _slugify(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -250,12 +353,18 @@ class ArtifactStore:
         self.claims_dir = root / "claims"
         self.dream_runs_dir = root / "dream-runs"
         self.reconsolidation_proposals_dir = root / "reconsolidation-proposals"
+        self.entities_dir = root / "entities"
+        self.placements_dir = root / "placements"
+        self.organization_proposals_dir = root / "organization-proposals"
         for directory in (
             self.sources_dir,
             self.episodes_dir,
             self.claims_dir,
             self.dream_runs_dir,
             self.reconsolidation_proposals_dir,
+            self.entities_dir,
+            self.placements_dir,
+            self.organization_proposals_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -281,6 +390,115 @@ class ArtifactStore:
 
     def save_claim(self, claim: MemoryClaim) -> None:
         _atomic_json(self.claims_dir / f"{_safe_id(claim.claim_id)}.json", asdict(claim))
+
+    def save_entity(self, entity: EntityRecord) -> None:
+        for existing in self.list_entities():
+            if existing.entity_id != entity.entity_id and existing.slug == entity.slug:
+                raise ValueError(f"Entity slug already exists: {entity.slug}")
+        _atomic_json(self.entities_dir / f"{_safe_id(entity.entity_id)}.json", asdict(entity))
+
+    def get_entity(self, entity_id: str) -> EntityRecord:
+        return EntityRecord(**self._read(self.entities_dir / f"{_safe_id(entity_id)}.json"))
+
+    def list_entities(self, *, status: str | None = None) -> list[EntityRecord]:
+        entities = [self.get_entity(path.stem) for path in sorted(self.entities_dir.glob("*.json"))]
+        return [entity for entity in entities if status is None or entity.status == status]
+
+    def entity_for_slug(self, slug: str) -> EntityRecord | None:
+        wanted = _slugify(slug)
+        return next((entity for entity in self.list_entities() if entity.slug == wanted), None)
+
+    def create_entity(self, entity_type: str, title: str, *, aliases: list[str] | None = None) -> EntityRecord:
+        now = datetime.now().astimezone().isoformat()
+        slug = _slugify(title)
+        if entity_type == "you":
+            entity_id = "you"
+            slug = "you"
+        else:
+            base = f"{entity_type}-{slug}"
+            entity_id = base
+            suffix = 2
+            existing_ids = {entity.entity_id for entity in self.list_entities()}
+            while entity_id in existing_ids:
+                entity_id = f"{base}-{suffix}"
+                suffix += 1
+            used_slugs = {entity.slug for entity in self.list_entities()}
+            base_slug = slug
+            suffix = 2
+            while slug in used_slugs:
+                slug = f"{base_slug}-{suffix}"
+                suffix += 1
+        entity = EntityRecord(
+            entity_id=entity_id,
+            entity_type=entity_type,
+            title=title,
+            slug=slug,
+            aliases=list(aliases or []),
+            status="active",
+            created_at=now,
+            updated_at=now,
+        )
+        self.save_entity(entity)
+        return entity
+
+    def save_placement(self, placement: ClaimPlacement) -> None:
+        self.get_claim(placement.claim_id)
+        if placement.owner_entity_id:
+            entity = self.get_entity(placement.owner_entity_id)
+            from mycelium.models import PAGE_SECTION_KEYS, PageType
+            allowed = {
+                key for key, _ in PAGE_SECTION_KEYS[cast(PageType, entity.entity_type)]
+            }
+            if placement.section_key not in allowed:
+                raise ValueError(
+                    f"Section {placement.section_key!r} is invalid for {entity.entity_type}"
+                )
+        for linked_id in placement.linked_entity_ids:
+            self.get_entity(linked_id)
+        _atomic_json(
+            self.placements_dir / f"{_safe_id(placement.claim_id)}.json", asdict(placement)
+        )
+
+    def get_placement(self, claim_id: str) -> ClaimPlacement:
+        return ClaimPlacement(**self._read(
+            self.placements_dir / f"{_safe_id(claim_id)}.json"
+        ))
+
+    def list_placements(self, *, status: str | None = None) -> list[ClaimPlacement]:
+        placements = [
+            self.get_placement(path.stem) for path in sorted(self.placements_dir.glob("*.json"))
+        ]
+        return [item for item in placements if status is None or item.status == status]
+
+    def placement_for_claim(self, claim_id: str) -> ClaimPlacement | None:
+        try:
+            return self.get_placement(claim_id)
+        except FileNotFoundError:
+            return None
+
+    def placements_for_entity(self, entity_id: str) -> list[ClaimPlacement]:
+        return [
+            placement for placement in self.list_placements(status="placed")
+            if placement.owner_entity_id == entity_id
+        ]
+
+    def save_organization_proposal(self, proposal: OrganizationProposal) -> None:
+        _atomic_json(
+            self.organization_proposals_dir / f"{_safe_id(proposal.proposal_id)}.json",
+            asdict(proposal),
+        )
+
+    def get_organization_proposal(self, proposal_id: str) -> OrganizationProposal:
+        return OrganizationProposal(**self._read(
+            self.organization_proposals_dir / f"{_safe_id(proposal_id)}.json"
+        ))
+
+    def list_organization_proposals(self, *, status: str | None = None) -> list[OrganizationProposal]:
+        proposals = [
+            self.get_organization_proposal(path.stem)
+            for path in sorted(self.organization_proposals_dir.glob("*.json"), reverse=True)
+        ]
+        return [item for item in proposals if status is None or item.status == status]
 
     def get_claim(self, claim_id: str) -> MemoryClaim:
         data = self._read(self.claims_dir / f"{_safe_id(claim_id)}.json")
@@ -357,9 +575,6 @@ class ArtifactStore:
             claim.dream_disposition_reason = decision.reason
             claim.dream_run_id = run.run_id
             claim.dream_disposition_at = decided_at
-            for page_slug in decision.page_slugs:
-                if page_slug not in claim.page_slugs:
-                    claim.page_slugs.append(page_slug)
             self.save_claim(claim)
         self.save_dream_run(run)
 
@@ -371,6 +586,9 @@ class ArtifactStore:
             "claims": 0,
             "dream_runs": 0,
             "reconsolidation_proposals": 0,
+            "entities": 0,
+            "placements": 0,
+            "organization_proposals": 0,
         }
         for label, directory in (
             ("sources", self.sources_dir),
@@ -378,15 +596,91 @@ class ArtifactStore:
             ("claims", self.claims_dir),
             ("dream_runs", self.dream_runs_dir),
             ("reconsolidation_proposals", self.reconsolidation_proposals_dir),
+            ("entities", self.entities_dir),
+            ("placements", self.placements_dir),
+            ("organization_proposals", self.organization_proposals_dir),
         ):
             for path in directory.glob("*.json"):
                 path.unlink()
                 counts[label] += 1
         return counts
 
+    def clear_projection(self) -> dict[str, int]:
+        """Delete entity-owned derived artifacts while preserving sources and claims."""
+        counts = {
+            "entities": 0,
+            "placements": 0,
+            "organization_proposals": 0,
+            "legacy_claim_assignments_removed": 0,
+            "claims_requeued": 0,
+        }
+        for label, directory in (
+            ("entities", self.entities_dir),
+            ("placements", self.placements_dir),
+            ("organization_proposals", self.organization_proposals_dir),
+        ):
+            for path in directory.glob("*.json"):
+                path.unlink()
+                counts[label] += 1
+        # Clearing the derived wiki is the explicit schema boundary. Older claims
+        # may still contain the retired page_slugs projection field; remove only
+        # that derived field while preserving the canonical claim and evidence.
+        for path in self.claims_dir.glob("*.json"):
+            data = self._read(path)
+            changed = False
+            if "page_slugs" in data:
+                data.pop("page_slugs")
+                counts["legacy_claim_assignments_removed"] += 1
+                changed = True
+            if data.get("status", "active") == "active" and data.get(
+                "dream_disposition"
+            ) not in {"excluded_assistant", "ignored_semantic"}:
+                data["dream_disposition"] = "pending"
+                data["dream_disposition_reason"] = "Canonical projection was cleared."
+                data["dream_run_id"] = None
+                data["dream_disposition_at"] = None
+                counts["claims_requeued"] += 1
+                changed = True
+            if not changed:
+                continue
+            _atomic_json(path, data)
+        return counts
+
     def list_claims(self, *, status: str | None = None) -> list[MemoryClaim]:
         claims = [self.get_claim(path.stem) for path in sorted(self.claims_dir.glob("*.json"))]
         return [claim for claim in claims if status is None or claim.status == status]
+
+    def list_short_term_claims(
+        self, *, include_deferred: bool = True
+    ) -> list[MemoryClaim]:
+        """Return active claims that have not entered canonical wiki memory.
+
+        Claim disposition is the durable queue state. A placement is consulted as
+        an integrity guard so a stale disposition cannot make an already placed
+        claim appear in short-term memory.
+        """
+        allowed = {"pending", "routing_failed"}
+        if include_deferred:
+            allowed.add("deferred")
+        queued = []
+        for claim in self.list_claims(status="active"):
+            if claim.dream_disposition not in allowed:
+                continue
+            placement = self.placement_for_claim(claim.claim_id)
+            if placement and placement.status == "placed":
+                continue
+            queued.append(claim)
+        return queued
+
+    def memory_tier(self, claim_id: str) -> str:
+        claim = self.get_claim(claim_id)
+        placement = self.placement_for_claim(claim_id)
+        if (
+            claim.dream_disposition in SHORT_TERM_DISPOSITIONS
+            and not (placement and placement.status == "placed")
+        ):
+            return "short_term"
+        return "canonical"
 
     def claims_for_sources(self, source_ids: Iterable[str], *, active_only: bool = True) -> list[MemoryClaim]:
         wanted = set(source_ids)
@@ -395,24 +689,14 @@ class ArtifactStore:
             if any(prov.source_id in wanted for prov in claim.provenance)
         ]
 
-    def assign_pages(self, claim_ids: Iterable[str], page_slug: str) -> None:
-        for claim_id in set(claim_ids):
-            try:
-                claim = self.get_claim(claim_id)
-            except FileNotFoundError:
-                continue
-            if page_slug not in claim.page_slugs:
-                claim.page_slugs.append(page_slug)
-                self.save_claim(claim)
-
-    def set_claim_page(self, claim_id: str, page_slug: str) -> None:
-        """Assign one canonical materialized page to a routed claim."""
-        claim = self.get_claim(claim_id)
-        claim.page_slugs = [page_slug]
-        self.save_claim(claim)
-
-    def claims_for_page(self, page_slug: str) -> list[MemoryClaim]:
-        return [claim for claim in self.list_claims(status="active") if page_slug in claim.page_slugs]
+    def claims_for_entity(self, entity_id: str) -> list[MemoryClaim]:
+        claim_ids = {
+            placement.claim_id for placement in self.placements_for_entity(entity_id)
+        }
+        return [
+            claim for claim in self.list_claims(status="active")
+            if claim.claim_id in claim_ids
+        ]
 
     def coverage_report(self) -> dict[str, Any]:
         sources = self.list_sources()
@@ -441,7 +725,13 @@ class ArtifactStore:
             "accounted_coverage": (len(accounted_segments) / len(all_segments)) if all_segments else 1.0,
             "unassigned_segment_ids": sorted(all_segments - claimed_segments),
             "unaccounted_segment_ids": sorted(all_segments - claimed_segments - ignored_segments),
-            "unassigned_claim_ids": sorted(claim.claim_id for claim in claims if not claim.page_slugs),
+            "unplaced_claim_ids": sorted(
+                claim.claim_id for claim in claims
+                if not (
+                    (placement := self.placement_for_claim(claim.claim_id))
+                    and placement.owner_entity_id
+                )
+            ),
             "unresolved_provenance_ids": sorted(unresolved),
             "failed_episode_ids": sorted(ep.episode_id for ep in episodes if ep.extraction_status == "failed"),
             "partial_episode_ids": sorted(ep.episode_id for ep in episodes if ep.extraction_status == "partial"),

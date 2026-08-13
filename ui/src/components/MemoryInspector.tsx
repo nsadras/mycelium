@@ -186,7 +186,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
       .some((value) => value.toLowerCase().includes(query))
   );
   const filteredClaims = claims.filter((claim) =>
-    [claim.claim_id, claim.text, claim.kind, claim.claim_type, claim.dream_disposition, claim.predicate ?? '', ...claim.page_slugs]
+    [claim.claim_id, claim.text, claim.kind, claim.claim_type, claim.dream_disposition, claim.predicate ?? '', claim.placement?.owner_entity_id ?? '']
       .some((value) => value.toLowerCase().includes(query))
   );
   const filteredDreamRuns = dreamRuns.filter((run) =>
@@ -356,6 +356,22 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
             </section>
 
             <section className="rounded-xl border border-slate-200 p-5">
+              <div className="mb-3 flex items-center gap-2">
+                <h2 className="font-bold">Short-term memory</h2>
+                <Badge tone={overview.short_term_memory.ready ? 'amber' : 'slate'}>{overview.short_term_memory.ready ? 'Dream ready' : 'Accumulating'}</Badge>
+              </div>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                {[
+                  ['Pending', overview.short_term_memory.pending_claims],
+                  ['Deferred', overview.short_term_memory.deferred_claims],
+                  ['Retryable failures', overview.short_term_memory.retryable_failures],
+                  ['Total queued', overview.short_term_memory.total_claims],
+                ].map(([label, value]) => <div key={label} className="rounded-lg bg-slate-50 p-3"><div className="text-lg font-bold">{value}</div><div className="text-xs text-slate-500">{label}</div></div>)}
+              </div>
+              <div className="mt-3 text-xs text-slate-500">Triggers: {overview.short_term_memory.reasons.map(humanize).join(', ') || 'none'} · oldest pending {formatDate(overview.short_term_memory.oldest_pending_at)}</div>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 p-5">
               <h2 className="mb-3 font-bold">Wiki projection</h2>
               <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
                 {[
@@ -372,7 +388,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
               <h2 className="mb-3 font-bold">Claim dispositions</h2>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(overview.dream_audit.claim_dispositions).map(([disposition, count]) => (
-                  <Badge key={disposition} tone={disposition === 'routed' ? 'green' : disposition === 'routing_failed' ? 'red' : disposition === 'pending' ? 'amber' : 'slate'}>
+                  <Badge key={disposition} tone={disposition === 'routed' ? 'green' : disposition === 'routing_failed' ? 'red' : disposition === 'pending' || disposition === 'deferred' ? 'amber' : 'slate'}>
                     {humanize(disposition)} · {count}
                   </Badge>
                 ))}
@@ -386,7 +402,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                 {[
                   ['Unassigned segments', overview.coverage.unassigned_segment_ids],
                   ['Unaccounted segments', overview.coverage.unaccounted_segment_ids],
-                  ['Unassigned claims', overview.coverage.unassigned_claim_ids],
+                  ['Unplaced claims', overview.coverage.unplaced_claim_ids],
                   ['Unresolved provenance', overview.coverage.unresolved_provenance_ids],
                   ['Failed episodes', overview.coverage.failed_episode_ids],
                   ['Partial episodes', overview.coverage.partial_episode_ids],
@@ -433,7 +449,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
               {activeTab === 'claims' && filteredClaims.map((claim) => (
                 <button key={claim.claim_id} onClick={() => setSelectedClaimId(claim.claim_id)} className={`w-full rounded-lg p-3 text-left ${selectedClaimId === claim.claim_id ? 'bg-indigo-100 text-indigo-900' : 'hover:bg-white'}`}>
                   <div className="line-clamp-2 text-sm font-semibold">{claim.text}</div>
-                  <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span>{humanize(claim.dream_disposition)}</span><span>{claim.page_slugs.length} pages</span></div>
+                  <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span>{humanize(claim.dream_disposition)}</span><span>{claim.placement?.status ?? 'short term'}</span></div>
                 </button>
               ))}
               {activeTab === 'reconsolidation' && filteredProposals.map((proposal) => (
@@ -528,7 +544,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
 
             {activeTab === 'claims' && (selectedClaim ? (
               <div className="mx-auto max-w-4xl space-y-6 p-5 md:p-8">
-                <div><div className="flex flex-wrap gap-2"><Badge tone={selectedClaim.status === 'active' ? 'green' : 'slate'}>{selectedClaim.status}</Badge><Badge tone={selectedClaim.dream_disposition === 'routed' ? 'green' : selectedClaim.dream_disposition === 'routing_failed' ? 'red' : selectedClaim.dream_disposition === 'pending' ? 'amber' : 'slate'}>{humanize(selectedClaim.dream_disposition)}</Badge><Badge tone="indigo">{selectedClaim.claim_type}</Badge><Badge>{selectedClaim.kind}</Badge>{selectedClaim.inferred && <Badge tone="amber">inferred</Badge>}</div><h2 className="mt-4 text-xl font-bold leading-relaxed">{selectedClaim.text}</h2><div className="mt-2 break-all font-mono text-xs text-slate-400">{selectedClaim.claim_id}</div></div>
+                <div><div className="flex flex-wrap gap-2"><Badge tone={selectedClaim.status === 'active' ? 'green' : 'slate'}>{selectedClaim.status}</Badge><Badge tone={selectedClaim.dream_disposition === 'routed' ? 'green' : selectedClaim.dream_disposition === 'routing_failed' ? 'red' : selectedClaim.dream_disposition === 'pending' || selectedClaim.dream_disposition === 'deferred' ? 'amber' : 'slate'}>{humanize(selectedClaim.dream_disposition)}</Badge><Badge tone="indigo">{selectedClaim.claim_type}</Badge><Badge>{selectedClaim.kind}</Badge>{selectedClaim.inferred && <Badge tone="amber">inferred</Badge>}</div><h2 className="mt-4 text-xl font-bold leading-relaxed">{selectedClaim.text}</h2><div className="mt-2 break-all font-mono text-xs text-slate-400">{selectedClaim.claim_id}</div></div>
                 <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
                   <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Confidence</div><strong>{percentage(selectedClaim.confidence)}</strong></div>
                   <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Salience</div><strong>{percentage(selectedClaim.salience)}</strong></div>
@@ -537,7 +553,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                 </div>
                 <div className="grid gap-3 text-sm md:grid-cols-2">
                   <div className="rounded-lg border border-slate-200 p-3"><strong>Predicate:</strong> {selectedClaim.predicate ?? 'None'}<br /><strong>Slot:</strong> {selectedClaim.slot ?? 'None'}<br /><strong>Recorded:</strong> {formatDate(selectedClaim.recorded_at)}<br /><strong>Derivation:</strong> {selectedClaim.derivation_operation ?? 'None'}</div>
-                  <div className="rounded-lg border border-slate-200 p-3"><strong>Wiki pages:</strong><div className="mt-2 flex flex-wrap gap-1">{selectedClaim.page_slugs.map((slug) => <Badge key={slug} tone="indigo">{slug}</Badge>)}{!selectedClaim.page_slugs.length && <span className="text-slate-400">Unassigned</span>}</div></div>
+                  <div className="rounded-lg border border-slate-200 p-3"><strong>Wiki owner:</strong><div className="mt-2 flex flex-wrap gap-1">{selectedClaim.placement?.owner_entity_id ? <Badge tone="indigo">{selectedClaim.placement.owner_entity_id} · {selectedClaim.placement.section_key}</Badge> : <span className="text-slate-400">Short-term / deferred</span>}</div></div>
                 </div>
                 <section className="rounded-xl border border-slate-200 p-4">
                   <h3 className="mb-2 text-sm font-bold">Latest Dream decision</h3>
@@ -570,7 +586,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                   </section>
                 </div>
                 <section className="rounded-xl border border-slate-200 p-4 text-sm">
-                  <div><strong>Affected pages:</strong> {selectedProposal.affected_page_slugs.join(', ') || 'None assigned'}</div>
+                  <div><strong>Affected entities:</strong> {selectedProposal.affected_entity_ids.join(', ') || 'None assigned'}</div>
                   <div className="mt-2"><strong>Dream run:</strong> {selectedProposal.dream_run_id}</div>
                   {selectedProposal.reviewer_note && <div className="mt-2"><strong>Reviewer note:</strong> {selectedProposal.reviewer_note}</div>}
                   {selectedProposal.application_error && <div className="mt-2 text-rose-700"><strong>Application error:</strong> {selectedProposal.application_error}</div>}

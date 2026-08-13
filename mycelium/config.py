@@ -13,6 +13,10 @@ class LLMConfig:
 @dataclass
 class DreamConfig:
     main_page_claim_limit: int = 18
+    queue_claim_threshold: int = 50
+    max_pending_hours: float = 24.0
+    deferred_revisit_hours: float = 168.0
+    lifecycle_poll_seconds: int = 300
 
 @dataclass
 class Config:
@@ -43,6 +47,14 @@ class Config:
         dream_data = data.get('dream', {})
         dream = DreamConfig(
             main_page_claim_limit=int(dream_data.get('main_page_claim_limit', 18)),
+            queue_claim_threshold=max(1, int(dream_data.get('queue_claim_threshold', 50))),
+            max_pending_hours=max(0.0, float(dream_data.get('max_pending_hours', 24.0))),
+            deferred_revisit_hours=max(
+                0.0, float(dream_data.get('deferred_revisit_hours', 168.0))
+            ),
+            lifecycle_poll_seconds=max(
+                30, int(dream_data.get('lifecycle_poll_seconds', 300))
+            ),
         )
         
         return cls(

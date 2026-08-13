@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, cast
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -14,6 +14,8 @@ from mycelium.session import Session
 from mycelium.facts import routing_recall_index
 from mycelium.sources import source_contexts_for_pages
 from mycelium.page_search import PageSearchIndex
+from mycelium.memory_tools import MemoryToolset
+from mycelium.short_term import ShortTermMemoryQueue, ShortTermMemoryStatus
 from mycelium.artifacts import (
     ArtifactStore,
     query_temporal_record,
@@ -56,6 +58,9 @@ class Mycelium:
             context_window_tokens=self.config.llm.context_window_tokens,
         )
         self.encoder = Encoder(self.llm, self._log_store, self.config, self.artifacts)
+        self.short_term_memory = ShortTermMemoryQueue(
+            self.artifacts, self.config.dream
+        )
         
         from mycelium.dream import DreamProcess
         self.dream_process = DreamProcess(self.llm, self._wiki, self._log_store, self.config, self.artifacts)
@@ -64,12 +69,15 @@ class Mycelium:
         if memory_profile == "none":
             return
 
-        slug = "user-profile"
+        try:
+            entity = self.artifacts.get_entity("you")
+        except FileNotFoundError:
+            entity = self.artifacts.create_entity("you", "You")
+        slug = entity.slug
         title = "You"
         content = (
-            "## Key Facts\n"
+            "## Profile\n"
             "\n_No personal facts recorded yet._\n\n"
-            "## Event Timeline\n\n"
             "## Memory Map\n"
             "\n_No focused pages yet._\n"
         )
@@ -91,7 +99,13 @@ class Mycelium:
                 importance=1.0,
                 page_type="you",
                 tags=tags,
-                related=[]
+                related=[],
+                entity_id=entity.entity_id,
+                entity_status=cast(
+                    Literal["active", "archived", "merged"], entity.status
+                ),
+                aliases=entity.aliases,
+                sections=[],
             )
             self._wiki.save(profile_page)
             
@@ -147,8 +161,41 @@ class Mycelium:
         budget = ContextBudget(budget_tokens)
         
         pages = self.wiki.list_all()
-        if not pages:
-            return []
+        loaded_pages: list[WikiPage] = []
+
+        # Short-term claims are queryable immediately but are explicitly kept
+        # separate from the canonical wiki until Dream places them.
+        recent_results = MemoryToolset(self.artifacts).search(
+            query, limit=8, memory_tier="short_term"
+        )
+        if recent_results:
+            lines = [
+                "These source-grounded claims are recent and unconsolidated. Treat them as",
+                "available episodic memory, not as a polished or conflict-resolved wiki summary.",
+                "",
+                *[
+                    f"- [{item['consolidation_status']}] {item['text']} "
+                    f"(claim: {item['claim_id']})"
+                    for item in recent_results
+                ],
+            ]
+            content = "\n".join(lines)
+            block = f"=== RECENT UNCONSOLIDATED MEMORY ===\n{content}"
+            if budget.fits(block):
+                budget.consume(block)
+                loaded_pages.append(WikiPage(
+                    slug="_short-term-memory",
+                    title="Recent, unconsolidated memory",
+                    content=content,
+                    created=datetime.now().astimezone(),
+                    last_updated=datetime.now().astimezone(),
+                    version=1,
+                    confidence=0.7,
+                    importance=0.9,
+                    page_type=None,
+                    tags=["short-term-memory"],
+                    entity_id="_short-term-memory",
+                ))
 
         selection_priorities = {
             hit.slug: rank
@@ -171,9 +218,14 @@ class Mycelium:
                     continue
                 if not temporal_intervals_overlap(query_temporal, claim_temporal):
                     continue
-                for slug in claim.page_slugs:
-                    if self.wiki.exists(slug):
-                        selection_priorities[slug] = 0
+                placement = self.artifacts.placement_for_claim(claim.claim_id)
+                if placement and placement.owner_entity_id:
+                    try:
+                        entity = self.artifacts.get_entity(placement.owner_entity_id)
+                    except FileNotFoundError:
+                        entity = None
+                    if entity and self.wiki.exists(entity.slug):
+                        selection_priorities[entity.slug] = 0
                 temporal_source_ids.update(
                     provenance.raw_log_entry_id
                     for provenance in claim.provenance
@@ -203,7 +255,6 @@ class Mycelium:
             key=lambda item: (item[0], item[1]),
         )
 
-        loaded_pages = []
         for priority, slug in selections:
             if not self.wiki.exists(slug):
                 continue
@@ -269,5 +320,25 @@ class Mycelium:
                 transcript_str = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in sess.transcript])
                 await self.encoder.encode_session(transcript_str, session_id)
             
-    async def dream(self, *, dry_run: bool = False) -> DreamReport:
-        return await self.dream_process.run(dry_run=dry_run)
+    def short_term_memory_status(
+        self, *, now: datetime | None = None
+    ) -> ShortTermMemoryStatus:
+        return self.short_term_memory.status(now=now)
+
+    async def dream(
+        self, *, dry_run: bool = False, include_deferred: bool = True
+    ) -> DreamReport:
+        return await self.dream_process.run(
+            dry_run=dry_run, include_deferred=include_deferred
+        )
+
+    async def dream_if_ready(
+        self, *, now: datetime | None = None, dry_run: bool = False
+    ) -> DreamReport | None:
+        status = self.short_term_memory_status(now=now)
+        if not status.ready:
+            return None
+        return await self.dream_process.run(
+            dry_run=dry_run,
+            include_deferred=status.include_deferred,
+        )

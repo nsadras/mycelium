@@ -65,6 +65,12 @@ class WikiStore:
         page_type = post.metadata["page_type"]
         if page_type is not None and page_type not in PAGE_TYPES:
             raise ValueError(f"Wiki page {slug} has invalid page_type: {page_type!r}")
+        entity_id = str(post.metadata.get("entity_id") or "")
+        if not entity_id:
+            raise ValueError(
+                f"Wiki page {slug} uses the pre-entity schema. "
+                "Clear and rebuild the wiki from canonical claims."
+            )
         
         related = [_edge_from_dict(r) for r in post.metadata.get("related", [])]
         update_log = [_update_log_from_dict(u) for u in post.metadata.get("update_log", [])]
@@ -94,7 +100,11 @@ class WikiStore:
             tags=post.metadata.get("tags", []),
             related=related,
             source_log_entries=post.metadata.get("source_log_entries", []),
-            update_log=update_log
+            update_log=update_log,
+            entity_id=entity_id,
+            entity_status=post.metadata.get("entity_status", "active"),
+            aliases=post.metadata.get("aliases", []),
+            sections=post.metadata.get("sections", []),
         )
 
     def save(self, page: WikiPage) -> None:
@@ -113,6 +123,10 @@ class WikiStore:
         post.metadata["related"] = [_edge_to_dict(r) for r in page.related]
         post.metadata["source_log_entries"] = page.source_log_entries
         post.metadata["update_log"] = [_update_log_to_dict(u) for u in page.update_log]
+        post.metadata["entity_id"] = page.entity_id
+        post.metadata["entity_status"] = page.entity_status
+        post.metadata["aliases"] = page.aliases
+        post.metadata["sections"] = page.sections
         
         with open(path, "wb") as f:
             frontmatter.dump(post, f)
@@ -193,7 +207,7 @@ class LogStore:
             f.write("\n")
             f.write(entry.content.strip() + "\n\n---\n\n")
 
-    def get_unconsolidated(self, days: int = 7) -> List[LogEntry]:
+    def get_unconsolidated(self, days: int | None = 7) -> List[LogEntry]:
         return [entry for entry in self.list_entries(days=days) if not entry.consolidated]
 
     def list_entries(self, days: int | None = 7) -> List[LogEntry]:

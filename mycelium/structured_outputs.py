@@ -1,9 +1,7 @@
 """Structured response contracts used by production LLM calls."""
 
 from collections.abc import Collection
-from typing import Any, Literal
-
-from mycelium.models import PageType
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, create_model
 
@@ -88,49 +86,101 @@ class RoutingOutput(RootModel[list[RoutingSelectionOutput]]):
     root: list[RoutingSelectionOutput] = Field(default_factory=list, max_length=8)
 
 
-class ConsolidationDestinationOutput(BaseModel):
-    page: str = Field(min_length=1, max_length=120)
-    page_type: Literal["entity", "event", "topic"]
+class _EntityCandidateBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=160)
+    aliases: list[str] = Field(default_factory=list, max_length=12)
 
 
-def consolidation_output_model(
+class PersonCandidateOutput(_EntityCandidateBase):
+    entity_type: Literal["person"]
+    creation_basis: Literal["durable_person"]
+
+
+class ProjectCandidateOutput(_EntityCandidateBase):
+    entity_type: Literal["project"]
+    creation_basis: Literal["project_continuity"]
+
+
+class TopicCandidateOutput(_EntityCandidateBase):
+    entity_type: Literal["topic"]
+    creation_basis: Literal["intentional_topic", "topic_evidence"]
+
+
+class OrganizationCandidateOutput(_EntityCandidateBase):
+    entity_type: Literal["organization"]
+    creation_basis: Literal["lasting_organization"]
+
+
+class PlaceCandidateOutput(_EntityCandidateBase):
+    entity_type: Literal["place"]
+    creation_basis: Literal["lasting_place"]
+
+
+class EventCandidateOutput(_EntityCandidateBase):
+    entity_type: Literal["event"]
+    creation_basis: Literal["substantial_event"]
+
+
+EntityCandidateOutput = Annotated[
+    PersonCandidateOutput | ProjectCandidateOutput | TopicCandidateOutput
+    | OrganizationCandidateOutput | PlaceCandidateOutput | EventCandidateOutput,
+    Field(discriminator="entity_type"),
+]
+
+
+class EntityDiscoveryDecisionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidate: EntityCandidateOutput | None = None
+    reason: str = Field(min_length=1, max_length=500)
+
+
+def entity_discovery_output_model(
     evidence_aliases: Collection[str],
 ) -> type[BaseModel]:
-    """Build an exact source-scoped page-assignment contract."""
+    """Require one entity-creation decision for each unresolved claim."""
+    aliases = tuple(dict.fromkeys(str(value) for value in evidence_aliases if value))
+    if not aliases:
+        raise ValueError("Entity discovery requires at least one evidence alias")
+    fields: dict[str, Any] = {
+        alias: (EntityDiscoveryDecisionOutput, ...) for alias in aliases
+    }
+    return create_model(
+        "SourceEntityDiscoveryOutput",
+        __config__=ConfigDict(extra="forbid"),
+        **fields,
+    )
+
+
+class ClaimPlacementOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    owner_entity: str = Field(default="", max_length=160)
+    linked_entities: list[str] = Field(default_factory=list, max_length=12)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+def placement_output_model(
+    evidence_aliases: Collection[str],
+) -> type[BaseModel]:
+    """Build an exact source-scoped claim-placement contract."""
     aliases = tuple(dict.fromkeys(str(value) for value in evidence_aliases if value))
     if not aliases:
         raise ValueError("Consolidation output requires at least one evidence alias")
     fields: dict[str, Any] = {
-        alias: (ConsolidationDestinationOutput, ...)
+        alias: (ClaimPlacementOutput, ...)
         for alias in aliases
     }
     return create_model(
-        "SourceConsolidationOutput",
+        "SourcePlacementOutput",
         __config__=ConfigDict(extra="forbid"),
         **fields,
     )
 
 
-class PageTaxonomyDecisionOutput(BaseModel):
-    page_type: PageType
-
-
-def page_taxonomy_output_model(
-    page_aliases: Collection[str],
-) -> type[BaseModel]:
-    """Build an exact contract for classifying already-formed wiki pages."""
-    aliases = tuple(dict.fromkeys(str(value) for value in page_aliases if value))
-    if not aliases:
-        raise ValueError("Page taxonomy output requires at least one page alias")
-    fields: dict[str, Any] = {
-        alias: (PageTaxonomyDecisionOutput, ...)
-        for alias in aliases
-    }
-    return create_model(
-        "PageTaxonomyOutput",
-        __config__=ConfigDict(extra="forbid"),
-        **fields,
-    )
+# The old slug-routing schema was intentionally removed. Keep one import name while
+# call sites transition in the same release; it resolves to the new contract rather
+# than accepting the old wire shape.
+consolidation_output_model = placement_output_model
 
 
 class ReconsolidationDecisionOutput(BaseModel):

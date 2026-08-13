@@ -1,20 +1,53 @@
 """Production prompts for extraction, routing, and reconsolidation."""
 
 
+def entity_discovery_prompt(index_content: str, evidence: str) -> tuple[str, str]:
+    system = """Discover durable semantic entities that deserve their own wiki pages.
+
+This is entity discovery, not claim placement. Return only genuinely new entities absent from the
+registry. Projects are named outcomes or continuing endeavors with continuity, commitment, or multiple
+supporting claims; they do not require a brand name. Examples include opening a dance studio or building
+an online clothing store. People need a durable relationship or recurring substantive relevance. Topics
+need intentional ongoing research or two non-equivalent claims. Organizations and places need lasting
+relevance. Events must be named, substantial, and consequential. Do not create pages for incidental
+objects, generic activities, routine appointments, broad catchalls, or a second entity already represented
+by an existing title or alias.
+
+Consider the supplied claims as one episodic cohort. Evidence from different source episodes may jointly
+establish a durable entity even when no individual claim is sufficient. Return one exact top-level property
+for every supplied C001-style EVIDENCE alias and no others. Put the same fully specified candidate on every
+claim that materially supports it, and candidate=null on claims that do not support a new entity. Each claim
+may support at most one new entity in this pass. A concrete continuing venture or outcome is a Project even without a
+proper name: for example, “a person is starting a dance studio” establishes Project “Dance Studio.” A plan
+to start a generic, still-undefined “business” does not. Repeated candidate proposals are consolidated
+deterministically. Return JSON only."""
+    user = f"""ENTITY REGISTRY:
+{index_content}
+
+SOURCE-GROUNDED CLAIMS:
+{evidence}"""
+    return system, user
+
+
 def consolidation_identify_prompt(index_content: str, evidence: str) -> tuple[str, str]:
-    system = """Assign every source-grounded memory claim to one focused wiki page.
+    system = """Assign every durable memory claim one existing semantic owner.
 
-Use entity pages for named people, organizations, places, products, and pets; event pages for
-specific dated events; and topic pages for projects, goals, tools, or coherent areas of work.
-Prefer an existing page from the supplied catalog when it fits. Use stable lowercase hyphenated
-slugs and at most eight distinct pages per batch. Never create generic catch-all or placeholder
-pages. Named participants are not implicitly the system user.
+The owner is the entity whose state, requirements, plans, or relationship the claim changes. It is
+not automatically the speaker, the first named noun, or the user. Entity discovery has already finished:
+use only an existing entity ID from the registry and never invent one. Most supplied claims should be
+placed. A person's profile, state, preferences, plans, relationships, and ordinary timeline events belong
+to that Person unless a more specific existing Project, Organization, Place, Topic, or Event is the entity
+whose state or requirements change. Typed wiki sections are assigned deterministically after ownership.
 
-Return one top-level property for every supplied C001-style EVIDENCE alias, with no other properties.
-Each property value must contain `page`, the destination slug, and `page_type`, which is entity, event,
-or topic. All supplied claims have already passed durable-memory admission; do not omit or re-evaluate
-them. Respond with JSON only."""
-    user = f"""WIKI PAGE CATALOG:
+Set owner_entity empty and provide no links only when current evidence is insufficient to choose an existing
+entity. This defers the claim in short-term memory so a later Dream can reconsider it with more context.
+linked_entities contains only supplied existing entity IDs that are substantively
+referenced; do not infer links from co-occurrence. External/tool evidence belongs only in
+research_references, or evidence for event pages, and must never establish a You fact automatically.
+
+Return one exact top-level property for every supplied C001-style EVIDENCE alias and no others. Respond
+with JSON only."""
+    user = f"""ENTITY REGISTRY AND SECTION CONTRACT:
 {index_content}
 
 SOURCE-GROUNDED CLAIMS:
@@ -94,6 +127,12 @@ facets.when for event times and facets.deadline for due dates. Never convert rel
 preserve phrases such as “by Friday” or “in three days” exactly so the deterministic resolver can anchor
 them to OCCURRED AT. Use inferred only for a strong implication with facets.inference_basis and confidence at
 most 0.7.
+
+The about list is semantic routing data, not a keyword list. Include the primary subject whose state,
+belief, preference, plan, relationship, or action the claim predicates, with role=subject. Include a
+different durable entity with role=owner when the claim chiefly changes that entity (for example, a
+project requirement). Other named participants may use role=participant. Do not put incidental objects,
+generic activities, or predicate complements in about merely because their words occur in the claim.
 
 Account for every segment once: cite it from claims when substantive, or put it in
 ignored_segment_ids when it is only scaffolding, filler, raw image URL, transport metadata, or an

@@ -1,0 +1,25 @@
+schema_version: 1
+scenario_id: daily-driver-paraphrased-v1
+final_checkpoint: cp3_final
+checkpoints:
+  - id: cp1_pre_dream
+    after_episode: chat-01
+    queue: {pending: [c-profile, c-intent, c-local, c-traceable], deferred: [], retryable: []}
+    entities: [you]
+    pages: [you]
+    forbidden_pages: [project-hearth]
+  - id: cp2_first_dream
+    after_episode: chat-01
+    queue: {pending: [], deferred: [c-intent, c-local, c-traceable], retryable: []}
+    entities: [you]
+    pages: [you]
+    forbidden_pages: [project-hearth]
+  - id: cp3_final
+    after_episode: meeting-01
+    queue: {pending: [], deferred: [], retryable: []}
+    entities: [you, project-hearth, person-tariq-bell]
+    pages: [you, project-hearth, person-tariq-bell]
+    required_page_facts:
+      project-hearth: [f-purpose, f-local, f-traceable, f-tariq-role]
+      person-tariq-bell: [f-tariq-role]
+    exact_fact_count: 5

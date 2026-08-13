@@ -2,19 +2,29 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import shutil
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
 from benchmarks.mycelium_bench.daily_driver import load_fixture, validate_fixture
+from benchmarks.mycelium_bench.daily_driver_eval import (
+    evaluate_run,
+    judge_probe_answer,
+    load_snapshots,
+    match_snapshot,
+    retrieved_generated_ids,
+)
+from benchmarks.mycelium_bench.adapters import OllamaQaClient
 from benchmarks.mycelium_bench.scoring import token_f1
-from mycelium.artifacts import MemoryClaim, SourceSegment
+from mycelium.artifacts import ArtifactStore, MemoryClaim, SourceSegment
 from mycelium.core import Mycelium
 from mycelium.reconsolidation import ReconsolidationReviewService
+from mycelium.session import Session
 
 
 def _jsonable(value: Any) -> Any:
@@ -32,7 +42,8 @@ def _jsonable(value: Any) -> Any:
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(_jsonable(value), indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+        json.dumps(_jsonable(value), indent=2, ensure_ascii=False, sort_keys=True)
+        + "\n",
         encoding="utf-8",
     )
 
@@ -74,7 +85,10 @@ def _snapshot(memory: Mycelium, checkpoint_id: str) -> dict[str, Any]:
         "sources": memory.artifacts.list_sources(),
         "episodes": memory.artifacts.list_episodes(),
         "claims": [
-            {**asdict(claim), "fixture_evidence": sorted(_claim_source_labels(claim, labels))}
+            {
+                **asdict(claim),
+                "fixture_evidence": sorted(_claim_source_labels(claim, labels)),
+            }
             for claim in claims
         ],
         "entities": entities,
@@ -127,11 +141,7 @@ async def _ingest_episode(
                 index=index,
                 content=text,
                 speaker=speaker,
-                role=(
-                    "user"
-                    if speaker == user_speaker_label
-                    else row.get("role")
-                ),
+                role=("user" if speaker == user_speaker_label else row.get("role")),
                 metadata={
                     "fixture_segment_id": str(row["id"]),
                     "fixture_retention": str(row.get("retention") or ""),
@@ -154,6 +164,60 @@ async def _ingest_episode(
         metadata=metadata,
         segments=segments,
     )
+
+
+def _replay_extracted_episode(
+    memory: Mycelium, replay: ArtifactStore, episode: dict[str, Any]
+) -> None:
+    """Replay only canonical extraction artifacts for one fixture episode."""
+    fixture_episode_id = str(episode["id"])
+    sources = [
+        source
+        for source in replay.list_sources()
+        if str(source.metadata.get("fixture_episode_id")) == fixture_episode_id
+    ]
+    if len(sources) != 1:
+        raise RuntimeError(
+            f"Replay store must contain one source for {fixture_episode_id}; found {len(sources)}"
+        )
+    source = copy.deepcopy(sources[0])
+    expected_labels = {str(row["id"]) for row in episode.get("segments") or []}
+    actual_labels = {
+        str(segment.metadata.get("fixture_segment_id"))
+        for segment in source.segments
+        if segment.metadata.get("fixture_segment_id")
+    }
+    if expected_labels != actual_labels:
+        raise RuntimeError(
+            f"Replay source for {fixture_episode_id} has different fixture segments"
+        )
+    manifests = [
+        item for item in replay.list_episodes() if item.source_id == source.source_id
+    ]
+    if len(manifests) != 1:
+        raise RuntimeError(
+            f"Replay store must contain one manifest for {fixture_episode_id}; found {len(manifests)}"
+        )
+    manifest = copy.deepcopy(manifests[0])
+    memory.artifacts.save_source(source)
+    for claim_id in manifest.claim_ids:
+        claim = copy.deepcopy(replay.get_claim(claim_id))
+        claim.status = "active"
+        claim.dream_disposition = "pending"
+        claim.dream_disposition_reason = None
+        claim.dream_run_id = None
+        claim.dream_disposition_at = None
+        memory.artifacts.save_claim(claim)
+    memory.artifacts.save_episode(manifest)
+
+
+def _copy_replay_logs(replay_store: Path, destination: Path) -> None:
+    logs = replay_store / "logs"
+    if not logs.is_dir():
+        raise ValueError(
+            f"Replay extraction store has no logs directory: {replay_store}"
+        )
+    shutil.copytree(logs, destination, dirs_exist_ok=True)
 
 
 def _gold_claim(fixture: dict[str, Any], claim_id: str) -> dict[str, Any]:
@@ -262,14 +326,15 @@ def _best_claim_candidates(
     return rows
 
 
-def _entity_comparison(
-    fixture: dict[str, Any], memory: Mycelium
-) -> dict[str, Any]:
+def _entity_comparison(fixture: dict[str, Any], memory: Mycelium) -> dict[str, Any]:
     generated = memory.artifacts.list_entities(status="active")
     matched_generated: set[str] = set()
     rows = []
     for gold in fixture["gold_wiki"]["entities"]:
-        names = {_normalized(gold["title"]), *map(_normalized, gold.get("aliases") or [])}
+        names = {
+            _normalized(gold["title"]),
+            *map(_normalized, gold.get("aliases") or []),
+        }
         candidates = []
         for entity in generated:
             if gold["id"] == "you":
@@ -303,7 +368,9 @@ def _entity_comparison(
                 "gold_title": gold["title"],
                 "gold_type": gold["type"],
                 "generated": _jsonable(selected[2]) if selected else None,
-                "type_match": bool(selected and selected[2].entity_type == gold["type"]),
+                "type_match": bool(
+                    selected and selected[2].entity_type == gold["type"]
+                ),
                 "name_similarity": round(selected[1], 4) if selected else 0.0,
             }
         )
@@ -372,9 +439,7 @@ def compare_final(fixture: dict[str, Any], memory: Mycelium) -> dict[str, Any]:
                 ],
             }
         )
-    claim_rows_by_id = {
-        row["gold_claim_id"]: row for row in claim_rows
-    }
+    claim_rows_by_id = {row["gold_claim_id"]: row for row in claim_rows}
     wiki_fact_rows = []
     for fact in fixture["gold_wiki"]["facts"]:
         matching_rows = [
@@ -435,7 +500,9 @@ def compare_final(fixture: dict[str, Any], memory: Mycelium) -> dict[str, Any]:
         },
         "projection": {
             "active_claims": len(active_claims),
-            "active_placed": sum(claim.claim_id in placed_ids for claim in active_claims),
+            "active_placed": sum(
+                claim.claim_id in placed_ids for claim in active_claims
+            ),
             "active_rendered": sum(
                 claim.claim_id in rendered_claim_ids for claim in active_claims
             ),
@@ -445,7 +512,9 @@ def compare_final(fixture: dict[str, Any], memory: Mycelium) -> dict[str, Any]:
                 if item.owner_entity_id not in page_entity_ids
             ],
             "dream_dispositions": dict(
-                sorted(Counter(claim.dream_disposition for claim in active_claims).items())
+                sorted(
+                    Counter(claim.dream_disposition for claim in active_claims).items()
+                )
             ),
         },
         "generated_pages": [
@@ -471,38 +540,172 @@ def compare_final(fixture: dict[str, Any], memory: Mycelium) -> dict[str, Any]:
     }
 
 
+async def _run_checkpoint_probes(
+    fixture: dict[str, Any],
+    memory: Mycelium,
+    checkpoint_id: str,
+    snapshot: dict[str, Any],
+    *,
+    run_answers: bool,
+) -> list[dict[str, Any]]:
+    probes = [
+        row
+        for row in fixture["probes"].get("probes") or []
+        if row.get("checkpoint") == checkpoint_id
+    ]
+    if not probes:
+        return []
+    snapshot_match = match_snapshot(fixture, snapshot)
+    gold_facts = {
+        str(row["id"]): row for row in fixture["gold_wiki"].get("facts") or []
+    }
+    qa = OllamaQaClient(
+        model=memory.config.llm.model,
+        url=memory.config.llm.url,
+        temperature=0.0,
+        timeout=memory.config.llm.timeout_seconds,
+    )
+    rows: list[dict[str, Any]] = []
+    for probe in probes:
+        loaded_pages = await memory.load_context(
+            str(probe["question"]),
+            session_id=f"daily-driver-{checkpoint_id}-{probe['id']}",
+        )
+        retrieved_gold_facts, retrieved_claim_ids = retrieved_generated_ids(
+            loaded_pages, snapshot_match
+        )
+        retrieved_evidence = {
+            str(value)
+            for claim in snapshot.get("claims") or []
+            if str(claim.get("claim_id")) in retrieved_claim_ids
+            for value in claim.get("fixture_evidence") or []
+        }
+        source_context = "\n".join(
+            page.source_context for page in loaded_pages if page.source_context
+        )
+        for source in memory.artifacts.list_sources():
+            if source.raw_log_entry_id and source.raw_log_entry_id in source_context:
+                retrieved_evidence.update(
+                    str(segment.metadata["fixture_segment_id"])
+                    for segment in source.segments
+                    if segment.metadata.get("fixture_segment_id")
+                )
+        required = set(map(str, probe.get("required_facts") or []))
+        forbidden = set(map(str, probe.get("forbidden_facts") or []))
+        forbidden_evidence = set(map(str, probe.get("forbidden_evidence") or []))
+        present_required = sorted(required & retrieved_gold_facts)
+        present_forbidden = sorted(forbidden & retrieved_gold_facts)
+        session = Session(
+            mycelium=memory,
+            session_id=f"daily-driver-{checkpoint_id}-{probe['id']}",
+            query=str(probe["question"]),
+        )
+        session.loaded_pages = loaded_pages
+        context = session.memory_context
+        result: dict[str, Any] = {
+            "probe_id": probe["id"],
+            "checkpoint": checkpoint_id,
+            "question": probe["question"],
+            "answerable": probe.get("answerable", True),
+            "required_facts": sorted(required),
+            "present_required_facts": present_required,
+            "missing_required_facts": sorted(required - retrieved_gold_facts),
+            "forbidden_facts": sorted(forbidden),
+            "present_forbidden_facts": present_forbidden,
+            "forbidden_evidence": sorted(forbidden_evidence),
+            "present_forbidden_evidence": sorted(
+                forbidden_evidence & retrieved_evidence
+            ),
+            "retrieved_evidence": sorted(retrieved_evidence),
+            "retrieval_passed": required <= retrieved_gold_facts
+            and not present_forbidden
+            and not (forbidden_evidence & retrieved_evidence),
+            "retrieved_generated_claim_ids": sorted(retrieved_claim_ids),
+            "loaded_pages": [
+                {"entity_id": page.entity_id, "slug": page.slug, "title": page.title}
+                for page in loaded_pages
+            ],
+            "context": context,
+            "answer": None,
+            "judgment": None,
+        }
+        if run_answers:
+            if probe.get("evaluation_mode") == "artifact":
+                answer = str(probe.get("expected_answer") or "")
+                result["answer_origin"] = "artifact observation"
+            else:
+                answer_result = await qa.answer(str(probe["question"]), context)
+                answer = answer_result.output
+                result["answer_origin"] = "production retrieval context"
+                result["answer_metadata"] = answer_result.metadata
+            result["answer"] = answer
+            result["judgment"] = await judge_probe_answer(
+                llm=memory.llm,
+                probe=probe,
+                answer=answer,
+                gold_facts=gold_facts,
+            )
+        rows.append(result)
+    return rows
+
+
 def _report_markdown(
-    run: dict[str, Any], comparison: dict[str, Any], actions: list[dict[str, Any]]
+    run: dict[str, Any],
+    evaluation: dict[str, Any],
+    actions: list[dict[str, Any]],
 ) -> str:
-    source = comparison["source_accounting"]
-    claims = comparison["claim_comparison"]
-    entities = comparison["entity_comparison"]
-    wiki_facts = comparison["wiki_fact_comparison"]
-    projection = comparison["projection"]
+    artifact_summary = evaluation["artifact_summary"]
+    source = artifact_summary["source_accounting"]
+    claims = artifact_summary["claims"]
+    entities = artifact_summary["entities"]
+    wiki_facts = artifact_summary["wiki_facts"]
+    projection = artifact_summary["projection"]
     lines = [
-        "# Daily Driver initial artifact comparison",
+        "# Daily Driver artifact evaluation",
         "",
         f"- Model: `{run['model']}`",
         f"- Fixture: `{run['scenario_id']}`",
-        "- Scope: production encoding, Dream, reviewed reconsolidation, and wiki projection; QA probes were not run.",
-        "- Comparison policy: source provenance is exact; semantic claim matches and entity-name matches are diagnostic heuristics for human review, not a benchmark score.",
+        f"- Extraction mode: `{run.get('extraction_mode', 'fresh')}`",
+        "- Scope: production encoding, Dream, reviewed reconsolidation, wiki projection, retrieval probes, and semantic answer checks.",
+        "- Comparison policy: provenance, state, ownership, sections, and rendered IDs are authoritative. Text matching is an exposed diagnostic used only to associate source-grounded propositions.",
+        "- Dimensions remain separate; there is no aggregate quality score.",
+        "",
+        "## Release gates",
+        "",
+        *[
+            f"- {'PASS' if gate['passed'] else 'FAIL'} `{gate['id']}` — {gate['rule']}"
+            for gate in evaluation["gates"]
+        ],
+        "",
+        "## Rubric dimensions",
+        "",
+        *[
+            (
+                f"- {('PASS' if metric['passed'] else 'FAIL') if metric.get('evaluated', True) else 'NOT RUN'} "
+                f"`{metric['id']}`: "
+                f"{metric['value']:.3f} ({metric['numerator']}/{metric['denominator']})"
+            )
+            for metric in evaluation["dimensions"]
+        ],
         "",
         "## Layer summary",
         "",
         f"- Claim-bearing source coverage: {source['claim_bearing_covered']}/{source['claim_bearing_total']}",
         f"- Source-only segments represented in extracted claims: {len(source['source_only_claimed'])}/{source['source_only_total']}",
         f"- Source-only segments rendered into the wiki: {len(source['source_only_rendered'])}/{source['source_only_total']}",
-        f"- Gold claims with an evidence-linked candidate: {claims['candidate_found']}/{claims['gold_total']}",
-        f"- Provisional semantic claim matches: {claims['likely_semantic_match']}/{claims['gold_total']}",
-        f"- Gold entities found: {len(entities['matches']) - len(entities['missing'])}/{len(entities['matches'])}",
+        f"- Gold claims with an evidence-linked candidate: {claims['evidence_candidate_found']}/{claims['gold_total']}",
+        f"- Evidence-grounded semantic candidates: {claims['semantic_candidate_found']}/{claims['gold_total']}",
+        f"- Gold entities found: {entities['found']}/{entities['gold_total']}",
         f"- Extra generated entities: {len(entities['extra'])}",
-        f"- Gold wiki facts provisionally represented anywhere: {wiki_facts['provisionally_represented']}/{wiki_facts['gold_total']}",
+        f"- Gold wiki facts rendered at their required page/section endpoints: {wiki_facts['rendered_correctly']}/{wiki_facts['gold_total']}",
         f"- Active generated claims placed: {projection['active_placed']}/{projection['active_claims']}",
         f"- Active generated claims rendered: {projection['active_rendered']}/{projection['active_claims']}",
+        f"- Atomic propositions represented: {evaluation['proposition_completeness']['propositions_represented']}/{evaluation['proposition_completeness']['propositions_total']}",
+        f"- Complete multi-assertion segments: {evaluation['proposition_completeness']['complete_multi_assertion_segments']}/{evaluation['proposition_completeness']['multi_assertion_segments']}",
         "",
         "## Known capability boundary",
         "",
-        "Source retraction is deliberately reported as unsupported. The runner did not mutate artifacts to imitate the gold checkpoint, so Northstar material may remain in the final generated wiki.",
+        "Unsupported fixture actions are recorded as capability gaps. The runner never mutates artifacts to imitate a gold checkpoint.",
         "",
         "## Source accounting",
         "",
@@ -513,12 +716,12 @@ def _report_markdown(
         "## Entity accounting",
         "",
         f"- Missing: {entities['missing'] or 'none'}",
-        f"- Extras: {[item['title'] for item in entities['extra']] or 'none'}",
+        f"- Extras: {[item.get('title') for item in entities['extra']] or 'none'}",
         "",
         "## Generated pages",
         "",
     ]
-    for page in comparison["generated_pages"]:
+    for page in artifact_summary["generated_pages"]:
         section_summary = ", ".join(
             f"{section['heading'] or section['key']} ({section['item_count']})"
             for section in page["sections"]
@@ -529,12 +732,14 @@ def _report_markdown(
         )
     lines.extend(["", "## Action log", ""])
     for action in actions:
-        detail = action.get("error") or action.get("reason") or action.get("result", "ok")
+        detail = (
+            action.get("error") or action.get("reason") or action.get("result", "ok")
+        )
         lines.append(f"- `{action['action']}`: {detail}")
     lines.extend(
         [
             "",
-            "See `comparison.json` for every gold claim and its best generated candidate, and `checkpoints/` for full snapshots and generated Markdown at each lifecycle boundary.",
+            "See `evaluation.json` for dimensions, gates, proposition completeness, checkpoint diffs, ownership confusion, duplicates, retrieval results, and page diffs. `comparison.json` is a transitional review artifact and is not used for gates or dimension results.",
             "",
         ]
     )
@@ -551,15 +756,29 @@ def refresh_daily_driver_comparison(
         output_dir / "store", config_path=config_path, memory_profile="user"
     )
     comparison = compare_final(fixture, memory)
+    snapshots = load_snapshots(output_dir)
+    probe_results = [
+        row
+        for path in sorted((output_dir / "checkpoints").glob("*/probes.json"))
+        for row in json.loads(path.read_text(encoding="utf-8"))
+    ]
+    evaluation = evaluate_run(fixture, snapshots, probe_results)
     _write_json(output_dir / "comparison.json", comparison)
+    _write_json(output_dir / "evaluation.json", evaluation)
     (output_dir / "REPORT.md").write_text(
-        _report_markdown(run, comparison, run["actions"]), encoding="utf-8"
+        _report_markdown(run, evaluation, run["actions"]),
+        encoding="utf-8",
     )
-    return comparison
+    return {"comparison": comparison, "evaluation": evaluation}
 
 
 async def run_daily_driver(
-    fixture_dir: Path, output_dir: Path, *, config_path: Path | None = None
+    fixture_dir: Path,
+    output_dir: Path,
+    *,
+    config_path: Path | None = None,
+    replay_extraction_store: Path | None = None,
+    run_probe_answers: bool = True,
 ) -> dict[str, Any]:
     validate_fixture(fixture_dir)
     fixture = load_fixture(fixture_dir)
@@ -571,15 +790,28 @@ async def run_daily_driver(
         config_path=config_path,
         memory_profile="user",
     )
+    replay = None
+    if replay_extraction_store is not None:
+        if not replay_extraction_store.is_dir():
+            raise ValueError(
+                f"Replay extraction store does not exist: {replay_extraction_store}"
+            )
+        replay = ArtifactStore(replay_extraction_store / "artifacts")
+        _copy_replay_logs(replay_extraction_store, memory.store_path / "logs")
     _configure_user(memory, str(fixture["scenario"]["user"]["name"]))
     actions: list[dict[str, Any]] = []
     checkpoint_ids: list[str] = []
+    snapshots: dict[str, dict[str, Any]] = {}
+    probe_results: list[dict[str, Any]] = []
     for episode in fixture["scenario"]["episodes"]:
-        await _ingest_episode(
-            memory,
-            episode,
-            user_speaker_label=str(fixture["scenario"]["user"]["speaker_label"]),
-        )
+        if replay is None:
+            await _ingest_episode(
+                memory,
+                episode,
+                user_speaker_label=str(fixture["scenario"]["user"]["speaker_label"]),
+            )
+        else:
+            _replay_extracted_episode(memory, replay, episode)
         for action in episode.get("actions_after") or []:
             kind, _, value = str(action).partition(":")
             event: dict[str, Any] = {"episode": episode["id"], "action": action}
@@ -597,6 +829,16 @@ async def run_daily_driver(
                             memory.store_path / "wiki" / f"{page.slug}.md",
                             wiki_dir / f"{page.slug}.md",
                         )
+                    snapshots[value] = snapshot
+                    checkpoint_probes = await _run_checkpoint_probes(
+                        fixture,
+                        memory,
+                        value,
+                        snapshot,
+                        run_answers=run_probe_answers,
+                    )
+                    _write_json(checkpoint_dir / "probes.json", checkpoint_probes)
+                    probe_results.extend(checkpoint_probes)
                     checkpoint_ids.append(value)
                     event["result"] = snapshot["counts"]
                 elif kind == "approve":
@@ -619,17 +861,90 @@ async def run_daily_driver(
                 )
             actions.append(event)
     comparison = compare_final(fixture, memory)
+    evaluation = evaluate_run(fixture, snapshots, probe_results)
     run = {
         "scenario_id": fixture["scenario"]["scenario_id"],
         "model": memory.config.llm.model,
         "ollama_url": memory.config.llm.url,
         "config_path": str(config_path) if config_path else None,
+        "extraction_mode": "replay" if replay is not None else "fresh",
+        "replay_extraction_store": (
+            str(replay_extraction_store) if replay_extraction_store else None
+        ),
+        "probe_answers": run_probe_answers,
         "checkpoint_ids": checkpoint_ids,
         "actions": actions,
     }
     _write_json(output_dir / "run.json", run)
     _write_json(output_dir / "comparison.json", comparison)
+    _write_json(output_dir / "evaluation.json", evaluation)
     (output_dir / "REPORT.md").write_text(
-        _report_markdown(run, comparison, actions), encoding="utf-8"
+        _report_markdown(run, evaluation, actions), encoding="utf-8"
     )
-    return {"run": run, "comparison": comparison, "output_dir": str(output_dir)}
+    return {
+        "run": run,
+        "comparison": comparison,
+        "evaluation": evaluation,
+        "output_dir": str(output_dir),
+    }
+
+
+async def run_daily_driver_trials(
+    fixture_dir: Path,
+    output_dir: Path,
+    *,
+    trials: int,
+    config_path: Path | None = None,
+    replay_extraction_store: Path | None = None,
+    run_probe_answers: bool = True,
+) -> dict[str, Any]:
+    """Run repeated independent trials and report variance per dimension."""
+    if trials < 2:
+        raise ValueError("Repeated trial runs require trials >= 2")
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise FileExistsError(f"Output directory is not empty: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    for trial in range(1, trials + 1):
+        trial_dir = output_dir / f"trial-{trial:02d}"
+        results.append(
+            await run_daily_driver(
+                fixture_dir,
+                trial_dir,
+                config_path=config_path,
+                replay_extraction_store=replay_extraction_store,
+                run_probe_answers=run_probe_answers,
+            )
+        )
+    dimension_values: dict[str, list[float]] = defaultdict(list)
+    gate_values: dict[str, list[bool]] = defaultdict(list)
+    for result in results:
+        for row in result["evaluation"]["dimensions"]:
+            dimension_values[row["id"]].append(float(row["value"]))
+        for row in result["evaluation"]["gates"]:
+            gate_values[row["id"]].append(bool(row["passed"]))
+    summary = {
+        "scenario_id": results[0]["run"]["scenario_id"],
+        "trials": trials,
+        "extraction_mode": results[0]["run"]["extraction_mode"],
+        "dimensions": {
+            key: {
+                "values": values,
+                "mean": sum(values) / len(values),
+                "minimum": min(values),
+                "maximum": max(values),
+            }
+            for key, values in sorted(dimension_values.items())
+        },
+        "gates": {
+            key: {
+                "passed_trials": sum(values),
+                "total_trials": len(values),
+                "passed_all": all(values),
+            }
+            for key, values in sorted(gate_values.items())
+        },
+        "trial_dirs": [result["output_dir"] for result in results],
+    }
+    _write_json(output_dir / "trial_summary.json", summary)
+    return summary

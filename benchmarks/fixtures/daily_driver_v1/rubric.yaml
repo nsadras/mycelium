@@ -77,14 +77,34 @@ dimensions:
 gates:
   - id: no_retracted_memory
     rule: No final wiki or retrieval artifact may contain a fact supported only by src-meeting-04.
+    check:
+      type: forbidden_evidence_absent
+      checkpoint: cp8_final
+      evidence: [meeting-04-s01, meeting-04-s02, meeting-04-s03]
   - id: no_false_attribution
     rule: Priya, Luis, Maya, and Grandmother facts must never be transferred between people.
+    check:
+      type: ownership_exact
+      checkpoint: cp8_final
+      entity_ids: [you, person-priya-raman, person-luis-ortega, person-grandmother]
   - id: no_cross_project_merge
     rule: Family Oral History and Lantern remain separate Project entities and pages.
+    check:
+      type: distinct_entities
+      checkpoint: cp8_final
+      entity_ids: [project-lantern, project-family-oral-history]
   - id: no_premature_lantern_page
     rule: Project Lantern does not exist at cp2_first_dream.
+    check:
+      type: checkpoint_checks
+      checkpoint: cp2_first_dream
+      kinds: [forbidden_page]
   - id: short_term_available
     rule: The cp1 query is answerable from pending claims without a wiki page.
+    check:
+      type: probe
+      probe_id: q-short-term-project
+      requirements: [retrieval, answer]
 reporting:
   required_outputs:
     - per_dimension_metrics

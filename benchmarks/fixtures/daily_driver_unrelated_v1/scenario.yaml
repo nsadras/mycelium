@@ -1,0 +1,36 @@
+schema_version: 1
+scenario_id: daily-driver-unrelated-v1
+title: Devon Shah's kitchen renovation
+timezone: America/Los_Angeles
+user: {id: you, name: Devon Shah, speaker_label: User, identity_authority: configured_profile}
+episodes:
+  - id: chat-01
+    source_id: src-chat-01
+    source_type: agent_conversation
+    occurred_at: 2026-10-12T18:00:00-07:00
+    participants: [User, Assistant]
+    segments:
+      - {id: chat-01-s01, speaker: User, role: user, text: I live in Portland and am restoring my 1920s kitchen. I want to preserve the oak cabinets instead of replacing them., retention: claim}
+      - {id: chat-01-s02, speaker: Assistant, role: assistant, text: Painted cabinets would be cheaper and easier to match., retention: source_only}
+      - {id: chat-01-s03, speaker: User, role: user, text: No paint. Keeping the original wood is the point. I also want an induction range., retention: claim}
+    actions_after: [checkpoint:cp1_pre_dream, dream, checkpoint:cp2_first_dream]
+  - id: meeting-01
+    source_id: src-meeting-01
+    source_type: meeting_transcript
+    occurred_at: 2026-10-15T10:00:00-07:00
+    participants: [User, Rosa Alvarez]
+    metadata: {title: Kitchen renovation site walk}
+    segments:
+      - {id: meeting-01-s01, speaker: Rosa Alvarez, text: I will coordinate the electrician and the permit inspection for the kitchen renovation., retention: claim}
+      - {id: meeting-01-s02, speaker: User, text: Please keep the induction range and electrical work under 2800 dollars., retention: claim}
+      - {id: meeting-01-s03, speaker: Rosa Alvarez, text: The permit inspection is booked for October 27 at 9 AM., retention: claim}
+  - id: tool-01
+    source_id: src-tool-01
+    source_type: tool_observation
+    occurred_at: 2026-10-15T10:30:00-07:00
+    participants: [Catalog search]
+    metadata: {tool_name: catalog_search, query: thirty-inch induction range}
+    segments:
+      - {id: tool-01-s01, speaker: Catalog search, role: tool, text: The selected thirty-inch induction range costs 1899 dollars and requires a 40-amp circuit., retention: claim}
+      - {id: tool-01-s02, speaker: Catalog search, role: tool, text: Sponsored result — a smart dishwasher is discounted this week., retention: source_only}
+    actions_after: [dream, checkpoint:cp3_final]

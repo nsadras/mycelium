@@ -1,0 +1,12 @@
+schema_version: 1
+scenario_id: daily-driver-paraphrased-v1
+claims:
+  - {id: c-profile, fact_id: f-profile, text: Elena Park facilitates workshops in Boston., claim_type: identity, predicate: has_profile, subject: you, owner: you, section: profile, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-01-s01]}
+  - {id: c-intent, fact_id: f-purpose, text: Elena wants a private offline searchable record of workshop sessions., claim_type: plan, predicate: build, subject: you, owner: project-hearth, section: overview, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-01-s01]}
+  - {id: c-local, fact_id: f-local, text: The workshop archive must remain on Elena's computer., claim_type: commitment, predicate: store_locally, subject: project-hearth, owner: project-hearth, section: requirements_constraints, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-01-s03]}
+  - {id: c-traceable, fact_id: f-traceable, text: Every Hearth summary must link to the exact source quotation., claim_type: commitment, predicate: requires_traceability, subject: project-hearth, owner: project-hearth, section: requirements_constraints, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-01-s03]}
+  - {id: c-name, fact_id: f-purpose, text: Elena named the offline workshop archive Hearth., claim_type: identity, predicate: project_purpose, subject: project-hearth, owner: project-hearth, section: overview, temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-01-s01]}
+  - {id: c-tariq-role, fact_id: f-tariq-role, text: Tariq owns Hearth transcript imports and facilitator export., claim_type: relationship, predicate: project_role, subject: person-tariq-bell, owner: person-tariq-bell, section: shared_projects, linked_entities: [project-hearth], temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-01-s02]}
+  - {id: c-description, fact_id: f-purpose, text: Hearth makes workshop decisions searchable with links to original quotations., claim_type: identity, predicate: project_purpose, subject: project-hearth, owner: project-hearth, section: overview, temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-01-s03]}
+ignored_segments:
+  - {id: chat-01-s02, reason: Unaccepted assistant proposal.}

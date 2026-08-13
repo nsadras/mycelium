@@ -1,0 +1,30 @@
+schema_version: 1
+scenario_id: daily-driver-paraphrased-v1
+authority: IDs, owners, sections, state, and provenance are normative; prose is illustrative.
+entities:
+  - {id: you, type: you, title: You, aliases: [Elena Park], page: you}
+  - {id: project-hearth, type: project, title: Hearth, aliases: [offline workshop archive, workshop record], page: hearth}
+  - {id: person-tariq-bell, type: person, title: Tariq Bell, aliases: [Tariq], page: tariq-bell}
+non_page_mentions: []
+retracted_entities: []
+facts:
+  - {id: f-profile, text: Elena Park facilitates workshops in Boston., claim_ids: [c-profile], state: current}
+  - {id: f-purpose, text: Hearth is Elena's private offline searchable workshop record with links to original quotations., claim_ids: [c-intent, c-name, c-description], state: current}
+  - {id: f-local, text: Hearth remains on Elena's computer., claim_ids: [c-local], state: current}
+  - {id: f-traceable, text: Every Hearth summary links to its exact source quotation., claim_ids: [c-traceable], state: current}
+  - {id: f-tariq-role, text: Tariq owns transcript imports and facilitator export for Hearth., claim_ids: [c-tariq-role], state: current, render_on: [person-tariq-bell, project-hearth]}
+pages:
+  - entity_id: you
+    slug: you
+    sections: {profile: [f-profile], memory_map: {links: [project-hearth, person-tariq-bell]}}
+  - entity_id: project-hearth
+    slug: hearth
+    sections:
+      overview: [f-purpose]
+      requirements_constraints: [f-local, f-traceable]
+      people_organizations: {facts: [f-tariq-role], links: [person-tariq-bell]}
+  - entity_id: person-tariq-bell
+    slug: tariq-bell
+    sections: {shared_projects: {facts: [f-tariq-role], links: [project-hearth]}}
+forbidden_final_content: {fact_ids: [], phrases: [hosted collaboration service]}
+forbidden_final_pages: []

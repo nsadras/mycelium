@@ -25,7 +25,9 @@ REQUIRED_FILES = {
 
 
 def load_fixture(fixture_dir: Path) -> dict[str, Any]:
-    missing = sorted(name for name in REQUIRED_FILES if not (fixture_dir / name).exists())
+    missing = sorted(
+        name for name in REQUIRED_FILES if not (fixture_dir / name).exists()
+    )
     if missing:
         raise ValueError(f"Missing fixture files: {', '.join(missing)}")
     return {
@@ -54,7 +56,9 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
     episodes = scenario.get("episodes") or []
     episode_ids = _unique_ids(episodes, "episode", errors)
     source_ids = _unique_values(episodes, "source_id", "source", errors)
-    segments = [segment for episode in episodes for segment in episode.get("segments") or []]
+    segments = [
+        segment for episode in episodes for segment in episode.get("segments") or []
+    ]
     segment_ids = _unique_ids(segments, "segment", errors)
     segment_by_id = {str(segment.get("id")): segment for segment in segments}
     user = scenario.get("user") or {}
@@ -70,7 +74,9 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
         errors.append("configured user name cannot be used as a source speaker label")
     for episode in episodes:
         episode_segments = episode.get("segments") or []
-        has_user_turn = any(segment.get("speaker") == user_label for segment in episode_segments)
+        has_user_turn = any(
+            segment.get("speaker") == user_label for segment in episode_segments
+        )
         participants = set(episode.get("participants") or [])
         if has_user_turn and user_label not in participants:
             errors.append(
@@ -96,7 +102,9 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
             evidence_id = str(evidence_id)
             evidenced_segments.add(evidence_id)
             if evidence_id not in segment_ids:
-                errors.append(f"claim {claim_id}: unknown evidence segment {evidence_id}")
+                errors.append(
+                    f"claim {claim_id}: unknown evidence segment {evidence_id}"
+                )
         owner = str(claim.get("owner") or "")
         if not owner:
             errors.append(f"claim {claim_id}: owner is required")
@@ -111,7 +119,9 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
 
     overlap = evidenced_segments & ignored_ids
     if overlap:
-        errors.append(f"segments cannot be both evidence and ignored: {sorted(overlap)}")
+        errors.append(
+            f"segments cannot be both evidence and ignored: {sorted(overlap)}"
+        )
     for ignored_id in ignored_ids:
         if ignored_id not in segment_ids:
             errors.append(f"ignored segment does not exist: {ignored_id}")
@@ -146,7 +156,9 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
             errors.append(
                 f"checkpoint {checkpoint_id}: unknown episode {checkpoint.get('after_episode')}"
             )
-        _validate_checkpoint_claims(checkpoint, checkpoint_id, claim_ids, fact_ids, errors)
+        _validate_checkpoint_claims(
+            checkpoint, checkpoint_id, claim_ids, fact_ids, errors
+        )
 
     action_checkpoints = {
         action.split(":", 1)[1]
@@ -198,7 +210,9 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
             f"pages_without_entities={sorted(page_entity_ids - entity_ids)}"
         )
     retracted_fact_ids = {
-        str(claim.get("fact_id")) for claim in claims if claim.get("state") == "retracted"
+        str(claim.get("fact_id"))
+        for claim in claims
+        if claim.get("state") == "retracted"
     }
     expected_final_fact_ids = fact_ids - retracted_fact_ids
     if wiki_fact_ids != expected_final_fact_ids:
@@ -248,9 +262,7 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
         entity_id = str(page.get("entity_id"))
         entity = entity_by_id.get(entity_id)
         if entity:
-            allowed_sections = {
-                key for key, _ in PAGE_SECTION_KEYS[entity["type"]]
-            }
+            allowed_sections = {key for key, _ in PAGE_SECTION_KEYS[entity["type"]]}
             unknown_sections = set(page.get("sections") or {}) - allowed_sections
             if unknown_sections:
                 errors.append(
@@ -265,7 +277,9 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
         actual_pages = rendered_fact_pages.get(fact_id, [])
         declared_pages = {str(value) for value in fact.get("render_on") or []}
         if declared_pages:
-            if set(actual_pages) != declared_pages or len(actual_pages) != len(declared_pages):
+            if set(actual_pages) != declared_pages or len(actual_pages) != len(
+                declared_pages
+            ):
                 errors.append(
                     f"wiki fact {fact_id}: endpoint projections differ; "
                     f"expected={sorted(declared_pages)}, actual={sorted(actual_pages)}"
@@ -306,22 +320,71 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
     for probe in probe_rows:
         probe_id = str(probe.get("id"))
         if probe.get("checkpoint") not in checkpoint_ids:
-            errors.append(f"probe {probe_id}: unknown checkpoint {probe.get('checkpoint')}")
-        for fact_id in [*(probe.get("required_facts") or []), *(probe.get("forbidden_facts") or [])]:
+            errors.append(
+                f"probe {probe_id}: unknown checkpoint {probe.get('checkpoint')}"
+            )
+        for fact_id in [
+            *(probe.get("required_facts") or []),
+            *(probe.get("forbidden_facts") or []),
+        ]:
             if fact_id not in fact_ids:
                 errors.append(f"probe {probe_id}: unknown fact {fact_id}")
-        for evidence_id in probe.get("required_evidence") or []:
+        for evidence_id in [
+            *(probe.get("required_evidence") or []),
+            *(probe.get("forbidden_evidence") or []),
+        ]:
             if evidence_id not in segment_ids:
                 errors.append(f"probe {probe_id}: unknown evidence {evidence_id}")
 
-    dimension_ids = _unique_ids(rubric.get("dimensions") or [], "rubric dimension", errors)
+    dimension_ids = _unique_ids(
+        rubric.get("dimensions") or [], "rubric dimension", errors
+    )
     gate_ids = _unique_ids(rubric.get("gates") or [], "rubric gate", errors)
+    supported_gate_checks = {
+        "checkpoint_checks",
+        "probe",
+        "distinct_entities",
+        "forbidden_evidence_absent",
+        "ownership_exact",
+    }
+    for gate in rubric.get("gates") or []:
+        check = gate.get("check") or {}
+        if check.get("type") not in supported_gate_checks:
+            errors.append(
+                f"rubric gate {gate.get('id')}: unsupported check type {check.get('type')}"
+            )
+        if check.get("checkpoint") and check["checkpoint"] not in checkpoint_ids:
+            errors.append(
+                f"rubric gate {gate.get('id')}: unknown checkpoint {check['checkpoint']}"
+            )
+        if check.get("probe_id") and check["probe_id"] not in probe_ids:
+            errors.append(
+                f"rubric gate {gate.get('id')}: unknown probe {check['probe_id']}"
+            )
+        for entity_id in check.get("entity_ids") or []:
+            if entity_id not in all_entity_ids:
+                errors.append(
+                    f"rubric gate {gate.get('id')}: unknown entity {entity_id}"
+                )
+
+    final_checkpoint_id = str(
+        checkpoints.get("final_checkpoint")
+        or (checkpoint_rows[-1]["id"] if checkpoint_rows else "")
+    )
+    if final_checkpoint_id not in checkpoint_ids:
+        errors.append(f"unknown final checkpoint {final_checkpoint_id}")
 
     final_checkpoint = next(
-        (checkpoint for checkpoint in checkpoint_rows if checkpoint.get("id") == "cp8_final"),
+        (
+            checkpoint
+            for checkpoint in checkpoint_rows
+            if checkpoint.get("id") == final_checkpoint_id
+        ),
         None,
     )
-    if final_checkpoint and final_checkpoint.get("exact_fact_count") != len(wiki_fact_ids):
+    if final_checkpoint and final_checkpoint.get("exact_fact_count") != len(
+        wiki_fact_ids
+    ):
         errors.append(
             "cp8_final exact_fact_count does not match gold_wiki facts: "
             f"{final_checkpoint.get('exact_fact_count')} != {len(wiki_fact_ids)}"
@@ -369,14 +432,18 @@ def _validate_checkpoint_claims(
     for key in ("pending", "deferred", "retryable"):
         for claim_id in queue.get(key) or []:
             if claim_id not in claim_ids:
-                errors.append(f"checkpoint {checkpoint_id}: unknown queued claim {claim_id}")
+                errors.append(
+                    f"checkpoint {checkpoint_id}: unknown queued claim {claim_id}"
+                )
     for key in claim_keys:
         for claim_id in checkpoint.get(key) or []:
             if claim_id not in claim_ids:
                 errors.append(f"checkpoint {checkpoint_id}: unknown claim {claim_id}")
-    for claim_id in (checkpoint.get("claim_state_overrides") or {}):
+    for claim_id in checkpoint.get("claim_state_overrides") or {}:
         if claim_id not in claim_ids:
-            errors.append(f"checkpoint {checkpoint_id}: unknown claim override {claim_id}")
+            errors.append(
+                f"checkpoint {checkpoint_id}: unknown claim override {claim_id}"
+            )
     for key in fact_keys:
         for fact_id in checkpoint.get(key) or []:
             if fact_id not in fact_ids:
@@ -404,7 +471,9 @@ def _unique_values(
     missing = sum(not value for value in values)
     if missing:
         errors.append(f"{label}: {missing} rows are missing {key}")
-    duplicates = sorted(value for value, count in Counter(values).items() if value and count > 1)
+    duplicates = sorted(
+        value for value, count in Counter(values).items() if value and count > 1
+    )
     if duplicates:
         errors.append(f"{label}: duplicate {key} values {duplicates}")
     return {value for value in values if value}
@@ -418,7 +487,9 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="python -m benchmarks.mycelium_bench.daily_driver")
+    parser = argparse.ArgumentParser(
+        prog="python -m benchmarks.mycelium_bench.daily_driver"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     validate_parser = subparsers.add_parser("validate")
     validate_parser.add_argument("fixture_dir", type=Path)
@@ -426,6 +497,25 @@ def main() -> None:
     run_parser.add_argument("fixture_dir", type=Path)
     run_parser.add_argument("--output-dir", type=Path, required=True)
     run_parser.add_argument("--config-path", type=Path, default=Path("mycelium.toml"))
+    run_parser.add_argument(
+        "--replay-extraction-store",
+        type=Path,
+        help=(
+            "Reuse only source, episode, claim, and raw-log extraction artifacts; "
+            "rerun Dream, review actions, projection, retrieval, and answers."
+        ),
+    )
+    run_parser.add_argument(
+        "--skip-probe-answers",
+        action="store_true",
+        help="Run deterministic retrieval probes but skip answer generation and judging.",
+    )
+    run_parser.add_argument(
+        "--trials",
+        type=int,
+        default=1,
+        help="Run independent end-to-end trials into trial-NN subdirectories.",
+    )
     compare_parser = subparsers.add_parser("compare")
     compare_parser.add_argument("fixture_dir", type=Path)
     compare_parser.add_argument("--output-dir", type=Path, required=True)
@@ -434,36 +524,59 @@ def main() -> None:
     )
     args = parser.parse_args()
     if args.command == "validate":
-        print(json.dumps(validate_fixture(args.fixture_dir), indent=2, ensure_ascii=False))
+        print(
+            json.dumps(validate_fixture(args.fixture_dir), indent=2, ensure_ascii=False)
+        )
     elif args.command == "run":
         import asyncio
 
-        from benchmarks.mycelium_bench.daily_driver_run import run_daily_driver
-
-        result = asyncio.run(
-            run_daily_driver(
-                args.fixture_dir,
-                args.output_dir,
-                config_path=args.config_path,
-            )
+        from benchmarks.mycelium_bench.daily_driver_run import (
+            run_daily_driver,
+            run_daily_driver_trials,
         )
-        summary = {
-            "output_dir": result["output_dir"],
-            "model": result["run"]["model"],
-            "source_accounting": result["comparison"]["source_accounting"],
-            "claim_comparison": {
-                key: value
-                for key, value in result["comparison"]["claim_comparison"].items()
-                if key != "rows"
-            },
-        }
+
+        if args.trials < 1:
+            parser.error("--trials must be at least 1")
+        if args.trials > 1:
+            summary = asyncio.run(
+                run_daily_driver_trials(
+                    args.fixture_dir,
+                    args.output_dir,
+                    trials=args.trials,
+                    config_path=args.config_path,
+                    replay_extraction_store=args.replay_extraction_store,
+                    run_probe_answers=not args.skip_probe_answers,
+                )
+            )
+            summary = {"output_dir": str(args.output_dir), **summary}
+        else:
+            result = asyncio.run(
+                run_daily_driver(
+                    args.fixture_dir,
+                    args.output_dir,
+                    config_path=args.config_path,
+                    replay_extraction_store=args.replay_extraction_store,
+                    run_probe_answers=not args.skip_probe_answers,
+                )
+            )
+            summary = {
+                "output_dir": result["output_dir"],
+                "model": result["run"]["model"],
+                "source_accounting": result["comparison"]["source_accounting"],
+                "claim_comparison": {
+                    key: value
+                    for key, value in result["comparison"]["claim_comparison"].items()
+                    if key != "rows"
+                },
+                "evaluation": result["evaluation"]["summary"],
+            }
         print(json.dumps(summary, indent=2, ensure_ascii=False))
     elif args.command == "compare":
         from benchmarks.mycelium_bench.daily_driver_run import (
             refresh_daily_driver_comparison,
         )
 
-        comparison = refresh_daily_driver_comparison(
+        refreshed = refresh_daily_driver_comparison(
             args.fixture_dir,
             args.output_dir,
             config_path=args.config_path,
@@ -472,8 +585,9 @@ def main() -> None:
             json.dumps(
                 {
                     "output_dir": str(args.output_dir),
-                    "source_accounting": comparison["source_accounting"],
-                    "projection": comparison["projection"],
+                    "source_accounting": refreshed["comparison"]["source_accounting"],
+                    "projection": refreshed["comparison"]["projection"],
+                    "evaluation": refreshed["evaluation"]["summary"],
                 },
                 indent=2,
                 ensure_ascii=False,

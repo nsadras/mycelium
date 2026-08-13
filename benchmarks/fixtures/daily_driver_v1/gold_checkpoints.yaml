@@ -1,5 +1,6 @@
 schema_version: 1
 scenario_id: daily-driver-v1
+final_checkpoint: cp8_final
 checkpoints:
   - id: cp1_pre_dream
     after_episode: chat-01

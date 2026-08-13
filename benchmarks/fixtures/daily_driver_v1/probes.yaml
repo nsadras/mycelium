@@ -13,6 +13,7 @@ probes:
 
   - id: q-short-term-page
     checkpoint: cp2_first_dream
+    evaluation_mode: artifact
     question: Does the memory wiki already contain a Lantern project page?
     expected_answer: No.
     required_facts: []
@@ -146,6 +147,7 @@ probes:
     required_facts: []
     forbidden_facts: [f-northstar-acquisition]
     required_evidence: []
+    forbidden_evidence: [meeting-04-s01, meeting-04-s02, meeting-04-s03]
     answerable: false
     purpose: A retracted source must not remain available through claims, wiki, source windows, or answer synthesis.
 
@@ -156,6 +158,7 @@ probes:
     required_facts: []
     forbidden_facts: []
     required_evidence: []
+    forbidden_evidence: [tool-02-s02]
     answerable: false
     purpose: Incidental tool results should not become durable memory merely because they were observed.
 
@@ -166,6 +169,7 @@ probes:
     required_facts: []
     forbidden_facts: []
     required_evidence: []
+    forbidden_evidence: [tool-03-s02]
     answerable: false
 
   - id: q-composed-readiness

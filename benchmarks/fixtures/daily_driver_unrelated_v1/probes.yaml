@@ -1,0 +1,7 @@
+schema_version: 1
+scenario_id: daily-driver-unrelated-v1
+probes:
+  - {id: q-short-term, checkpoint: cp1_pre_dream, question: "What must happen to Devon's original cabinets?", expected_answer: Preserve the oak; do not replace or paint it., required_facts: [f-cabinets], forbidden_facts: [], required_evidence: [chat-01-s01, chat-01-s03], answerable: true}
+  - {id: q-role, checkpoint: cp3_final, question: "What does Rosa coordinate?", expected_answer: The electrician and permit inspection., required_facts: [f-rosa-role], forbidden_facts: [], required_evidence: [meeting-01-s01], answerable: true}
+  - {id: q-budget, checkpoint: cp3_final, question: "What is the range and electrical budget, and how much does the selected range cost?", expected_answer: 2800 dollars total; the range costs 1899 dollars., required_facts: [f-budget, f-range-spec], forbidden_facts: [], required_evidence: [meeting-01-s02, tool-01-s01], answerable: true}
+  - {id: q-dishwasher, checkpoint: cp3_final, question: "Which smart dishwasher did Devon select?", expected_answer: There is no durable memory of a selected dishwasher., required_facts: [], forbidden_facts: [], required_evidence: [], forbidden_evidence: [tool-01-s02], answerable: false}

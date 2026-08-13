@@ -1,0 +1,22 @@
+schema_version: 1
+scenario_id: daily-driver-unrelated-v1
+principles: [Evaluate IDs and provenance rather than matching fixture wording.]
+dimensions:
+  - {id: claim_recall, stage: encoding, measure: Atomic proposition recall., severity: high}
+  - {id: unsupported_claim_rate, stage: encoding, measure: Unsupported rendered memory., severity: critical}
+  - {id: provenance_accuracy, stage: encoding, measure: Exact evidence retention., severity: critical}
+  - {id: entity_precision_recall, stage: discovery, measure: Required entities without extras., severity: high}
+  - {id: entity_type_accuracy, stage: discovery, measure: Correct page types., severity: high}
+  - {id: ownership_accuracy, stage: organization, measure: Correct canonical owner., severity: critical}
+  - {id: section_accuracy, stage: projection, measure: Correct typed section., severity: medium}
+  - {id: wiki_fact_recall, stage: projection, measure: Required facts rendered., severity: high}
+  - {id: wiki_concision, stage: projection, measure: No undeclared duplicate facts., severity: medium}
+  - {id: retrieval_fact_recall, stage: retrieval, measure: Probe facts retrieved., severity: high}
+  - {id: retrieval_tangent_rate, stage: retrieval, measure: Unrelated sponsored content absent., severity: high}
+  - {id: semantic_answer_quality, stage: answering, measure: Probe propositions answered., severity: high}
+gates:
+  - {id: no_premature_project, rule: One unnamed personal activity does not force a Project page., check: {type: checkpoint_checks, checkpoint: cp2_first_dream, kinds: [forbidden_page]}}
+  - {id: correct_role_owner, rule: Rosa's project role remains person-owned., check: {type: ownership_exact, checkpoint: cp3_final, entity_ids: [person-rosa-alvarez]}}
+  - {id: short_term_available, rule: The cabinet decision is queryable before Dream., check: {type: probe, probe_id: q-short-term, requirements: [retrieval, answer]}}
+  - {id: no_sponsored_tangent, rule: A sponsored dishwasher result does not answer a personal selection question., check: {type: probe, probe_id: q-dishwasher, requirements: [answer]}}
+reporting: {required_outputs: [per_dimension_metrics, checkpoint_diffs, ownership_confusion_matrix, duplicate_rendered_facts, retrieval_required_and_forbidden_fact_ids, qualitative_page_diff]}

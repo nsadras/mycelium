@@ -1,0 +1,25 @@
+schema_version: 1
+scenario_id: daily-driver-unrelated-v1
+final_checkpoint: cp3_final
+checkpoints:
+  - id: cp1_pre_dream
+    after_episode: chat-01
+    queue: {pending: [c-profile, c-project, c-cabinets, c-induction], deferred: [], retryable: []}
+    entities: [you]
+    pages: [you]
+    forbidden_pages: [project-kitchen-renovation]
+  - id: cp2_first_dream
+    after_episode: chat-01
+    queue: {pending: [], deferred: [c-project, c-cabinets, c-induction], retryable: []}
+    entities: [you]
+    pages: [you]
+    forbidden_pages: [project-kitchen-renovation]
+  - id: cp3_final
+    after_episode: tool-01
+    queue: {pending: [], deferred: [], retryable: []}
+    entities: [you, project-kitchen-renovation, person-rosa-alvarez]
+    pages: [you, project-kitchen-renovation, person-rosa-alvarez]
+    required_page_facts:
+      project-kitchen-renovation: [f-project, f-cabinets, f-induction, f-rosa-role, f-budget, f-inspection, f-range-spec]
+      person-rosa-alvarez: [f-rosa-role]
+    exact_fact_count: 8

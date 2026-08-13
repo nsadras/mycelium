@@ -1,0 +1,6 @@
+schema_version: 1
+scenario_id: daily-driver-paraphrased-v1
+probes:
+  - {id: q-short-term, checkpoint: cp1_pre_dream, question: "Where must Elena's workshop record live and what traceability does she require?", expected_answer: On her computer; every summary links to its exact quotation., required_facts: [f-local, f-traceable], forbidden_facts: [], required_evidence: [chat-01-s03], answerable: true}
+  - {id: q-premature, checkpoint: cp2_first_dream, evaluation_mode: artifact, question: "Is there already a Hearth project page?", expected_answer: No., required_facts: [], forbidden_facts: [], required_evidence: [], answerable: true}
+  - {id: q-role, checkpoint: cp3_final, question: "What does Tariq own for Hearth?", expected_answer: Transcript imports and facilitator export., required_facts: [f-tariq-role], forbidden_facts: [], required_evidence: [meeting-01-s02], answerable: true}

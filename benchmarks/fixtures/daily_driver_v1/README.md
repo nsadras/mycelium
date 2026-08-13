@@ -86,9 +86,12 @@ uv run python -m benchmarks.mycelium_bench.daily_driver \
   --config-path mycelium.toml
 ```
 
-The run directory contains the complete Mycelium store, a snapshot and generated
-Markdown wiki for every checkpoint, `comparison.json` with layer-specific diagnostics,
-and a concise `REPORT.md`. The runner never simulates unsupported lifecycle operations;
+The run directory contains the complete Mycelium store, a snapshot, generated Markdown,
+and retrieval/answer probe results for every checkpoint. `evaluation.json` contains all
+rubric dimensions, executable hard gates, proposition completeness, checkpoint diffs,
+ownership confusion, duplicate facts, retrieval required/forbidden facts, and structured
+page diffs. `comparison.json` retains the earlier review-oriented diagnostics. The runner
+never simulates unsupported lifecycle operations;
 for example, source retraction is recorded as a capability gap until Mycelium implements
 it. Recompute the deterministic comparison after changing comparison logic without
 calling the LLM again:
@@ -99,3 +102,37 @@ uv run python -m benchmarks.mycelium_bench.daily_driver \
   --output-dir benchmark_runs/daily-driver-v1-run \
   --config-path mycelium.toml
 ```
+
+For ownership, fact-resolution, or presentation iterations, replay the exact extraction
+layer while rerunning every downstream stage:
+
+```bash
+uv run python -m benchmarks.mycelium_bench.daily_driver run \
+  benchmarks/fixtures/daily_driver_v1 \
+  --output-dir benchmark_runs/daily-driver-v1-replay \
+  --replay-extraction-store benchmark_runs/<baseline>/store \
+  --config-path mycelium.toml
+```
+
+The replay copies source, episode, claim, and raw-log artifacts one fixture episode at a
+time. It resets claim lifecycle and routing state; it does not reuse entities, placements,
+facts, pages, proposals, or retrieval results.
+
+Before accepting a candidate, run at least three fresh end-to-end trials. The root writes
+`trial_summary.json` with independent values for every dimension and pass counts for every
+gate—never a combined score:
+
+```bash
+uv run python -m benchmarks.mycelium_bench.daily_driver run \
+  benchmarks/fixtures/daily_driver_v1 \
+  --output-dir benchmark_runs/daily-driver-v1-candidate \
+  --trials 3 \
+  --config-path mycelium.toml
+```
+
+Two compact transfer fixtures guard against scenario-specific solutions:
+
+- `daily_driver_paraphrased_v1` changes names, place, vocabulary, and sentence structure
+  while retaining the delayed-discovery and project-role invariants.
+- `daily_driver_unrelated_v1` exercises the same architecture with home-renovation chats,
+  a contractor meeting, tool evidence, and sponsored-result noise.

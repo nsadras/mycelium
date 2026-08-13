@@ -1,0 +1,27 @@
+schema_version: 1
+scenario_id: daily-driver-paraphrased-v1
+title: Elena Park's offline workshop record
+timezone: America/New_York
+user: {id: you, name: Elena Park, speaker_label: User, identity_authority: configured_profile}
+episodes:
+  - id: chat-01
+    source_id: src-chat-01
+    source_type: agent_conversation
+    occurred_at: 2026-10-01T09:00:00-04:00
+    participants: [User, Assistant]
+    segments:
+      - {id: chat-01-s01, speaker: User, role: user, text: I facilitate workshops in Boston and need a private offline workspace that turns session notes into a searchable record., retention: claim}
+      - {id: chat-01-s02, speaker: Assistant, role: assistant, text: A hosted collaboration service would be quick to share., retention: source_only}
+      - {id: chat-01-s03, speaker: User, role: user, text: It must stay on my computer, and every summary needs to link back to the exact quotation. I have not named the effort., retention: claim}
+    actions_after: [checkpoint:cp1_pre_dream, dream, checkpoint:cp2_first_dream]
+  - id: meeting-01
+    source_id: src-meeting-01
+    source_type: meeting_transcript
+    occurred_at: 2026-10-05T14:00:00-04:00
+    participants: [User, Tariq Bell]
+    metadata: {title: Workshop archive planning}
+    segments:
+      - {id: meeting-01-s01, speaker: User, text: I am calling the offline workshop archive Hearth., retention: claim}
+      - {id: meeting-01-s02, speaker: Tariq Bell, text: I will own transcript imports and the facilitator export., retention: claim}
+      - {id: meeting-01-s03, speaker: User, text: Hearth should make workshop decisions searchable while preserving links to their original quotations., retention: claim}
+    actions_after: [dream, checkpoint:cp3_final]

@@ -286,12 +286,21 @@ retention, atomic claims, lifecycle checkpoints, entity ownership, the final wik
 The fixture emphasizes wiki coherence, correction, source retraction, and avoiding tangential memories;
 reference-answer wording is not normative.
 
+The runner executes the fixture rubric as independent artifact-level dimensions and hard gates, records
+checkpoint retrieval/answer probes, and reports proposition completeness for multi-assertion source segments.
+It also supports extraction replay for downstream semantic iterations and repeated fresh trials for variance.
+The renamed/paraphrased and unrelated-domain transfer cases live beside the primary fixture and must not
+introduce scenario vocabulary into production routing.
+
 Validate the fixture before changing it or using it as a regression authority:
 
 ```bash
 uv run python -m benchmarks.mycelium_bench.daily_driver \
   validate benchmarks/fixtures/daily_driver_v1
 ```
+
+See the fixture README for `run`, `--replay-extraction-store`, `--trials 3`, output artifacts, and transfer
+fixture commands.
 
 See `benchmarks/fixtures/daily_driver_v1/REVIEW.md` for the accepted product decisions that govern the fixture
 before wiring it into an automated system-under-test runner.

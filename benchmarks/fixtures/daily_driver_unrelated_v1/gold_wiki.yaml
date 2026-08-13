@@ -1,0 +1,37 @@
+schema_version: 1
+scenario_id: daily-driver-unrelated-v1
+authority: IDs, owners, sections, state, and provenance are normative; prose is illustrative.
+entities:
+  - {id: you, type: you, title: You, aliases: [Devon Shah], page: you}
+  - {id: project-kitchen-renovation, type: project, title: Kitchen Renovation, aliases: [1920s kitchen, kitchen restoration], page: kitchen-renovation}
+  - {id: person-rosa-alvarez, type: person, title: Rosa Alvarez, aliases: [Rosa], page: rosa-alvarez}
+non_page_mentions:
+  - {label: induction range, reason: A selected component of the renovation rather than a separate Topic.}
+retracted_entities: []
+facts:
+  - {id: f-profile, text: Devon Shah lives in Portland., claim_ids: [c-profile], state: current}
+  - {id: f-project, text: Devon is restoring a 1920s kitchen., claim_ids: [c-project], state: current}
+  - {id: f-cabinets, text: Preserve the original oak cabinets; do not replace or paint them., claim_ids: [c-cabinets], state: current}
+  - {id: f-induction, text: Use an induction range., claim_ids: [c-induction], state: current}
+  - {id: f-rosa-role, text: Rosa coordinates the electrician and permit inspection., claim_ids: [c-rosa-role], state: current, render_on: [person-rosa-alvarez, project-kitchen-renovation]}
+  - {id: f-budget, text: Keep the range and electrical work under 2800 dollars., claim_ids: [c-budget], state: current}
+  - {id: f-inspection, text: The permit inspection is October 27 2026 at 9 AM., claim_ids: [c-inspection], state: current}
+  - {id: f-range-spec, text: The selected range costs 1899 dollars and requires a 40-amp circuit., claim_ids: [c-range-spec], state: current}
+pages:
+  - entity_id: you
+    slug: you
+    sections: {profile: [f-profile], memory_map: {links: [project-kitchen-renovation, person-rosa-alvarez]}}
+  - entity_id: project-kitchen-renovation
+    slug: kitchen-renovation
+    sections:
+      overview: [f-project]
+      requirements_constraints: [f-cabinets, f-budget]
+      decisions: [f-induction]
+      next_steps_deadlines: [f-inspection]
+      people_organizations: {facts: [f-rosa-role], links: [person-rosa-alvarez]}
+      research_references: [f-range-spec]
+  - entity_id: person-rosa-alvarez
+    slug: rosa-alvarez
+    sections: {shared_projects: {facts: [f-rosa-role], links: [project-kitchen-renovation]}}
+forbidden_final_content: {fact_ids: [], phrases: [painted cabinets, smart dishwasher]}
+forbidden_final_pages: [induction-range, smart-dishwasher]

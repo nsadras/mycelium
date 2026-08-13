@@ -15,6 +15,7 @@ from mycelium.facts import routing_recall_index
 from mycelium.sources import source_contexts_for_pages
 from mycelium.page_search import PageSearchIndex
 from mycelium.memory_tools import MemoryToolset
+from mycelium.materialization import sections_markdown
 from mycelium.short_term import ShortTermMemoryQueue, ShortTermMemoryStatus
 from mycelium.artifacts import (
     ArtifactStore,
@@ -255,20 +256,28 @@ class Mycelium:
             key=lambda item: (item[0], item[1]),
         )
 
+        budgeted_project_role_claim_ids: set[str] = set()
         for priority, slug in selections:
             if not self.wiki.exists(slug):
                 continue
                 
             page = self.wiki.get(slug)
+            candidate_role_ids = set(budgeted_project_role_claim_ids)
+            page_body = (
+                sections_markdown(page.sections, candidate_role_ids)
+                if page.sections
+                else page.content
+            )
             content = (
                 f"=== MEMORY: {page.title} "
                 f"(confidence: {page.confidence:.2f}, v{page.version}) ===\n"
-                f"{page.content}\n=== END MEMORY ==="
+                f"{page_body}\n=== END MEMORY ==="
             )
             
             if budget.fits(content):
                 budget.consume(content)
                 loaded_pages.append(page)
+                budgeted_project_role_claim_ids = candidate_role_ids
 
         source_contexts = source_contexts_for_pages(
             loaded_pages,

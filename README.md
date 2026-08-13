@@ -96,19 +96,35 @@ claims in one logical pass. Each claim cites its supporting segment IDs and is p
 claims immediately, but labels them as recent and unconsolidated rather than presenting them as canonical
 wiki knowledge.
 
-Dream is the only transition from short-term claims into the wiki. It considers the accumulated claim cohort
-across source episodes, discovers sparse durable entities, and assigns every admitted claim one existing
-semantic owner. The owner's typed section is derived deterministically from claim semantics, and affected
-wiki pages are generated from active placed claims. When current evidence cannot establish a page or owner,
+Dream is the only transition from short-term claims into the wiki. One cohort scope plan considers evidence
+across source episodes, discovers sparse durable entities, resolves early descriptions against later names,
+assigns every admitted claim one semantic owner, and resolves structured meeting-speaker occurrences to
+explicit entity IDs. Deterministic code validates the structured plan and its cited evidence; it does not use
+claim keywords, lexical overlap, or title matching to infer semantic identity or ownership. The owner's typed
+section is derived deterministically
+from claim semantics. A second presentation layer groups compatible placed claims into persisted, grounded
+`ConsolidatedFact` records; wiki pages render those concise facts while retaining every member claim and exact
+source reference. When current evidence cannot establish a page or owner,
 the claim becomes `deferred` instead of being discarded or permanently unassigned. A later Dream can revisit
 it alongside newly accumulated evidence.
 
-The default server policy runs Dream at 50 pending/retryable claims or when the oldest has waited 24 hours.
+The default server policy runs Dream at 20 pending/retryable claims or when the oldest has waited 24 hours.
 Deferred claims receive a broader review after seven days. Queue thresholds only choose when to invoke Dream;
 they do not introduce another consolidation path. Failed routing remains retryable, and manual assignment
 uses the same placement and deterministic materialization records.
 
-Page identity lives in the plaintext entity registry under `artifacts/entities/`; claim ownership lives separately under `artifacts/placements/`. Entity IDs survive title and slug changes. The seven page types—You, Person, Project, Topic, Organization, Place, and Event—have stable ordered section contracts. Claims have one canonical owner; explicitly referenced entities become compact reciprocal links instead of receiving copied facts. Tool and web evidence is labeled and kept in Research & References (or Event evidence).
+Page identity lives in `artifacts/entities/`; claim ownership and its append-only rationale live in
+`artifacts/placements/` and `artifacts/scope-decisions/`; editable display statements live in
+`artifacts/consolidated-facts/`. Named meeting participants also receive source-grounded encounter records,
+so a useful Person page can exist before the system knows enough to assert a profile fact. Entity IDs survive
+title and slug changes. The seven page types—You, Person, Project, Topic, Organization, Place, and Event—have
+stable ordered section contracts. Claims have one canonical owner; explicitly referenced entities normally
+become compact reciprocal links. The deliberate exception is a `project_role` relationship: one person-owned
+claim and its provenance are projected on both the Person/You page and the Project's stakeholder section, so
+either human navigation path is useful without creating two sources of truth. The Wiki inspector exposes the
+fact synthesis and scope audit, edits fact text and scope, and can group or split facts while leaving source
+claims intact. Prompt rendering deduplicates a role if both endpoint pages are retrieved. Tool and web evidence
+is labeled and kept in Research & References (or Event evidence).
 
 When a new claim may update existing memory, Dream compares it with a bounded set of related claims. Additive information routes normally and supporting relationships are linked automatically. Contradictions and supersessions create durable proposals in the Memory Inspector. Until review, both alternatives are withheld from authoritative sections and shown under Needs Review. Approval immediately updates canonical claim links or status and regenerates every affected page; rejection keeps both claims active and unrelated. Retrieval itself is read-only.
 
@@ -261,6 +277,24 @@ rates. The benchmark-only `gold_evidence` system answers from the exact labeled 
 a qualitative encoding/retrieval control, not a numerical ceiling: cited turns can omit adjacent context and
 technically correct paraphrases can still receive low scorer values. Neither diagnostic path exposes labels to
 the production memory system.
+
+### Daily-driver artifact benchmark
+
+`benchmarks/fixtures/daily_driver_v1` is a product-oriented complement to LoCoMo. It follows one fictional
+user through assistant chats, meeting transcripts, and tool observations, with gold records for source
+retention, atomic claims, lifecycle checkpoints, entity ownership, the final wiki, and semantic retrieval.
+The fixture emphasizes wiki coherence, correction, source retraction, and avoiding tangential memories;
+reference-answer wording is not normative.
+
+Validate the fixture before changing it or using it as a regression authority:
+
+```bash
+uv run python -m benchmarks.mycelium_bench.daily_driver \
+  validate benchmarks/fixtures/daily_driver_v1
+```
+
+See `benchmarks/fixtures/daily_driver_v1/REVIEW.md` for the accepted product decisions that govern the fixture
+before wiring it into an automated system-under-test runner.
 
 ## License
 

@@ -1,16 +1,21 @@
+import pytest
+
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimPlacement,
     ClaimProvenance,
+    ConsolidatedFact,
     MemoryClaim,
     ReconsolidationProposal,
 )
 from mycelium.config import Config
-from mycelium.consolidation import ClaimEvidence, ClaimRouter
 from mycelium.materialization import PageMaterializer
-from mycelium.organization import EntityCurationService, OrganizationAuditor
+from mycelium.organization import (
+    EntityCurationService,
+    FactCurationService,
+    OrganizationAuditor,
+)
 from mycelium.store import WikiStore
-from mycelium.artifacts import SourceDocument, SourceSegment
 
 
 def claim(claim_id: str, text: str, claim_type: str = "state", modality: str = "speech"):
@@ -45,6 +50,20 @@ def place(artifacts, item, owner, section, *, links=None):
         section_key=section,
         linked_entity_ids=list(links or []),
         status="placed",
+        reason="test",
+        created_at="2026-08-12T10:00:00-07:00",
+        updated_at="2026-08-12T10:00:00-07:00",
+    ))
+    artifacts.save_consolidated_fact(ConsolidatedFact(
+        fact_id=f"fact-{item.claim_id}",
+        text=item.text,
+        member_claim_ids=[item.claim_id],
+        owner_entity_id=owner.entity_id,
+        section_key=section,
+        linked_entity_ids=list(links or []),
+        state="active",
+        synthesis_origin="claim",
+        confidence=item.confidence,
         reason="test",
         created_at="2026-08-12T10:00:00-07:00",
         updated_at="2026-08-12T10:00:00-07:00",
@@ -85,6 +104,123 @@ def test_typed_projection_is_ordered_traceable_and_research_is_labeled(tmp_path)
     assert fact["claim_ids"] == ["claim-status"]
     assert fact["sources"][0]["segment_ids"] == ["source-1#claim-status"]
     assert "external research" in page.sections[1]["items"][0]["qualifiers"]
+
+
+def test_project_role_has_one_canonical_placement_and_two_page_views(tmp_path):
+    artifacts, wiki, materializer, _, project = setup_store(tmp_path)
+    person = artifacts.create_entity("person", "Priya Raman")
+    role = claim(
+        "claim-role",
+        "Priya Raman leads pilot evaluation and recruitment for Mycelium.",
+        "relationship",
+    )
+    role.predicate = "project_role"
+    role.about = [
+        {"entity": "Priya Raman", "role": "subject"},
+        {"entity": "Mycelium", "role": "project"},
+    ]
+    place(artifacts, role, person, "shared_projects", links=[project.entity_id])
+
+    result = materializer.regenerate({person.entity_id})
+
+    assert set(result.changed_pages) == {person.slug, project.slug}
+    assert len(artifacts.list_claims()) == 1
+    assert len(artifacts.list_placements()) == 1
+    person_fact = wiki.get(person.slug).sections[0]["items"][0]
+    project_fact = wiki.get(project.slug).sections[0]["items"][0]
+    assert person_fact["claim_ids"] == project_fact["claim_ids"] == ["claim-role"]
+    assert person_fact["sources"] == project_fact["sources"]
+    assert person_fact["canonical_owner_entity_ids"] == [person.entity_id]
+    assert project_fact["canonical_owner_entity_ids"] == [person.entity_id]
+    assert person_fact["canonical_linked_entity_ids"] == [project.entity_id]
+    assert project_fact["canonical_linked_entity_ids"] == [project.entity_id]
+    assert person_fact["relationship_kind"] == "project_role"
+    assert project_fact["relationship_kind"] == "project_role"
+    assert person_fact["projection"] == "canonical"
+    assert project_fact["projection"] == "shared_endpoint"
+    assert person_fact["links"][0]["entity_id"] == project.entity_id
+    assert project_fact["links"][0]["entity_id"] == person.entity_id
+    assert wiki.get(person.slug).sections[0]["key"] == "shared_projects"
+    assert wiki.get(project.slug).sections[0]["key"] == "people_organizations"
+
+
+def test_project_role_placement_requires_person_owner_and_one_project(tmp_path):
+    artifacts, _, _, _, project = setup_store(tmp_path)
+    role = claim("claim-role", "Priya Raman leads Mycelium.", "relationship")
+    role.predicate = "project_role"
+    artifacts.save_claim(role)
+
+    with pytest.raises(ValueError, match="Person or You owner"):
+        artifacts.save_placement(ClaimPlacement(
+            claim_id=role.claim_id,
+            owner_entity_id=project.entity_id,
+            section_key="people_organizations",
+            linked_entity_ids=[],
+            status="placed",
+            reason="invalid role",
+            created_at="2026-08-12T10:00:00-07:00",
+            updated_at="2026-08-12T10:00:00-07:00",
+        ))
+
+
+def test_ordinary_linked_fact_is_not_copied_to_linked_page(tmp_path):
+    artifacts, wiki, materializer, _, project = setup_store(tmp_path)
+    person = artifacts.create_entity("person", "Priya Raman")
+    status = claim("claim-status", "Priya Raman reviewed Mycelium once.", "event")
+    place(artifacts, status, person, "timeline", links=[project.entity_id])
+
+    materializer.regenerate({person.entity_id, project.entity_id})
+
+    assert "reviewed Mycelium" in wiki.get(person.slug).content
+    assert "reviewed Mycelium" not in wiki.get(project.slug).content
+
+
+def test_removing_project_role_regenerates_both_endpoint_views(tmp_path):
+    artifacts, wiki, materializer, _, project = setup_store(tmp_path)
+    person = artifacts.create_entity("person", "Priya Raman")
+    role = claim("claim-role", "Priya Raman leads Mycelium.", "relationship")
+    role.predicate = "project_role"
+    role.about = [
+        {"entity": "Priya Raman", "role": "subject"},
+        {"entity": "Mycelium", "role": "project"},
+    ]
+    place(artifacts, role, person, "shared_projects", links=[project.entity_id])
+    materializer.regenerate({person.entity_id})
+
+    role.status = "superseded"
+    artifacts.save_claim(role)
+    result = materializer.regenerate({person.entity_id})
+
+    assert set(result.updated_slugs) == {person.slug, project.slug}
+    assert "Priya Raman leads Mycelium" not in wiki.get(person.slug).content
+    assert "Priya Raman leads Mycelium" not in wiki.get(project.slug).content
+
+
+def test_moving_project_role_updates_old_and_new_project_views(tmp_path):
+    artifacts, wiki, materializer, _, old_project = setup_store(tmp_path)
+    new_project = artifacts.create_entity("project", "MnemOS")
+    person = artifacts.create_entity("person", "Priya Raman")
+    role = claim("claim-role", "Priya Raman leads the memory project.", "relationship")
+    role.predicate = "project_role"
+    role.about = [
+        {"entity": "Priya Raman", "role": "subject"},
+        {"entity": "Mycelium", "role": "project"},
+    ]
+    place(artifacts, role, person, "shared_projects", links=[old_project.entity_id])
+    materializer.regenerate({person.entity_id})
+    service = EntityCurationService(artifacts, wiki, materializer)
+
+    service.move_claim(
+        role.claim_id,
+        person.entity_id,
+        "shared_projects",
+        linked_entity_ids=[new_project.entity_id],
+    )
+
+    assert "leads the memory project" not in wiki.get(old_project.slug).content
+    assert "leads the memory project" in wiki.get(new_project.slug).content
+    person_fact = wiki.get(person.slug).sections[0]["items"][0]
+    assert person_fact["links"][0]["entity_id"] == new_project.entity_id
 
 
 def test_pending_conflict_is_withheld_from_authoritative_section(tmp_path):
@@ -154,11 +290,51 @@ def test_manual_placement_moves_claim_between_short_term_and_canonical_memory(tm
 
     assert artifacts.get_claim(item.claim_id).dream_disposition == "routed"
     assert artifacts.memory_tier(item.claim_id) == "canonical"
+    assert artifacts.active_scope_decision(item.claim_id).origin == "manual"
+    assert artifacts.facts_for_claim(item.claim_id)[0].owner_entity_id == project.entity_id
 
     service.move_claim(item.claim_id, None, None, reason="Needs more context")
 
     assert artifacts.get_claim(item.claim_id).dream_disposition == "deferred"
     assert artifacts.memory_tier(item.claim_id) == "short_term"
+    assert artifacts.active_scope_decision(item.claim_id).owner_entity_id is None
+    assert artifacts.facts_for_claim(item.claim_id) == []
+
+
+def test_manual_fact_group_edit_and_split_preserve_claims(tmp_path):
+    artifacts, wiki, materializer, _, project = setup_store(tmp_path)
+    first = claim("claim-first", "Mycelium stores claims as plaintext.")
+    second = claim("claim-second", "Mycelium keeps exact source references.")
+    place(artifacts, first, project, "overview")
+    place(artifacts, second, project, "overview")
+    materializer.regenerate({project.entity_id})
+    service = FactCurationService(artifacts, materializer)
+
+    grouped = service.group(
+        ["fact-claim-first", "fact-claim-second"],
+        "Mycelium stores plaintext claims with exact source references.",
+        reason="User combined complementary facts",
+    ).facts[0]
+    service.edit(
+        grouped.fact_id,
+        "Mycelium keeps plaintext claims and exact evidence references.",
+        reason="User refined the wording",
+    )
+    split = service.split(
+        grouped.fact_id,
+        [
+            {"claim_ids": [first.claim_id], "text": first.text},
+            {"claim_ids": [second.claim_id], "text": second.text},
+        ],
+        reason="User separated the facts",
+    )
+
+    assert len(split.facts) == 2
+    assert {claim.claim_id for claim in artifacts.list_claims()} >= {
+        first.claim_id, second.claim_id
+    }
+    assert first.text in wiki.get(project.slug).content
+    assert second.text in wiki.get(project.slug).content
 
 
 def test_clear_projection_preserves_claims_and_removes_legacy_assignment(tmp_path):
@@ -175,52 +351,3 @@ def test_clear_projection_preserves_claims_and_removes_legacy_assignment(tmp_pat
     assert counts["claims_requeued"] == 1
     assert artifacts.get_claim("claim-1").text == item.text
     assert artifacts.get_claim("claim-1").dream_disposition == "pending"
-
-
-def test_direct_named_participants_bootstrap_person_entities(tmp_path):
-    source = SourceDocument(
-        source_id="meeting-1", source_type="meeting_transcript", session_id="session-1",
-        recorded_at="2026-08-12T10:00:00", occurred_at=None,
-        participants=["Ava", "Ben"],
-        segments=[SourceSegment("meeting-1#seg-1", 0, "Ava proposed a launch.", speaker="Ava")],
-    )
-    item = MemoryClaim(
-        "claim-1", "Ava proposed a launch.", "plan", [{"entity": "Ava"}],
-        [ClaimProvenance("meeting-1", ["meeting-1#seg-1"], speaker="Ava")],
-        "2026-08-12T10:00:00", claim_type="plan",
-    )
-
-    entities = ClaimRouter._participant_entities([ClaimEvidence(item, source)], [])
-
-    assert [(entity.entity_id, entity.title) for entity in entities] == [
-        ("person-ava", "Ava"), ("person-ben", "Ben")
-    ]
-
-
-def test_owner_grounding_rejects_tangential_context_but_accepts_title_terms(tmp_path):
-    artifacts, _, _, _, project = setup_store(tmp_path)
-    source = SourceDocument(
-        source_id="source-1", source_type="multi_party_conversation",
-        session_id="session-1", recorded_at="2026-08-12T10:00:00",
-        occurred_at=None, participants=["Ava"], segments=[],
-    )
-    unrelated = claim("claim-1", "A bulletin board is depicted in a photo.")
-    unrelated.about = [{"entity": "bulletin board"}]
-    relevant = claim("claim-2", "The online Mycelium project is expanding.")
-
-    assert not ClaimRouter._owner_is_grounded(project, unrelated, source)
-    assert ClaimRouter._owner_is_grounded(project, relevant, source)
-
-
-def test_discovery_preserves_explicit_qualified_surface_aliases(tmp_path):
-    source = SourceDocument(
-        source_id="source-1", source_type="multi_party_conversation",
-        session_id="session-1", recorded_at="2026-08-12T10:00:00",
-        occurred_at=None, participants=["Ava"], segments=[],
-    )
-    item = claim("claim-1", "Gina's online clothing store is growing.")
-    item.about = [{"entity": "Gina's online clothing store", "role": "owner"}]
-
-    aliases = ClaimRouter._surface_aliases("Clothing Store", [ClaimEvidence(item, source)])
-
-    assert aliases == ["Gina's online clothing store"]

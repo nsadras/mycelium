@@ -13,10 +13,13 @@ from mycelium.artifacts import (
     SourceSegment,
 )
 from mycelium.config import Config
+from mycelium.consolidation import ClaimEvidence
 from mycelium.dream import DreamProcess
 from mycelium.models import LogEntry
 from mycelium.store import LogStore, WikiStore
 from mycelium.structured_outputs import (
+    CohortScopePlanOutput,
+    cohort_scope_output_model,
     consolidation_output_model,
     entity_discovery_output_model,
 )
@@ -59,6 +62,128 @@ def discover(alias: str, title: str, entity_type: str = "topic") -> dict:
 
 def no_discovery(alias: str = "C001") -> dict:
     return {alias: {"reason": "The claim does not establish a new entity."}}
+
+
+def assignment(
+    owner: str = "",
+    *,
+    disposition: str = "canonical",
+    links: list[str] | None = None,
+    supporting: list[str] | None = None,
+    reason: str = "The cohort establishes this scope.",
+) -> dict:
+    value = {
+        "disposition": disposition,
+        "supporting_claims": list(supporting or []),
+        "confidence": 0.9,
+        "reason": reason,
+    }
+    if disposition == "canonical":
+        value.update({
+            "owner_entity": owner,
+            "linked_entities": list(links or []),
+        })
+    return value
+
+
+def scope_candidate(
+    candidate_id: str,
+    title: str,
+    entity_type: str,
+    supporting: list[str],
+    *,
+    independent: bool = True,
+    basis: str | None = None,
+    supporting_participants: list[str] | None = None,
+) -> dict:
+    bases = {
+        "topic": "intentional_topic", "project": "project_continuity",
+        "person": "durable_person", "organization": "lasting_organization",
+        "place": "lasting_place", "event": "substantial_event",
+    }
+    return {
+        "candidate_id": candidate_id,
+        "title": title,
+        "entity_type": entity_type,
+        "aliases": [],
+        "creation_basis": basis or bases[entity_type],
+        "supporting_claims": supporting,
+        "supporting_participants": list(supporting_participants or []),
+        "independent_scope": independent,
+        "confidence": 0.9,
+        "reason": "The cited cohort establishes an independently useful page.",
+    }
+
+
+def scope_plan(
+    assignments: dict[str, dict],
+    candidates: list[dict] | None = None,
+    participants: dict[str, dict] | None = None,
+) -> dict:
+    return {
+        "candidates": list(candidates or []),
+        "assignments": assignments,
+        "participants": dict(participants or {}),
+    }
+
+
+def participant(entity: str) -> dict:
+    return {
+        "entity_type": "you" if entity == "you" else "person",
+        "entity": entity,
+        "confidence": 0.9,
+        "reason": "The cohort resolves this source participant to this entity.",
+    }
+
+
+def new_scope(
+    alias: str, title: str, entity_type: str = "topic", *, supporting: list[str] | None = None
+) -> dict:
+    support = list(supporting or [alias])
+    return scope_plan(
+        {alias: assignment("N001", supporting=support)},
+        [scope_candidate("N001", title, entity_type, support)],
+    )
+
+
+def you_scope(alias: str = "C001") -> dict:
+    return scope_plan({alias: assignment("you", supporting=[alias])})
+
+
+def test_cohort_scope_contract_rejects_extra_fields():
+    valid = scope_plan({"C001": assignment("you")})
+    assert CohortScopePlanOutput.model_validate(valid).assignments["C001"].owner_entity == "you"
+    with pytest.raises(ValidationError):
+        CohortScopePlanOutput.model_validate({**valid, "routes": []})
+    with pytest.raises(ValidationError):
+        CohortScopePlanOutput.model_validate(scope_plan({"C001": assignment()}))
+
+
+def test_runtime_cohort_contract_requires_every_exact_alias():
+    output_model = cohort_scope_output_model(["C001", "C002"])
+    valid = scope_plan({
+        "C001": assignment("you"),
+        "C002": assignment(disposition="deferred"),
+    })
+    assert set(output_model.model_validate(valid).model_dump()["assignments"]) == {
+        "C001", "C002"
+    }
+    with pytest.raises(ValidationError):
+        output_model.model_validate(scope_plan({"C001": assignment("you")}))
+
+
+def test_runtime_cohort_contract_requires_participant_resolution():
+    output_model = cohort_scope_output_model(["C001"], {"P001": "user"})
+    valid = scope_plan(
+        {"C001": assignment("you")},
+        participants={"P001": participant("you")},
+    )
+
+    parsed = output_model.model_validate(valid).model_dump()
+
+    assert parsed["participants"]["P001"]["entity"] == "you"
+    with pytest.raises(ValidationError):
+        output_model.model_validate(scope_plan({"C001": assignment("you")}))
 
 
 def test_consolidation_schema_requires_one_destination_for_every_exact_alias():
@@ -198,12 +323,12 @@ def add_claim(
 @pytest.mark.asyncio
 async def test_dream_routes_claim_and_materializes_deterministic_page(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response=discover("C001", "Memory Design")
+        tmp_path, llm_response=new_scope("C001", "Memory Design")
     )
     entry, source = add_source(logs, artifacts)
     claim = add_claim(
         artifacts, source, text="Memory Design favors deterministic views.",
-        about="Memory Design",
+        about="Memory Design", claim_type="plan",
     )
 
     report = await dream.run()
@@ -212,10 +337,17 @@ async def test_dream_routes_claim_and_materializes_deterministic_page(tmp_path):
     assert report.entries_consolidated == 1
     assert report.completed_source_ids == [entry.entry_id]
     page = wiki.get("memory-design")
-    assert "## Preferences & Positions" in page.content
+    assert "## Why It Matters" in page.content
     assert claim.text in page.content
     assert page.tags == []
     assert artifacts.get_placement(claim.claim_id).owner_entity_id == "topic-memory-design"
+    fact = artifacts.list_consolidated_facts()[0]
+    assert fact.member_claim_ids == [claim.claim_id]
+    assert fact.text == claim.text
+    scope = artifacts.active_scope_decision(claim.claim_id)
+    assert scope is not None
+    assert scope.owner_entity_id == "topic-memory-design"
+    assert scope.origin == "automatic"
     assert logs.get(entry.entry_id).consolidated is True
     assert llm.call_structured.await_count == 1
     assert report.taxonomy_failures == []
@@ -232,14 +364,12 @@ async def test_dream_defers_claim_without_a_clear_owner_and_completes_episode(tm
         text="A loosely described effort may become important later.",
         about="loosely described effort",
     )
-    llm.call_structured.side_effect = [
-        no_discovery(),
-        {"C001": {
-            "owner_entity": "",
-            "linked_entities": [],
-            "reason": "More episodic context is required.",
-        }},
-    ]
+    llm.call_structured.return_value = scope_plan({
+        "C001": assignment(
+            disposition="deferred",
+            reason="More episodic context is required.",
+        )
+    })
 
     report = await dream.run()
 
@@ -262,14 +392,12 @@ async def test_later_dream_discovers_page_from_claims_across_episodes(tmp_path):
         claim_type="event",
         about="Ava's adoption effort",
     )
-    llm.call_structured.side_effect = [
-        no_discovery(),
-        {"C001": {
-            "owner_entity": "",
-            "linked_entities": [],
-            "reason": "One mention does not yet establish a continuing project.",
-        }},
-    ]
+    llm.call_structured.return_value = scope_plan({
+        "C001": assignment(
+            disposition="deferred",
+            reason="One mention does not yet establish a continuing project.",
+        )
+    })
     await dream.run()
 
     _, second_source = add_source(logs, artifacts, suffix="second")
@@ -281,17 +409,14 @@ async def test_later_dream_discovers_page_from_claims_across_episodes(tmp_path):
         claim_type="plan",
         about="Ava's adoption effort",
     )
-    candidate = discover("C001", "Ava's Adoption", "project")["C001"]
-    placement = {"C001": {
-        "owner_entity": "project-ava-s-adoption",
-        "linked_entities": [],
-        "reason": "The claim advances the continuing adoption project.",
-    }}
-    llm.call_structured.side_effect = [
-        {"C001": candidate, "C002": candidate},
-        placement,
-        placement,
-    ]
+    support = ["C001", "C002"]
+    llm.call_structured.return_value = scope_plan(
+        {
+            "C001": assignment("N001", supporting=support),
+            "C002": assignment("N001", supporting=support),
+        },
+        [scope_candidate("N001", "Ava's Adoption", "project", support)],
+    )
 
     report = await dream.run()
 
@@ -304,7 +429,7 @@ async def test_later_dream_discovers_page_from_claims_across_episodes(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dream_rejects_incomplete_alias_coverage_and_keeps_source_pending(tmp_path):
+async def test_dream_rejects_incomplete_alias_coverage_claim_locally(tmp_path):
     dream, _, wiki, logs, artifacts = build_dream(
         tmp_path, llm_response={}
     )
@@ -316,15 +441,16 @@ async def test_dream_rejects_incomplete_alias_coverage_and_keeps_source_pending(
 
     report = await dream.run()
 
-    assert report.pending_source_ids == [entry.entry_id]
+    assert report.pending_source_ids == []
+    assert report.completed_source_ids == [entry.entry_id]
     assert report.failures[0]["stage"] == "routing"
     assert [page.slug for page in wiki.list_all()] == ["you"]
-    assert logs.get(entry.entry_id).consolidated is False
-    assert artifacts.list_dream_runs()[0].status == "failed"
+    assert logs.get(entry.entry_id).consolidated is True
+    assert artifacts.get_claim("claim-one").dream_disposition == "routing_failed"
 
 
 @pytest.mark.asyncio
-async def test_dream_routes_sources_separately_so_one_invalid_response_is_isolated(tmp_path):
+async def test_invalid_owner_defers_one_claim_without_blocking_its_sibling(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
     first_entry, first_source = add_source(logs, artifacts, suffix="first")
     add_claim(
@@ -333,6 +459,7 @@ async def test_dream_routes_sources_separately_so_one_invalid_response_is_isolat
         claim_id="claim-first",
         text="Tea is a durable subject.",
         about="Tea",
+        claim_type="plan",
     )
     second_entry, second_source = add_source(logs, artifacts, suffix="second")
     add_claim(
@@ -341,38 +468,36 @@ async def test_dream_routes_sources_separately_so_one_invalid_response_is_isolat
         claim_id="claim-second",
         text="Coffee is a durable subject.",
         about="Coffee",
+        claim_type="plan",
     )
 
-    async def respond(system, user, output_type, **kwargs):
-        if kwargs.get("debug_label") == "dream-entity-discovery":
-            return {
-                "C001": {"reason": "Tea does not establish a page."},
-                **discover("C002", "Coffee"),
-            }
-        if "claim=Tea is a durable subject." in user:
-            return {}
-        raise AssertionError("Coffee should route deterministically after discovery")
-
-    llm.call_structured.side_effect = respond
+    llm.call_structured.return_value = scope_plan(
+        {
+            "C001": assignment("N999", supporting=["C001"]),
+            "C002": assignment("N001", supporting=["C002"]),
+        },
+        [scope_candidate("N001", "Coffee", "topic", ["C002"])],
+    )
     report = await dream.run()
 
-    assert report.pending_source_ids == [first_entry.entry_id]
-    assert report.completed_source_ids == [second_entry.entry_id]
-    assert logs.get(first_entry.entry_id).consolidated is False
+    assert report.pending_source_ids == []
+    assert report.completed_source_ids == [first_entry.entry_id, second_entry.entry_id]
+    assert logs.get(first_entry.entry_id).consolidated is True
     assert logs.get(second_entry.entry_id).consolidated is True
     assert wiki.exists("coffee")
-    assert llm.call_structured.await_count == 2
+    assert artifacts.get_claim("claim-first").dream_disposition == "deferred"
+    assert llm.call_structured.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_partial_extraction_routes_available_claims_without_repair(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response=discover("C001", "Partial Memory")
+        tmp_path, llm_response=new_scope("C001", "Partial Memory")
     )
     entry, source = add_source(logs, artifacts, extraction_status="partial")
     add_claim(
         artifacts, source, text="Partial Memory has a durable property.",
-        about="Partial Memory",
+        about="Partial Memory", claim_type="plan",
     )
 
     report = await dream.run()
@@ -409,9 +534,24 @@ async def test_partial_extraction_without_claims_stays_pending(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_named_participant_claim_is_deterministically_owned_by_person(tmp_path):
-    dream, _, _, logs, artifacts = build_dream(
-        tmp_path, llm_response=route("C001", "user-profile")
+async def test_named_participants_receive_encounter_pages_and_claim_ownership(tmp_path):
+    dream, _, wiki, logs, artifacts = build_dream(
+        tmp_path,
+        llm_response=scope_plan(
+            {"C001": assignment("N001", supporting=["C001"])},
+            [
+                scope_candidate(
+                    "N001", "Ava", "person", ["C001"],
+                    supporting_participants=["P001"],
+                ),
+                scope_candidate(
+                    "N002", "Ben", "person", [],
+                    basis="durable_person",
+                    supporting_participants=["P002"],
+                ),
+            ],
+            {"P001": participant("N001"), "P002": participant("N002")},
+        ),
     )
     entry, source = add_source(
         logs,
@@ -419,6 +559,13 @@ async def test_named_participant_claim_is_deterministically_owned_by_person(tmp_
         source_type="multi_party_conversation",
         participants=["Ava", "Ben"],
     )
+    source.segments.append(SourceSegment(
+        segment_id=f"{source.source_id}#seg-0002",
+        index=1,
+        speaker="Ben",
+        content="Ben acknowledged the discussion.",
+    ))
+    artifacts.save_source(source)
     add_claim(artifacts, source, text="Ava adopted a dog.")
 
     report = await dream.run()
@@ -426,17 +573,146 @@ async def test_named_participant_claim_is_deterministically_owned_by_person(tmp_
     assert report.completed_source_ids == [entry.entry_id]
     assert report.failures == []
     assert artifacts.get_placement("claim-one").owner_entity_id == "person-ava"
+    assert wiki.exists("ben")
+    assert "Participated in a recorded meeting" in wiki.get("ben").content
+    assert len(artifacts.list_encounters(entity_id="person-ben")) == 1
+
+
+def test_subordinate_project_and_single_tool_topic_are_not_independent_pages(tmp_path):
+    dream, _, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, first_source = add_source(logs, artifacts, suffix="first")
+    _, second_source = add_source(logs, artifacts, suffix="second")
+    first = add_claim(
+        artifacts, first_source, claim_id="claim-pilot-one",
+        text="The pilot starts next week.", claim_type="plan", about="Pilot Program",
+    )
+    second = add_claim(
+        artifacts, second_source, claim_id="claim-pilot-two",
+        text="The pilot will recruit three teams.", claim_type="commitment",
+        about="Pilot Program",
+    )
+    pilot = scope_candidate(
+        "N001", "Pilot Program", "project", ["C001", "C002"],
+        independent=False,
+    )
+    assert not dream.router._candidate_is_eligible(
+        pilot,
+        [ClaimEvidence(first, first_source), ClaimEvidence(second, second_source)],
+    )
+
+    _, tool_source = add_source(
+        logs, artifacts, suffix="tool", source_type="tool_observation"
+    )
+    tool_claim = add_claim(
+        artifacts, tool_source, claim_id="claim-whisperx",
+        text="WhisperX supports diarization.", claim_type="observation",
+        about="WhisperX",
+    )
+    topic = scope_candidate("N002", "WhisperX", "topic", ["C003"])
+    assert not dream.router._candidate_is_eligible(
+        topic, [ClaimEvidence(tool_claim, tool_source)]
+    )
+
+
+def test_named_project_is_admitted_from_structured_identity_and_support(tmp_path):
+    dream, _, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, source = add_source(logs, artifacts)
+    identity = add_claim(
+        artifacts, source, claim_id="claim-name",
+        text="The design initiative has a stable name.",
+        claim_type="identity", about="Atlas",
+    )
+    description = add_claim(
+        artifacts, source, claim_id="claim-description",
+        text="The initiative has an approved operating constraint.",
+        claim_type="state", about="Atlas",
+    )
+    candidate = scope_candidate(
+        "N001", "Atlas", "project", ["C001", "C002"],
+        independent=False,
+        basis="named_project",
+    )
+    assert dream.router._candidate_is_eligible(
+        candidate,
+        [ClaimEvidence(identity, source), ClaimEvidence(description, source)],
+    )
+
+
+@pytest.mark.asyncio
+async def test_candidate_support_includes_claims_assigned_to_candidate(tmp_path):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, source = add_source(logs, artifacts)
+    identity = add_claim(
+        artifacts, source, claim_id="claim-name",
+        text="The design initiative has a stable name.",
+        claim_type="identity", about="Atlas",
+    )
+    description = add_claim(
+        artifacts, source, claim_id="claim-description",
+        text="The initiative has an approved operating constraint.",
+        claim_type="state", about="Atlas",
+    )
+    llm.call_structured.return_value = scope_plan(
+        {
+            "C001": assignment("N001", supporting=["C001"]),
+            "C002": assignment("N001", supporting=["C002"]),
+        },
+        [scope_candidate(
+            "N001", "Atlas", "project", ["C001"], independent=False,
+            basis="named_project",
+        )],
+    )
+
+    result = await dream.router.route([
+        ClaimEvidence(description, source), ClaimEvidence(identity, source),
+    ])
+
+    assert [entity.title for entity in result.new_entities] == ["Atlas"]
+    assert {route.owner_entity_id for route in result.routes} == {"project-atlas"}
+
+
+@pytest.mark.asyncio
+async def test_router_does_not_override_source_only_from_claim_text(tmp_path):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, source = add_source(logs, artifacts)
+    identity = add_claim(
+        artifacts, source, claim_id="claim-name",
+        text="The initiative is named Nimbus.", claim_type="identity", about="Nimbus",
+    )
+    description = add_claim(
+        artifacts, source, claim_id="claim-description",
+        text="Nimbus has an approved delivery constraint.", about="Nimbus",
+    )
+    llm.call_structured.return_value = scope_plan(
+        {
+            "C001": assignment(disposition="source_only"),
+            "C002": assignment(disposition="source_only"),
+        },
+        [scope_candidate(
+            "N001", "Nimbus", "project", ["C001", "C002"],
+            independent=False, basis="named_project",
+        )],
+    )
+
+    result = await dream.router.route([
+        ClaimEvidence(identity, source), ClaimEvidence(description, source),
+    ])
+
+    assert [route.disposition for route in result.routes] == [
+        "source_only", "source_only",
+    ]
+    assert all(route.owner_entity_id is None for route in result.routes)
 
 
 @pytest.mark.asyncio
 async def test_dream_dry_run_reports_but_does_not_write(tmp_path):
     dream, _, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response=discover("C001", "Preview Page")
+        tmp_path, llm_response=new_scope("C001", "Preview Page")
     )
     entry, source = add_source(logs, artifacts)
     claim = add_claim(
         artifacts, source, text="Preview Page has a durable property.",
-        about="Preview Page",
+        about="Preview Page", claim_type="plan",
     )
 
     report = await dream.run(dry_run=True)
@@ -451,12 +727,13 @@ async def test_dream_dry_run_reports_but_does_not_write(tmp_path):
 @pytest.mark.asyncio
 async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response=discover("C001", "Stable Page")
+        tmp_path, llm_response=new_scope("C001", "Stable Page")
     )
     _, source = add_source(logs, artifacts, suffix="first")
     add_claim(
         artifacts, source, claim_id="claim-first",
         text="Stable Page records a tea preference.", about="Stable Page",
+        claim_type="plan",
     )
     await dream.run()
 
@@ -464,9 +741,10 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
     add_claim(
         artifacts, source_two, claim_id="claim-second",
         text="Stable Page records a coffee preference.", about="Stable Page",
+        claim_type="plan",
     )
     llm.call_structured.side_effect = [
-        no_discovery(),
+        scope_plan({"C001": assignment("topic-stable-page", supporting=["C001"])}),
         {"decisions": [{
             "incoming_alias": "N001",
             "relation": "additive",
@@ -474,6 +752,10 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
             "explanation": "A separate preference.",
             "confidence": 0.9,
         }]},
+        {"facts": [
+            {"claim_aliases": ["F001"], "text": "Stable Page records a tea preference.", "confidence": 0.9, "reason": "Separate preference."},
+            {"claim_aliases": ["F002"], "text": "Stable Page records a coffee preference.", "confidence": 0.9, "reason": "Separate preference."},
+        ]},
     ]
     report = await dream.run()
 
@@ -481,18 +763,18 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
     page = wiki.get("stable-page")
     assert "tea preference" in page.content
     assert "coffee preference" in page.content
-    assert llm.call_structured.await_count == 3
+    assert llm.call_structured.await_count == 4
 
 
 @pytest.mark.asyncio
 async def test_entity_type_is_authoritative_at_creation_without_taxonomy_pass(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response=discover("C001", "Memory Design")
+        tmp_path, llm_response=new_scope("C001", "Memory Design")
     )
     entry, source = add_source(logs, artifacts)
     add_claim(
         artifacts, source, text="Memory Design favors deterministic views.",
-        about="Memory Design",
+        about="Memory Design", claim_type="plan",
     )
 
     first = await dream.run()
@@ -509,14 +791,14 @@ async def test_entity_type_is_authoritative_at_creation_without_taxonomy_pass(tm
     assert second.taxonomy_failures == []
     assert page.page_type == "topic"
     assert page.title == "Memory Design"
-    assert "## Preferences & Positions" in page.content
+    assert "## Why It Matters" in page.content
     assert llm.call_structured.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_you_entity_is_typed_without_a_taxonomy_call(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response=route("C001", "user-profile", "entity")
+        tmp_path, llm_response=you_scope()
     )
     entry, source = add_source(logs, artifacts)
     add_claim(artifacts, source)
@@ -534,7 +816,7 @@ async def test_you_entity_is_typed_without_a_taxonomy_call(tmp_path):
 @pytest.mark.asyncio
 async def test_dream_persists_contradiction_proposal_and_marks_both_claims_pending(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response=route("C001", "user-profile", "entity")
+        tmp_path, llm_response=you_scope()
     )
     _, first_source = add_source(logs, artifacts, suffix="first")
     add_claim(
@@ -553,7 +835,7 @@ async def test_dream_persists_contradiction_proposal_and_marks_both_claims_pendi
         text="The user dislikes tea.",
     )
     llm.call_structured.side_effect = [
-        no_discovery(),
+        you_scope(),
         {"decisions": [{
             "incoming_alias": "N001",
             "relation": "contradicts",
@@ -584,9 +866,9 @@ async def test_dream_persists_contradiction_proposal_and_marks_both_claims_pendi
 
 
 @pytest.mark.asyncio
-async def test_dream_fails_source_closed_when_reconsolidation_response_is_invalid(tmp_path):
+async def test_invalid_reconsolidation_is_claim_local_and_source_history_completes(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
-        tmp_path, llm_response=route("C001", "user-profile", "entity")
+        tmp_path, llm_response=you_scope()
     )
     _, first_source = add_source(logs, artifacts, suffix="first")
     add_claim(artifacts, first_source, claim_id="claim-old")
@@ -600,15 +882,16 @@ async def test_dream_fails_source_closed_when_reconsolidation_response_is_invali
         text="The user no longer prefers deterministic memory views.",
     )
     llm.call_structured.side_effect = [
-        route("C001", "user-profile", "entity"),
+        you_scope(),
         {"decisions": []},
     ]
 
     report = await dream.run()
 
-    assert report.completed_source_ids == []
-    assert report.pending_source_ids == [second_entry.entry_id]
+    assert report.completed_source_ids == [second_entry.entry_id]
+    assert report.pending_source_ids == []
     assert report.failures[0]["stage"] == "reconsolidation"
-    assert logs.get(second_entry.entry_id).consolidated is False
+    assert logs.get(second_entry.entry_id).consolidated is True
+    assert artifacts.get_claim("claim-new").dream_disposition == "routing_failed"
     assert "no longer" not in wiki.get("you").content
     assert artifacts.list_reconsolidation_proposals() == []

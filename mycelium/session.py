@@ -1,6 +1,7 @@
 from typing import List, Dict, TYPE_CHECKING
 
 from mycelium.models import WikiPage
+from mycelium.materialization import sections_markdown
 
 if TYPE_CHECKING:
     from mycelium.core import Mycelium
@@ -30,11 +31,18 @@ class Session:
             return ""
             
         blocks = []
+        seen_project_role_claim_ids: set[str] = set()
         for page in self.loaded_pages:
             header = f"=== MEMORY: {page.title} (confidence: {page.confidence:.2f}, v{page.version}) ==="
-            body = page.content
+            body = (
+                sections_markdown(page.sections, seen_project_role_claim_ids)
+                if page.sections
+                else page.content
+            )
             if page.source_context:
                 body = f"{body}\n\n{page.source_context}"
+            if not body.strip():
+                continue
             blocks.append(f"{header}\n{body}")
             
         return "\n\n".join(blocks) + "\n\n=== END MEMORY ==="

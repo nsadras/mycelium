@@ -1,0 +1,208 @@
+schema_version: 1
+scenario_id: daily-driver-v1
+authority: Structured page, section, fact, state, and provenance expectations are normative; exact prose is not.
+entities:
+  - {id: you, type: you, title: You, aliases: [Maya Chen], page: you}
+  - {id: project-lantern, type: project, title: Lantern, aliases: [meeting-memory assistant, meeting idea], page: lantern}
+  - {id: project-family-oral-history, type: project, title: Family Oral History, aliases: [oral-history interviews, family interviews], page: family-oral-history}
+  - {id: person-priya-raman, type: person, title: Priya Raman, aliases: [Priya], page: priya-raman}
+  - {id: person-luis-ortega, type: person, title: Luis Ortega, aliases: [Luis], page: luis-ortega}
+  - {id: person-grandmother, type: person, title: Grandmother, aliases: [Grandma, Maya's grandmother], page: grandmother}
+non_page_mentions:
+  - {label: WhisperX, reason: A researched component of Lantern, not an independently tracked Topic.}
+  - {label: Grandma's grocery store, reason: One historical detail with no continuing independent relevance.}
+  - {label: September 13 oral-history interview, reason: A normal Project timeline occurrence, not a consequential Event page.}
+  - {label: Lantern meetings, reason: Routine meetings belong in the Project timeline rather than separate pages.}
+  - {label: LANTERN-42, reason: An issue state represented on Lantern rather than an independent Project.}
+retracted_entities:
+  - {id: event-northstar-smallbird-acquisition, type: event, title: Northstar–Smallbird Acquisition, reason: All supporting evidence came from retracted source src-meeting-04.}
+  - {id: person-omar-haddad, type: person, title: Omar Haddad, reason: This transient meeting participant was known only through retracted source src-meeting-04.}
+facts:
+  - id: f-maya-profile
+    text: Maya Chen is a product designer in Oakland.
+    claim_ids: [c-maya-profile]
+    state: current
+  - id: f-lantern-purpose
+    text: Lantern is Maya's private local desktop application for searchable meeting memory.
+    claim_ids: [c-lantern-intent, c-lantern-description]
+    state: current
+  - id: f-lantern-form
+    text: Lantern is a desktop application, not a browser extension.
+    claim_ids: [c-lantern-desktop]
+    state: current
+  - id: f-lantern-privacy
+    text: Lantern handles sensitive client meeting information.
+    claim_ids: [c-sensitive-client-data]
+    state: current
+  - id: f-lantern-local-only
+    text: Audio and transcripts remain on the laptop unless the user explicitly exports them; cloud transcription is rejected.
+    claim_ids: [c-local-storage, c-no-cloud, c-explicit-export]
+    state: current
+  - id: f-whisperx-decision
+    text: Lantern uses a local WhisperX pipeline for the pilot.
+    claim_ids: [c-local-whisper-plan, c-whisperx-final]
+    state: current
+  - id: f-priya-role
+    text: Priya owns Lantern pilot recruitment and evaluation.
+    claim_ids: [c-priya-eval, c-priya-role-repeat, c-priya-role-confirm]
+    state: current
+    render_on: [person-priya-raman, project-lantern]
+  - id: f-maya-lantern-role
+    text: Maya owns Lantern's desktop prototype and consent flow.
+    claim_ids: [c-maya-owns-prototype]
+    state: current
+    render_on: [you, project-lantern]
+  - id: f-speaker-correction
+    text: Speaker-name correction is required for the Lantern pilot.
+    claim_ids: [c-speaker-correction-need, c-speaker-correction-accepted]
+    state: current
+  - id: f-prototype-review
+    text: The working-prototype review was scheduled for September 10, 2026.
+    claim_ids: [c-prototype-review]
+    state: history
+  - id: f-whisperx-research
+    text: WhisperX was the leading candidate because it supports local alignment and diarization, subject to benchmarking.
+    claim_ids: [c-whisperx-capability, c-whisperx-candidate]
+    state: history
+  - id: f-consent-gate
+    text: Participants must confirm consent before every recording; the consent gate is a release blocker.
+    claim_ids: [c-consent-before-recording, c-consent-confirmation, c-consent-blocker]
+    state: current
+  - id: f-luis-role
+    text: Luis owns Lantern's local transcription pipeline and WhisperX packaging.
+    claim_ids: [c-luis-role]
+    state: current
+    render_on: [person-luis-ortega, project-lantern]
+  - id: f-priya-evaluation-completed
+    text: Priya recruited three Lantern pilot teams and completed the evaluation rubric.
+    claim_ids: [c-priya-completed]
+    state: history
+  - id: f-pilot-metrics
+    text: The pilot measures correction effort and traceability from a memory to its transcript evidence.
+    claim_ids: [c-pilot-metrics]
+    state: current
+  - id: f-packaged-build
+    text: Luis targeted September 11, 2026 for the packaged Lantern build.
+    claim_ids: [c-build-friday, c-build-tomorrow]
+    state: history
+  - id: f-pilot-date-old
+    text: The first pilot was initially targeted for September 22, 2026 and was later rescheduled.
+    claim_ids: [c-pilot-date-old]
+    state: superseded_history
+  - id: f-family-history-purpose
+    text: Maya records personal oral-history interviews with her grandmother about her immigration story.
+    claim_ids: [c-family-history-purpose]
+    state: current
+  - id: f-grandmother-relationship
+    text: Maya's grandmother is the subject of Maya's family oral-history interviews.
+    claim_ids: [c-grandmother-relationship]
+    state: current
+  - id: f-family-history-interview
+    text: An oral-history interview occurred September 13, 2026 from 3:00 PM to 4:30 PM at Grandmother's apartment in Berkeley.
+    claim_ids: [c-family-history-interview-plan, c-family-history-calendar]
+    state: history
+  - id: f-family-history-separate
+    text: Maya's family oral-history interviews are separate from Lantern and are not Lantern user research.
+    claim_ids: [c-family-history-separate]
+    state: current
+  - id: f-whisperx-benchmark
+    text: WhisperX ran faster than real time on Maya's laptop and produced usable speaker labels after correction.
+    claim_ids: [c-whisperx-benchmark]
+    state: history
+  - id: f-pilot-date-current
+    text: Lantern's first pilot is scheduled for September 28, 2026 after recruitment required more time.
+    claim_ids: [c-pilot-date-new]
+    state: current
+  - id: f-prototype-status
+    text: The desktop prototype supports speaker-name correction and links memories to transcript segments.
+    claim_ids: [c-prototype-capabilities]
+    state: current
+  - id: f-consent-bug
+    text: LANTERN-42 exposed a consent bypass when reopening recent meetings; Maya fixed it and closed the issue.
+    claim_ids: [c-consent-bug-open, c-consent-bug-closed]
+    state: current_with_history
+  - id: f-family-history-interview-result
+    text: Grandmother said she arrived in California in 1974 and worked at her aunt's grocery store in Richmond.
+    claim_ids: [c-family-history-interview-result]
+    state: history
+  - id: f-family-history-next-step
+    text: Maya plans to scan Grandmother's photographs before their next oral-history interview; no date is set.
+    claim_ids: [c-family-history-scan-plan]
+    state: current
+  - id: f-pilot-readiness
+    text: The September 28 Lantern pilot build is ready for Priya's three teams.
+    claim_ids: [c-pilot-build-ready]
+    state: current
+  - id: f-embedding-question
+    text: After the pilot, Lantern must decide whether transcript embeddings can remain fully inspectable.
+    claim_ids: [c-embedding-question]
+    state: current
+pages:
+  - entity_id: you
+    slug: you
+    sections:
+      profile: [f-maya-profile]
+      priorities_plans: [f-maya-lantern-role]
+      memory_map:
+        links: [project-lantern, project-family-oral-history, person-priya-raman, person-luis-ortega, person-grandmother]
+  - entity_id: project-lantern
+    slug: lantern
+    sections:
+      overview: [f-lantern-purpose]
+      objective: [f-pilot-metrics]
+      current_status: [f-prototype-status, f-pilot-readiness]
+      requirements_constraints: [f-lantern-privacy, f-lantern-local-only, f-speaker-correction, f-consent-gate]
+      decisions: [f-lantern-form, f-whisperx-decision]
+      next_steps_deadlines: [f-pilot-date-current, f-embedding-question]
+      people_organizations:
+        facts: [f-maya-lantern-role, f-priya-role, f-luis-role]
+        links: [person-priya-raman, person-luis-ortega]
+      timeline: [f-prototype-review, f-pilot-date-old, f-consent-bug]
+      research_references: [f-whisperx-research, f-whisperx-benchmark]
+  - entity_id: project-family-oral-history
+    slug: family-oral-history
+    sections:
+      overview: [f-family-history-purpose]
+      requirements_constraints: [f-family-history-separate]
+      next_steps_deadlines: [f-family-history-next-step]
+      people_organizations:
+        links: [person-grandmother]
+      timeline: [f-family-history-interview]
+  - entity_id: person-priya-raman
+    slug: priya-raman
+    sections:
+      shared_projects:
+        facts: [f-priya-role]
+        links: [project-lantern]
+      timeline: [f-priya-evaluation-completed]
+  - entity_id: person-luis-ortega
+    slug: luis-ortega
+    sections:
+      shared_projects:
+        facts: [f-luis-role]
+        links: [project-lantern]
+      timeline: [f-packaged-build]
+  - entity_id: person-grandmother
+    slug: grandmother
+    sections:
+      relationship_to_you: [f-grandmother-relationship]
+      shared_projects:
+        links: [project-family-oral-history]
+      timeline: [f-family-history-interview-result]
+forbidden_final_content:
+  fact_ids: [f-northstar-acquisition, f-northstar-integration, f-northstar-legal]
+  phrases:
+    - Northstar acquired Smallbird
+    - 18 million dollars
+    - Omar owns the migration plan
+    - TranscribeCloud
+    - dentist cleaning
+    - dark mode icon
+forbidden_final_pages:
+  - northstar
+  - smallbird
+  - northstar-smallbird-acquisition
+  - whisperx
+  - grocery-store
+  - dentist-cleaning
+  - lantern-42

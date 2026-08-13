@@ -53,6 +53,7 @@ DREAM_DISPOSITIONS = {
     "ignored_semantic",
     "excluded_assistant",
     "routing_failed",
+    "source_only",
 }
 SHORT_TERM_DISPOSITIONS = {"pending", "deferred", "routing_failed"}
 RECONSOLIDATION_RELATIONS = {"contradicts", "supersedes"}
@@ -222,6 +223,87 @@ class ClaimPlacement:
 
 
 @dataclass
+class ClaimScopeDecision:
+    """Append-only explanation for one claim's current or proposed wiki scope."""
+
+    decision_id: str
+    claim_id: str
+    owner_entity_id: str | None
+    section_key: str | None
+    linked_entity_ids: list[str]
+    supporting_claim_ids: list[str]
+    confidence: float
+    reason: str
+    origin: str
+    dream_run_id: str | None
+    status: str
+    created_at: str
+    superseded_by_decision_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.origin not in {"automatic", "manual", "review"}:
+            raise ValueError(f"Unsupported scope-decision origin: {self.origin}")
+        if self.status not in {"active", "superseded", "proposed", "rejected"}:
+            raise ValueError(f"Unsupported scope-decision status: {self.status}")
+        if self.status == "superseded" and not self.superseded_by_decision_id:
+            raise ValueError("Superseded scope decisions require a successor")
+        self.linked_entity_ids = sorted(set(self.linked_entity_ids))
+        self.supporting_claim_ids = sorted(set(self.supporting_claim_ids))
+        self.confidence = max(0.0, min(1.0, float(self.confidence)))
+
+
+@dataclass
+class EntityEncounter:
+    """Source-grounded evidence that a Person participated in an episode."""
+
+    encounter_id: str
+    entity_id: str
+    source_id: str
+    raw_log_entry_id: str | None
+    occurred_at: str | None
+    title: str | None
+    created_at: str
+
+
+@dataclass
+class ConsolidatedFact:
+    """A stable, editable wiki statement grounded in one or more source claims."""
+
+    fact_id: str
+    text: str
+    member_claim_ids: list[str]
+    owner_entity_id: str
+    section_key: str
+    linked_entity_ids: list[str]
+    state: str
+    synthesis_origin: str
+    confidence: float
+    reason: str
+    created_at: str
+    updated_at: str
+    manual_text: bool = False
+
+    def __post_init__(self) -> None:
+        if self.state not in {"active", "retired"}:
+            raise ValueError(f"Unsupported consolidated-fact state: {self.state}")
+        if self.synthesis_origin not in {"claim", "model", "manual"}:
+            raise ValueError(
+                f"Unsupported consolidated-fact origin: {self.synthesis_origin}"
+            )
+        self.text = " ".join(self.text.split()).strip()
+        if not self.text:
+            raise ValueError("Consolidated facts require display text")
+        self.member_claim_ids = sorted(set(self.member_claim_ids))
+        if not self.member_claim_ids:
+            raise ValueError("Consolidated facts require at least one member claim")
+        self.linked_entity_ids = sorted({
+            value for value in self.linked_entity_ids
+            if value and value != self.owner_entity_id
+        })
+        self.confidence = max(0.0, min(1.0, float(self.confidence)))
+
+
+@dataclass
 class OrganizationProposal:
     proposal_id: str
     proposal_type: str
@@ -355,6 +437,9 @@ class ArtifactStore:
         self.reconsolidation_proposals_dir = root / "reconsolidation-proposals"
         self.entities_dir = root / "entities"
         self.placements_dir = root / "placements"
+        self.scope_decisions_dir = root / "scope-decisions"
+        self.encounters_dir = root / "encounters"
+        self.consolidated_facts_dir = root / "consolidated-facts"
         self.organization_proposals_dir = root / "organization-proposals"
         for directory in (
             self.sources_dir,
@@ -364,6 +449,9 @@ class ArtifactStore:
             self.reconsolidation_proposals_dir,
             self.entities_dir,
             self.placements_dir,
+            self.scope_decisions_dir,
+            self.encounters_dir,
+            self.consolidated_facts_dir,
             self.organization_proposals_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
@@ -442,7 +530,7 @@ class ArtifactStore:
         return entity
 
     def save_placement(self, placement: ClaimPlacement) -> None:
-        self.get_claim(placement.claim_id)
+        claim = self.get_claim(placement.claim_id)
         if placement.owner_entity_id:
             entity = self.get_entity(placement.owner_entity_id)
             from mycelium.models import PAGE_SECTION_KEYS, PageType
@@ -453,6 +541,21 @@ class ArtifactStore:
                 raise ValueError(
                     f"Section {placement.section_key!r} is invalid for {entity.entity_type}"
                 )
+            is_project_role = (
+                claim.claim_type == "relationship"
+                and _normalized_label(claim.predicate).replace(" ", "_") == "project_role"
+            )
+            if is_project_role:
+                project_links = [
+                    linked_id
+                    for linked_id in placement.linked_entity_ids
+                    if self.get_entity(linked_id).entity_type == "project"
+                ]
+                if entity.entity_type not in {"you", "person"} or len(project_links) != 1:
+                    raise ValueError(
+                        "Project-role placements require a Person or You owner and "
+                        "exactly one linked Project"
+                    )
         for linked_id in placement.linked_entity_ids:
             self.get_entity(linked_id)
         _atomic_json(
@@ -475,6 +578,118 @@ class ArtifactStore:
             return self.get_placement(claim_id)
         except FileNotFoundError:
             return None
+
+    def save_scope_decision(self, decision: ClaimScopeDecision) -> None:
+        if decision.status == "active":
+            for current in self.list_scope_decisions(
+                claim_id=decision.claim_id, status="active"
+            ):
+                if current.decision_id == decision.decision_id:
+                    continue
+                current.status = "superseded"
+                current.superseded_by_decision_id = decision.decision_id
+                _atomic_json(
+                    self.scope_decisions_dir / f"{_safe_id(current.decision_id)}.json",
+                    asdict(current),
+                )
+        _atomic_json(
+            self.scope_decisions_dir / f"{_safe_id(decision.decision_id)}.json",
+            asdict(decision),
+        )
+
+    def get_scope_decision(self, decision_id: str) -> ClaimScopeDecision:
+        return ClaimScopeDecision(**self._read(
+            self.scope_decisions_dir / f"{_safe_id(decision_id)}.json"
+        ))
+
+    def list_scope_decisions(
+        self, *, claim_id: str | None = None, status: str | None = None
+    ) -> list[ClaimScopeDecision]:
+        values = [
+            self.get_scope_decision(path.stem)
+            for path in sorted(self.scope_decisions_dir.glob("*.json"))
+        ]
+        return [
+            item for item in values
+            if (claim_id is None or item.claim_id == claim_id)
+            and (status is None or item.status == status)
+        ]
+
+    def active_scope_decision(self, claim_id: str) -> ClaimScopeDecision | None:
+        values = self.list_scope_decisions(claim_id=claim_id, status="active")
+        return values[-1] if values else None
+
+    def save_encounter(self, encounter: EntityEncounter) -> None:
+        self.get_entity(encounter.entity_id)
+        _atomic_json(
+            self.encounters_dir / f"{_safe_id(encounter.encounter_id)}.json",
+            asdict(encounter),
+        )
+
+    def get_encounter(self, encounter_id: str) -> EntityEncounter:
+        return EntityEncounter(**self._read(
+            self.encounters_dir / f"{_safe_id(encounter_id)}.json"
+        ))
+
+    def list_encounters(self, *, entity_id: str | None = None) -> list[EntityEncounter]:
+        values = [
+            self.get_encounter(path.stem)
+            for path in sorted(self.encounters_dir.glob("*.json"))
+        ]
+        return [
+            item for item in values
+            if entity_id is None or item.entity_id == entity_id
+        ]
+
+    def save_consolidated_fact(self, fact: ConsolidatedFact) -> None:
+        self.get_entity(fact.owner_entity_id)
+        from mycelium.models import PAGE_SECTION_KEYS, PageType
+        allowed = {
+            key for key, _ in PAGE_SECTION_KEYS[
+                cast(PageType, self.get_entity(fact.owner_entity_id).entity_type)
+            ]
+        }
+        if fact.section_key not in allowed:
+            raise ValueError(
+                f"Section {fact.section_key!r} is invalid for consolidated fact owner"
+            )
+        for claim_id in fact.member_claim_ids:
+            self.get_claim(claim_id)
+        for linked_id in fact.linked_entity_ids:
+            self.get_entity(linked_id)
+        _atomic_json(
+            self.consolidated_facts_dir / f"{_safe_id(fact.fact_id)}.json",
+            asdict(fact),
+        )
+
+    def get_consolidated_fact(self, fact_id: str) -> ConsolidatedFact:
+        return ConsolidatedFact(**self._read(
+            self.consolidated_facts_dir / f"{_safe_id(fact_id)}.json"
+        ))
+
+    def list_consolidated_facts(
+        self, *, owner_entity_id: str | None = None, state: str | None = None
+    ) -> list[ConsolidatedFact]:
+        values = [
+            self.get_consolidated_fact(path.stem)
+            for path in sorted(self.consolidated_facts_dir.glob("*.json"))
+        ]
+        return [
+            item for item in values
+            if (owner_entity_id is None or item.owner_entity_id == owner_entity_id)
+            and (state is None or item.state == state)
+        ]
+
+    def facts_for_claim(self, claim_id: str) -> list[ConsolidatedFact]:
+        return [
+            fact for fact in self.list_consolidated_facts()
+            if claim_id in fact.member_claim_ids
+        ]
+
+    def delete_consolidated_fact(self, fact_id: str) -> None:
+        path = self.consolidated_facts_dir / f"{_safe_id(fact_id)}.json"
+        if path.exists():
+            path.unlink()
 
     def placements_for_entity(self, entity_id: str) -> list[ClaimPlacement]:
         return [
@@ -589,6 +804,9 @@ class ArtifactStore:
             "entities": 0,
             "placements": 0,
             "organization_proposals": 0,
+            "scope_decisions": 0,
+            "encounters": 0,
+            "consolidated_facts": 0,
         }
         for label, directory in (
             ("sources", self.sources_dir),
@@ -599,6 +817,9 @@ class ArtifactStore:
             ("entities", self.entities_dir),
             ("placements", self.placements_dir),
             ("organization_proposals", self.organization_proposals_dir),
+            ("scope_decisions", self.scope_decisions_dir),
+            ("encounters", self.encounters_dir),
+            ("consolidated_facts", self.consolidated_facts_dir),
         ):
             for path in directory.glob("*.json"):
                 path.unlink()
@@ -611,6 +832,9 @@ class ArtifactStore:
             "entities": 0,
             "placements": 0,
             "organization_proposals": 0,
+            "scope_decisions": 0,
+            "encounters": 0,
+            "consolidated_facts": 0,
             "legacy_claim_assignments_removed": 0,
             "claims_requeued": 0,
         }
@@ -618,6 +842,9 @@ class ArtifactStore:
             ("entities", self.entities_dir),
             ("placements", self.placements_dir),
             ("organization_proposals", self.organization_proposals_dir),
+            ("scope_decisions", self.scope_decisions_dir),
+            ("encounters", self.encounters_dir),
+            ("consolidated_facts", self.consolidated_facts_dir),
         ):
             for path in directory.glob("*.json"):
                 path.unlink()

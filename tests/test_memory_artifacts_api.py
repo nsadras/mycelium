@@ -177,6 +177,8 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
             "claims_missing_segments": [],
             "placements_missing_claims": [],
             "placements_missing_entities": [],
+            "facts_missing_claims": [],
+            "facts_missing_entities": [],
             "entities_missing_pages": [],
                 "sources_missing_raw_log": [],
                 "proposals_missing_claims": [],

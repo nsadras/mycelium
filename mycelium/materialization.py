@@ -11,19 +11,15 @@ from typing import Literal, cast
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimPlacement,
+    ConsolidatedFact,
     EntityRecord,
     MemoryClaim,
 )
 from mycelium.config import Config
 from mycelium.consolidation import ClaimRoute, placement_from_route
 from mycelium.models import Edge, PAGE_SECTION_KEYS, PageType, UpdateLogEntry, WikiPage
-from mycelium.projection import (
-    compact_display_claims,
-    compact_record_qualifiers,
-    display_claim_text,
-    project_claim,
-)
 from mycelium.store import WikiStore
+from mycelium.wiki_schema import is_project_role, project_role_section
 
 
 INDEX_GROUPS: tuple[tuple[PageType, str], ...] = (
@@ -37,6 +33,44 @@ INDEX_GROUPS: tuple[tuple[PageType, str], ...] = (
 )
 
 
+def sections_markdown(
+    sections: list[dict],
+    seen_project_role_claim_ids: set[str] | None = None,
+) -> str:
+    """Render structured sections, deduplicating shared roles across prompt pages."""
+    lines: list[str] = []
+    for section in sections:
+        item_lines: list[str] = []
+        for item in section["items"]:
+            if item["kind"] == "link":
+                item_lines.append(f"- [[{item['slug']}]] — {item['title']}")
+                continue
+            if item["kind"] == "encounter":
+                item_lines.append(f"- {item['text']} _(source: {item['source_id']})_")
+                continue
+            claim_ids = set(item.get("claim_ids", []))
+            if (
+                seen_project_role_claim_ids is not None
+                and item.get("relationship_kind") == "project_role"
+            ):
+                if claim_ids and claim_ids <= seen_project_role_claim_ids:
+                    continue
+                seen_project_role_claim_ids.update(claim_ids)
+            qualifiers = item.get("qualifiers", [])
+            suffix = f" _({'; '.join(qualifiers)})_" if qualifiers else ""
+            linked = " ".join(
+                f"[[{link['slug']}]]" for link in item.get("links", [])
+            )
+            link_suffix = f" — {linked}" if linked else ""
+            item_lines.append(f"- {item['text']}{link_suffix}{suffix}")
+        if not item_lines:
+            continue
+        if lines:
+            lines.append("")
+        lines.extend([f"## {section['title']}", "", *item_lines])
+    return "\n".join(lines).strip()
+
+
 @dataclass
 class MaterializationResult:
     changed_pages: dict[str, WikiPage] = field(default_factory=dict)
@@ -45,6 +79,8 @@ class MaterializationResult:
     deleted_slugs: set[str] = field(default_factory=set)
     entities: dict[str, EntityRecord] = field(default_factory=dict)
     placements: dict[str, ClaimPlacement] = field(default_factory=dict)
+    facts: dict[str, ConsolidatedFact] = field(default_factory=dict)
+    retired_fact_ids: set[str] = field(default_factory=set)
 
 
 class PageMaterializer:
@@ -54,13 +90,19 @@ class PageMaterializer:
         self.config = config
 
     def stage(
-        self, routes: list[ClaimRoute], new_entities: list[EntityRecord] | None = None
+        self,
+        routes: list[ClaimRoute],
+        new_entities: list[EntityRecord] | None = None,
+        facts: list[ConsolidatedFact] | None = None,
+        retired_fact_ids: set[str] | None = None,
     ) -> MaterializationResult:
         result = MaterializationResult()
         result.entities = {entity.entity_id: entity for entity in new_entities or []}
         now = datetime.now().astimezone().isoformat()
         for route in routes:
             result.placements[route.claim_id] = placement_from_route(route, now=now)
+        result.facts = {fact.fact_id: fact for fact in facts or []}
+        result.retired_fact_ids = set(retired_fact_ids or ())
         affected = {
             entity_id
             for placement in result.placements.values()
@@ -76,6 +118,7 @@ class PageMaterializer:
                     existing_entities[entity_id], updated_at=now
                 )
         if result.entities:
+            affected.update(result.entities)
             affected.add("you")
         self._stage_entities(result, affected)
         return result
@@ -85,6 +128,10 @@ class PageMaterializer:
             self.artifacts.save_entity(entity)
         for placement in result.placements.values():
             self.artifacts.save_placement(placement)
+        for fact_id in result.retired_fact_ids:
+            self.artifacts.delete_consolidated_fact(fact_id)
+        for fact in result.facts.values():
+            self.artifacts.save_consolidated_fact(fact)
         for slug in result.deleted_slugs:
             self.wiki.delete(slug)
         for page in result.changed_pages.values():
@@ -112,24 +159,55 @@ class PageMaterializer:
             placement.claim_id: placement for placement in self.artifacts.list_placements()
         }
         placements.update(result.placements)
-        claims = {claim.claim_id: claim for claim in self.artifacts.list_claims(status="active")}
+        all_claims = {
+            claim.claim_id: claim for claim in self.artifacts.list_claims()
+        }
+        claims = {
+            claim_id: claim
+            for claim_id, claim in all_claims.items()
+            if claim.status == "active"
+        }
         pending_ids = self.artifacts.pending_reconsolidation_claim_ids()
+        encounters = self.artifacts.list_encounters()
+        facts = {
+            fact.fact_id: fact
+            for fact in self.artifacts.list_consolidated_facts(state="active")
+            if fact.fact_id not in result.retired_fact_ids
+        }
+        facts.update(result.facts)
+        entity_ids = self._expand_project_role_endpoints(
+            entity_ids, all_claims, placements, entities
+        )
 
         for entity_id in sorted(entity_ids):
             entity = entities.get(entity_id)
             if entity is None or entity.status != "active":
                 continue
-            entity_claims = [
-                (claims[placement.claim_id], placement)
-                for placement in placements.values()
-                if placement.status == "placed"
-                and placement.owner_entity_id == entity_id
-                and placement.claim_id in claims
-                and not claims[placement.claim_id].derivation_operation
-            ]
+            entity_claims = []
+            for placement in placements.values():
+                claim = claims.get(placement.claim_id)
+                if (
+                    claim is None
+                    or placement.status != "placed"
+                    or claim.derivation_operation
+                ):
+                    continue
+                page_placement = self._page_placement(
+                    entity_id, claim, placement, entities
+                )
+                if page_placement is not None:
+                    entity_claims.append((claim, page_placement))
+            entity_facts = []
+            for fact in facts.values():
+                page_fact = self._page_fact(
+                    entity_id, fact, claims, placements, entities
+                )
+                if page_fact is not None:
+                    entity_facts.append(page_fact)
             existing = self._existing_page(entity)
             page = self._build_page(
-                entity, entity_claims, entities, placements, pending_ids, existing
+                entity, entity_claims, entities, placements, pending_ids,
+                encounters, entity_facts, claims, existing,
             )
             if existing is None:
                 page.update_log = [UpdateLogEntry(
@@ -158,6 +236,117 @@ class PageMaterializer:
                 result.changed_pages[entity.slug] = page
                 result.updated_slugs.add(entity.slug)
 
+    @classmethod
+    def _expand_project_role_endpoints(
+        cls,
+        entity_ids: set[str],
+        claims: dict[str, MemoryClaim],
+        placements: dict[str, ClaimPlacement],
+        entities: dict[str, EntityRecord],
+    ) -> set[str]:
+        """Regenerate both views when a canonical project-role claim changes."""
+        expanded = set(entity_ids)
+        for placement in placements.values():
+            claim = claims.get(placement.claim_id)
+            if claim is None or placement.status != "placed":
+                continue
+            endpoints = cls._project_role_endpoints(claim, placement, entities)
+            if endpoints & expanded:
+                expanded.update(endpoints)
+        return expanded
+
+    @classmethod
+    def _page_placement(
+        cls,
+        entity_id: str,
+        claim: MemoryClaim,
+        placement: ClaimPlacement,
+        entities: dict[str, EntityRecord],
+    ) -> ClaimPlacement | None:
+        endpoints = cls._project_role_endpoints(claim, placement, entities)
+        if entity_id in endpoints:
+            return replace(
+                placement,
+                owner_entity_id=entity_id,
+                section_key=project_role_section(entities[entity_id].entity_type),
+                linked_entity_ids=sorted(endpoints - {entity_id}),
+            )
+        if placement.owner_entity_id == entity_id:
+            return placement
+        return None
+
+    @classmethod
+    def _page_fact(
+        cls,
+        entity_id: str,
+        fact: ConsolidatedFact,
+        claims: dict[str, MemoryClaim],
+        placements: dict[str, ClaimPlacement],
+        entities: dict[str, EntityRecord],
+    ) -> ConsolidatedFact | None:
+        if fact.state != "active":
+            return None
+        role_claims = [
+            claims[claim_id] for claim_id in fact.member_claim_ids
+            if claim_id in claims and is_project_role(claims[claim_id])
+        ]
+        if role_claims:
+            endpoints = set()
+            for claim in role_claims:
+                placement = placements.get(claim.claim_id)
+                if placement is not None:
+                    endpoints.update(
+                        cls._project_role_endpoints(claim, placement, entities)
+                    )
+            if entity_id in endpoints:
+                return replace(
+                    fact,
+                    owner_entity_id=entity_id,
+                    section_key=project_role_section(
+                        entities[entity_id].entity_type
+                    ),
+                    linked_entity_ids=sorted(endpoints - {entity_id}),
+                )
+        return fact if fact.owner_entity_id == entity_id else None
+
+    @staticmethod
+    def _project_role_endpoints(
+        claim: MemoryClaim,
+        placement: ClaimPlacement,
+        entities: dict[str, EntityRecord],
+    ) -> set[str]:
+        """Identify one person/You and one Project named by a role claim."""
+        if not is_project_role(claim) or not placement.owner_entity_id:
+            return set()
+        canonical_owner = entities.get(placement.owner_entity_id)
+        if (
+            canonical_owner is None
+            or canonical_owner.status != "active"
+            or canonical_owner.entity_type not in {"you", "person"}
+        ):
+            return set()
+        candidate_ids = {
+            placement.owner_entity_id,
+            *placement.linked_entity_ids,
+        }
+        person_ids = {
+            entity_id
+            for entity_id in candidate_ids
+            if entity_id in entities
+            and entities[entity_id].status == "active"
+            and entities[entity_id].entity_type in {"you", "person"}
+        }
+        project_ids = {
+            entity_id
+            for entity_id in candidate_ids
+            if entity_id in entities
+            and entities[entity_id].status == "active"
+            and entities[entity_id].entity_type == "project"
+        }
+        if len(person_ids) != 1 or len(project_ids) != 1:
+            return set()
+        return person_ids | project_ids
+
     def _existing_page(self, entity: EntityRecord) -> WikiPage | None:
         if entity.status == "archived":
             return None
@@ -179,9 +368,15 @@ class PageMaterializer:
         entities: dict[str, EntityRecord],
         placements: dict[str, ClaimPlacement],
         pending_ids: set[str],
+        encounters: list,
+        facts: list[ConsolidatedFact],
+        claims_by_id: dict[str, MemoryClaim],
         existing: WikiPage | None,
     ) -> WikiPage:
-        sections = self._sections(entity, owned, entities, placements, pending_ids)
+        sections = self._sections(
+            entity, owned, entities, placements, pending_ids, encounters,
+            facts, claims_by_id,
+        )
         claims = [claim for claim, _ in owned]
         confidences = [max(0.0, min(1.0, claim.confidence)) for claim in claims]
         source_ids = sorted({
@@ -202,7 +397,7 @@ class PageMaterializer:
         return WikiPage(
             slug=entity.slug,
             title=entity.title,
-            content=self._markdown(sections),
+            content=sections_markdown(sections),
             created=existing.created if existing else now,
             last_updated=now,
             version=existing.version if existing else 1,
@@ -229,14 +424,39 @@ class PageMaterializer:
         entities: dict[str, EntityRecord],
         placements: dict[str, ClaimPlacement],
         pending_ids: set[str],
+        encounters: list,
+        facts: list[ConsolidatedFact],
+        claims_by_id: dict[str, MemoryClaim],
     ) -> list[dict]:
-        grouped: dict[str, list[tuple[MemoryClaim, ClaimPlacement]]] = defaultdict(list)
-        review: list[tuple[MemoryClaim, ClaimPlacement]] = []
-        for claim, placement in owned:
-            if claim.claim_id in pending_ids:
-                review.append((claim, placement))
+        grouped: dict[str, list[ConsolidatedFact]] = defaultdict(list)
+        review: list[ConsolidatedFact] = []
+        for fact in facts:
+            if set(fact.member_claim_ids) & pending_ids:
+                review.append(fact)
             else:
-                grouped[str(placement.section_key)].append((claim, placement))
+                grouped[fact.section_key].append(fact)
+
+        encounter_items: list[dict] = []
+        if entity.entity_type == "person":
+            represented_source_ids = {
+                provenance.source_id for claim, _ in owned for provenance in claim.provenance
+            }
+            for encounter in encounters:
+                if (
+                    encounter.entity_id != entity.entity_id
+                    or encounter.source_id in represented_source_ids
+                ):
+                    continue
+                date = str(encounter.occurred_at or "").split("T", 1)[0]
+                context = encounter.title or "a recorded meeting"
+                date_suffix = f" on {date}" if date else ""
+                encounter_items.append({
+                    "kind": "encounter",
+                    "encounter_id": encounter.encounter_id,
+                    "text": f"Participated in {context}{date_suffix}.",
+                    "source_id": encounter.source_id,
+                    "raw_log_entry_id": encounter.raw_log_entry_id,
+                })
 
         sections: list[dict] = []
         for key, title in PAGE_SECTION_KEYS[cast(PageType, entity.entity_type)]:
@@ -254,33 +474,47 @@ class PageMaterializer:
                 [*grouped.get(key, []), *review]
                 if key == "needs_review" else grouped.get(key, [])
             )
-            items = self._fact_items(values, entities, pending=(key == "needs_review"))
+            items = self._fact_items(
+                values,
+                entities,
+                claims_by_id,
+                pending=(key == "needs_review"),
+                page_entity_id=entity.entity_id,
+                canonical_placements=placements,
+            )
+            if key == "timeline" and encounter_items:
+                items.extend(encounter_items)
             if items:
                 sections.append({"key": key, "title": title, "items": items})
         return sections
 
-    @staticmethod
     def _fact_items(
-        values: list[tuple[MemoryClaim, ClaimPlacement]],
+        self,
+        values: list[ConsolidatedFact],
         entities: dict[str, EntityRecord],
+        claims_by_id: dict[str, MemoryClaim],
         *,
         pending: bool,
+        page_entity_id: str,
+        canonical_placements: dict[str, ClaimPlacement],
     ) -> list[dict]:
         if not values:
             return []
-        placement_by_claim = {claim.claim_id: placement for claim, placement in values}
-        projected = compact_display_claims([project_claim(claim) for claim, _ in values])
         items = []
-        for item in projected:
-            claim = item.claim
-            member_ids = list(item.claim_ids)
+        for fact in sorted(values, key=lambda value: (value.created_at, value.fact_id)):
+            members = [
+                claims_by_id[claim_id] for claim_id in fact.member_claim_ids
+                if claim_id in claims_by_id
+            ]
+            if not members:
+                continue
+            claim = members[0]
+            member_ids = list(fact.member_claim_ids)
             links = sorted({
-                linked_id
-                for claim_id in member_ids
-                for linked_id in placement_by_claim[claim_id].linked_entity_ids
+                linked_id for linked_id in fact.linked_entity_ids
                 if linked_id in entities and entities[linked_id].status == "active"
             })
-            qualifiers = compact_record_qualifiers(item, include_date=True)
+            qualifiers = []
             if claim.evidence_modality == "tool":
                 qualifiers.append("external research")
             if pending:
@@ -292,12 +526,39 @@ class PageMaterializer:
                     "raw_log_entry_id": provenance.raw_log_entry_id,
                     "speaker": provenance.speaker,
                 }
-                for member in item.members for provenance in member.provenance
+                for member in members for provenance in member.provenance
             ]
+            canonical_owner_ids = sorted({
+                cast(str, canonical_placements[claim_id].owner_entity_id)
+                for claim_id in member_ids
+                if claim_id in canonical_placements
+                and canonical_placements[claim_id].owner_entity_id
+            })
+            canonical_linked_ids = sorted({
+                linked_id
+                for claim_id in member_ids
+                if claim_id in canonical_placements
+                for linked_id in canonical_placements[claim_id].linked_entity_ids
+            })
             items.append({
                 "kind": "fact",
-                "text": display_claim_text(claim),
+                "fact_id": fact.fact_id,
+                "text": fact.text,
                 "claim_ids": member_ids,
+                "synthesis_origin": fact.synthesis_origin,
+                "synthesis_confidence": fact.confidence,
+                "synthesis_reason": fact.reason,
+                "manual_text": fact.manual_text,
+                "canonical_owner_entity_ids": canonical_owner_ids,
+                "canonical_linked_entity_ids": canonical_linked_ids,
+                "relationship_kind": (
+                    "project_role" if is_project_role(claim) else None
+                ),
+                "projection": (
+                    "shared_endpoint"
+                    if any(owner_id != page_entity_id for owner_id in canonical_owner_ids)
+                    else "canonical"
+                ),
                 "qualifiers": list(dict.fromkeys(qualifiers)),
                 "evidence_modality": claim.evidence_modality,
                 "sources": sources,
@@ -347,25 +608,6 @@ class PageMaterializer:
             }
             for entity in values
         ]
-
-    @staticmethod
-    def _markdown(sections: list[dict]) -> str:
-        lines: list[str] = []
-        for section in sections:
-            if lines:
-                lines.append("")
-            lines.append(f"## {section['title']}")
-            lines.append("")
-            for item in section["items"]:
-                if item["kind"] == "link":
-                    lines.append(f"- [[{item['slug']}]] — {item['title']}")
-                    continue
-                qualifiers = item.get("qualifiers", [])
-                suffix = f" _({'; '.join(qualifiers)})_" if qualifiers else ""
-                linked = " ".join(f"[[{link['slug']}]]" for link in item.get("links", []))
-                link_suffix = f" — {linked}" if linked else ""
-                lines.append(f"- {item['text']}{link_suffix}{suffix}")
-        return "\n".join(lines).strip()
 
     def rebuild_index(
         self,

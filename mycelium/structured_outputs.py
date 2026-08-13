@@ -1,6 +1,6 @@
 """Structured response contracts used by production LLM calls."""
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, create_model
@@ -133,6 +133,150 @@ class EntityDiscoveryDecisionOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     candidate: EntityCandidateOutput | None = None
     reason: str = Field(min_length=1, max_length=500)
+
+
+class ScopeEntityCandidateOutput(BaseModel):
+    """One globally defined candidate used by cohort claim assignments."""
+
+    model_config = ConfigDict(extra="forbid")
+    candidate_id: str = Field(pattern=r"^N[0-9]{3}$")
+    title: str = Field(min_length=1, max_length=160)
+    entity_type: Literal[
+        "person", "project", "topic", "organization", "place", "event"
+    ]
+    aliases: list[str] = Field(default_factory=list, max_length=12)
+    creation_basis: Literal[
+        "meeting_participant", "durable_person", "named_project",
+        "project_continuity", "intentional_topic",
+        "topic_evidence", "lasting_organization", "lasting_place",
+        "substantial_event",
+    ]
+    supporting_claims: list[str] = Field(default_factory=list, max_length=48)
+    supporting_participants: list[str] = Field(default_factory=list, max_length=48)
+    independent_scope: bool
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class CanonicalScopeAssignmentOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    disposition: Literal["canonical"]
+    owner_entity: str = Field(min_length=1, max_length=160)
+    linked_entities: list[str] = Field(default_factory=list, max_length=12)
+    supporting_claims: list[str] = Field(default_factory=list, max_length=48)
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class NoncanonicalScopeAssignmentOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    disposition: Literal["deferred", "source_only"]
+    supporting_claims: list[str] = Field(default_factory=list, max_length=48)
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+ScopeAssignmentOutput = Annotated[
+    CanonicalScopeAssignmentOutput | NoncanonicalScopeAssignmentOutput,
+    Field(discriminator="disposition"),
+]
+
+
+class UserParticipantResolutionOutput(BaseModel):
+    """Resolve a structurally labelled user speaker to the singleton You entity."""
+
+    model_config = ConfigDict(extra="forbid")
+    entity_type: Literal["you"]
+    entity: Literal["you"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class PersonParticipantResolutionOutput(BaseModel):
+    """Resolve a non-user meeting speaker to a Person entity reference."""
+
+    model_config = ConfigDict(extra="forbid")
+    entity_type: Literal["person"]
+    entity: str = Field(min_length=1, max_length=160)
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+ParticipantScopeResolutionOutput = (
+    UserParticipantResolutionOutput | PersonParticipantResolutionOutput
+)
+
+
+class CohortScopePlanOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidates: list[ScopeEntityCandidateOutput] = Field(
+        default_factory=list, max_length=24
+    )
+    assignments: dict[str, ScopeAssignmentOutput]
+    participants: dict[str, ParticipantScopeResolutionOutput] = Field(
+        default_factory=dict
+    )
+
+
+class ConsolidatedFactGroupOutput(BaseModel):
+    """A presentation-level grouping of compatible claims in one fixed scope."""
+
+    model_config = ConfigDict(extra="forbid")
+    claim_aliases: list[str] = Field(min_length=1, max_length=48)
+    text: str = Field(min_length=1, max_length=600)
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class ConsolidatedFactPlanOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    facts: list[ConsolidatedFactGroupOutput] = Field(min_length=1, max_length=96)
+
+
+def cohort_scope_output_model(
+    evidence_aliases: Collection[str],
+    participant_aliases: Collection[str] | Mapping[str, str | None] = (),
+) -> type[BaseModel]:
+    """Build a cohort contract with exact assignment keys visible to guided decoding."""
+    aliases = tuple(dict.fromkeys(str(value) for value in evidence_aliases if value))
+    if not aliases:
+        raise ValueError("Cohort scope planning requires at least one evidence alias")
+    assignment_fields: dict[str, Any] = {
+        alias: (ScopeAssignmentOutput, ...) for alias in aliases
+    }
+    assignments_model = create_model(
+        "ExactCohortAssignments",
+        __config__=ConfigDict(extra="forbid"),
+        **assignment_fields,
+    )
+    participant_roles = (
+        {str(alias): role for alias, role in participant_aliases.items() if alias}
+        if isinstance(participant_aliases, Mapping)
+        else {str(alias): None for alias in participant_aliases if alias}
+    )
+    participant_fields: dict[str, Any] = {
+        alias: ((
+            UserParticipantResolutionOutput
+            if str(role or "").lower() == "user"
+            else PersonParticipantResolutionOutput
+        ), ...)
+        for alias, role in participant_roles.items()
+    }
+    participants_model = create_model(
+        "ExactCohortParticipants",
+        __config__=ConfigDict(extra="forbid"),
+        **participant_fields,
+    )
+    return create_model(
+        "ExactCohortScopePlan",
+        __config__=ConfigDict(extra="forbid"),
+        candidates=(
+            list[ScopeEntityCandidateOutput],
+            Field(default_factory=list, max_length=24),
+        ),
+        assignments=(assignments_model, ...),
+        participants=(participants_model, ...),
+    )
 
 
 def entity_discovery_output_model(

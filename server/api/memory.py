@@ -16,7 +16,11 @@ from server.runtime import (
     run_dream_if_ready as run_dream_if_ready_process,
 )
 from mycelium.reconsolidation import ReconsolidationReviewService, ReviewConflictError
-from mycelium.organization import EntityCurationService, OrganizationReviewService
+from mycelium.organization import (
+    EntityCurationService,
+    FactCurationService,
+    OrganizationReviewService,
+)
 
 router = APIRouter()
 
@@ -60,6 +64,34 @@ class PlacementUpdateRequest(BaseModel):
     reason: str = "Manual wiki organization"
 
 
+class FactEditRequest(BaseModel):
+    text: str = Field(min_length=1)
+    reason: str = "Manual fact correction"
+
+
+class FactMoveRequest(BaseModel):
+    owner_entity_id: str
+    section_key: str
+    linked_entity_ids: list[str] = Field(default_factory=list)
+    reason: str = "Manual fact organization"
+
+
+class FactGroupRequest(BaseModel):
+    fact_ids: list[str] = Field(min_length=2)
+    text: str = Field(min_length=1)
+    reason: str = "Manual fact grouping"
+
+
+class FactSplitGroup(BaseModel):
+    claim_ids: list[str] = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
+class FactSplitRequest(BaseModel):
+    groups: list[FactSplitGroup] = Field(min_length=2)
+    reason: str = "Manual fact split"
+
+
 def wiki_page_response(page):
     return {
         "slug": page.slug,
@@ -101,6 +133,7 @@ def _artifact_integrity(mem) -> dict:
     proposals = mem.artifacts.list_reconsolidation_proposals()
     entities = {entity.entity_id: entity for entity in mem.artifacts.list_entities()}
     placements = {item.claim_id: item for item in mem.artifacts.list_placements()}
+    facts = mem.artifacts.list_consolidated_facts()
 
     issues = {
         "sources_without_episode": sorted(
@@ -148,6 +181,17 @@ def _artifact_integrity(mem) -> dict:
             f"{placement.claim_id}:{placement.owner_entity_id}"
             for placement in placements.values()
             if placement.owner_entity_id and placement.owner_entity_id not in entities
+        ),
+        "facts_missing_claims": sorted(
+            f"{fact.fact_id}:{claim_id}"
+            for fact in facts
+            for claim_id in fact.member_claim_ids
+            if claim_id not in claim_by_id
+        ),
+        "facts_missing_entities": sorted(
+            f"{fact.fact_id}:{fact.owner_entity_id}"
+            for fact in facts
+            if fact.owner_entity_id not in entities
         ),
         "entities_missing_pages": sorted(
             f"{entity.entity_id}:{entity.slug}"
@@ -337,6 +381,28 @@ async def list_artifact_placements(status: str | None = None):
     return [asdict(item) for item in get_mem().artifacts.list_placements(status=status)]
 
 
+@router.get("/artifacts/scope-decisions")
+async def list_scope_decisions(claim_id: str | None = None, status: str | None = None):
+    return [
+        asdict(item)
+        for item in get_mem().artifacts.list_scope_decisions(
+            claim_id=claim_id, status=status
+        )
+    ]
+
+
+@router.get("/artifacts/consolidated-facts")
+async def list_consolidated_facts(
+    owner_entity_id: str | None = None, state: str | None = None
+):
+    return [
+        asdict(item)
+        for item in get_mem().artifacts.list_consolidated_facts(
+            owner_entity_id=owner_entity_id, state=state
+        )
+    ]
+
+
 @router.get("/artifacts/organization-proposals")
 async def list_organization_proposals(status: str | None = None):
     return [
@@ -482,6 +548,18 @@ def _curation_service():
     return EntityCurationService(mem.artifacts, mem.wiki, mem.dream_process.materializer)
 
 
+def _fact_curation_service():
+    mem = get_mem()
+    return FactCurationService(mem.artifacts, mem.dream_process.materializer)
+
+
+def _fact_curation_response(result):
+    return {
+        "facts": [asdict(fact) for fact in result.facts],
+        "pages_updated": result.pages_updated,
+    }
+
+
 def _curation_response(result):
     if result is None:
         return {"entity": None, "pages_updated": [], "pages_deleted": []}
@@ -566,6 +644,60 @@ async def update_placement(claim_id: str, req: PlacementUpdateRequest):
         ))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Claim or entity not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.patch("/facts/{fact_id}")
+async def edit_fact(fact_id: str, req: FactEditRequest):
+    try:
+        return _fact_curation_response(
+            _fact_curation_service().edit(fact_id, req.text, reason=req.reason)
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Fact not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/facts/{fact_id}/move")
+async def move_fact(fact_id: str, req: FactMoveRequest):
+    try:
+        return _fact_curation_response(_fact_curation_service().move(
+            fact_id,
+            req.owner_entity_id,
+            req.section_key,
+            linked_entity_ids=req.linked_entity_ids,
+            reason=req.reason,
+        ))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Fact, claim, or entity not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/facts/group")
+async def group_facts(req: FactGroupRequest):
+    try:
+        return _fact_curation_response(
+            _fact_curation_service().group(req.fact_ids, req.text, reason=req.reason)
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Fact not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/facts/{fact_id}/split")
+async def split_fact(fact_id: str, req: FactSplitRequest):
+    try:
+        return _fact_curation_response(_fact_curation_service().split(
+            fact_id,
+            [group.model_dump() for group in req.groups],
+            reason=req.reason,
+        ))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Fact not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

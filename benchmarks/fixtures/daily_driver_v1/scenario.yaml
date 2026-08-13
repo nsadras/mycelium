@@ -1,0 +1,396 @@
+schema_version: 1
+scenario_id: daily-driver-v1
+title: Maya Chen's local meeting-memory project
+timezone: America/Los_Angeles
+user:
+  id: you
+  name: Maya Chen
+  speaker_label: User
+  identity_authority: configured_profile
+episodes:
+  - id: chat-01
+    source_id: src-chat-01
+    source_type: agent_conversation
+    occurred_at: 2026-09-01T09:00:00-07:00
+    dream_after: false
+    participants: [User, Assistant]
+    segments:
+      - id: chat-01-s01
+        speaker: User
+        role: user
+        text: I am a product designer in Oakland, and I want to prototype a private meeting-memory assistant that runs locally.
+        retention: claim
+      - id: chat-01-s02
+        speaker: Assistant
+        role: assistant
+        text: A browser extension could make the first prototype quick to distribute and test.
+        retention: source_only
+      - id: chat-01-s03
+        speaker: User
+        role: user
+        text: I do not want a browser extension. I want a desktop app because meetings include sensitive client information. I am not ready to name it yet.
+        retention: claim
+    actions_after: [checkpoint:cp1_pre_dream, dream, checkpoint:cp2_first_dream]
+
+  - id: chat-02
+    source_id: src-chat-02
+    source_type: agent_conversation
+    occurred_at: 2026-09-02T14:00:00-07:00
+    dream_after: false
+    participants: [User, Assistant]
+    segments:
+      - id: chat-02-s01
+        speaker: User
+        role: user
+        text: For the meeting idea, recordings and transcripts must stay on the laptop. Cloud transcription is a nonstarter.
+        retention: claim
+      - id: chat-02-s02
+        speaker: Assistant
+        role: assistant
+        text: A local Whisper model would satisfy that constraint.
+        retention: source_only
+      - id: chat-02-s03
+        speaker: User
+        role: user
+        text: Yes, use a local Whisper model for the prototype.
+        retention: claim
+
+  - id: meeting-01
+    source_id: src-meeting-01
+    source_type: meeting_transcript
+    occurred_at: 2026-09-03T10:00:00-07:00
+    dream_after: false
+    participants: [User, Priya Raman]
+    metadata:
+      title: Meeting-memory concept review
+    segments:
+      - id: meeting-01-s01
+        speaker: Priya Raman
+        text: I can lead evaluation for the meeting assistant and recruit three pilot teams.
+        retention: claim
+      - id: meeting-01-s02
+        speaker: User
+        text: Great. I will own the desktop prototype and consent flow.
+        retention: claim
+      - id: meeting-01-s03
+        speaker: Priya Raman
+        text: We should test speaker correction because diarization errors are inevitable.
+        retention: claim
+      - id: meeting-01-s04
+        speaker: User
+        text: Agreed. Speaker correction is required for the pilot.
+        retention: claim
+      - id: meeting-01-s05
+        speaker: User
+        text: Let us review a working prototype next Thursday.
+        retention: claim
+
+  - id: tool-01
+    source_id: src-tool-01
+    source_type: tool_observation
+    occurred_at: 2026-09-04T11:00:00-07:00
+    dream_after: false
+    participants: [Ollama web search]
+    metadata:
+      tool_name: web_search
+      query: WhisperX local diarization support
+    segments:
+      - id: tool-01-s01
+        speaker: Ollama web search
+        role: tool
+        text: WhisperX supports word-level alignment and speaker diarization and can run with locally installed models.
+        retention: claim
+      - id: tool-01-s02
+        speaker: Ollama web search
+        role: tool
+        text: Sponsored result — TranscribeCloud offers unlimited team transcription for $39 per month.
+        retention: source_only
+
+  - id: chat-03
+    source_id: src-chat-03
+    source_type: agent_conversation
+    occurred_at: 2026-09-04T11:20:00-07:00
+    dream_after: false
+    participants: [User, Assistant]
+    segments:
+      - id: chat-03-s01
+        speaker: Assistant
+        role: assistant
+        text: WhisperX appears to support the alignment and diarization capabilities the prototype needs.
+        retention: source_only
+      - id: chat-03-s02
+        speaker: User
+        role: user
+        text: WhisperX sounds like our leading transcription candidate, but let us not make a final decision until we benchmark it.
+        retention: claim
+      - id: chat-03-s03
+        speaker: User
+        role: user
+        text: I also need participant consent before any recording starts.
+        retention: claim
+
+  - id: meeting-02
+    source_id: src-meeting-02
+    source_type: meeting_transcript
+    occurred_at: 2026-09-08T15:00:00-07:00
+    dream_after: false
+    participants: [User, Priya Raman, Luis Ortega]
+    metadata:
+      title: Lantern prototype planning
+    segments:
+      - id: meeting-02-s01
+        speaker: User
+        text: The prototype is now called Lantern, and it is a local desktop app for searchable meeting memory.
+        retention: claim
+      - id: meeting-02-s02
+        speaker: Luis Ortega
+        text: I will implement the local transcription pipeline and package WhisperX.
+        retention: claim
+      - id: meeting-02-s03
+        speaker: Priya Raman
+        text: I will write the pilot evaluation rubric and recruit the teams.
+        retention: claim
+      - id: meeting-02-s04
+        speaker: User
+        text: The pilot should measure correction effort and whether users can trace a memory back to the transcript.
+        retention: claim
+      - id: meeting-02-s05
+        speaker: Luis Ortega
+        text: We can have a packaged build by Friday.
+        retention: claim
+      - id: meeting-02-s06
+        speaker: User
+        text: Let us target the first pilot for September 22.
+        retention: claim
+    actions_after: [dream, checkpoint:cp3_second_dream]
+
+  - id: chat-04
+    source_id: src-chat-04
+    source_type: agent_conversation
+    occurred_at: 2026-09-09T18:00:00-07:00
+    dream_after: false
+    participants: [User, Assistant]
+    segments:
+      - id: chat-04-s01
+        speaker: User
+        role: user
+        text: Separately from Lantern, I have started recording oral-history interviews with my grandmother about her immigration story.
+        retention: claim
+      - id: chat-04-s02
+        speaker: User
+        role: user
+        text: The next interview is Sunday afternoon at her apartment in Berkeley.
+        retention: claim
+      - id: chat-04-s03
+        speaker: Assistant
+        role: assistant
+        text: Those interviews might also reveal useful examples of what people need from Lantern.
+        retention: source_only
+      - id: chat-04-s04
+        speaker: User
+        role: user
+        text: I would rather keep the family interviews separate. They are personal, not Lantern user research.
+        retention: claim
+
+  - id: tool-02
+    source_id: src-tool-02
+    source_type: tool_observation
+    occurred_at: 2026-09-10T09:00:00-07:00
+    dream_after: false
+    participants: [Calendar]
+    metadata:
+      tool_name: calendar_lookup
+      query: Current user commitments September 10 through September 14
+    segments:
+      - id: tool-02-s01
+        speaker: Calendar
+        role: tool
+        text: "Calendar event: Oral-history interview with Grandma — Sunday, September 13, 2026 from 3:00 PM to 4:30 PM at Grandma's apartment, Berkeley."
+        retention: claim
+      - id: tool-02-s02
+        speaker: Calendar
+        role: tool
+        text: "Calendar event: Dentist cleaning — Monday, September 14, 2026 at 8:00 AM."
+        retention: source_only
+
+  - id: meeting-03
+    source_id: src-meeting-03
+    source_type: meeting_transcript
+    occurred_at: 2026-09-10T13:00:00-07:00
+    dream_after: false
+    participants: [User, Luis Ortega]
+    metadata:
+      title: Lantern architecture review
+    segments:
+      - id: meeting-03-s01
+        speaker: Luis Ortega
+        text: WhisperX ran faster than real time on your laptop and speaker labels were usable after correction.
+        retention: claim
+      - id: meeting-03-s02
+        speaker: User
+        text: Then we are choosing WhisperX for the pilot.
+        retention: claim
+      - id: meeting-03-s03
+        speaker: User
+        text: Store audio and transcripts locally, and require an explicit export action before anything leaves the machine.
+        retention: claim
+      - id: meeting-03-s04
+        speaker: Luis Ortega
+        text: I can finish the packaged build tomorrow.
+        retention: claim
+    actions_after: [dream, checkpoint:cp4_mature_update]
+
+  - id: chat-05
+    source_id: src-chat-05
+    source_type: agent_conversation
+    occurred_at: 2026-09-11T16:00:00-07:00
+    dream_after: false
+    participants: [User, Assistant]
+    segments:
+      - id: chat-05-s01
+        speaker: User
+        role: user
+        text: Priya cannot recruit the pilot teams by September 22, so move Lantern's first pilot to September 28.
+        retention: claim
+      - id: chat-05-s02
+        speaker: User
+        role: user
+        text: Priya still owns recruitment and the evaluation rubric.
+        retention: claim
+      - id: chat-05-s03
+        speaker: Assistant
+        role: assistant
+        text: Understood. The first pilot is now planned for September 28.
+        retention: source_only
+    actions_after: [dream, checkpoint:cp5_pending_change, approve:recon-pilot-date, checkpoint:cp6_change_applied]
+
+  - id: meeting-04
+    source_id: src-meeting-04
+    source_type: meeting_transcript
+    occurred_at: 2026-09-12T09:00:00-07:00
+    dream_after: false
+    participants: [User, Omar Haddad]
+    metadata:
+      title: Northstar acquisition integration
+      workspace: imported-by-mistake
+    segments:
+      - id: meeting-04-s01
+        speaker: Omar Haddad
+        text: Northstar acquired Smallbird for 18 million dollars.
+        retention: claim_then_retract
+      - id: meeting-04-s02
+        speaker: User
+        text: The integration begins October 1, and Omar owns the migration plan.
+        retention: claim_then_retract
+      - id: meeting-04-s03
+        speaker: Omar Haddad
+        text: Legal review must finish before launch.
+        retention: claim_then_retract
+    actions_after: [dream, checkpoint:cp6_wrong_import]
+
+  - id: chat-06
+    source_id: src-chat-06
+    source_type: agent_conversation
+    occurred_at: 2026-09-12T10:00:00-07:00
+    dream_after: false
+    participants: [User, Assistant]
+    segments:
+      - id: chat-06-s01
+        speaker: User
+        role: user
+        text: That Northstar meeting was imported from the wrong workspace. Delete that source and everything learned only from it.
+        retention: retraction_instruction
+    actions_after: [retract:src-meeting-04, checkpoint:cp7_retraction_applied]
+
+  - id: meeting-05
+    source_id: src-meeting-05
+    source_type: meeting_transcript
+    occurred_at: 2026-09-14T10:00:00-07:00
+    dream_after: false
+    participants: [User, Priya Raman]
+    metadata:
+      title: Lantern pilot readiness
+    segments:
+      - id: meeting-05-s01
+        speaker: Priya Raman
+        text: I recruited three pilot teams and finished the evaluation rubric.
+        retention: claim
+      - id: meeting-05-s02
+        speaker: User
+        text: The desktop prototype now supports speaker-name correction and source links back to transcript segments.
+        retention: claim
+      - id: meeting-05-s03
+        speaker: Priya Raman
+        text: Participants must confirm consent at the start of every recorded meeting.
+        retention: claim
+      - id: meeting-05-s04
+        speaker: User
+        text: Agreed. The consent gate is a release blocker, not an optional polish item.
+        retention: claim
+
+  - id: tool-03
+    source_id: src-tool-03
+    source_type: tool_observation
+    occurred_at: 2026-09-15T12:00:00-07:00
+    dream_after: false
+    participants: [Issue tracker]
+    metadata:
+      tool_name: issue_search
+      query: Lantern open blockers
+    segments:
+      - id: tool-03-s01
+        speaker: Issue tracker
+        role: tool
+        text: "LANTERN-42 — Consent dialog does not block recording when reopened from recent meetings. Status: open. Assignee: Maya Chen."
+        retention: claim
+      - id: tool-03-s02
+        speaker: Issue tracker
+        role: tool
+        text: "LANTERN-17 — Dark mode icon alignment. Status: open. Assignee: Luis Ortega."
+        retention: source_only
+
+  - id: chat-07
+    source_id: src-chat-07
+    source_type: agent_conversation
+    occurred_at: 2026-09-16T17:00:00-07:00
+    dream_after: false
+    participants: [User, Assistant]
+    segments:
+      - id: chat-07-s01
+        speaker: User
+        role: user
+        text: The interview with Grandma went well. She described arriving in California in 1974 and working at her aunt's grocery store in Richmond.
+        retention: claim
+      - id: chat-07-s02
+        speaker: User
+        role: user
+        text: I want to scan her photographs before our next interview, but we have not picked a date yet.
+        retention: claim
+      - id: chat-07-s03
+        speaker: Assistant
+        role: assistant
+        text: It might be interesting to research how that Richmond neighborhood has changed since the 1970s.
+        retention: source_only
+
+  - id: meeting-06
+    source_id: src-meeting-06
+    source_type: meeting_transcript
+    occurred_at: 2026-09-18T11:00:00-07:00
+    dream_after: false
+    participants: [User, Luis Ortega]
+    metadata:
+      title: Lantern blocker review
+    segments:
+      - id: meeting-06-s01
+        speaker: User
+        text: I fixed the consent-dialog bypass, so LANTERN-42 is closed.
+        retention: claim
+      - id: meeting-06-s02
+        speaker: Luis Ortega
+        text: The September 28 pilot build is ready for Priya's teams.
+        retention: claim
+      - id: meeting-06-s03
+        speaker: User
+        text: After the pilot, our next decision is whether transcript embeddings can remain fully inspectable.
+        retention: claim
+    actions_after: [dream, checkpoint:cp8_final]

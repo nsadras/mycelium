@@ -1,5 +1,7 @@
 """Shared deterministic mapping from claim semantics to typed wiki sections."""
 
+import re
+
 from mycelium.artifacts import MemoryClaim
 
 
@@ -49,7 +51,27 @@ DEFAULT_SECTIONS: dict[str, dict[str, str]] = {
 }
 
 
+def is_project_role(claim: MemoryClaim) -> bool:
+    """Return whether a claim is the canonical relationship for a project role."""
+    predicate = re.sub(r"[^a-z0-9]+", "_", str(claim.predicate or "").lower()).strip("_")
+    return claim.claim_type == "relationship" and predicate == "project_role"
+
+
+def project_role_section(entity_type: str) -> str:
+    """Map one project-role relationship into an endpoint's human-facing view."""
+    sections = {
+        "you": "priorities_plans",
+        "person": "shared_projects",
+        "project": "people_organizations",
+    }
+    if entity_type not in sections:
+        raise ValueError(f"Project roles cannot render on {entity_type} entities")
+    return sections[entity_type]
+
+
 def default_section(entity_type: str, claim: MemoryClaim) -> str:
     if claim.evidence_modality == "tool":
         return "evidence" if entity_type == "event" else "research_references"
+    if is_project_role(claim) and entity_type in {"you", "person", "project"}:
+        return project_role_section(entity_type)
     return DEFAULT_SECTIONS[entity_type][claim.claim_type]

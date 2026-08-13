@@ -8,6 +8,7 @@ from datetime import datetime
 
 from mycelium.artifacts import (
     ArtifactStore,
+    ClaimScopeDecision,
     DreamClaimDecision,
     DreamRunAudit,
     MemoryClaim,
@@ -15,6 +16,8 @@ from mycelium.artifacts import (
 )
 from mycelium.config import Config
 from mycelium.consolidation import ClaimEvidence, ClaimRouter
+from mycelium.consolidation import placement_from_route
+from mycelium.facts import FactConsolidator
 from mycelium.materialization import PageMaterializer
 from mycelium.organization import OrganizationAuditor
 from mycelium.reconsolidation import ClaimReconsolidator, add_claim_link
@@ -41,6 +44,7 @@ class DreamProcess:
         self.router = ClaimRouter(llm, artifacts)
         self.materializer = PageMaterializer(wiki, artifacts, config)
         self.reconsolidator = ClaimReconsolidator(llm, artifacts)
+        self.fact_consolidator = FactConsolidator(llm, artifacts)
         self.short_term = ShortTermMemoryQueue(artifacts, config.dream)
 
     async def run(
@@ -113,8 +117,9 @@ class DreamProcess:
         evidence, decisions = self._build_evidence(sources, queued_claim_ids)
         routing = await self.router.route(evidence) if evidence else None
         if routing is not None:
+            failed_claim_ids: set[str] = set()
             for failure in routing.failures:
-                failed_source_ids.add(failure.raw_log_entry_id)
+                failed_claim_ids.add(failure.claim_id)
                 failures.append({
                     "stage": "routing",
                     "source_id": failure.raw_log_entry_id,
@@ -129,7 +134,7 @@ class DreamProcess:
             successful_routes = [
                 route
                 for route in routing.routes
-                if route.raw_log_entry_id not in failed_source_ids
+                if route.claim_id not in failed_claim_ids
             ]
         else:
             successful_routes = []
@@ -140,8 +145,9 @@ class DreamProcess:
             dream_run_id=run_id,
         ) if successful_routes else None
         if reconciliation is not None:
+            recon_failed_claim_ids: set[str] = set()
             for recon_failure in reconciliation.failures:
-                failed_source_ids.add(recon_failure.raw_log_entry_id)
+                recon_failed_claim_ids.add(recon_failure.claim_id)
                 failures.append({
                     "stage": "reconsolidation",
                     "source_id": recon_failure.raw_log_entry_id,
@@ -155,7 +161,7 @@ class DreamProcess:
                 )
             successful_routes = [
                 route for route in successful_routes
-                if route.raw_log_entry_id not in failed_source_ids
+                if route.claim_id not in recon_failed_claim_ids
             ]
             successful_claim_ids = {route.claim_id for route in successful_routes}
             supporting_relations = [
@@ -183,6 +189,15 @@ class DreamProcess:
 
         referenced_entity_ids = {
             route.owner_entity_id for route in successful_routes if route.owner_entity_id
+        } | {
+            entity_id for route in successful_routes for entity_id in route.linked_entity_ids
+        } | {
+            encounter.entity_id
+            for encounter in (routing.encounters if routing is not None else [])
+        } | {
+            entity.entity_id
+            for entity in (routing.new_entities if routing is not None else [])
+            if entity.entity_type in {"person", "project"}
         }
         retained_new_entities = [
             entity for entity in (routing.new_entities if routing is not None else [])
@@ -199,7 +214,30 @@ class DreamProcess:
                 ))
                 for route in successful_routes
             ]
-        materialized = self.materializer.stage(successful_routes, retained_new_entities)
+        placed_routes = [route for route in successful_routes if route.placed]
+        affected_fact_entities = {
+            route.owner_entity_id for route in placed_routes if route.owner_entity_id
+        }
+        pending_fact_claim_ids = (
+            self.artifacts.pending_reconsolidation_claim_ids()
+            | {
+                claim_id for proposal in proposals
+                for claim_id in (proposal.incoming_claim_id, proposal.target_claim_id)
+            }
+        )
+        fact_result = await self.fact_consolidator.consolidate(
+            [placement_from_route(route) for route in placed_routes],
+            affected_entity_ids={
+                value for value in affected_fact_entities if value is not None
+            },
+            pending_claim_ids=pending_fact_claim_ids,
+        )
+        materialized = self.materializer.stage(
+            successful_routes,
+            retained_new_entities,
+            facts=fact_result.facts,
+            retired_fact_ids=fact_result.retired_fact_ids,
+        )
         routed_entities = {
             entity.entity_id: entity
             for entity in [
@@ -218,17 +256,17 @@ class DreamProcess:
                     f"Owned by {entity.entity_id} in {route.section_key}.",
                     page_slugs=[entity.slug],
                 )
+            elif route.disposition == "source_only":
+                self._set_decision(
+                    decisions, route.claim_id, "source_only", route.reason
+                )
             else:
                 self._set_decision(
                     decisions, route.claim_id, "deferred", route.reason
                 )
 
         for decision in decisions.values():
-            if decision.raw_log_entry_id in failed_source_ids and decision.disposition != "excluded_assistant":
-                decision.disposition = "routing_failed"
-                decision.reason = "The source remained pending because consolidation did not complete."
-                decision.page_slugs = []
-            elif decision.disposition == "pending":
+            if decision.disposition == "pending":
                 decision.disposition = "routing_failed"
                 decision.reason = "No terminal routing decision was recorded."
 
@@ -241,6 +279,41 @@ class DreamProcess:
 
         if not dry_run:
             self.materializer.persist(materialized)
+            retained_new_entity_ids = {
+                entity.entity_id for entity in retained_new_entities
+            }
+            for encounter in (routing.encounters if routing is not None else []):
+                if encounter.entity_id in retained_new_entity_ids or any(
+                    entity.entity_id == encounter.entity_id
+                    for entity in self.artifacts.list_entities()
+                ):
+                    self.artifacts.save_encounter(encounter)
+            encounter_entity_ids = {
+                encounter.entity_id
+                for encounter in (routing.encounters if routing is not None else [])
+            }
+            if encounter_entity_ids:
+                encounter_pages = self.materializer.regenerate(encounter_entity_ids | {"you"})
+                materialized.changed_pages.update(encounter_pages.changed_pages)
+                materialized.created_slugs.update(encounter_pages.created_slugs)
+                materialized.updated_slugs.update(encounter_pages.updated_slugs)
+                materialized.deleted_slugs.update(encounter_pages.deleted_slugs)
+            now = datetime.now().astimezone().isoformat()
+            for route in successful_routes:
+                self.artifacts.save_scope_decision(ClaimScopeDecision(
+                    decision_id=f"scope-{uuid.uuid4().hex[:12]}",
+                    claim_id=route.claim_id,
+                    owner_entity_id=route.owner_entity_id,
+                    section_key=route.section_key,
+                    linked_entity_ids=list(route.linked_entity_ids),
+                    supporting_claim_ids=list(route.supporting_claim_ids),
+                    confidence=route.confidence,
+                    reason=route.reason,
+                    origin="automatic",
+                    dream_run_id=run_id,
+                    status="active",
+                    created_at=now,
+                ))
             routed_entity_ids = {
                 route.owner_entity_id for route in successful_routes if route.owner_entity_id
             }

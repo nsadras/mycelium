@@ -1,0 +1,116 @@
+schema_version: 1
+scenario_id: daily-driver-v1
+checkpoints:
+  - id: cp1_pre_dream
+    after_episode: chat-01
+    description: Claims are durably searchable before any canonical organization occurs.
+    queue:
+      pending: [c-maya-profile, c-lantern-intent, c-lantern-desktop, c-sensitive-client-data]
+      deferred: []
+      retryable: []
+    entities: [you]
+    pages: [you]
+    forbidden_pages: [project-lantern]
+
+  - id: cp2_first_dream
+    after_episode: chat-01
+    description: One unnamed idea is insufficient for a Project page.
+    queue:
+      pending: []
+      deferred: [c-lantern-intent, c-lantern-desktop, c-sensitive-client-data]
+      retryable: []
+    canonical_claims: [c-maya-profile]
+    entities: [you]
+    pages: [you]
+    forbidden_pages: [project-lantern]
+
+  - id: cp3_second_dream
+    after_episode: meeting-02
+    description: Evidence across chats, a tool result, and meetings establishes Lantern and its collaborators.
+    queue: {pending: [], deferred: [], retryable: []}
+    canonical_through_episode: meeting-02
+    entities: [you, project-lantern, person-priya-raman, person-luis-ortega]
+    pages: [you, project-lantern, person-priya-raman, person-luis-ortega]
+    required_page_facts:
+      project-lantern: [f-lantern-purpose, f-lantern-local-only, f-speaker-correction, f-pilot-date-old, f-maya-lantern-role, f-priya-role, f-luis-role]
+      person-priya-raman: [f-priya-role]
+      person-luis-ortega: [f-luis-role, f-packaged-build]
+    forbidden_pages: [project-family-oral-history, topic-whisperx, event-prototype-review]
+
+  - id: cp4_mature_update
+    after_episode: meeting-03
+    description: A mature Lantern page assimilates new architecture facts while the recurring family oral-history activity forms a separate Project.
+    queue: {pending: [], deferred: [], retryable: []}
+    canonical_through_episode: meeting-03
+    entities: [you, project-lantern, project-family-oral-history, person-priya-raman, person-luis-ortega, person-grandmother]
+    pages: [you, project-lantern, project-family-oral-history, person-priya-raman, person-luis-ortega, person-grandmother]
+    required_page_facts:
+      project-lantern: [f-whisperx-decision, f-lantern-local-only, f-whisperx-benchmark]
+      project-family-oral-history: [f-family-history-purpose, f-family-history-separate, f-family-history-interview]
+    forbidden_pages: [topic-whisperx, event-family-history-interview, place-berkeley, organization-grocery-store]
+
+  - id: cp5_pending_change
+    after_episode: chat-05
+    description: An explicit date correction is reviewable before either date is presented as current truth.
+    queue: {pending: [], deferred: [], retryable: []}
+    reconciliation:
+      - id: recon-pilot-date
+        relation: supersedes
+        incoming_claim: c-pilot-date-new
+        target_claim: c-pilot-date-old
+        status: pending
+    withheld_from_authoritative_sections: [c-pilot-date-old, c-pilot-date-new]
+    needs_review: [c-pilot-date-old, c-pilot-date-new]
+
+  - id: cp6_change_applied
+    after_episode: chat-05
+    description: Approval makes September 28 current and retains September 22 only as superseded history.
+    queue: {pending: [], deferred: [], retryable: []}
+    claim_state_overrides:
+      c-pilot-date-old: superseded
+      c-pilot-date-new: active
+    authoritative_facts: [f-pilot-date-current]
+    historical_facts: [f-pilot-date-old]
+    forbidden_current_facts: [f-pilot-date-old]
+
+  - id: cp6_wrong_import
+    after_episode: meeting-04
+    description: The wrong-workspace source is visible and traceable before the user retracts it.
+    queue: {pending: [], deferred: [], retryable: []}
+    claim_state_overrides:
+      c-northstar-acquisition: active
+      c-northstar-integration: active
+      c-northstar-legal: active
+    entities: [you, project-lantern, project-family-oral-history, person-priya-raman, person-luis-ortega, person-grandmother, person-omar-haddad, event-northstar-smallbird-acquisition]
+    pages: [you, project-lantern, project-family-oral-history, person-priya-raman, person-luis-ortega, person-grandmother, person-omar-haddad, event-northstar-smallbird-acquisition]
+    required_page_facts:
+      event-northstar-smallbird-acquisition: [f-northstar-acquisition, f-northstar-integration, f-northstar-legal]
+
+  - id: cp7_retraction_applied
+    after_episode: chat-06
+    description: Retraction removes unsupported canonical memory while preserving an inspectable audit tombstone.
+    queue: {pending: [], deferred: [], retryable: []}
+    source_states: {src-meeting-04: retracted}
+    claim_state_overrides:
+      c-northstar-acquisition: retracted
+      c-northstar-integration: retracted
+      c-northstar-legal: retracted
+    removed_entities: [person-omar-haddad, event-northstar-smallbird-acquisition]
+    removed_pages: [person-omar-haddad, event-northstar-smallbird-acquisition]
+    forbidden_retrieval_facts: [f-northstar-acquisition, f-northstar-integration, f-northstar-legal]
+
+  - id: cp8_final
+    after_episode: meeting-06
+    description: Current state and history are concise, complete, separated by project, and free of retracted material.
+    queue: {pending: [], deferred: [], retryable: []}
+    canonical_through_episode: meeting-06
+    claim_state_overrides:
+      c-pilot-date-old: superseded
+      c-northstar-acquisition: retracted
+      c-northstar-integration: retracted
+      c-northstar-legal: retracted
+    entities: [you, project-lantern, project-family-oral-history, person-priya-raman, person-luis-ortega, person-grandmother]
+    pages: [you, project-lantern, project-family-oral-history, person-priya-raman, person-luis-ortega, person-grandmother]
+    exact_fact_count: 29
+    forbidden_pages: [event-northstar-smallbird-acquisition, topic-whisperx, organization-grocery-store, issue-lantern-42]
+    forbidden_retrieval_facts: [f-northstar-acquisition, f-northstar-integration, f-northstar-legal]

@@ -60,3 +60,49 @@ def test_memory_context_renders_nested_recall_fact_once(temp_mycelium):
     session.loaded_pages = [page]
 
     assert session.memory_context.count("A single useful fact") == 1
+
+
+def test_memory_context_renders_shared_project_role_once_across_endpoint_pages(temp_mycelium):
+    role = {
+        "kind": "fact",
+        "text": "Priya leads pilot evaluation.",
+        "claim_ids": ["claim-role"],
+        "relationship_kind": "project_role",
+        "qualifiers": [],
+        "links": [],
+    }
+    project = WikiPage(
+        slug="lantern", title="Lantern", content="unused",
+        created=None, last_updated=None, version=1, confidence=0.8, importance=0.5,
+        sections=[{
+            "key": "people_organizations",
+            "title": "People & Organizations",
+            "items": [role, {
+                "kind": "fact", "text": "Lantern is ready.",
+                "claim_ids": ["claim-ready"], "relationship_kind": None,
+                "qualifiers": [], "links": [],
+            }],
+        }],
+    )
+    person = WikiPage(
+        slug="priya", title="Priya", content="unused",
+        created=None, last_updated=None, version=1, confidence=0.8, importance=0.5,
+        sections=[{
+            "key": "shared_projects", "title": "Shared Projects", "items": [
+                role,
+                {
+                    "kind": "fact", "text": "Priya completed the rubric.",
+                    "claim_ids": ["claim-rubric"], "relationship_kind": None,
+                    "qualifiers": [], "links": [],
+                },
+            ],
+        }],
+    )
+    from mycelium.session import Session
+
+    session = Session(temp_mycelium, "test", "question")
+    session.loaded_pages = [project, person]
+
+    assert session.memory_context.count("Priya leads pilot evaluation") == 1
+    assert "Lantern is ready" in session.memory_context
+    assert "Priya completed the rubric" in session.memory_context

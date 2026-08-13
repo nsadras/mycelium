@@ -11,20 +11,21 @@ from mycelium import prompts
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimPlacement,
+    EntityEncounter,
     EntityRecord,
     MemoryClaim,
     SourceDocument,
 )
 from mycelium.models import PAGE_SECTION_KEYS, PAGE_TYPES, PageType
 from mycelium.ollama import OllamaClient
-from mycelium.structured_outputs import entity_discovery_output_model, placement_output_model
-from mycelium.wiki_schema import default_section
+from mycelium.structured_outputs import cohort_scope_output_model
+from mycelium.wiki_schema import default_section, is_project_role
 
 
 CREATION_BASIS: dict[PageType, set[str]] = {
     "you": set(),
-    "person": {"durable_person"},
-    "project": {"project_continuity"},
+    "person": {"meeting_participant", "durable_person"},
+    "project": {"named_project", "project_continuity"},
     "topic": {"intentional_topic", "topic_evidence"},
     "organization": {"lasting_organization"},
     "place": {"lasting_place"},
@@ -54,10 +55,15 @@ class ClaimRoute:
     linked_entity_ids: tuple[str, ...]
     raw_log_entry_id: str
     reason: str
+    disposition: str = "canonical"
+    supporting_claim_ids: tuple[str, ...] = ()
+    confidence: float = 0.8
 
     @property
     def placed(self) -> bool:
-        return bool(self.owner_entity_id and self.section_key)
+        return self.disposition == "canonical" and bool(
+            self.owner_entity_id and self.section_key
+        )
 
 
 @dataclass(frozen=True)
@@ -72,6 +78,7 @@ class RoutingResult:
     routes: list[ClaimRoute] = field(default_factory=list)
     new_entities: list[EntityRecord] = field(default_factory=list)
     failures: list[RoutingFailure] = field(default_factory=list)
+    encounters: list[EntityEncounter] = field(default_factory=list)
 
 
 class ClaimRouter:
@@ -83,325 +90,333 @@ class ClaimRouter:
 
     async def route(self, evidence: list[ClaimEvidence]) -> RoutingResult:
         result = RoutingResult()
-        evidence_by_source: dict[str, list[ClaimEvidence]] = {}
-        for item in evidence:
-            evidence_by_source.setdefault(item.raw_log_entry_id, []).append(item)
         planned = {entity.entity_id: entity for entity in self.artifacts.list_entities()}
-        seeded = self._participant_entities(evidence, planned.values())
-        for entity in seeded:
-            planned[entity.entity_id] = entity
-            result.new_entities.append(entity)
-
-        # Discovery is deliberately cohort-level: claims accumulated across
-        # episodes must be visible together before any one source is routed.
-        # Placement remains source-scoped so a malformed response cannot poison
-        # unrelated episodes.
-        for offset in range(0, len(evidence), 48):
-            discovered = await self._discover_entities(
-                evidence[offset:offset + 48], planned
-            )
-            for entity in discovered:
-                planned[entity.entity_id] = entity
-                result.new_entities.append(entity)
-        for source_evidence in evidence_by_source.values():
-            for offset in range(0, len(source_evidence), 32):
-                batch = source_evidence[offset:offset + 32]
-                batch_result = await self._route_batch(batch, planned)
-                result.routes.extend(batch_result.routes)
-                result.failures.extend(batch_result.failures)
-        return result
-
-    async def _discover_entities(
-        self, evidence: list[ClaimEvidence], entities: dict[str, EntityRecord]
-    ) -> list[EntityRecord]:
-        """Discover durable page subjects before deciding where claims belong."""
+        if not evidence:
+            return result
         aliases = {f"C{index:03d}": item for index, item in enumerate(evidence, start=1)}
-        output_model = entity_discovery_output_model(aliases)
-        system, user = prompts.entity_discovery_prompt(
-            self._entity_registry(entities.values()), self._format_evidence(aliases)
+        participants = self._participant_occurrences(evidence)
+        output_model = cohort_scope_output_model(aliases, {
+            alias: role for alias, (_, _, role) in participants.items()
+        })
+        system, user = prompts.cohort_scope_prompt(
+            self._entity_catalog(planned.values()),
+            self._format_evidence(aliases, participants),
         )
         try:
             response = await self.llm.call_structured(
                 system,
                 user,
                 output_model,
-                num_predict=2048,
-                debug_label="dream-entity-discovery",
+                num_predict=8192,
+                debug_label="dream-cohort-scope",
             )
-            decisions = output_model.model_validate(response).model_dump()
-        except Exception:
-            # Entity discovery is advisory. Placement still records a durable,
-            # reviewable deferral when no established owner fits.
-            return []
-
-        known = dict(entities)
-        created: list[EntityRecord] = []
-        now = datetime.now().astimezone().isoformat()
-        grouped: dict[tuple[str, str], list[tuple[str, dict]]] = {}
-        for alias, decision in decisions.items():
-            candidate = decision["candidate"]
-            if candidate is None:
-                continue
-            entity_type = candidate["entity_type"]
-            title = " ".join(str(candidate["title"]).split()).strip()
-            basis = str(candidate["creation_basis"])
-            if not title or entity_type not in CREATION_BASIS or basis not in CREATION_BASIS[entity_type]:
-                continue
-            grouped.setdefault((entity_type, slugify(title)), []).append((alias, candidate))
-
-        for (entity_type, _), proposals in grouped.items():
-            cited = [aliases[alias].claim for alias, _ in proposals]
-            basis = str(proposals[0][1]["creation_basis"])
-            if any(str(decision["creation_basis"]) != basis for _, decision in proposals):
-                continue
-            if basis == "topic_evidence" and len(cited) < 2:
-                continue
-            if basis == "project_continuity" and not (
-                len(cited) >= 2
-                or any(claim.claim_type in {"state", "plan", "commitment", "decision"} for claim in cited)
+            plan = output_model.model_validate(response).model_dump()
+            if set(plan["assignments"]) != set(aliases):
+                raise ValueError("Cohort assignments did not cover the exact evidence aliases")
+            allowed_aliases = set(aliases)
+            if any(
+                set(candidate["supporting_claims"]) - allowed_aliases
+                for candidate in plan["candidates"]
+            ) or any(
+                set(decision["supporting_claims"]) - allowed_aliases
+                for decision in plan["assignments"].values()
             ):
-                continue
-            candidate = proposals[0][1]
-            title = " ".join(str(candidate["title"]).split()).strip()
-            all_aliases = [
-                *[alias for _, decision in proposals for alias in decision["aliases"]],
-                *self._surface_aliases(title, evidence),
+                raise ValueError("Cohort plan cited an unknown evidence alias")
+            allowed_participants = set(participants)
+            if set(plan["participants"]) != allowed_participants or any(
+                set(candidate["supporting_participants"]) - allowed_participants
+                for candidate in plan["candidates"]
+            ):
+                raise ValueError("Cohort plan did not resolve the exact participant aliases")
+            candidate_ids = {
+                candidate["candidate_id"] for candidate in plan["candidates"]
+            }
+            if len(candidate_ids) != len(plan["candidates"]):
+                raise ValueError("Cohort plan declared a candidate ID more than once")
+            entity_types = {
+                **{key: entity.entity_type for key, entity in planned.items()},
+                **{
+                    candidate["candidate_id"]: candidate["entity_type"]
+                    for candidate in plan["candidates"]
+                },
+            }
+            if any(
+                (
+                    role == "user" and resolution["entity"] != "you"
+                ) or (
+                    role != "user"
+                    and entity_types.get(resolution["entity"]) != "person"
+                )
+                for alias, resolution in plan["participants"].items()
+                for role in [participants[alias][2]]
+            ):
+                raise ValueError("Source participants must resolve to You or a Person")
+        except Exception as exc:
+            return self._fail_batch(
+                evidence,
+                f"Cohort scope response did not satisfy the contract: {type(exc).__name__}",
+            )
+
+        candidate_entities: dict[str, EntityRecord] = {}
+        candidate_support: dict[str, tuple[str, ...]] = {}
+        now = datetime.now().astimezone().isoformat()
+        for candidate in plan["candidates"]:
+            assigned_support = [
+                alias
+                for alias, decision in plan["assignments"].items()
+                if decision["disposition"] == "canonical"
+                and decision["owner_entity"] == candidate["candidate_id"]
             ]
-            names = {
-                slugify(title),
-                *(slugify(alias) for alias in all_aliases),
-            } - {""}
-            duplicate = next((
-                entity for entity in known.values()
-                if entity.status == "active"
-                and entity.entity_type == entity_type
-                and names & {
-                    slugify(entity.title),
-                    *(slugify(alias) for alias in entity.aliases),
-                }
-            ), None)
-            if duplicate is not None:
+            support = tuple(dict.fromkeys([
+                *candidate["supporting_claims"], *assigned_support,
+            ]))
+            supporting = [aliases[value] for value in support]
+            if not self._candidate_is_eligible(candidate, supporting):
                 continue
             entity = self._planned_entity(
-                entity_type, title, known.values(), now, aliases=all_aliases,
+                candidate["entity_type"],
+                candidate["title"],
+                planned.values(),
+                now,
+                aliases=candidate["aliases"],
             )
-            known[entity.entity_id] = entity
-            created.append(entity)
-        return created
+            planned[entity.entity_id] = entity
+            candidate_entities[candidate["candidate_id"]] = entity
+            candidate_support[candidate["candidate_id"]] = support
+            result.new_entities.append(entity)
 
-    @staticmethod
-    def _surface_aliases(title: str, evidence: Iterable[ClaimEvidence]) -> list[str]:
-        """Preserve explicit possessive/qualified forms of a discovered title."""
-        title_key = slugify(title)
-        if not title_key:
-            return []
-        aliases = set()
-        for item in evidence:
-            for mention in item.claim.about:
-                surface = " ".join(str(mention.get("entity") or "").split()).strip()
-                key = slugify(surface)
-                if key != title_key and key.endswith(f"-{title_key}"):
-                    aliases.add(surface)
-        return sorted(aliases)
-
-    @classmethod
-    def _participant_entities(
-        cls,
-        evidence: list[ClaimEvidence],
-        existing: Iterable[EntityRecord],
-    ) -> list[EntityRecord]:
-        """Create Persons for direct named participants before semantic placement."""
-        existing = list(existing)
-        known_names = {
-            slugify(name)
-            for entity in existing
-            if entity.entity_type == "person" and entity.status == "active"
-            for name in [entity.title, *entity.aliases]
-        }
-        ignored = {"user", "assistant", "system", "tool", "unknown", "speaker"}
-        names = sorted({
-            " ".join(str(name).split()).strip()
-            for item in evidence
-            if item.source.source_type in {"meeting_transcript", "multi_party_conversation"}
-            for name in [
-                *item.source.participants,
-                *(segment.speaker for segment in item.source.segments),
-            ]
-            if name
-            and slugify(str(name)) not in ignored
-            and slugify(str(name)) not in known_names
-        })
-        now = datetime.now().astimezone().isoformat()
-        created: list[EntityRecord] = []
-        for name in names:
-            entity = cls._planned_entity("person", name, [*existing, *created], now)
-            created.append(entity)
-            known_names.add(slugify(name))
-        return created
-
-    async def _route_batch(
-        self, evidence: list[ClaimEvidence], entities: dict[str, EntityRecord]
-    ) -> RoutingResult:
-        result = RoutingResult()
-        unresolved: list[ClaimEvidence] = []
-        for item in evidence:
-            exact = self._exact_owner(item.claim, entities.values())
-            if exact is None:
-                unresolved.append(item)
-                continue
-            exact_owner, exact_links = exact
-            if item.claim.evidence_modality == "tool" and exact_owner.entity_type == "you":
-                unresolved.append(item)
-                continue
-            result.routes.append(ClaimRoute(
-                item.claim.claim_id,
-                exact_owner.entity_id,
-                default_section(exact_owner.entity_type, item.claim),
-                tuple(entity.entity_id for entity in exact_links),
-                item.raw_log_entry_id,
-                "Exact subject identity matched the canonical entity registry.",
-            ))
-        if not unresolved:
-            return result
-        evidence = unresolved
-        aliases = {f"C{index:03d}": item for index, item in enumerate(evidence, start=1)}
-        output_model = placement_output_model(aliases)
-        system, user = prompts.consolidation_identify_prompt(
-            self._entity_catalog(entities.values()), self._format_evidence(aliases)
+        result.encounters = self._participant_encounters(
+            participants,
+            plan["participants"],
+            planned,
+            candidate_entities,
         )
-        try:
-            response = await self.llm.call_structured(
-                system,
-                user,
-                output_model,
-                num_predict=4096,
-                debug_label="dream-claim-ownership",
-            )
-            if not isinstance(response, dict):
-                raise ValueError("Placement response was not an object")
-            decisions = output_model.model_validate(response).model_dump()
-        except Exception as exc:
-            result.failures.extend(self._fail_batch(
-                evidence,
-                f"Placement response did not satisfy the source contract: {type(exc).__name__}",
-            ).failures)
-            return result
 
-        known = dict(entities)
         for alias, item in aliases.items():
-            decision = decisions[alias]
-            reason = str(decision["reason"]).strip()
-            owner_value = str(decision["owner_entity"]).strip()
-            if not owner_value:
-                result.routes.append(ClaimRoute(
-                    item.claim.claim_id, None, None, (), item.raw_log_entry_id, reason
-                ))
-                continue
-
-            routed_owner = known.get(owner_value)
-            if routed_owner is None or routed_owner.status != "active":
-                result.routes.append(ClaimRoute(
-                    item.claim.claim_id, None, None, (), item.raw_log_entry_id,
-                    f"Proposed owner {owner_value!r} was not an active canonical entity. {reason}",
-                ))
-                continue
-            if routed_owner.entity_type == "you" and self._has_named_participant_scope(item.source):
-                result.failures.append(self._failure(
-                    item, "Named-participant evidence cannot be owned by You"
-                ))
-                continue
-            if not self._owner_is_grounded(routed_owner, item.claim, item.source):
-                result.routes.append(ClaimRoute(
-                    item.claim.claim_id, None, None, (), item.raw_log_entry_id,
-                    f"Proposed owner {routed_owner.entity_id!r} was not grounded in the standalone claim. {reason}",
-                ))
-                continue
-
-            section_key = default_section(routed_owner.entity_type, item.claim)
-            if item.claim.evidence_modality == "tool":
-                section_key = "evidence" if routed_owner.entity_type == "event" else "research_references"
-                if routed_owner.entity_type == "you":
-                    result.routes.append(ClaimRoute(
-                        item.claim.claim_id, None, None, (), item.raw_log_entry_id,
-                        "External evidence cannot automatically establish a fact on You.",
-                    ))
-                    continue
-            routed_links = tuple(sorted({
-                value for value in decision["linked_entities"]
-                if value in known and value != routed_owner.entity_id and known[value].status == "active"
-            }))
-            result.routes.append(ClaimRoute(
-                item.claim.claim_id,
-                routed_owner.entity_id,
-                section_key,
-                routed_links,
-                item.raw_log_entry_id,
-                reason,
+            decision = plan["assignments"][alias]
+            result.routes.append(self._route_decision(
+                alias,
+                item,
+                decision,
+                aliases,
+                planned,
+                candidate_entities,
+                candidate_support,
             ))
         return result
 
-    @staticmethod
-    def _owner_is_grounded(
-        owner: EntityRecord, claim: MemoryClaim, source: SourceDocument
-    ) -> bool:
-        if owner.entity_id == "you":
-            return source.source_type == "agent_conversation"
-        content = slugify(" ".join([
-            claim.text,
-            *(str(item.get("entity") or "") for item in claim.about),
+    def _route_decision(
+        self,
+        alias: str,
+        item: ClaimEvidence,
+        decision: dict,
+        aliases: dict[str, ClaimEvidence],
+        entities: dict[str, EntityRecord],
+        candidates: dict[str, EntityRecord],
+        candidate_support: dict[str, tuple[str, ...]],
+    ) -> ClaimRoute:
+        disposition = str(decision["disposition"])
+        support_aliases = tuple(dict.fromkeys([
+            alias,
+            *decision["supporting_claims"],
+            *candidate_support.get(str(decision.get("owner_entity") or ""), ()),
         ]))
-        words = set(content.split("-"))
-        for name in [owner.title, *owner.aliases]:
-            name_words = {word for word in slugify(name).split("-") if len(word) >= 3}
-            if name_words & words:
-                return True
+        supporting_ids = tuple(
+            aliases[value].claim.claim_id
+            for value in support_aliases
+            if value in aliases
+        )
+        if disposition != "canonical":
+            return ClaimRoute(
+                item.claim.claim_id, None, None, (), item.raw_log_entry_id,
+                str(decision["reason"]), disposition, supporting_ids,
+                float(decision["confidence"]),
+            )
+        owner_ref = str(decision["owner_entity"])
+        owner = candidates.get(owner_ref) or entities.get(owner_ref)
+        if owner is None or owner.status != "active":
+            return ClaimRoute(
+                item.claim.claim_id, None, None, (), item.raw_log_entry_id,
+                f"Proposed owner {owner_ref!r} was not admitted or active. {decision['reason']}",
+                "deferred", supporting_ids, float(decision["confidence"]),
+            )
+        link_refs = [str(value) for value in decision["linked_entities"]]
+        linked = set()
+        for value in link_refs:
+            linked_entity = candidates.get(value) or entities.get(value)
+            if linked_entity is None or linked_entity.status != "active":
+                return ClaimRoute(
+                    item.claim.claim_id, None, None, (), item.raw_log_entry_id,
+                    f"Proposed linked entity {value!r} was not admitted or active. "
+                    f"{decision['reason']}",
+                    "deferred", supporting_ids, float(decision["confidence"]),
+                )
+            linked.add(linked_entity.entity_id)
+        linked.discard(owner.entity_id)
+        link_entities = [entities[value] for value in linked if value in entities]
+        if is_project_role(item.claim) and not self._valid_project_role_route(
+            owner, link_entities
+        ):
+            return ClaimRoute(
+                item.claim.claim_id, None, None, (), item.raw_log_entry_id,
+                "Project-role placement requires a Person or You owner and exactly one linked Project.",
+                "deferred", supporting_ids, float(decision["confidence"]),
+            )
+        section = default_section(owner.entity_type, item.claim)
+        if item.claim.evidence_modality == "tool":
+            if owner.entity_type == "you":
+                return ClaimRoute(
+                    item.claim.claim_id, None, None, (), item.raw_log_entry_id,
+                    "External evidence cannot automatically establish a personal fact on You.",
+                    "source_only", supporting_ids, float(decision["confidence"]),
+                )
+            section = "evidence" if owner.entity_type == "event" else "research_references"
+        return ClaimRoute(
+            item.claim.claim_id, owner.entity_id, section, tuple(sorted(linked)),
+            item.raw_log_entry_id, str(decision["reason"]), "canonical",
+            supporting_ids, float(decision["confidence"]),
+        )
+
+    @staticmethod
+    def _participant_occurrences(
+        evidence: list[ClaimEvidence],
+    ) -> dict[str, tuple[SourceDocument, str, str | None]]:
+        """Expose source-declared participant occurrences to the scope contract."""
+        sources = {
+            item.source.source_id: item.source
+            for item in evidence
+            if item.source.source_type
+            in {"meeting_transcript", "multi_party_conversation"}
+        }
+        occurrences: list[tuple[SourceDocument, str, str | None]] = []
+        for source in sources.values():
+            speakers = dict.fromkeys(
+                (
+                    str(segment.speaker).strip(),
+                    str(segment.role).strip().lower() if segment.role else None,
+                )
+                for segment in source.segments
+                if str(segment.speaker or "").strip()
+            )
+            occurrences.extend(
+                (source, name, role) for name, role in speakers
+            )
+        return {
+            f"P{index:03d}": occurrence
+            for index, occurrence in enumerate(occurrences, start=1)
+        }
+
+    @staticmethod
+    def _participant_encounters(
+        occurrences: dict[str, tuple[SourceDocument, str, str | None]],
+        resolutions: dict[str, dict],
+        entities: dict[str, EntityRecord],
+        candidates: dict[str, EntityRecord],
+    ) -> list[EntityEncounter]:
+        created_at = datetime.now().astimezone().isoformat()
+        encounters: dict[str, EntityEncounter] = {}
+        for alias, (source, _, _) in occurrences.items():
+            resolution = resolutions[alias]
+            entity = candidates.get(resolution["entity"]) or entities.get(
+                resolution["entity"]
+            )
+            if entity is None or entity.entity_type != "person":
+                continue
+            title = str(source.metadata.get("title") or "").strip() or None
+            encounter_id = f"encounter-{entity.entity_id}-{source.source_id}"
+            encounters[encounter_id] = EntityEncounter(
+                encounter_id=encounter_id,
+                entity_id=entity.entity_id,
+                source_id=source.source_id,
+                raw_log_entry_id=source.raw_log_entry_id,
+                occurred_at=source.occurred_at,
+                title=title,
+                created_at=created_at,
+            )
+        return sorted(encounters.values(), key=lambda item: item.encounter_id)
+
+    @classmethod
+    def _candidate_is_eligible(
+        cls,
+        candidate: dict,
+        supporting: list[ClaimEvidence],
+    ) -> bool:
+        entity_type = str(candidate["entity_type"])
+        basis = str(candidate["creation_basis"])
+        if (
+            not str(candidate["title"]).strip()
+            or entity_type not in CREATION_BASIS
+            or basis not in CREATION_BASIS[entity_type]
+            or not (supporting or candidate["supporting_participants"])
+        ):
+            return False
+        if entity_type == "person":
+            return bool(candidate["supporting_participants"] or supporting)
+        claims = [item.claim for item in supporting]
+        source_ids = {item.source.source_id for item in supporting}
+        if entity_type == "project":
+            if basis == "named_project":
+                if not any(claim.claim_type == "identity" for claim in claims):
+                    return False
+                return len({claim.claim_id for claim in claims}) >= 2
+            continuity = any(
+                claim.claim_type in {"plan", "commitment", "decision", "state"}
+                for claim in claims
+            )
+            return (
+                bool(candidate["independent_scope"])
+                and len(source_ids) >= 2
+                and len(claims) >= 2
+                and continuity
+            )
+        if not candidate["independent_scope"]:
+            return False
+        if entity_type == "topic":
+            intentional = any(
+                item.source.source_type != "tool_observation"
+                and item.claim.claim_type in {"plan", "commitment"}
+                for item in supporting
+            )
+            return intentional or len({item.source.source_id for item in supporting if item.source.source_type != "tool_observation"}) >= 2
+        if entity_type == "organization":
+            return len(source_ids) >= 2 and any(
+                item.source.source_type != "tool_observation"
+                and item.claim.claim_type in {"relationship", "plan", "commitment"}
+                for item in supporting
+            )
+        if entity_type == "place":
+            return len(source_ids) >= 2 and any(
+                item.claim.claim_type in {"plan", "relationship", "state"}
+                for item in supporting
+            )
+        if entity_type == "event":
+            return len(claims) >= 2 and any(
+                claim.claim_type in {"event", "decision", "plan"} for claim in claims
+            )
         return False
 
     @staticmethod
-    def _exact_owner(
-        claim: MemoryClaim,
-        entities: Iterable[EntityRecord],
-    ) -> tuple[EntityRecord, list[EntityRecord]] | None:
-        names = [
-            (slugify(str(item.get("entity") or "")), str(item.get("role") or "").lower())
-            for item in claim.about if item.get("entity")
-        ]
-        matches: dict[str, tuple[EntityRecord, set[str]]] = {}
-        active = [entity for entity in entities if entity.status == "active"]
-        for entity in active:
-            aliases = {slugify(entity.title), *(slugify(alias) for alias in entity.aliases)}
-            if entity.entity_id == "you":
-                aliases.update({"user", "the-user"})
-            roles = {role for name, role in names if name in aliases}
-            if roles:
-                matches[entity.entity_id] = (entity, roles)
-        claim_words = f"-{slugify(claim.text)}-"
-        text_matches: dict[str, EntityRecord] = {}
-        for entity in active:
-            aliases = {slugify(entity.title), *(slugify(alias) for alias in entity.aliases)}
-            if entity.entity_id == "you":
-                aliases.update({"user", "the-user"})
-            if any(alias and f"-{alias}-" in claim_words for alias in aliases):
-                text_matches[entity.entity_id] = entity
-        # A second canonical entity named in the normalized assertion makes
-        # ownership semantic, even when extraction omitted it from `about`.
-        if set(text_matches) - set(matches):
-            return None
-        if len(matches) == 1:
-            return next(iter(matches.values()))[0], []
-        owners = [value[0] for value in matches.values() if "owner" in value[1]]
-        if len(owners) == 1:
-            owner = owners[0]
-            return owner, [value[0] for value in matches.values() if value[0] != owner]
-        subjects = [value[0] for value in matches.values() if "subject" in value[1]]
-        if len(subjects) == 1:
-            owner = subjects[0]
-            return owner, [value[0] for value in matches.values() if value[0] != owner]
-        if matches:
-            return None
-        if len(text_matches) == 1:
-            return next(iter(text_matches.values())), []
-        return None
+    def _user_evidence(item: ClaimEvidence) -> bool:
+        wanted = {
+            segment_id
+            for provenance in item.claim.provenance
+            for segment_id in provenance.segment_ids
+        }
+        return any(
+            segment.segment_id in wanted
+            and str(segment.role or segment.speaker or "").strip().lower() == "user"
+            for segment in item.source.segments
+        )
+
+    @staticmethod
+    def _valid_project_role_route(
+        owner: EntityRecord, links: Iterable[EntityRecord]
+    ) -> bool:
+        links = list(links)
+        return (
+            owner.entity_type in {"you", "person"}
+            and sum(entity.entity_type == "project" for entity in links) == 1
+        )
 
     @staticmethod
     def _planned_entity(
@@ -464,20 +479,10 @@ class ClaimRouter:
         return "\n".join(lines)
 
     @staticmethod
-    def _entity_registry(entities: Iterable[EntityRecord]) -> str:
-        lines = []
-        for entity in sorted(entities, key=lambda item: item.entity_id):
-            if entity.status != "active":
-                continue
-            aliases = ", ".join(entity.aliases) or "none"
-            lines.append(
-                f"- id={entity.entity_id}; type={entity.entity_type}; "
-                f"title={entity.title!r}; aliases={aliases}"
-            )
-        return "\n".join(lines) or "- none yet"
-
-    @staticmethod
-    def _format_evidence(aliases: dict[str, ClaimEvidence]) -> str:
+    def _format_evidence(
+        aliases: dict[str, ClaimEvidence],
+        participants: dict[str, tuple[SourceDocument, str, str | None]],
+    ) -> str:
         blocks = []
         for alias, item in aliases.items():
             claim = item.claim
@@ -490,29 +495,34 @@ class ClaimRouter:
             )
             blocks.append(
                 f"[EVIDENCE {alias}]\nclaim_type={claim.claim_type}; entities={entities}; "
-                f"temporal_status={claim.temporal_status}; source_type={item.source.source_type}; "
+                f"temporal_status={claim.temporal_status}; source_id={item.source.source_id}; "
+                f"source_type={item.source.source_type}; occurred_at={item.source.occurred_at or 'unknown'}; "
+                f"participants={','.join(item.source.participants) or 'none'}; "
                 f"evidence_modality={claim.evidence_modality}\nclaim={claim.text}\n"
                 f"qualifiers={facets or 'none'}"
             )
+        if participants:
+            blocks.append("[SOURCE-DECLARED PARTICIPANTS]")
+            blocks.extend(
+                f"[{alias}] name={name!r}; source_id={source.source_id}; "
+                f"speaker_role={role or 'participant'}; "
+                f"occurred_at={source.occurred_at or 'unknown'}"
+                for alias, (source, name, role) in participants.items()
+            )
         return "\n\n".join(blocks)
-
-    @staticmethod
-    def _has_named_participant_scope(source: SourceDocument) -> bool:
-        if source.source_type not in {"multi_party_conversation", "meeting_transcript"}:
-            return False
-        names = {
-            str(value).strip().lower()
-            for value in [*source.participants, *(segment.speaker for segment in source.segments)]
-            if value
-        }
-        return bool(names - {"user", "assistant", "system", "tool", "unknown"})
 
     @staticmethod
     def _failure(item: ClaimEvidence, reason: str) -> RoutingFailure:
         return RoutingFailure(item.claim.claim_id, item.raw_log_entry_id, reason)
 
-    def _fail_batch(self, evidence: Iterable[ClaimEvidence], reason: str) -> RoutingResult:
-        return RoutingResult(failures=[self._failure(item, reason) for item in evidence])
+    def _fail_batch(
+        self,
+        evidence: Iterable[ClaimEvidence],
+        reason: str,
+    ) -> RoutingResult:
+        return RoutingResult(
+            failures=[self._failure(item, reason) for item in evidence],
+        )
 
 
 def placement_from_route(route: ClaimRoute, *, now: str | None = None) -> ClaimPlacement:

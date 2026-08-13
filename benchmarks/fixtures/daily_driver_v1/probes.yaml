@@ -1,0 +1,178 @@
+schema_version: 1
+scenario_id: daily-driver-v1
+probes:
+  - id: q-short-term-project
+    checkpoint: cp1_pre_dream
+    question: What kind of application does Maya want for the meeting-memory idea?
+    expected_answer: A private local desktop application, not a browser extension.
+    required_facts: [f-lantern-purpose, f-lantern-form]
+    forbidden_facts: []
+    required_evidence: [chat-01-s01, chat-01-s03]
+    answerable: true
+    purpose: Recent claims must be useful before any project page exists.
+
+  - id: q-short-term-page
+    checkpoint: cp2_first_dream
+    question: Does the memory wiki already contain a Lantern project page?
+    expected_answer: No.
+    required_facts: []
+    forbidden_facts: []
+    required_evidence: []
+    answerable: true
+    purpose: One unnamed episode must not force premature page creation.
+
+  - id: q-lantern-purpose
+    checkpoint: cp3_second_dream
+    question: What is Lantern?
+    expected_answer: A private local desktop application for searchable meeting memory.
+    required_facts: [f-lantern-purpose]
+    forbidden_facts: [f-family-history-purpose]
+    required_evidence: [meeting-02-s01]
+    answerable: true
+
+  - id: q-priya-owner
+    checkpoint: cp8_final
+    question: What does Priya own for Lantern, and what has she completed?
+    expected_answer: Pilot recruitment and evaluation; she recruited three teams and completed the evaluation rubric.
+    required_facts: [f-priya-role, f-priya-evaluation-completed]
+    forbidden_facts: [f-luis-role, f-maya-lantern-role]
+    required_evidence: [meeting-01-s01, meeting-05-s01]
+    answerable: true
+
+  - id: q-luis-deadline
+    checkpoint: cp4_mature_update
+    question: When did Luis target the packaged Lantern build?
+    expected_answer: September 11, 2026.
+    required_facts: [f-packaged-build]
+    forbidden_facts: [f-pilot-date-current]
+    required_evidence: [meeting-02-s05, meeting-03-s04]
+    answerable: true
+
+  - id: q-privacy
+    checkpoint: cp8_final
+    question: What are Lantern's rules for recordings and transcripts leaving the laptop?
+    expected_answer: They remain local unless the user explicitly exports them; cloud transcription is rejected.
+    required_facts: [f-lantern-local-only]
+    forbidden_facts: []
+    required_evidence: [chat-02-s01, meeting-03-s03]
+    answerable: true
+
+  - id: q-transcription-decision
+    checkpoint: cp8_final
+    question: Which transcription system did Lantern choose for the pilot, and why?
+    expected_answer: WhisperX, after it ran faster than real time locally and produced usable correctable speaker labels.
+    required_facts: [f-whisperx-decision, f-whisperx-benchmark]
+    forbidden_facts: []
+    required_evidence: [meeting-03-s01, meeting-03-s02]
+    answerable: true
+
+  - id: q-current-pilot-pending
+    checkpoint: cp5_pending_change
+    question: What is Lantern's authoritative first-pilot date?
+    expected_answer: The date is pending review because September 28 may supersede September 22.
+    required_facts: []
+    forbidden_facts: [f-pilot-date-old, f-pilot-date-current]
+    required_evidence: [meeting-02-s06, chat-05-s01]
+    answerable: true
+    purpose: Neither side of an unresolved correction should be presented as settled truth.
+
+  - id: q-current-pilot-applied
+    checkpoint: cp8_final
+    question: When is Lantern's first pilot?
+    expected_answer: September 28, 2026.
+    required_facts: [f-pilot-date-current]
+    forbidden_facts: [f-pilot-date-old]
+    required_evidence: [chat-05-s01]
+    answerable: true
+
+  - id: q-pilot-history
+    checkpoint: cp8_final
+    question: Was Lantern's pilot always scheduled for September 28?
+    expected_answer: No. It was initially targeted for September 22 and moved to September 28 because recruitment needed more time.
+    required_facts: [f-pilot-date-old, f-pilot-date-current]
+    forbidden_facts: []
+    required_evidence: [meeting-02-s06, chat-05-s01]
+    answerable: true
+
+  - id: q-family-history-separation
+    checkpoint: cp8_final
+    question: Are Maya's family oral-history interviews part of Lantern's user research?
+    expected_answer: No. They are a separate personal project.
+    required_facts: [f-family-history-purpose, f-family-history-separate]
+    forbidden_facts: [f-lantern-purpose]
+    required_evidence: [chat-04-s01, chat-04-s04]
+    answerable: true
+
+  - id: q-family-history-next
+    checkpoint: cp8_final
+    question: What is Maya's next step for her family oral-history interviews, and when is the next interview?
+    expected_answer: Scan her grandmother's photographs; no next interview date is set.
+    required_facts: [f-family-history-next-step]
+    forbidden_facts: [f-pilot-date-current]
+    required_evidence: [chat-07-s02]
+    answerable: true
+
+  - id: q-grandmother-history
+    checkpoint: cp8_final
+    question: What did Maya's grandmother say about arriving in California and her early work?
+    expected_answer: She arrived in California in 1974 and worked at her aunt's grocery store in Richmond.
+    required_facts: [f-family-history-interview-result]
+    forbidden_facts: []
+    required_evidence: [chat-07-s01]
+    answerable: true
+
+  - id: q-consent-status
+    checkpoint: cp8_final
+    question: Is the Lantern consent bypass still open?
+    expected_answer: No. Maya fixed the bypass and closed LANTERN-42.
+    required_facts: [f-consent-bug]
+    forbidden_facts: []
+    required_evidence: [tool-03-s01, meeting-06-s01]
+    answerable: true
+
+  - id: q-retracted-before
+    checkpoint: cp6_wrong_import
+    question: What did memory record about Northstar and Smallbird?
+    expected_answer: Northstar acquired Smallbird for 18 million dollars.
+    required_facts: [f-northstar-acquisition]
+    forbidden_facts: []
+    required_evidence: [meeting-04-s01]
+    answerable: true
+
+  - id: q-retracted-after
+    checkpoint: cp8_final
+    question: What did Northstar acquire, and for how much?
+    expected_answer: There is no active memory supporting that claim.
+    required_facts: []
+    forbidden_facts: [f-northstar-acquisition]
+    required_evidence: []
+    answerable: false
+    purpose: A retracted source must not remain available through claims, wiki, source windows, or answer synthesis.
+
+  - id: q-tangential-dentist
+    checkpoint: cp8_final
+    question: When is Maya's dentist cleaning?
+    expected_answer: There is no durable memory for that appointment.
+    required_facts: []
+    forbidden_facts: []
+    required_evidence: []
+    answerable: false
+    purpose: Incidental tool results should not become durable memory merely because they were observed.
+
+  - id: q-dark-mode
+    checkpoint: cp8_final
+    question: Who owns the Lantern dark-mode icon issue?
+    expected_answer: There is no durable memory for that cosmetic issue.
+    required_facts: []
+    forbidden_facts: []
+    required_evidence: []
+    answerable: false
+
+  - id: q-composed-readiness
+    checkpoint: cp8_final
+    question: Is Lantern ready for the pilot, and what remains undecided afterward?
+    expected_answer: Yes. The September 28 build is ready for Priya's teams; afterward the team must decide whether transcript embeddings can remain fully inspectable.
+    required_facts: [f-pilot-readiness, f-embedding-question]
+    forbidden_facts: []
+    required_evidence: [meeting-06-s02, meeting-06-s03]
+    answerable: true

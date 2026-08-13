@@ -1,0 +1,97 @@
+schema_version: 1
+scenario_id: daily-driver-v1
+principles:
+  - Evaluate structured meaning, state, ownership, and provenance rather than exact wording.
+  - Report every dimension independently; do not collapse results into one opaque benchmark score.
+  - Incorrect, stale, retracted, or misattributed memory is more harmful than a minor omission.
+  - More pages and more retrieved facts are not inherently better.
+dimensions:
+  - id: claim_recall
+    stage: encoding
+    measure: Gold atomic claims represented by a semantically equivalent extracted claim.
+    severity: medium
+  - id: unsupported_claim_rate
+    stage: encoding
+    measure: Extracted durable claims with no supporting gold claim or admitted extra evidence.
+    severity: critical
+  - id: provenance_accuracy
+    stage: encoding
+    measure: Exact gold evidence segments retained without unsupported segment citations.
+    severity: critical
+  - id: semantic_envelope_accuracy
+    stage: encoding
+    measure: Subject, claim type, predicate or slot, modality, and temporal role match.
+    severity: high
+  - id: lifecycle_accuracy
+    stage: consolidation
+    measure: Pending, deferred, canonical, review, superseded, and retracted states match each checkpoint.
+    severity: critical
+  - id: entity_precision_recall
+    stage: discovery
+    measure: Required page entities exist and forbidden/incidental page entities do not.
+    severity: high
+  - id: entity_type_accuracy
+    stage: discovery
+    measure: Page entities use the expected You, Person, Project, Topic, Organization, Place, or Event type.
+    severity: high
+  - id: ownership_accuracy
+    stage: organization
+    measure: Each canonical claim has the correct single owner; shared project-role views retain that owner and the same provenance.
+    severity: critical
+  - id: section_accuracy
+    stage: projection
+    measure: Consolidated facts appear in semantically appropriate typed sections.
+    severity: medium
+  - id: wiki_fact_recall
+    stage: projection
+    measure: Every required final fact appears on its authoritative page.
+    severity: high
+  - id: wiki_concision
+    stage: projection
+    measure: Ordinary facts render once; declared project-role relationships render exactly once on each endpoint despite repeated support.
+    severity: medium
+  - id: cross_project_contamination
+    stage: projection
+    measure: Lantern, Family Oral History, and retracted Northstar facts remain separated.
+    severity: critical
+  - id: current_history_separation
+    stage: projection
+    measure: Current facts, superseded history, and unresolved alternatives are presented distinctly.
+    severity: critical
+  - id: retraction_completeness
+    stage: correction
+    measure: Retracted claims, pages, links, source windows, and retrieval results disappear while an audit tombstone remains.
+    severity: critical
+  - id: retrieval_fact_recall
+    stage: retrieval
+    measure: Probe-required fact IDs are present in rendered context.
+    severity: high
+  - id: retrieval_tangent_rate
+    stage: retrieval
+    measure: Probe-forbidden facts and unrelated pages are absent from rendered context.
+    severity: high
+  - id: semantic_answer_quality
+    stage: answering
+    measure: Required answer propositions are present, forbidden propositions absent, and unanswerable probes remain unanswered.
+    severity: high
+gates:
+  - id: no_retracted_memory
+    rule: No final wiki or retrieval artifact may contain a fact supported only by src-meeting-04.
+  - id: no_false_attribution
+    rule: Priya, Luis, Maya, and Grandmother facts must never be transferred between people.
+  - id: no_cross_project_merge
+    rule: Family Oral History and Lantern remain separate Project entities and pages.
+  - id: no_premature_lantern_page
+    rule: Project Lantern does not exist at cp2_first_dream.
+  - id: short_term_available
+    rule: The cp1 query is answerable from pending claims without a wiki page.
+reporting:
+  required_outputs:
+    - per_dimension_metrics
+    - checkpoint_diffs
+    - missing_and_extra_claims
+    - missing_and_extra_entities
+    - ownership_confusion_matrix
+    - duplicate_rendered_facts
+    - retrieval_required_and_forbidden_fact_ids
+    - qualitative_page_diff

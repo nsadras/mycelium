@@ -7,6 +7,7 @@ from mycelium.artifacts import (
     ArtifactStore,
     ClaimPlacement,
     ClaimProvenance,
+    ConsolidatedFact,
     MemoryClaim,
     ReconsolidationProposal,
 )
@@ -156,6 +157,14 @@ def review_setup(tmp_path, relation: str):
             item.claim_id, "you", "preferences_working_style", [], "placed", "test",
             "2026-08-01T12:00:00", "2026-08-01T12:00:00",
         ))
+        artifacts.save_consolidated_fact(ConsolidatedFact(
+            fact_id=f"fact-{item.claim_id}", text=item.text,
+            member_claim_ids=[item.claim_id], owner_entity_id="you",
+            section_key="preferences_working_style", linked_entity_ids=[],
+            state="active", synthesis_origin="claim", confidence=item.confidence,
+            reason="test", created_at="2026-08-01T12:00:00",
+            updated_at="2026-08-01T12:00:00",
+        ))
     materializer = PageMaterializer(wiki, artifacts, Config.defaults())
     materializer.regenerate({"you"})
     proposal = ReconsolidationProposal(
@@ -202,6 +211,16 @@ def test_approve_deadline_supersession_reprojects_only_new_due_date(tmp_path):
         artifacts.save_placement(ClaimPlacement(
             item.claim_id, project.entity_id, "next_steps_deadlines", [], "placed", "test",
             "2026-08-01T12:00:00", "2026-08-01T12:00:00",
+        ))
+        due = item.facets["temporal"]["start"]
+        artifacts.save_consolidated_fact(ConsolidatedFact(
+            fact_id=f"fact-{item.claim_id}",
+            text=f"The user will send the report. (deadline: {due})",
+            member_claim_ids=[item.claim_id], owner_entity_id=project.entity_id,
+            section_key="next_steps_deadlines", linked_entity_ids=[],
+            state="active", synthesis_origin="claim", confidence=item.confidence,
+            reason="test", created_at="2026-08-01T12:00:00",
+            updated_at="2026-08-01T12:00:00",
         ))
     materializer = PageMaterializer(wiki, artifacts, Config.defaults())
     materializer.regenerate({project.entity_id})

@@ -71,8 +71,17 @@ export interface WikiSourceReference {
 
 export interface WikiFactItem {
   kind: 'fact';
+  fact_id: string;
   text: string;
   claim_ids: string[];
+  canonical_owner_entity_ids: string[];
+  canonical_linked_entity_ids: string[];
+  projection: 'canonical' | 'shared_endpoint';
+  relationship_kind: 'project_role' | null;
+  synthesis_origin: 'claim' | 'model' | 'manual';
+  synthesis_confidence: number;
+  synthesis_reason: string;
+  manual_text: boolean;
   qualifiers: string[];
   evidence_modality: string;
   sources: WikiSourceReference[];
@@ -88,10 +97,18 @@ export interface WikiLinkItem {
   entity_type: PageType;
 }
 
+export interface WikiEncounterItem {
+  kind: 'encounter';
+  encounter_id: string;
+  text: string;
+  source_id: string;
+  raw_log_entry_id?: string | null;
+}
+
 export interface WikiSection {
   key: string;
   title: string;
-  items: (WikiFactItem | WikiLinkItem)[];
+  items: (WikiFactItem | WikiLinkItem | WikiEncounterItem)[];
 }
 
 export interface EntityRecord {

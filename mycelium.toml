@@ -9,7 +9,7 @@ context_budget_tokens = 32768
 
 [dream]
 main_page_claim_limit = 18
-queue_claim_threshold = 50
+queue_claim_threshold = 20
 max_pending_hours = 24
 deferred_revisit_hours = 168
 lifecycle_poll_seconds = 300

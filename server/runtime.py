@@ -431,6 +431,9 @@ def clear_wiki_store() -> dict[str, int]:
         "entities_deleted": 0,
         "placements_deleted": 0,
         "organization_proposals_deleted": 0,
+        "scope_decisions_deleted": 0,
+        "encounters_deleted": 0,
+        "consolidated_facts_deleted": 0,
         "legacy_claim_assignments_removed": 0,
         "claims_requeued": 0,
     }
@@ -458,6 +461,9 @@ def clear_wiki_store() -> dict[str, int]:
     counts["entities_deleted"] = projection_counts["entities"]
     counts["placements_deleted"] = projection_counts["placements"]
     counts["organization_proposals_deleted"] = projection_counts["organization_proposals"]
+    counts["scope_decisions_deleted"] = projection_counts["scope_decisions"]
+    counts["encounters_deleted"] = projection_counts["encounters"]
+    counts["consolidated_facts_deleted"] = projection_counts["consolidated_facts"]
     counts["legacy_claim_assignments_removed"] = projection_counts[
         "legacy_claim_assignments_removed"
     ]

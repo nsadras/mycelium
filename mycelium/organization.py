@@ -11,6 +11,8 @@ from typing import cast
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimPlacement,
+    ClaimScopeDecision,
+    ConsolidatedFact,
     EntityRecord,
     OrganizationProposal,
 )
@@ -18,6 +20,7 @@ from mycelium.materialization import MaterializationResult, PageMaterializer
 from mycelium.models import PAGE_SECTION_KEYS, PAGE_TYPES, PageType
 from mycelium.store import WikiStore
 from mycelium.wiki_schema import default_section
+from mycelium.projection import display_claim_text
 
 
 def _now() -> str:
@@ -33,6 +36,12 @@ class CurationResult:
     entity: EntityRecord
     pages_updated: list[str]
     pages_deleted: list[str]
+
+
+@dataclass
+class FactCurationResult:
+    facts: list[ConsolidatedFact]
+    pages_updated: list[str]
 
 
 class EntityCurationService:
@@ -79,6 +88,14 @@ class EntityCurationService:
                 placement.reason = "Section remapped after a manual entity type correction."
                 placement.updated_at = _now()
                 self.artifacts.save_placement(placement)
+            for fact in self.artifacts.list_consolidated_facts(
+                owner_entity_id=entity_id, state="active"
+            ):
+                representative = self.artifacts.get_claim(fact.member_claim_ids[0])
+                fact.section_key = default_section(entity.entity_type, representative)
+                fact.reason = "Section remapped after a manual entity type correction."
+                fact.updated_at = _now()
+                self.artifacts.save_consolidated_fact(fact)
         if old_slug != entity.slug:
             self.wiki.delete(old_slug)
         pages = self.materializer.regenerate({entity_id, "you"})
@@ -111,9 +128,14 @@ class EntityCurationService:
         *,
         linked_entity_ids: list[str] | None = None,
         reason: str = "Manual wiki organization",
+        origin: str = "manual",
     ) -> CurationResult | None:
         old = self.artifacts.placement_for_claim(claim_id)
-        affected = {old.owner_entity_id} if old and old.owner_entity_id else set()
+        affected = (
+            {old.owner_entity_id, *old.linked_entity_ids}
+            if old and old.owner_entity_id
+            else set()
+        )
         now = _now()
         if owner_entity_id is None:
             placement = ClaimPlacement(
@@ -126,7 +148,7 @@ class EntityCurationService:
                 list(linked_entity_ids if linked_entity_ids is not None else (old.linked_entity_ids if old else [])),
                 "placed", reason, old.created_at if old else now, now,
             )
-            affected.add(owner_entity_id)
+            affected.update({owner_entity_id, *placement.linked_entity_ids})
         self.artifacts.save_placement(placement)
         claim = self.artifacts.get_claim(claim_id)
         claim.dream_disposition = "routed" if owner_entity_id else "deferred"
@@ -134,6 +156,62 @@ class EntityCurationService:
         claim.dream_run_id = None
         claim.dream_disposition_at = now
         self.artifacts.save_claim(claim)
+        self.artifacts.save_scope_decision(ClaimScopeDecision(
+            decision_id=f"scope-{uuid.uuid4().hex[:12]}",
+            claim_id=claim_id,
+            owner_entity_id=owner_entity_id,
+            section_key=section_key,
+            linked_entity_ids=list(placement.linked_entity_ids),
+            supporting_claim_ids=[claim_id],
+            confidence=1.0,
+            reason=reason,
+            origin=origin,
+            dream_run_id=None,
+            status="active",
+            created_at=now,
+        ))
+        containing = self.artifacts.facts_for_claim(claim_id)
+        if containing:
+            for fact in containing:
+                self.artifacts.delete_consolidated_fact(fact.fact_id)
+                for remaining_id in (
+                    value for value in fact.member_claim_ids if value != claim_id
+                ):
+                    remaining = self.artifacts.get_claim(remaining_id)
+                    remaining_placement = self.artifacts.get_placement(remaining_id)
+                    self.artifacts.save_consolidated_fact(ConsolidatedFact(
+                        fact_id=f"fact-{uuid.uuid4().hex[:12]}",
+                        text=display_claim_text(remaining),
+                        member_claim_ids=[remaining_id],
+                        owner_entity_id=cast(str, remaining_placement.owner_entity_id),
+                        section_key=cast(str, remaining_placement.section_key),
+                        linked_entity_ids=list(remaining_placement.linked_entity_ids),
+                        state="active",
+                        synthesis_origin="claim",
+                        confidence=remaining.confidence,
+                        reason="Separated after manual claim-level curation.",
+                        created_at=now,
+                        updated_at=now,
+                    ))
+        if owner_entity_id is not None:
+            self.artifacts.save_consolidated_fact(ConsolidatedFact(
+                fact_id=(
+                    containing[0].fact_id
+                    if len(containing) == 1 and len(containing[0].member_claim_ids) == 1
+                    else f"fact-{uuid.uuid4().hex[:12]}"
+                ),
+                text=display_claim_text(claim),
+                member_claim_ids=[claim_id],
+                owner_entity_id=owner_entity_id,
+                section_key=cast(str, section_key),
+                linked_entity_ids=list(placement.linked_entity_ids),
+                state="active",
+                synthesis_origin="claim",
+                confidence=claim.confidence,
+                reason="Manual claim-level curation.",
+                created_at=containing[0].created_at if containing else now,
+                updated_at=now,
+            ))
         pages = self.materializer.regenerate({value for value in affected if value})
         if owner_entity_id is None:
             return None
@@ -170,6 +248,23 @@ class EntityCurationService:
                 placement.updated_at = _now()
                 placement.__post_init__()
                 self.artifacts.save_placement(placement)
+        for fact in self.artifacts.list_consolidated_facts(state="active"):
+            changed = False
+            if fact.owner_entity_id == source_entity_id:
+                fact.owner_entity_id = target_entity_id
+                representative = self.artifacts.get_claim(fact.member_claim_ids[0])
+                fact.section_key = default_section(target.entity_type, representative)
+                changed = True
+            if source_entity_id in fact.linked_entity_ids:
+                fact.linked_entity_ids = [
+                    target_entity_id if value == source_entity_id else value
+                    for value in fact.linked_entity_ids
+                ]
+                changed = True
+            if changed:
+                fact.updated_at = _now()
+                fact.__post_init__()
+                self.artifacts.save_consolidated_fact(fact)
         target.aliases = sorted(set([
             *target.aliases, source.title, source.slug, *source.aliases
         ]))
@@ -202,10 +297,13 @@ class EntityCurationService:
         entity = self.artifacts.create_entity(entity_type, title, aliases=aliases)
         for claim_id in selected:
             placement = self.artifacts.get_placement(claim_id)
-            placement.owner_entity_id = entity.entity_id
-            placement.section_key = default_section(entity.entity_type, self.artifacts.get_claim(claim_id))
-            placement.updated_at = _now()
-            self.artifacts.save_placement(placement)
+            self.move_claim(
+                claim_id,
+                entity.entity_id,
+                default_section(entity.entity_type, self.artifacts.get_claim(claim_id)),
+                linked_entity_ids=list(placement.linked_entity_ids),
+                reason="Manual entity split",
+            )
         pages = self.materializer.regenerate({source.entity_id, entity.entity_id, "you"})
         return self._result(entity, pages, [])
 
@@ -218,6 +316,165 @@ class EntityCurationService:
             sorted(pages.changed_pages),
             sorted(set([*deleted, *pages.deleted_slugs])),
         )
+
+
+class FactCurationService:
+    """Manual editing and grouping for persisted presentation facts."""
+
+    def __init__(self, artifacts: ArtifactStore, materializer: PageMaterializer):
+        self.artifacts = artifacts
+        self.materializer = materializer
+
+    def edit(self, fact_id: str, text: str, *, reason: str) -> FactCurationResult:
+        fact = self.artifacts.get_consolidated_fact(fact_id)
+        fact.text = text
+        fact.synthesis_origin = "manual"
+        fact.manual_text = True
+        fact.confidence = 1.0
+        fact.reason = reason
+        fact.updated_at = _now()
+        fact.__post_init__()
+        self.artifacts.save_consolidated_fact(fact)
+        pages = self.materializer.regenerate({fact.owner_entity_id})
+        return FactCurationResult([fact], sorted(pages.changed_pages))
+
+    def move(
+        self,
+        fact_id: str,
+        owner_entity_id: str,
+        section_key: str,
+        *,
+        linked_entity_ids: list[str],
+        reason: str,
+    ) -> FactCurationResult:
+        fact = self.artifacts.get_consolidated_fact(fact_id)
+        old_ids = {fact.owner_entity_id, *fact.linked_entity_ids}
+        now = _now()
+        for claim_id in fact.member_claim_ids:
+            old = self.artifacts.get_placement(claim_id)
+            placement = ClaimPlacement(
+                claim_id=claim_id,
+                owner_entity_id=owner_entity_id,
+                section_key=section_key,
+                linked_entity_ids=list(linked_entity_ids),
+                status="placed",
+                reason=reason,
+                created_at=old.created_at,
+                updated_at=now,
+            )
+            self.artifacts.save_placement(placement)
+            self.artifacts.save_scope_decision(ClaimScopeDecision(
+                decision_id=f"scope-{uuid.uuid4().hex[:12]}",
+                claim_id=claim_id,
+                owner_entity_id=owner_entity_id,
+                section_key=section_key,
+                linked_entity_ids=list(linked_entity_ids),
+                supporting_claim_ids=list(fact.member_claim_ids),
+                confidence=1.0,
+                reason=reason,
+                origin="manual",
+                dream_run_id=None,
+                status="active",
+                created_at=now,
+            ))
+        fact.owner_entity_id = owner_entity_id
+        fact.section_key = section_key
+        fact.linked_entity_ids = list(linked_entity_ids)
+        fact.synthesis_origin = "manual"
+        fact.reason = reason
+        fact.updated_at = now
+        fact.__post_init__()
+        self.artifacts.save_consolidated_fact(fact)
+        pages = self.materializer.regenerate(
+            {owner_entity_id, *old_ids, *linked_entity_ids}
+        )
+        return FactCurationResult([fact], sorted(pages.changed_pages))
+
+    def group(
+        self, fact_ids: list[str], text: str, *, reason: str
+    ) -> FactCurationResult:
+        facts = [self.artifacts.get_consolidated_fact(value) for value in fact_ids]
+        if len(facts) < 2:
+            raise ValueError("Grouping requires at least two consolidated facts")
+        scopes = {(fact.owner_entity_id, fact.section_key) for fact in facts}
+        if len(scopes) != 1:
+            raise ValueError("Facts must share one owner and section before grouping")
+        owner, section = next(iter(scopes))
+        now = _now()
+        grouped = ConsolidatedFact(
+            fact_id=f"fact-{uuid.uuid4().hex[:12]}",
+            text=text,
+            member_claim_ids=sorted({
+                claim_id for fact in facts for claim_id in fact.member_claim_ids
+            }),
+            owner_entity_id=owner,
+            section_key=section,
+            linked_entity_ids=sorted({
+                entity_id for fact in facts for entity_id in fact.linked_entity_ids
+            }),
+            state="active",
+            synthesis_origin="manual",
+            confidence=1.0,
+            reason=reason,
+            created_at=now,
+            updated_at=now,
+            manual_text=True,
+        )
+        for fact in facts:
+            self.artifacts.delete_consolidated_fact(fact.fact_id)
+        self.artifacts.save_consolidated_fact(grouped)
+        pages = self.materializer.regenerate({owner})
+        return FactCurationResult([grouped], sorted(pages.changed_pages))
+
+    def split(
+        self,
+        fact_id: str,
+        groups: list[dict[str, object]],
+        *,
+        reason: str,
+    ) -> FactCurationResult:
+        source = self.artifacts.get_consolidated_fact(fact_id)
+        parsed_groups: list[tuple[list[str], str]] = []
+        for group in groups:
+            raw_ids = group.get("claim_ids")
+            if not isinstance(raw_ids, list):
+                raise ValueError("Each split group requires a claim_ids list")
+            parsed_groups.append((
+                [str(claim_id) for claim_id in raw_ids],
+                str(group.get("text") or ""),
+            ))
+        member_ids = [
+            claim_id for claim_ids, _ in parsed_groups for claim_id in claim_ids
+        ]
+        if (
+            len(groups) < 2
+            or len(member_ids) != len(set(member_ids))
+            or set(member_ids) != set(source.member_claim_ids)
+        ):
+            raise ValueError("Split groups must partition the source fact's claims exactly")
+        now = _now()
+        created = []
+        for claim_ids, text in parsed_groups:
+            created.append(ConsolidatedFact(
+                fact_id=f"fact-{uuid.uuid4().hex[:12]}",
+                text=text,
+                member_claim_ids=claim_ids,
+                owner_entity_id=source.owner_entity_id,
+                section_key=source.section_key,
+                linked_entity_ids=list(source.linked_entity_ids),
+                state="active",
+                synthesis_origin="manual",
+                confidence=1.0,
+                reason=reason,
+                created_at=now,
+                updated_at=now,
+                manual_text=True,
+            ))
+        self.artifacts.delete_consolidated_fact(source.fact_id)
+        for fact in created:
+            self.artifacts.save_consolidated_fact(fact)
+        pages = self.materializer.regenerate({source.owner_entity_id})
+        return FactCurationResult(created, sorted(pages.changed_pages))
 
 
 class OrganizationAuditor:
@@ -321,6 +578,7 @@ class OrganizationReviewService:
                     owner_entity_id,
                     proposal.proposed_section_key,
                     reason=f"Approved organization proposal {proposal.proposal_id}",
+                    origin="review",
                 )
             else:
                 if proposal.source_entity_id is None or proposal.target_entity_id is None:

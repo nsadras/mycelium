@@ -950,6 +950,9 @@ def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
         "entities": 0,
         "placements": 0,
         "organization_proposals": 0,
+        "scope_decisions": 0,
+        "encounters": 0,
+        "consolidated_facts": 0,
     }
     assert store.list_sources() == []
     assert store.list_episodes() == []

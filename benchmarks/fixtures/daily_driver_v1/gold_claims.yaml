@@ -1,0 +1,159 @@
+schema_version: 1
+scenario_id: daily-driver-v1
+claims:
+  - {id: c-maya-profile, fact_id: f-maya-profile, text: Maya Chen is a product designer in Oakland., claim_type: identity, predicate: has_profile, subject: you, owner: you, section: profile, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-01-s01]}
+  - {id: c-lantern-intent, fact_id: f-lantern-purpose, text: Maya wants to prototype a private local meeting-memory assistant., claim_type: plan, predicate: build, subject: you, owner: project-lantern, section: objective, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-01-s01]}
+  - {id: c-lantern-desktop, fact_id: f-lantern-form, text: Lantern will be a desktop application rather than a browser extension., claim_type: decision, predicate: application_form, subject: project-lantern, owner: project-lantern, section: decisions, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-01-s03]}
+  - {id: c-sensitive-client-data, fact_id: f-lantern-privacy, text: Lantern meetings may contain sensitive client information., claim_type: state, predicate: handles_sensitive_data, subject: project-lantern, owner: project-lantern, section: requirements_constraints, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-01-s03]}
+  - {id: c-local-storage, fact_id: f-lantern-local-only, text: Lantern recordings and transcripts must remain on the laptop., claim_type: commitment, predicate: store_locally, subject: project-lantern, owner: project-lantern, section: requirements_constraints, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-02-s01]}
+  - {id: c-no-cloud, fact_id: f-lantern-local-only, text: Cloud transcription is not acceptable for Lantern., claim_type: decision, predicate: reject_cloud_transcription, subject: project-lantern, owner: project-lantern, section: decisions, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-02-s01]}
+  - {id: c-local-whisper-plan, fact_id: f-whisperx-decision, text: Maya initially chose a local Whisper model for the prototype., claim_type: decision, predicate: transcription_engine, subject: project-lantern, owner: project-lantern, section: timeline, temporal_status: past, evidence_modality: speech, state: superseded, evidence: [chat-02-s03], superseded_by: c-whisperx-final}
+  - {id: c-priya-eval, fact_id: f-priya-role, text: Priya Raman leads Lantern pilot evaluation and team recruitment., claim_type: relationship, predicate: project_role, subject: person-priya-raman, owner: person-priya-raman, section: shared_projects, linked_entities: [project-lantern], temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-01-s01]}
+  - {id: c-maya-owns-prototype, fact_id: f-maya-lantern-role, text: Maya owns Lantern's desktop prototype and consent flow., claim_type: relationship, predicate: project_role, subject: you, owner: you, section: priorities_plans, linked_entities: [project-lantern], temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-01-s02]}
+  - {id: c-speaker-correction-need, fact_id: f-speaker-correction, text: Lantern must support correction of speaker attribution., claim_type: state, predicate: requires_speaker_correction, subject: project-lantern, owner: project-lantern, section: requirements_constraints, temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-01-s03]}
+  - {id: c-speaker-correction-accepted, fact_id: f-speaker-correction, text: Maya made speaker correction a pilot requirement., claim_type: decision, predicate: requires_speaker_correction, subject: project-lantern, owner: project-lantern, section: requirements_constraints, temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-01-s04]}
+  - id: c-prototype-review
+    fact_id: f-prototype-review
+    text: Lantern's working-prototype review was scheduled for September 10, 2026.
+    claim_type: plan
+    predicate: prototype_review
+    subject: project-lantern
+    owner: project-lantern
+    section: timeline
+    temporal_status: past
+    evidence_modality: speech
+    state: active
+    evidence: [meeting-01-s05]
+    temporal: {expression: next Thursday, role: event_time, start: 2026-09-10, end: 2026-09-10, certainty: exact}
+  - {id: c-whisperx-capability, fact_id: f-whisperx-research, text: WhisperX supports local alignment and speaker diarization., claim_type: observation, predicate: supports_capability, subject: topic-local-transcription, owner: project-lantern, section: research_references, temporal_status: atemporal, evidence_modality: tool, state: active, evidence: [tool-01-s01]}
+  - {id: c-whisperx-candidate, fact_id: f-whisperx-research, text: WhisperX became Lantern's leading transcription candidate pending a benchmark., claim_type: decision, predicate: leading_candidate, subject: project-lantern, owner: project-lantern, section: research_references, temporal_status: past, evidence_modality: speech, state: active, evidence: [chat-03-s02]}
+  - {id: c-consent-before-recording, fact_id: f-consent-gate, text: Lantern requires participant consent before recording starts., claim_type: commitment, predicate: requires_consent, subject: project-lantern, owner: project-lantern, section: requirements_constraints, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-03-s03]}
+  - {id: c-lantern-description, fact_id: f-lantern-purpose, text: Lantern is a local desktop application for searchable meeting memory., claim_type: identity, predicate: project_purpose, subject: project-lantern, owner: project-lantern, section: overview, temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-02-s01]}
+  - {id: c-luis-role, fact_id: f-luis-role, text: Luis Ortega owns Lantern's local transcription pipeline and WhisperX packaging., claim_type: relationship, predicate: project_role, subject: person-luis-ortega, owner: person-luis-ortega, section: shared_projects, linked_entities: [project-lantern], temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-02-s02]}
+  - {id: c-priya-role-repeat, fact_id: f-priya-role, text: Priya owns Lantern's pilot rubric and team recruitment., claim_type: relationship, predicate: project_role, subject: person-priya-raman, owner: person-priya-raman, section: shared_projects, linked_entities: [project-lantern], temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-02-s03]}
+  - {id: c-pilot-metrics, fact_id: f-pilot-metrics, text: Lantern's pilot measures correction effort and traceability from memory to transcript., claim_type: decision, predicate: pilot_metrics, subject: project-lantern, owner: project-lantern, section: objective, temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-02-s04]}
+  - id: c-build-friday
+    fact_id: f-packaged-build
+    text: Luis planned a packaged Lantern build by September 11, 2026.
+    claim_type: commitment
+    predicate: package_build
+    subject: person-luis-ortega
+    owner: person-luis-ortega
+    section: timeline
+    temporal_status: past
+    evidence_modality: speech
+    state: active
+    evidence: [meeting-02-s05]
+    temporal: {expression: by Friday, role: deadline, start: 2026-09-11, end: 2026-09-11, certainty: exact}
+  - id: c-pilot-date-old
+    fact_id: f-pilot-date-old
+    text: Lantern's first pilot was initially targeted for September 22, 2026.
+    claim_type: plan
+    predicate: first_pilot_date
+    slot: lantern.first_pilot_date
+    subject: project-lantern
+    owner: project-lantern
+    section: timeline
+    temporal_status: future
+    evidence_modality: speech
+    state: superseded
+    evidence: [meeting-02-s06]
+    temporal: {expression: September 22, role: deadline, start: 2026-09-22, end: 2026-09-22, certainty: exact}
+    superseded_by: c-pilot-date-new
+  - {id: c-family-history-purpose, fact_id: f-family-history-purpose, text: Maya is recording personal oral-history interviews with her grandmother about her immigration story., claim_type: identity, predicate: project_purpose, subject: project-family-oral-history, owner: project-family-oral-history, section: overview, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-04-s01]}
+  - {id: c-grandmother-relationship, fact_id: f-grandmother-relationship, text: Maya's grandmother is the subject of Maya's family oral-history interviews., claim_type: relationship, predicate: grandmother_and_interview_subject, subject: person-grandmother, owner: person-grandmother, section: relationship_to_you, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-04-s01]}
+  - id: c-family-history-interview-plan
+    fact_id: f-family-history-interview
+    text: Maya planned an oral-history interview with her grandmother for September 13, 2026 at her grandmother's apartment in Berkeley.
+    claim_type: plan
+    predicate: interview_grandmother
+    subject: project-family-oral-history
+    owner: project-family-oral-history
+    section: timeline
+    temporal_status: past
+    evidence_modality: speech
+    state: active
+    evidence: [chat-04-s02]
+    temporal: {expression: Sunday afternoon, role: event_time, start: 2026-09-13, end: 2026-09-13, certainty: exact}
+  - {id: c-family-history-separate, fact_id: f-family-history-separate, text: Maya's family oral-history interviews are separate from Lantern and are not Lantern user research., claim_type: decision, predicate: separate_project, subject: project-family-oral-history, owner: project-family-oral-history, section: requirements_constraints, temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-04-s04]}
+  - id: c-family-history-calendar
+    fact_id: f-family-history-interview
+    text: The oral-history interview was scheduled for September 13, 2026 from 3:00 PM to 4:30 PM in Berkeley.
+    claim_type: observation
+    predicate: interview_grandmother
+    subject: project-family-oral-history
+    owner: project-family-oral-history
+    section: timeline
+    temporal_status: past
+    evidence_modality: tool
+    state: active
+    evidence: [tool-02-s01]
+    temporal: {expression: Sunday, September 13, 2026 from 3:00 PM to 4:30 PM, role: event_time, start: 2026-09-13T15:00:00-07:00, end: 2026-09-13T16:30:00-07:00, certainty: exact}
+  - {id: c-whisperx-benchmark, fact_id: f-whisperx-benchmark, text: WhisperX ran faster than real time on Maya's laptop and produced usable correctable speaker labels., claim_type: observation, predicate: benchmark_result, subject: project-lantern, owner: project-lantern, section: research_references, temporal_status: past, evidence_modality: speech, state: active, evidence: [meeting-03-s01]}
+  - {id: c-whisperx-final, fact_id: f-whisperx-decision, text: Lantern chose WhisperX for the pilot after the local benchmark., claim_type: decision, predicate: transcription_engine, slot: lantern.transcription_engine, subject: project-lantern, owner: project-lantern, section: decisions, temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-03-s02]}
+  - {id: c-explicit-export, fact_id: f-lantern-local-only, text: Lantern requires explicit export before audio or transcripts leave the machine., claim_type: decision, predicate: explicit_export, subject: project-lantern, owner: project-lantern, section: requirements_constraints, temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-03-s03]}
+  - id: c-build-tomorrow
+    fact_id: f-packaged-build
+    text: Luis planned to finish the packaged Lantern build on September 11, 2026.
+    claim_type: commitment
+    predicate: package_build
+    subject: person-luis-ortega
+    owner: person-luis-ortega
+    section: timeline
+    temporal_status: past
+    evidence_modality: speech
+    state: active
+    evidence: [meeting-03-s04]
+    temporal: {expression: tomorrow, role: deadline, start: 2026-09-11, end: 2026-09-11, certainty: exact}
+  - id: c-pilot-date-new
+    fact_id: f-pilot-date-current
+    text: Lantern's first pilot was moved to September 28, 2026 because Priya needed more time to recruit teams.
+    claim_type: decision
+    predicate: first_pilot_date
+    slot: lantern.first_pilot_date
+    subject: project-lantern
+    owner: project-lantern
+    section: next_steps_deadlines
+    temporal_status: future
+    evidence_modality: speech
+    state: active
+    evidence: [chat-05-s01]
+    temporal: {expression: September 28, role: deadline, start: 2026-09-28, end: 2026-09-28, certainty: exact}
+  - {id: c-priya-role-confirm, fact_id: f-priya-role, text: Priya continues to own pilot recruitment and the evaluation rubric., claim_type: relationship, predicate: project_role, subject: person-priya-raman, owner: person-priya-raman, section: shared_projects, linked_entities: [project-lantern], temporal_status: current, evidence_modality: speech, state: active, evidence: [chat-05-s02]}
+  - {id: c-northstar-acquisition, fact_id: f-northstar-acquisition, text: Northstar acquired Smallbird for 18 million dollars., claim_type: event, predicate: acquire, subject: organization-northstar, owner: event-northstar-smallbird-acquisition, section: summary, temporal_status: past, evidence_modality: speech, state: retracted, evidence: [meeting-04-s01], retracted_by: src-meeting-04}
+  - id: c-northstar-integration
+    fact_id: f-northstar-integration
+    text: Northstar's Smallbird integration was scheduled to begin October 1, 2026, with Omar owning migration.
+    claim_type: plan
+    predicate: integration_plan
+    subject: organization-northstar
+    owner: event-northstar-smallbird-acquisition
+    section: follow_ups
+    temporal_status: future
+    evidence_modality: speech
+    state: retracted
+    evidence: [meeting-04-s02]
+    temporal: {expression: October 1, role: event_time, start: 2026-10-01, end: 2026-10-01, certainty: exact}
+    retracted_by: src-meeting-04
+  - {id: c-northstar-legal, fact_id: f-northstar-legal, text: Northstar required legal review before launch., claim_type: commitment, predicate: legal_review, subject: organization-northstar, owner: event-northstar-smallbird-acquisition, section: follow_ups, temporal_status: future, evidence_modality: speech, state: retracted, evidence: [meeting-04-s03], retracted_by: src-meeting-04}
+  - {id: c-priya-completed, fact_id: f-priya-evaluation-completed, text: Priya recruited three Lantern pilot teams and completed the evaluation rubric., claim_type: event, predicate: completed_evaluation_setup, subject: person-priya-raman, owner: person-priya-raman, section: timeline, linked_entities: [project-lantern], temporal_status: past, evidence_modality: speech, state: active, evidence: [meeting-05-s01]}
+  - {id: c-prototype-capabilities, fact_id: f-prototype-status, text: Lantern's desktop prototype supports speaker-name correction and source links to transcript segments., claim_type: state, predicate: prototype_capabilities, subject: project-lantern, owner: project-lantern, section: current_status, temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-05-s02]}
+  - {id: c-consent-confirmation, fact_id: f-consent-gate, text: Lantern participants must confirm consent at the start of every recorded meeting., claim_type: commitment, predicate: requires_consent, subject: project-lantern, owner: project-lantern, section: requirements_constraints, temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-05-s03]}
+  - {id: c-consent-blocker, fact_id: f-consent-gate, text: Maya made Lantern's consent gate a release blocker., claim_type: decision, predicate: consent_is_release_blocker, subject: project-lantern, owner: project-lantern, section: requirements_constraints, temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-05-s04]}
+  - {id: c-consent-bug-open, fact_id: f-consent-bug, text: LANTERN-42 allowed recording without consent when reopened from recent meetings and was assigned to Maya., claim_type: observation, predicate: issue_status, slot: lantern.issue.42, subject: project-lantern, owner: project-lantern, section: timeline, temporal_status: past, evidence_modality: tool, state: active, evidence: [tool-03-s01]}
+  - {id: c-family-history-interview-result, fact_id: f-family-history-interview-result, text: Maya's grandmother said she arrived in California in 1974 and worked at her aunt's grocery store in Richmond., claim_type: event, predicate: oral_history_account, subject: person-grandmother, owner: person-grandmother, section: timeline, temporal_status: past, evidence_modality: speech, state: active, evidence: [chat-07-s01]}
+  - {id: c-family-history-scan-plan, fact_id: f-family-history-next-step, text: Maya plans to scan her grandmother's photographs before their next oral-history interview; no interview date is set., claim_type: plan, predicate: scan_photographs, subject: project-family-oral-history, owner: project-family-oral-history, section: next_steps_deadlines, temporal_status: future, evidence_modality: speech, state: active, evidence: [chat-07-s02]}
+  - {id: c-consent-bug-closed, fact_id: f-consent-bug, text: Maya fixed the LANTERN-42 consent-dialog bypass and closed the issue., claim_type: event, predicate: issue_status, slot: lantern.issue.42, subject: project-lantern, owner: project-lantern, section: timeline, temporal_status: past, evidence_modality: speech, state: active, evidence: [meeting-06-s01]}
+  - {id: c-pilot-build-ready, fact_id: f-pilot-readiness, text: Lantern's September 28 pilot build is ready for Priya's teams., claim_type: state, predicate: pilot_readiness, subject: project-lantern, owner: project-lantern, section: current_status, temporal_status: current, evidence_modality: speech, state: active, evidence: [meeting-06-s02]}
+  - {id: c-embedding-question, fact_id: f-embedding-question, text: After the pilot, Lantern must decide whether transcript embeddings can remain fully inspectable., claim_type: plan, predicate: evaluate_embeddings, subject: project-lantern, owner: project-lantern, section: next_steps_deadlines, temporal_status: future, evidence_modality: speech, state: active, evidence: [meeting-06-s03]}
+ignored_segments:
+  - {id: chat-01-s02, reason: Unaccepted assistant architecture proposal.}
+  - {id: chat-02-s02, reason: Assistant suggestion is retained only through Maya's acceptance.}
+  - {id: tool-01-s02, reason: Sponsored cloud-transcription result is unused and violates the project's constraint.}
+  - {id: chat-03-s01, reason: Assistant restatement adds no evidence beyond the tool result.}
+  - {id: chat-04-s03, reason: Assistant speculation is explicitly rejected by Maya and adds no durable fact.}
+  - {id: tool-02-s02, reason: Routine dentist appointment is not part of durable benchmark memory.}
+  - {id: chat-05-s03, reason: Assistant restatement is not an independent correction.}
+  - {id: tool-03-s02, reason: Cosmetic dark-mode issue is deliberately below the durable-memory threshold.}
+  - {id: chat-07-s03, reason: Tangential assistant suggestion is not accepted or pursued.}
+  - {id: chat-06-s01, reason: This is a source-retraction command, not a durable personal fact.}

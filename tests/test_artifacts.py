@@ -951,6 +951,10 @@ def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
         "placements": 0,
         "organization_proposals": 0,
         "scope_decisions": 0,
+        "retention_records": 0,
+        "entity_references": 0,
+        "entity_resolution_decisions": 0,
+        "scope_cohorts": 0,
         "encounters": 0,
         "consolidated_facts": 0,
     }

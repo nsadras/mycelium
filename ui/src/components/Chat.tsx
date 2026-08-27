@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, memo, type Dispatch, type FormEvent, type SetStateAction } from 'react';
+import { useState, useEffect, useMemo, useRef, memo, type Dispatch, type FormEvent, type SetStateAction } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
@@ -106,11 +106,15 @@ const ChatMessageItem = memo(function ChatMessageItem({ m, id }: { m: Message; i
                 remarkPlugins={[remarkGfm, remarkMath]} 
                 rehypePlugins={[rehypeKatex]}
                 components={{
-                  table: ({ node, ...props }) => (
-                    <div className="overflow-x-auto max-w-full my-4 rounded-lg border border-slate-700/40">
-                      <table className="min-w-full divide-y divide-slate-800" {...props} />
-                    </div>
-                  )
+                  table: (componentProps) => {
+                    const tableProps = { ...componentProps };
+                    delete tableProps.node;
+                    return (
+                      <div className="overflow-x-auto max-w-full my-4 rounded-lg border border-slate-700/40">
+                        <table className="min-w-full divide-y divide-slate-800" {...tableProps} />
+                      </div>
+                    );
+                  }
                 }}
               >
                 {m.content}
@@ -154,9 +158,12 @@ export default function Chat({
   const [activePromptIndex, setActivePromptIndex] = useState<number | null>(null);
   const [navOpenMobile, setNavOpenMobile] = useState(false);
 
-  const userPrompts = messages
-    .map((m, index) => ({ ...m, originalIndex: index }))
-    .filter(m => m.role === 'user');
+  const userPrompts = useMemo(
+    () => messages
+      .map((m, index) => ({ ...m, originalIndex: index }))
+      .filter(m => m.role === 'user'),
+    [messages],
+  );
 
   const showNav = userPrompts.length >= 5;
 
@@ -194,7 +201,7 @@ export default function Chat({
     return () => {
       container.removeEventListener('scroll', handleScroll);
     };
-  }, [messages, showNav]);
+  }, [showNav, userPrompts]);
 
   const handleJumpToPrompt = (msgIndex: number) => {
     const el = document.getElementById(`msg-${msgIndex}`);
@@ -205,29 +212,26 @@ export default function Chat({
   };
 
   useEffect(() => {
-    if (selectedId) {
-      fetchHistory(selectedId);
-    } else {
-      setMessages([]);
-    }
-    setAssistantStatus({ activity: 'idle', label: 'Idle', detail: selectedId ? 'Ready' : 'Select a session' });
-    setNavOpenMobile(false);
-  }, [selectedId]);
+    let cancelled = false;
+    const loadHistory = selectedId
+      ? api.get(`/sessions/${selectedId}`).then((res) => res.data.transcript as Message[])
+      : Promise.resolve([] as Message[]);
+    loadHistory
+      .then((transcript) => {
+        if (cancelled) return;
+        setMessages(transcript);
+        setAssistantStatus({ activity: 'idle', label: 'Idle', detail: selectedId ? 'Ready' : 'Select a session' });
+        setNavOpenMobile(false);
+      })
+      .catch((err) => console.error("Failed to fetch history", err));
+    return () => { cancelled = true; };
+  }, [selectedId, setAssistantStatus]);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
-
-  const fetchHistory = async (id: string) => {
-    try {
-      const res = await api.get(`/sessions/${id}`);
-      setMessages(res.data.transcript);
-    } catch (err) {
-      console.error("Failed to fetch history", err);
-    }
-  };
 
   const handleSend = async (e: FormEvent) => {
     e.preventDefault();

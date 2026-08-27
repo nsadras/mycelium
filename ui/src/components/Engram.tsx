@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type Dispatch, type MouseEvent, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MouseEvent, type SetStateAction } from 'react';
 import { AlertTriangle, Check, CheckCircle2, CircleHelp, Clock, FileAudio, Gavel, ListChecks, Loader2, Pause, Pencil, Play, RotateCw, Save, Trash2, Upload, Volume2, VolumeX, X } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -154,6 +154,37 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   const [isMuted, setIsMuted] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
 
+  const applyMeeting = useCallback((next: EngramMeeting | null) => {
+    setMeeting(next);
+    setSpeakerNames(next?.speaker_names ?? {});
+  }, []);
+
+  const selectMeeting = useCallback((id: string | null) => {
+    setSelectedId(id);
+    applyMeeting(null);
+    setEditingTranscriptTurn(null);
+    setSavingTranscriptTurn(null);
+    pendingSeekRef.current = null;
+    playbackAttemptedRef.current = false;
+    audioRef.current?.pause();
+    setIsPlaying(false);
+    setIsBuffering(false);
+    setCurrentTime(0);
+    setAudioDuration(0);
+    setPlaybackError(null);
+  }, [applyMeeting]);
+
+  const refreshMeetings = useCallback(async () => {
+    try {
+      const res = await api.get('/engram/meetings');
+      const next = res.data as EngramMeeting[];
+      setMeetings(next);
+      setSelectedId(current => current ?? next[0]?.id ?? null);
+    } catch (err) {
+      console.error('Failed to fetch meetings', err);
+    }
+  }, []);
+
   const segments = useMemo(() => meeting?.segments ?? [], [meeting]);
   const turns = useMemo(() => transcriptTurns(segments, speakerNames), [segments, speakerNames]);
   const activeTurnKey = useMemo(
@@ -174,34 +205,32 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   }, [segments]);
 
   useEffect(() => {
-    fetchMeetings();
-    setAssistantStatus({ activity: 'engram', label: 'Engram', detail: 'Ready for meetings' });
-  }, []);
+    let cancelled = false;
+    api.get('/engram/meetings')
+      .then((res) => {
+        if (cancelled) return;
+        const next = res.data as EngramMeeting[];
+        setMeetings(next);
+        setSelectedId(current => current ?? next[0]?.id ?? null);
+        setAssistantStatus({ activity: 'engram', label: 'Engram', detail: 'Ready for meetings' });
+      })
+      .catch((err) => console.error('Failed to fetch meetings', err));
+    return () => { cancelled = true; };
+  }, [setAssistantStatus]);
 
   useEffect(() => {
-    if (!selectedId) {
-      setMeeting(null);
-      return;
-    }
-    fetchMeeting(selectedId);
-  }, [selectedId]);
-
-  useEffect(() => {
-    setSpeakerNames(meeting?.speaker_names ?? {});
-  }, [meeting?.id, JSON.stringify(meeting?.speaker_names ?? {})]);
-
-  useEffect(() => {
-    setEditingTranscriptTurn(null);
-    setSavingTranscriptTurn(null);
-    pendingSeekRef.current = null;
-    playbackAttemptedRef.current = false;
-    audioRef.current?.pause();
-    setIsPlaying(false);
-    setIsBuffering(false);
-    setCurrentTime(0);
-    setAudioDuration(0);
-    setPlaybackError(null);
-  }, [selectedId]);
+    if (!selectedId) return;
+    let cancelled = false;
+    api.get(`/engram/meetings/${selectedId}`)
+      .then((res) => {
+        if (cancelled) return;
+        const next = res.data as EngramMeeting;
+        applyMeeting(next);
+        setMeetings(prev => prev.map(item => item.id === selectedId ? { ...item, ...next } : item));
+      })
+      .catch((err) => console.error('Failed to fetch meeting', err));
+    return () => { cancelled = true; };
+  }, [applyMeeting, selectedId]);
 
   useEffect(() => {
     if (!selectedId || meeting?.id !== selectedId || !isBusyStatus(meeting.status)) return;
@@ -213,7 +242,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
         const res = await api.get(`/engram/meetings/${selectedId}`);
         if (cancelled) return;
         const next = res.data as EngramMeeting;
-        setMeeting(next);
+        applyMeeting(next);
         setMeetings(prev => prev.map(item => item.id === next.id ? { ...item, ...next } : item));
         if (next.status === 'failed') {
           setAssistantStatus({ activity: 'error', label: 'Engram failed', detail: 'Check meeting detail' });
@@ -234,7 +263,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
       cancelled = true;
       if (pollTimer) clearTimeout(pollTimer);
     };
-  }, [selectedId, meeting?.id, meeting?.status, setAssistantStatus]);
+  }, [applyMeeting, selectedId, meeting?.id, meeting?.status, setAssistantStatus]);
 
   useEffect(() => {
     if (transcriptRef.current) {
@@ -242,35 +271,13 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     }
   }, [segments.length]);
 
-  const fetchMeetings = async () => {
-    try {
-      const res = await api.get('/engram/meetings');
-      setMeetings(res.data);
-      if (res.data.length > 0 && !selectedId) {
-        setSelectedId(res.data[0].id);
-      }
-    } catch (err) {
-      console.error('Failed to fetch meetings', err);
-    }
-  };
-
-  const fetchMeeting = async (id: string) => {
-    try {
-      const res = await api.get(`/engram/meetings/${id}`);
-      setMeeting(res.data);
-      setMeetings(prev => prev.map(item => item.id === id ? { ...item, ...res.data } : item));
-    } catch (err) {
-      console.error('Failed to fetch meeting', err);
-    }
-  };
-
   const processMeeting = async () => {
     if (!meeting || isProcessing) return;
     setIsProcessing(true);
     setAssistantStatus({ activity: 'thinking', label: 'Processing meeting', detail: meeting.title });
     try {
       const res = await api.post(`/engram/meetings/${meeting.id}/process`);
-      setMeeting(res.data);
+      applyMeeting(res.data);
       setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
     } catch (err) {
       console.error('Failed to process meeting', err);
@@ -337,7 +344,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     setIsSavingSpeakers(true);
     try {
       const res = await api.put(`/engram/meetings/${meeting.id}/speakers`, { speaker_names: speakerNames });
-      setMeeting(res.data);
+      applyMeeting(res.data);
       setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
       return res.data as EngramMeeting;
     } catch (err) {
@@ -369,7 +376,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
         segments: updates,
         speaker: speakerChanged ? speaker : undefined,
       });
-      setMeeting(res.data);
+      applyMeeting(res.data);
       setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
       return true;
     } catch (err) {
@@ -389,7 +396,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
       const saved = await saveSpeakerNames();
       if (!saved) return;
       const res = await api.post(`/engram/meetings/${meeting.id}/finalize`);
-      setMeeting(res.data);
+      applyMeeting(res.data);
       setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
       setAssistantStatus({ activity: 'engram', label: 'Meeting complete', detail: res.data.title });
     } catch (err) {
@@ -408,14 +415,9 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     setAssistantStatus({ activity: 'engram', label: 'Deleting recording', detail: target.title });
     try {
       await api.delete(`/engram/meetings/${target.id}`);
-      setMeetings(prev => {
-        const next = prev.filter(item => item.id !== target.id);
-        if (selectedId === target.id) {
-          setSelectedId(next[0]?.id ?? null);
-          setMeeting(null);
-        }
-        return next;
-      });
+      const next = meetings.filter(item => item.id !== target.id);
+      setMeetings(next);
+      if (selectedId === target.id) selectMeeting(next[0]?.id ?? null);
       setAssistantStatus({ activity: 'engram', label: 'Recording deleted', detail: 'Ready' });
     } catch (err) {
       console.error('Failed to delete meeting', err);
@@ -437,7 +439,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setMeetings(prev => [res.data, ...prev]);
-      setSelectedId(res.data.id);
+      selectMeeting(res.data.id);
       setTitle('');
       setAssistantStatus({ activity: 'engram', label: 'Raw recording ready', detail: res.data.title });
     } catch (err) {
@@ -501,7 +503,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
             <h2 className="font-semibold text-slate-700 flex items-center gap-2">
               <FileAudio size={16} /> Engram
             </h2>
-            <button onClick={fetchMeetings} title="Refresh meetings" className="p-1 hover:bg-slate-100 rounded-md text-indigo-600">
+            <button onClick={refreshMeetings} title="Refresh meetings" className="p-1 hover:bg-slate-100 rounded-md text-indigo-600">
               <RotateCw size={16} />
             </button>
           </div>
@@ -533,7 +535,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
           {meetings.map((item) => (
             <button
               key={item.id}
-              onClick={() => setSelectedId(item.id)}
+              onClick={() => selectMeeting(item.id)}
               className={cn(
                 "w-full rounded-md px-3 py-2 text-left text-sm transition-colors",
                 selectedId === item.id ? "bg-indigo-50 text-indigo-700 font-medium" : "hover:bg-slate-50 text-slate-600"

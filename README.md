@@ -96,11 +96,15 @@ claims in one logical pass. Each claim cites its supporting segment IDs and is p
 claims immediately, but labels them as recent and unconsolidated rather than presenting them as canonical
 wiki knowledge.
 
-Dream is the only transition from short-term claims into the wiki. One cohort scope plan considers evidence
-across source episodes, discovers sparse durable entities, resolves early descriptions against later names,
-assigns every admitted claim one semantic owner, and resolves structured meeting-speaker occurrences to
-explicit entity IDs. Deterministic code validates the structured plan and its cited evidence; it does not use
-claim keywords, lexical overlap, or title matching to infer semantic identity or ownership. The owner's typed
+Dream is the only transition from short-term claims into the wiki. Source-structure policy first records
+assistant/system exclusions and extraction rejections as typed non-wiki retention—not as deferred or
+canonical claims. The scope planner then considers pending claims plus explicit deferred evidence, discovers
+sparse durable entities, resolves early descriptions against later names, assigns every admitted claim one
+semantic owner, and resolves structured meeting-speaker occurrences to explicit entity IDs. Deterministic
+code validates the structured plan and its cited evidence; it does not use claim keywords, lexical overlap,
+or title matching to infer semantic identity or ownership. When a new entity materializes, a bounded second
+pass revisits its persisted source/cohort/reference neighborhood, including older You-owned claims, so scope
+can change without whole-store or token-overlap reactivation. The owner's typed
 section is derived deterministically
 from claim semantics. A second presentation layer groups compatible placed claims into persisted, grounded
 `ConsolidatedFact` records; wiki pages render those concise facts while retaining every member claim and exact
@@ -113,7 +117,11 @@ Deferred claims receive a broader review after seven days. Queue thresholds only
 they do not introduce another consolidation path. Failed routing remains retryable, and manual assignment
 uses the same placement and deterministic materialization records.
 
-Page identity lives in `artifacts/entities/`; claim ownership and its append-only rationale live in
+Page identity lives in `artifacts/entities/`, where a resolved identity may remain `provisional` before it
+has enough evidence for a page. Entity-creation and participant decisions live in
+`artifacts/entity-resolution-decisions/`; structured subject, object, context, and canonical-owner endpoints
+live in `artifacts/entity-references/`; scope neighborhoods live in `artifacts/scope-cohorts/`; typed source
+exclusions live in `artifacts/retention-records/`. Claim ownership and its append-only rationale live in
 `artifacts/placements/` and `artifacts/scope-decisions/`; editable display statements live in
 `artifacts/consolidated-facts/`. Named meeting participants also receive source-grounded encounter records,
 so a useful Person page can exist before the system knows enough to assert a profile fact. Entity IDs survive
@@ -214,8 +222,7 @@ context_window_tokens = 32768
 context_budget_tokens = 32768
 
 [dream]
-main_page_claim_limit = 18
-queue_claim_threshold = 50
+queue_claim_threshold = 20
 max_pending_hours = 24
 deferred_revisit_hours = 168
 lifecycle_poll_seconds = 300

@@ -77,6 +77,8 @@ class ClaimReconsolidator:
         existing = [claim for claim in active if claim.claim_id not in current_ids]
 
         for route in routes:
+            if route.claim_id not in current_ids:
+                continue
             try:
                 incoming = self.artifacts.get_claim(route.claim_id)
             except FileNotFoundError:

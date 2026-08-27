@@ -26,3 +26,14 @@
 - The host Ollama server at `http://localhost:11434` may be unreachable from the filesystem/network sandbox even when it is running normally.
 - Do not conclude that Ollama is down from a sandboxed connection failure. Verify it with a read-only `/api/tags` request using sandbox/network escalation.
 - Run Ollama-dependent tests and benchmarks with the same escalation so they can reach the host loopback interface. Do not start another Ollama process, change the configured URL, or use a fallback model to work around sandbox isolation.
+
+## Architecture and completion standards
+
+- Treat `DESIGN.md` as the authority for the intended current production architecture. Dated planning files are
+  historical records unless they explicitly declare otherwise. Update `DESIGN.md` and user-facing README
+  behavior in the same change as an architectural mechanism.
+- Do not mark a milestone complete merely because its implementation checklist is present. Its declared
+  acceptance conditions, transfer fixtures, and required repeated trials must pass, with the results recorded.
+- Before checkpointing a change, run the documented Python checks, UI lint/build, and `git diff --check` from
+  `DESIGN.md`. A semantic milestone also requires its named behavioral fixture protocol; mocked unit tests alone
+  are not acceptance evidence.

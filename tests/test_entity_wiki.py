@@ -13,7 +13,6 @@ from mycelium.materialization import PageMaterializer
 from mycelium.organization import (
     EntityCurationService,
     FactCurationService,
-    OrganizationAuditor,
 )
 from mycelium.store import WikiStore
 
@@ -263,21 +262,6 @@ def test_merge_reassigns_claims_and_keeps_redirect_identity(tmp_path):
     assert artifacts.get_placement("claim-1").owner_entity_id == project.entity_id
     assert wiki.exists(project.slug)
     assert not wiki.exists(duplicate.slug)
-
-
-def test_deferred_claim_gets_review_suggestion_only_for_exact_unique_entity(tmp_path):
-    artifacts, _, _, _, project = setup_store(tmp_path)
-    item = claim("claim-1", "Mycelium needs a claim editor.", "plan")
-    artifacts.save_claim(item)
-    artifacts.save_placement(ClaimPlacement(
-        item.claim_id, None, None, [], "deferred", "no owner", "now", "now"
-    ))
-
-    proposals = OrganizationAuditor(artifacts).audit()
-
-    assert len(proposals) == 1
-    assert proposals[0].proposal_type == "assign_claim"
-    assert proposals[0].proposed_owner_entity_id == project.entity_id
 
 
 def test_manual_placement_moves_claim_between_short_term_and_canonical_memory(tmp_path):

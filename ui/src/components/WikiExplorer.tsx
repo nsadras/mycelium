@@ -62,7 +62,20 @@ export default function WikiExplorer() {
     setProposals(proposalResponse.data);
   };
 
-  useEffect(() => { refresh().catch((error) => console.error('Failed to load wiki', error)); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      api.get<WikiPage[]>('/memory/wiki'),
+      api.get<EntityRecord[]>('/memory/artifacts/entities'),
+      api.get<OrganizationProposalArtifact[]>('/memory/artifacts/organization-proposals?status=pending'),
+    ]).then(([pageResponse, entityResponse, proposalResponse]) => {
+      if (cancelled) return;
+      setPages(pageResponse.data);
+      setEntities(entityResponse.data);
+      setProposals(proposalResponse.data);
+    }).catch((error) => console.error('Failed to load wiki', error));
+    return () => { cancelled = true; };
+  }, []);
   useEffect(() => {
     if (!selectedSlug) return;
     api.get<WikiPage>(`/memory/wiki/${encodeURIComponent(selectedSlug)}`)

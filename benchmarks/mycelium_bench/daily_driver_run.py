@@ -80,7 +80,7 @@ def _snapshot(memory: Mycelium, checkpoint_id: str) -> dict[str, Any]:
     facts = memory.artifacts.list_consolidated_facts()
     pages = memory.wiki.list_all()
     labels = _source_label_map(memory)
-    return {
+    return _jsonable({
         "checkpoint_id": checkpoint_id,
         "sources": memory.artifacts.list_sources(),
         "episodes": memory.artifacts.list_episodes(),
@@ -113,7 +113,7 @@ def _snapshot(memory: Mycelium, checkpoint_id: str) -> dict[str, Any]:
             "entities": len(entities),
             "pages": len(pages),
         },
-    }
+    })
 
 
 def _configure_user(memory: Mycelium, name: str) -> None:
@@ -751,10 +751,28 @@ def refresh_daily_driver_comparison(
 ) -> dict[str, Any]:
     """Recompute diagnostics for a completed run without invoking an LLM."""
     fixture = load_fixture(fixture_dir)
-    run = json.loads((output_dir / "run.json").read_text(encoding="utf-8"))
     memory = Mycelium(
         output_dir / "store", config_path=config_path, memory_profile="user"
     )
+    run_path = output_dir / "run.json"
+    if run_path.exists():
+        run = json.loads(run_path.read_text(encoding="utf-8"))
+    else:
+        run = {
+            "scenario_id": fixture["scenario"]["scenario_id"],
+            "model": memory.config.llm.model,
+            "ollama_url": memory.config.llm.url,
+            "config_path": str(config_path) if config_path else None,
+            "extraction_mode": "unknown_recovered_run",
+            "replay_extraction_store": None,
+            "probe_answers": True,
+            "checkpoint_ids": sorted(
+                path.parent.name
+                for path in (output_dir / "checkpoints").glob("*/snapshot.json")
+            ),
+            "actions": [],
+        }
+        _write_json(run_path, run)
     comparison = compare_final(fixture, memory)
     snapshots = load_snapshots(output_dir)
     probe_results = [
@@ -860,8 +878,6 @@ async def run_daily_driver(
                     {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
                 )
             actions.append(event)
-    comparison = compare_final(fixture, memory)
-    evaluation = evaluate_run(fixture, snapshots, probe_results)
     run = {
         "scenario_id": fixture["scenario"]["scenario_id"],
         "model": memory.config.llm.model,
@@ -876,6 +892,8 @@ async def run_daily_driver(
         "actions": actions,
     }
     _write_json(output_dir / "run.json", run)
+    comparison = compare_final(fixture, memory)
+    evaluation = evaluate_run(fixture, snapshots, probe_results)
     _write_json(output_dir / "comparison.json", comparison)
     _write_json(output_dir / "evaluation.json", evaluation)
     (output_dir / "REPORT.md").write_text(

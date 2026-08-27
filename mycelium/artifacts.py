@@ -50,12 +50,17 @@ DREAM_DISPOSITIONS = {
     "pending",
     "deferred",
     "routed",
-    "ignored_semantic",
-    "excluded_assistant",
+    "excluded_source_policy",
     "routing_failed",
-    "source_only",
 }
 SHORT_TERM_DISPOSITIONS = {"pending", "deferred", "routing_failed"}
+NON_WIKI_RETENTION_REASONS = {
+    "assistant_unadopted",
+    "system_control",
+    "extractor_rejected",
+    "legacy_derived",
+}
+ENTITY_REFERENCE_ROLES = {"subject", "object", "context", "canonical_owner"}
 RECONSOLIDATION_RELATIONS = {"contradicts", "supersedes"}
 RECONSOLIDATION_STATUSES = {"pending", "approved", "rejected", "applied", "stale"}
 
@@ -174,6 +179,7 @@ class EntityRecord:
     status: str
     created_at: str
     updated_at: str
+    materialization_state: str = "materialized"
     merged_into_entity_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -183,6 +189,10 @@ class EntityRecord:
             raise ValueError(f"Unsupported entity type: {self.entity_type}")
         if self.status not in {"active", "archived", "merged"}:
             raise ValueError(f"Unsupported entity status: {self.status}")
+        if self.materialization_state not in {"provisional", "materialized"}:
+            raise ValueError(
+                f"Unsupported entity materialization state: {self.materialization_state}"
+            )
         if self.entity_id == "you" and self.entity_type != "you":
             raise ValueError("The singleton you entity must have type 'you'")
         if self.entity_type == "you" and self.entity_id != "you":
@@ -196,6 +206,112 @@ class EntityRecord:
         if not self.title or not self.slug:
             raise ValueError("Entity title and slug are required")
         self.aliases = sorted({" ".join(value.split()).strip() for value in self.aliases if value.strip()})
+
+
+@dataclass
+class NonWikiRetentionRecord:
+    """Typed evidence retention outside short-term and canonical wiki memory."""
+
+    retention_id: str
+    target_type: str
+    source_id: str
+    segment_ids: list[str]
+    reason: str
+    policy_origin: str
+    created_at: str
+    claim_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.target_type not in {"claim", "segment"}:
+            raise ValueError(f"Unsupported retention target: {self.target_type}")
+        if self.reason not in NON_WIKI_RETENTION_REASONS:
+            raise ValueError(f"Unsupported non-wiki retention reason: {self.reason}")
+        if self.policy_origin not in {"source_structure", "extraction"}:
+            raise ValueError(f"Unsupported retention policy origin: {self.policy_origin}")
+        if self.target_type == "claim" and not self.claim_id:
+            raise ValueError("Claim retention records require claim_id")
+        if self.target_type == "segment" and self.claim_id:
+            raise ValueError("Segment retention records cannot name a claim")
+        self.segment_ids = sorted(set(self.segment_ids))
+        if not self.segment_ids:
+            raise ValueError("Non-wiki retention records require source segments")
+
+
+@dataclass
+class ClaimEntityReference:
+    """A structured claim mention or canonical scope endpoint."""
+
+    reference_id: str
+    claim_id: str
+    role: str
+    surface: str | None
+    entity_id: str | None
+    confidence: float
+    reason: str
+    origin: str
+    dream_run_id: str
+    status: str
+    created_at: str
+    superseded_by_reference_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.role not in ENTITY_REFERENCE_ROLES:
+            raise ValueError(f"Unsupported entity-reference role: {self.role}")
+        if self.origin not in {"extraction", "scope", "manual"}:
+            raise ValueError(f"Unsupported entity-reference origin: {self.origin}")
+        if self.status not in {"active", "superseded"}:
+            raise ValueError(f"Unsupported entity-reference status: {self.status}")
+        if self.status == "superseded" and not self.superseded_by_reference_id:
+            raise ValueError("Superseded references require a successor")
+        self.surface = " ".join(str(self.surface or "").split()).strip() or None
+        self.confidence = max(0.0, min(1.0, float(self.confidence)))
+
+
+@dataclass
+class EntityResolutionDecision:
+    """Append-only identity creation or participant-resolution evidence."""
+
+    decision_id: str
+    decision_type: str
+    entity_id: str | None
+    proposed_entity_type: str
+    proposed_title: str
+    source_ids: list[str]
+    supporting_claim_ids: list[str]
+    supporting_segment_ids: list[str]
+    confidence: float
+    reason: str
+    review_state: str
+    dream_run_id: str
+    created_at: str
+    participant_surface: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.decision_type not in {"entity_creation", "participant_resolution"}:
+            raise ValueError(f"Unsupported entity-resolution decision: {self.decision_type}")
+        if self.review_state not in {"accepted", "review_required", "rejected"}:
+            raise ValueError(f"Unsupported identity review state: {self.review_state}")
+        self.source_ids = sorted(set(self.source_ids))
+        self.supporting_claim_ids = sorted(set(self.supporting_claim_ids))
+        self.supporting_segment_ids = sorted(set(self.supporting_segment_ids))
+        self.confidence = max(0.0, min(1.0, float(self.confidence)))
+
+
+@dataclass
+class ScopeCohort:
+    """Persisted, non-lexical evidence neighborhood used for scope revision."""
+
+    cohort_id: str
+    dream_run_id: str
+    claim_ids: list[str]
+    source_ids: list[str]
+    revision_entity_ids: list[str]
+    created_at: str
+
+    def __post_init__(self) -> None:
+        self.claim_ids = sorted(set(self.claim_ids))
+        self.source_ids = sorted(set(self.source_ids))
+        self.revision_entity_ids = sorted(set(self.revision_entity_ids))
 
 
 @dataclass
@@ -438,6 +554,10 @@ class ArtifactStore:
         self.entities_dir = root / "entities"
         self.placements_dir = root / "placements"
         self.scope_decisions_dir = root / "scope-decisions"
+        self.retention_records_dir = root / "retention-records"
+        self.entity_references_dir = root / "entity-references"
+        self.entity_resolution_decisions_dir = root / "entity-resolution-decisions"
+        self.scope_cohorts_dir = root / "scope-cohorts"
         self.encounters_dir = root / "encounters"
         self.consolidated_facts_dir = root / "consolidated-facts"
         self.organization_proposals_dir = root / "organization-proposals"
@@ -450,6 +570,10 @@ class ArtifactStore:
             self.entities_dir,
             self.placements_dir,
             self.scope_decisions_dir,
+            self.retention_records_dir,
+            self.entity_references_dir,
+            self.entity_resolution_decisions_dir,
+            self.scope_cohorts_dir,
             self.encounters_dir,
             self.consolidated_facts_dir,
             self.organization_proposals_dir,
@@ -496,7 +620,14 @@ class ArtifactStore:
         wanted = _slugify(slug)
         return next((entity for entity in self.list_entities() if entity.slug == wanted), None)
 
-    def create_entity(self, entity_type: str, title: str, *, aliases: list[str] | None = None) -> EntityRecord:
+    def create_entity(
+        self,
+        entity_type: str,
+        title: str,
+        *,
+        aliases: list[str] | None = None,
+        materialization_state: str = "materialized",
+    ) -> EntityRecord:
         now = datetime.now().astimezone().isoformat()
         slug = _slugify(title)
         if entity_type == "you":
@@ -525,6 +656,7 @@ class ArtifactStore:
             status="active",
             created_at=now,
             updated_at=now,
+            materialization_state=materialization_state,
         )
         self.save_entity(entity)
         return entity
@@ -618,6 +750,131 @@ class ArtifactStore:
     def active_scope_decision(self, claim_id: str) -> ClaimScopeDecision | None:
         values = self.list_scope_decisions(claim_id=claim_id, status="active")
         return values[-1] if values else None
+
+    def save_retention_record(self, record: NonWikiRetentionRecord) -> None:
+        if record.claim_id:
+            self.get_claim(record.claim_id)
+        self.get_source(record.source_id)
+        _atomic_json(
+            self.retention_records_dir / f"{_safe_id(record.retention_id)}.json",
+            asdict(record),
+        )
+
+    def get_retention_record(self, retention_id: str) -> NonWikiRetentionRecord:
+        return NonWikiRetentionRecord(**self._read(
+            self.retention_records_dir / f"{_safe_id(retention_id)}.json"
+        ))
+
+    def list_retention_records(
+        self, *, claim_id: str | None = None, source_id: str | None = None
+    ) -> list[NonWikiRetentionRecord]:
+        values = [
+            self.get_retention_record(path.stem)
+            for path in sorted(self.retention_records_dir.glob("*.json"))
+        ]
+        return [
+            item for item in values
+            if (claim_id is None or item.claim_id == claim_id)
+            and (source_id is None or item.source_id == source_id)
+        ]
+
+    def save_entity_reference(self, reference: ClaimEntityReference) -> None:
+        self.get_claim(reference.claim_id)
+        if reference.entity_id:
+            self.get_entity(reference.entity_id)
+        if reference.status == "active":
+            for current in self.list_entity_references(
+                claim_id=reference.claim_id, status="active"
+            ):
+                if current.role != reference.role or current.surface != reference.surface:
+                    continue
+                current.status = "superseded"
+                current.superseded_by_reference_id = reference.reference_id
+                _atomic_json(
+                    self.entity_references_dir
+                    / f"{_safe_id(current.reference_id)}.json",
+                    asdict(current),
+                )
+        _atomic_json(
+            self.entity_references_dir / f"{_safe_id(reference.reference_id)}.json",
+            asdict(reference),
+        )
+
+    def get_entity_reference(self, reference_id: str) -> ClaimEntityReference:
+        return ClaimEntityReference(**self._read(
+            self.entity_references_dir / f"{_safe_id(reference_id)}.json"
+        ))
+
+    def list_entity_references(
+        self,
+        *,
+        claim_id: str | None = None,
+        entity_id: str | None = None,
+        status: str | None = None,
+    ) -> list[ClaimEntityReference]:
+        values = [
+            self.get_entity_reference(path.stem)
+            for path in sorted(self.entity_references_dir.glob("*.json"))
+        ]
+        return [
+            item for item in values
+            if (claim_id is None or item.claim_id == claim_id)
+            and (entity_id is None or item.entity_id == entity_id)
+            and (status is None or item.status == status)
+        ]
+
+    def save_entity_resolution_decision(
+        self, decision: EntityResolutionDecision
+    ) -> None:
+        if decision.entity_id:
+            self.get_entity(decision.entity_id)
+        for claim_id in decision.supporting_claim_ids:
+            self.get_claim(claim_id)
+        _atomic_json(
+            self.entity_resolution_decisions_dir
+            / f"{_safe_id(decision.decision_id)}.json",
+            asdict(decision),
+        )
+
+    def get_entity_resolution_decision(
+        self, decision_id: str
+    ) -> EntityResolutionDecision:
+        return EntityResolutionDecision(**self._read(
+            self.entity_resolution_decisions_dir / f"{_safe_id(decision_id)}.json"
+        ))
+
+    def list_entity_resolution_decisions(
+        self, *, entity_id: str | None = None, review_state: str | None = None
+    ) -> list[EntityResolutionDecision]:
+        values = [
+            self.get_entity_resolution_decision(path.stem)
+            for path in sorted(self.entity_resolution_decisions_dir.glob("*.json"))
+        ]
+        return [
+            item for item in values
+            if (entity_id is None or item.entity_id == entity_id)
+            and (review_state is None or item.review_state == review_state)
+        ]
+
+    def save_scope_cohort(self, cohort: ScopeCohort) -> None:
+        for claim_id in cohort.claim_ids:
+            self.get_claim(claim_id)
+        _atomic_json(
+            self.scope_cohorts_dir / f"{_safe_id(cohort.cohort_id)}.json",
+            asdict(cohort),
+        )
+
+    def get_scope_cohort(self, cohort_id: str) -> ScopeCohort:
+        return ScopeCohort(**self._read(
+            self.scope_cohorts_dir / f"{_safe_id(cohort_id)}.json"
+        ))
+
+    def list_scope_cohorts(self) -> list[ScopeCohort]:
+        values = [
+            self.get_scope_cohort(path.stem)
+            for path in sorted(self.scope_cohorts_dir.glob("*.json"))
+        ]
+        return sorted(values, key=lambda item: (item.created_at, item.cohort_id))
 
     def save_encounter(self, encounter: EntityEncounter) -> None:
         self.get_entity(encounter.entity_id)
@@ -805,6 +1062,10 @@ class ArtifactStore:
             "placements": 0,
             "organization_proposals": 0,
             "scope_decisions": 0,
+            "retention_records": 0,
+            "entity_references": 0,
+            "entity_resolution_decisions": 0,
+            "scope_cohorts": 0,
             "encounters": 0,
             "consolidated_facts": 0,
         }
@@ -818,6 +1079,10 @@ class ArtifactStore:
             ("placements", self.placements_dir),
             ("organization_proposals", self.organization_proposals_dir),
             ("scope_decisions", self.scope_decisions_dir),
+            ("retention_records", self.retention_records_dir),
+            ("entity_references", self.entity_references_dir),
+            ("entity_resolution_decisions", self.entity_resolution_decisions_dir),
+            ("scope_cohorts", self.scope_cohorts_dir),
             ("encounters", self.encounters_dir),
             ("consolidated_facts", self.consolidated_facts_dir),
         ):
@@ -833,6 +1098,10 @@ class ArtifactStore:
             "placements": 0,
             "organization_proposals": 0,
             "scope_decisions": 0,
+            "retention_records": 0,
+            "entity_references": 0,
+            "entity_resolution_decisions": 0,
+            "scope_cohorts": 0,
             "encounters": 0,
             "consolidated_facts": 0,
             "legacy_claim_assignments_removed": 0,
@@ -843,6 +1112,10 @@ class ArtifactStore:
             ("placements", self.placements_dir),
             ("organization_proposals", self.organization_proposals_dir),
             ("scope_decisions", self.scope_decisions_dir),
+            ("retention_records", self.retention_records_dir),
+            ("entity_references", self.entity_references_dir),
+            ("entity_resolution_decisions", self.entity_resolution_decisions_dir),
+            ("scope_cohorts", self.scope_cohorts_dir),
             ("encounters", self.encounters_dir),
             ("consolidated_facts", self.consolidated_facts_dir),
         ):
@@ -861,7 +1134,7 @@ class ArtifactStore:
                 changed = True
             if data.get("status", "active") == "active" and data.get(
                 "dream_disposition"
-            ) not in {"excluded_assistant", "ignored_semantic"}:
+            ) != "excluded_source_policy":
                 data["dream_disposition"] = "pending"
                 data["dream_disposition_reason"] = "Canonical projection was cleared."
                 data["dream_run_id"] = None
@@ -902,6 +1175,8 @@ class ArtifactStore:
     def memory_tier(self, claim_id: str) -> str:
         claim = self.get_claim(claim_id)
         placement = self.placement_for_claim(claim_id)
+        if claim.dream_disposition == "excluded_source_policy":
+            return "source"
         if (
             claim.dream_disposition in SHORT_TERM_DISPOSITIONS
             and not (placement and placement.status == "placed")

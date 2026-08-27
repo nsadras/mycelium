@@ -30,57 +30,41 @@ SOURCE-GROUNDED CLAIMS:
 
 
 def cohort_scope_prompt(index_content: str, evidence: str) -> tuple[str, str]:
-    system = """Organize one cohort of source-grounded memory claims into a concise personal wiki.
+    system = """Organize one cohort of retained claims into durable wiki identities and claim owners.
 
-Do entity discovery and claim ownership as one globally consistent decision. Define each genuinely new
-entity once with an N001-style candidate ID, cite every materially supporting claim alias, then assign every
-claim either to an existing entity ID, to one candidate ID, to deferred, or to source_only. Assignments may
-cite other claims whose shared context establishes the owner. Never use an undeclared candidate ID.
+Use the whole cohort. Reuse an existing stable ID when evidence describes the same real subject, including
+an early description that receives a name later. Otherwise define a new identity once with an N001-style ID
+and cite the C001-style claims or P001-style participants that establish it. Do not create duplicate,
+catchall, component, phase, tool, vendor, issue, deliverable, or routine-session pages.
 
-Resolve every supplied P001-style participant occurrence to either `you`, an existing Person ID, or a
-declared Person candidate. A participant-backed Person candidate cites those participant aliases using
-supporting_participants and uses creation_basis=meeting_participant. Repeated names, variants, and aliases
-must be resolved semantically in this one plan; deterministic code will not compare participant strings.
-An occurrence with speaker_role=user must resolve to `you`. Every other supplied meeting speaker must
-resolve to an existing Person or a declared Person candidate, never to `you` or another entity type.
+Create only independently useful identities:
+- Person: a human with a durable relationship or substantive relevance.
+- Project: a continuing endeavor or outcome supported by concrete work, commitment, or recurring activity
+  across the evidence. Its individual sessions and milestones remain part of the Project.
+- Event: one bounded occurrence with lasting significance independent of a continuing Project.
+- Topic, Organization, or Place: independently and durably relevant, not merely incidental or tool-reported.
 
-The owner is the entity whose state, requirements, plans, responsibilities, or history the claim changes.
-Use the cohort to resolve aliases and evolving names: early descriptions of an endeavor must attach to its
-later established Project. Components, vendors, technologies, issues, phases, pilots, milestones, meetings,
-and research subjects belong to the established Project they serve unless they have clear value and continuity
-independent of it. Mark such candidates independent_scope=false and do not assign claims to them as pages.
+Use named_project for an explicitly named Project, project_continuity for an inferred Project,
+meeting_participant for a participant-backed Person, and the matching schema basis for other types.
+Set independent_scope=false when a proposed identity is subordinate rather than page-worthy.
 
-Follow this order: (1) identify existing entities and all qualifying new candidates using the entire cohort;
-(2) resolve early descriptions, later names, and participant references to those entities; (3) assign every
-claim. Do not defer a claim merely because its owner was absent before this pass when the cohort now satisfies
-the creation policy. A canonical assignment must have a nonempty existing entity ID or declared candidate ID.
-Claims grounded in user speech about the user's own identity, preferences, relationships, or plans normally
-belong to the existing `you` entity unless a more specific established entity is their subject.
+The claim owner is the identity whose state, plans, requirements, responsibilities, relationships, or history
+the claim changes. Assign every supplied claim exactly once to an existing ID, a declared candidate ID, or
+deferred. Claims already passed retention policy: defer only when identity or ownership lacks evidence.
+Reconsider prior assignments when the full cohort resolves them. User-authored personal facts belong to `you`
+unless a more specific subject owns them. External evidence may support another entity but does not establish
+a personal fact about `you` by itself.
 
-Creation policy:
-- People are eligible from retained evidence; meeting participants may already exist in the registry.
-- A named Project uses creation_basis=named_project and needs an explicit identity claim plus another
-  substantive supporting claim.
-- An inferred Project needs non-equivalent evidence across multiple source episodes plus a continuity signal.
-- Topics, Organizations, Places, and Events need explicit independent user relevance or recurring support;
-  a single tool observation, incidental location, routine event, or named component is insufficient.
-- Do not create catchalls or duplicate an existing title or alias.
+Resolve every supplied participant exactly once. speaker_role=user resolves to `you`; every other speaker
+resolves to an existing Person or a declared Person candidate. Use the supplied mention roles and stable
+entity references as evidence when resolving people and other subjects.
 
-A recurring personal endeavor is also a Project when it has a continuing purpose and concrete work or a
-scheduled next step across sources. Do not route the endeavor's facts to `you` merely because the user
-performs it. The user relationship may link to the Project, while incidental appointments and locations
-remain subordinate. Source IDs show whether evidence recurs across episodes. A named relative or collaborator
-discussed substantively in retained user evidence deserves a Person candidate even when they are not a
-labeled meeting participant.
+For every canonical claim, fill subject_entity, object_entities, and contextual_entities with supplied stable
+IDs when those semantic roles exist, and include non-owner endpoints in linked_entities. For project_role,
+the Person or `you` is the owner and exactly one Project is linked.
 
-Use canonical when a claim is useful on a justified page. Use deferred when more context is needed. Use
-source_only for valid but tangential, low-value, control-plane, assistant-only, sponsored, routine, or cosmetic
-information that should remain inspectable source memory but not wiki content. External evidence can support a
-Project but cannot automatically establish a personal fact on You.
-
-For a project_role relationship, the Person or You is the canonical owner and exactly one Project is linked.
-Return every supplied claim alias and participant alias exactly once. Candidate titles must be concise human
-page titles without redundant type labels. Return JSON only."""
+Return every supplied claim and participant alias exactly once. Use only declared candidate IDs, exact evidence
+aliases, concise human page titles, and JSON matching the schema."""
     user = f"""ENTITY REGISTRY AND SECTION CONTRACT:
 {index_content}
 

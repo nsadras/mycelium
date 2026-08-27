@@ -44,7 +44,9 @@ mycelium/
 
 ### 1. Chat and retrieval
 
-When a user sends a message, the backend builds a retrieval query from the chat title, recent thread context, and current message. A routing LLM selects relevant wiki pages from the index using page summaries, confidence, importance, and recall sections.
+When a user sends a message, the backend builds a retrieval query from the chat title, recent thread context,
+and current message. A disposable in-memory SQLite FTS5 index ranks complete wiki pages with BM25. Exact
+title/entity mentions and structured temporal matches may add pages before the context budget is applied.
 
 Loaded pages are placed in the chat system prompt along with compact snippets from their backlinked raw logs. The entire current session transcript is then passed to the chat model.
 
@@ -78,20 +80,29 @@ The dream process converts source-grounded claims into semantic wiki pages:
 
 ```mermaid
 flowchart TD
-    A[Unconsolidated source-grounded claims] --> B[Route or explicitly ignore every claim]
-    B --> C[Reactivate related existing claims]
-    C --> D[Classify additive, support, contradiction, or supersession]
-    D --> E[Create review proposals for unsafe changes]
-    E --> F[Deterministically materialize active claims]
-    F --> G[Persist assignments and Dream audit]
-    G --> H[Mark completed logs consolidated]
+    A[Unconsolidated source-grounded claims] --> B[Compile typed source retention]
+    B --> C[Discover identities and plan admitted claim scope]
+    C --> D{New entity materialized?}
+    D -->|yes| E[Re-plan explicit persisted scope neighborhood]
+    D -->|no| F[Use initial scope]
+    E --> F
+    F --> G[Classify additive, support, contradiction, or supersession]
+    G --> H[Create review proposals for unsafe changes]
+    H --> I[Deterministically materialize active facts]
+    I --> J[Persist scope, identity, references, cohorts, and Dream audit]
+    J --> K[Mark completed logs consolidated]
 ```
 
 Important behavior:
 
 - Routing uses exact batch-local alias accounting and fails closed on malformed output.
-- Assistant/system conversation claims remain source history rather than durable personalized memory.
-- Active claims are partitioned into memory, timeline, detail, and interaction sections without LLM prose rewriting.
+- Assistant/system conversation claims and extraction-rejected segments remain source history under closed,
+  provenance-linked retention reasons rather than masquerading as deferred or canonical memory.
+- `source_only` is not a model-authored scope outcome: every admitted claim is placed or explicitly deferred.
+- Entity identity and page admission are separate. A known identity may remain provisional until supported by
+  enough durable evidence; creation and participant-resolution decisions retain support, confidence, and review state.
+- Claim entity references preserve extracted surface mentions and stable subject, object, context, and owner IDs.
+- Scope revision uses persisted source/cohort/entity-reference neighborhoods, never token or alias overlap.
 - `_index.md` is rebuilt deterministically from materialized pages.
 - Dream records source outcomes, claim dispositions, proposal IDs, and failures.
 
@@ -109,7 +120,30 @@ The direct Python API uses the `Mycelium.session()` async context manager. It re
 
 ## Memory operations
 
-The backend does not schedule flush, Dream, or shutdown work. The web UI and API expose explicit operations for current, idle, or all episode flushing; Dream consolidation; proposal review; and development resets.
+The backend starts one lifecycle task with the FastAPI application. By default it checks every five minutes,
+flushes episodes idle for 20 minutes or containing at least 25 user turns, and runs Dream when its queue age or
+size policy is ready. The web UI and API also expose explicit operations for current, idle, or all episode
+flushing; Dream consolidation; proposal review; and development resets. The direct Python API leaves Dream
+invocation to its caller.
+
+## Architecture authority and validation
+
+This document describes the intended current production architecture. Dated files under `planning/` are
+historical design and audit records unless they explicitly say otherwise. When a production mechanism changes,
+update this document and the user-facing README in the same change.
+
+A memory milestone is complete only when its implementation checklist and declared acceptance conditions pass.
+Use the following repository checks before checkpointing a change:
+
+```bash
+uv run ruff check mycelium server tests benchmarks
+uv run pytest -q
+cd ui && npm run lint && npm run build
+git diff --check
+```
+
+Semantic milestones must additionally run their named behavioral fixture protocol, including required transfer
+fixtures and repeated trials. Unit tests with mocked model outputs establish mechanics, not semantic acceptance.
 
 ## Storage layout
 
@@ -121,7 +155,7 @@ mycelium_store/
 ├── logs/               # Daily raw episodic logs
 ├── wiki/               # Semantic memory pages and _index.md
 │   └── _archive/       # Archived wiki pages
-├── artifacts/          # Sources, episodes, claims, Dream audits, and reconciliation proposals
+├── artifacts/          # Canonical evidence plus inspectable semantic decisions and derived facts
 └── engram/             # SQLite meeting metadata and uploaded audio
 ```
 

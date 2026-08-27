@@ -135,8 +135,8 @@ class EntityDiscoveryDecisionOutput(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
-class ScopeEntityCandidateOutput(BaseModel):
-    """One globally defined candidate used by cohort claim assignments."""
+class _ScopeEntityCandidateBase(BaseModel):
+    """Shared fields for one globally defined cohort entity candidate."""
 
     model_config = ConfigDict(extra="forbid")
     candidate_id: str = Field(pattern=r"^N[0-9]{3}$")
@@ -145,24 +145,42 @@ class ScopeEntityCandidateOutput(BaseModel):
         "person", "project", "topic", "organization", "place", "event"
     ]
     aliases: list[str] = Field(default_factory=list, max_length=12)
-    creation_basis: Literal[
-        "meeting_participant", "durable_person", "named_project",
-        "project_continuity", "intentional_topic",
-        "topic_evidence", "lasting_organization", "lasting_place",
-        "substantial_event",
-    ]
-    supporting_claims: list[str] = Field(default_factory=list, max_length=48)
-    supporting_participants: list[str] = Field(default_factory=list, max_length=48)
     independent_scope: bool
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str = Field(min_length=1, max_length=500)
 
+
+class ParticipantEntityCandidateOutput(_ScopeEntityCandidateBase):
+    entity_type: Literal["person"]
+    creation_basis: Literal["meeting_participant"]
+    supporting_claims: list[str] = Field(default_factory=list, max_length=48)
+    supporting_participants: list[str] = Field(min_length=1, max_length=48)
+
+
+class EvidenceEntityCandidateOutput(_ScopeEntityCandidateBase):
+    creation_basis: Literal[
+        "durable_person", "named_project",
+        "project_continuity", "intentional_topic",
+        "topic_evidence", "lasting_organization", "lasting_place",
+        "substantial_event",
+    ]
+    supporting_claims: list[str] = Field(min_length=1, max_length=48)
+    supporting_participants: list[str] = Field(default_factory=list, max_length=48)
+
+
+ScopeEntityCandidateOutput = Annotated[
+    ParticipantEntityCandidateOutput | EvidenceEntityCandidateOutput,
+    Field(discriminator="creation_basis"),
+]
 
 class CanonicalScopeAssignmentOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     disposition: Literal["canonical"]
     owner_entity: str = Field(min_length=1, max_length=160)
     linked_entities: list[str] = Field(default_factory=list, max_length=12)
+    subject_entity: str = Field(default="", max_length=160)
+    object_entities: list[str] = Field(default_factory=list, max_length=12)
+    contextual_entities: list[str] = Field(default_factory=list, max_length=12)
     supporting_claims: list[str] = Field(default_factory=list, max_length=48)
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str = Field(min_length=1, max_length=500)
@@ -170,7 +188,7 @@ class CanonicalScopeAssignmentOutput(BaseModel):
 
 class NoncanonicalScopeAssignmentOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    disposition: Literal["deferred", "source_only"]
+    disposition: Literal["deferred"]
     supporting_claims: list[str] = Field(default_factory=list, max_length=48)
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str = Field(min_length=1, max_length=500)

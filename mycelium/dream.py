@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import replace
 from datetime import datetime
 
 from mycelium.artifacts import (
@@ -11,15 +10,17 @@ from mycelium.artifacts import (
     ClaimScopeDecision,
     DreamClaimDecision,
     DreamRunAudit,
+    EntityRecord,
     MemoryClaim,
+    NonWikiRetentionRecord,
+    ScopeCohort,
     SourceDocument,
 )
 from mycelium.config import Config
-from mycelium.consolidation import ClaimEvidence, ClaimRouter
+from mycelium.consolidation import ClaimEvidence, ClaimRouter, RoutingResult
 from mycelium.consolidation import placement_from_route
 from mycelium.facts import FactConsolidator
 from mycelium.materialization import PageMaterializer
-from mycelium.organization import OrganizationAuditor
 from mycelium.reconsolidation import ClaimReconsolidator, add_claim_link
 from mycelium.short_term import ShortTermMemoryQueue
 from mycelium.models import DreamReport, LogEntry
@@ -55,6 +56,8 @@ class DreamProcess:
         queued_claims = self.short_term.claims_for_dream(
             include_deferred=include_deferred
         )
+        incoming_claim_ids = {claim.claim_id for claim in queued_claims}
+        queued_claims = self._initial_scope_claims(queued_claims)
         queued_claim_ids = {claim.claim_id for claim in queued_claims}
         queued_source_ids = {
             provenance.source_id
@@ -114,11 +117,66 @@ class DreamProcess:
                     ),
                 })
 
-        evidence, decisions = self._build_evidence(sources, queued_claim_ids)
-        routing = await self.router.route(evidence) if evidence else None
+        retention_records = self._retention_records(
+            sources, queued_claim_ids, episodes_by_source
+        )
+        evidence, decisions = self._build_evidence(
+            sources, queued_claim_ids, episodes_by_source, incoming_claim_ids
+        )
+        incoming_source_ids = {
+            provenance.source_id
+            for claim_id in incoming_claim_ids
+            for provenance in self.artifacts.get_claim(claim_id).provenance
+        }
+        routing = await self.router.route(
+            evidence,
+            dream_run_id=run_id,
+            participant_source_ids=incoming_source_ids,
+        ) if evidence else None
+        newly_materialized = [
+            entity for entity in (routing.new_entities if routing is not None else [])
+            if entity.materialization_state == "materialized"
+        ]
+        if newly_materialized:
+            revision_claims = self._scope_revision_claims(
+                queued_claims, newly_materialized
+            )
+            revision_claim_ids = {claim.claim_id for claim in revision_claims}
+            revision_source_ids = {
+                provenance.source_id
+                for claim in revision_claims
+                for provenance in claim.provenance
+            }
+            revision_sources = [
+                source for source in self.artifacts.list_sources()
+                if source.source_id in revision_source_ids
+            ]
+            revision_evidence, revision_decisions = self._build_evidence(
+                revision_sources,
+                revision_claim_ids,
+                episodes_by_source,
+                incoming_claim_ids,
+            )
+            initial_evidence_ids = {item.claim.claim_id for item in evidence}
+            revision_routing = await self.router.route(
+                revision_evidence,
+                dream_run_id=run_id,
+                seed_entities=(routing.new_entities if routing is not None else []),
+                participant_source_ids=incoming_source_ids,
+            ) if (
+                revision_evidence
+                and {item.claim.claim_id for item in revision_evidence}
+                > initial_evidence_ids
+            ) else None
+            if revision_routing is not None:
+                routing = self._merge_revision_routing(routing, revision_routing)
+                evidence = revision_evidence
+                decisions = revision_decisions
         if routing is not None:
             failed_claim_ids: set[str] = set()
             for failure in routing.failures:
+                if failure.claim_id not in incoming_claim_ids:
+                    continue
                 failed_claim_ids.add(failure.claim_id)
                 failures.append({
                     "stage": "routing",
@@ -141,7 +199,7 @@ class DreamProcess:
 
         reconciliation = await self.reconsolidator.analyze(
             [route for route in successful_routes if route.placed],
-            current_claim_ids={item.claim.claim_id for item in evidence},
+            current_claim_ids=incoming_claim_ids,
             dream_run_id=run_id,
         ) if successful_routes else None
         if reconciliation is not None:
@@ -187,33 +245,26 @@ class DreamProcess:
             for proposal in proposals:
                 self.artifacts.save_reconsolidation_proposal(proposal)
 
-        referenced_entity_ids = {
-            route.owner_entity_id for route in successful_routes if route.owner_entity_id
-        } | {
-            entity_id for route in successful_routes for entity_id in route.linked_entity_ids
+        retained_new_entities = list(
+            routing.new_entities if routing is not None else []
+        )
+        materialized_entity_ids = {
+            entity_id
+            for route in successful_routes
+            if route.placed
+            for entity_id in [route.owner_entity_id, *route.linked_entity_ids]
+            if entity_id
         } | {
             encounter.entity_id
             for encounter in (routing.encounters if routing is not None else [])
-        } | {
-            entity.entity_id
-            for entity in (routing.new_entities if routing is not None else [])
-            if entity.entity_type in {"person", "project"}
         }
-        retained_new_entities = [
-            entity for entity in (routing.new_entities if routing is not None else [])
-            if entity.entity_id in referenced_entity_ids
-        ]
-        discarded_new_ids = {
-            entity.entity_id for entity in (routing.new_entities if routing is not None else [])
-        } - referenced_entity_ids
-        if discarded_new_ids:
-            successful_routes = [
-                replace(route, linked_entity_ids=tuple(
-                    entity_id for entity_id in route.linked_entity_ids
-                    if entity_id not in discarded_new_ids
-                ))
-                for route in successful_routes
-            ]
+        for entity in retained_new_entities:
+            if (
+                entity.materialization_state == "materialized"
+                and entity.entity_id not in materialized_entity_ids
+                and entity.entity_id != "you"
+            ):
+                entity.materialization_state = "provisional"
         placed_routes = [route for route in successful_routes if route.placed]
         affected_fact_entities = {
             route.owner_entity_id for route in placed_routes if route.owner_entity_id
@@ -256,10 +307,6 @@ class DreamProcess:
                     f"Owned by {entity.entity_id} in {route.section_key}.",
                     page_slugs=[entity.slug],
                 )
-            elif route.disposition == "source_only":
-                self._set_decision(
-                    decisions, route.claim_id, "source_only", route.reason
-                )
             else:
                 self._set_decision(
                     decisions, route.claim_id, "deferred", route.reason
@@ -279,6 +326,16 @@ class DreamProcess:
 
         if not dry_run:
             self.materializer.persist(materialized)
+            for record in retention_records:
+                self.artifacts.save_retention_record(record)
+            for identity_decision in (
+                routing.entity_decisions if routing is not None else []
+            ):
+                self.artifacts.save_entity_resolution_decision(identity_decision)
+            for reference in (
+                routing.entity_references if routing is not None else []
+            ):
+                self.artifacts.save_entity_reference(reference)
             retained_new_entity_ids = {
                 entity.entity_id for entity in retained_new_entities
             }
@@ -329,7 +386,20 @@ class DreamProcess:
                 materialized.deleted_slugs.update(related_pages.deleted_slugs)
             if completed_source_ids:
                 self.logs.mark_consolidated(completed_source_ids)
-            OrganizationAuditor(self.artifacts).audit()
+            self.artifacts.save_scope_cohort(ScopeCohort(
+                cohort_id=f"cohort-{uuid.uuid4().hex[:12]}",
+                dream_run_id=run_id,
+                claim_ids=sorted(incoming_claim_ids),
+                source_ids=sorted({
+                    provenance.source_id
+                    for claim_id in incoming_claim_ids
+                    for provenance in self.artifacts.get_claim(claim_id).provenance
+                }),
+                revision_entity_ids=sorted({
+                    entity.entity_id for entity in retained_new_entities
+                }),
+                created_at=now,
+            ))
 
         report = DreamReport(
             pages_updated=len(materialized.updated_slugs),
@@ -347,10 +417,209 @@ class DreamProcess:
             self._persist_audit(run_id, started_at, raw_entries, report, decisions)
         return report
 
+    def _initial_scope_claims(
+        self, queued_claims: list[MemoryClaim]
+    ) -> list[MemoryClaim]:
+        """Join incoming evidence only to explicitly deferred scope."""
+        if not queued_claims:
+            return []
+        claim_ids = {claim.claim_id for claim in queued_claims}
+        claim_ids.update(
+            placement.claim_id
+            for placement in self.artifacts.list_placements(status="deferred")
+        )
+        claims = {
+            claim.claim_id: claim
+            for claim in self.artifacts.list_claims(status="active")
+            if claim.dream_disposition != "excluded_source_policy"
+        }
+        return sorted(
+            (claims[claim_id] for claim_id in claim_ids if claim_id in claims),
+            key=lambda item: (item.recorded_at, item.claim_id),
+        )
+
+    def _scope_revision_claims(
+        self,
+        queued_claims: list[MemoryClaim],
+        revision_entities: list[EntityRecord],
+    ) -> list[MemoryClaim]:
+        """Expand a Dream with explicit prior scope neighborhoods, never lexical similarity."""
+        if not queued_claims:
+            return []
+        claim_ids = {claim.claim_id for claim in queued_claims}
+
+        # The immediately preceding consolidation cohort is the persisted semantic
+        # context in which an early description may have been assigned before a
+        # later name or identity became available.
+        cohorts = self.artifacts.list_scope_cohorts()
+        if cohorts:
+            claim_ids.update(cohorts[-1].claim_ids)
+
+        # You and deferred are explicit scope states. They are the two places from
+        # which a newly established, more specific entity most often needs to take
+        # ownership; neither selection consults claim text or surface aliases.
+        for placement in self.artifacts.list_placements():
+            if placement.status == "deferred" or placement.owner_entity_id == "you":
+                claim_ids.add(placement.claim_id)
+
+        # Stable entity endpoints extend the neighborhood across prior cohorts.
+        current_entity_ids = {
+            entity.entity_id for entity in revision_entities
+        } | {
+            reference.entity_id
+            for claim in queued_claims
+            for reference in self.artifacts.list_entity_references(
+                claim_id=claim.claim_id, status="active"
+            )
+            if reference.entity_id
+        }
+        if current_entity_ids:
+            claim_ids.update(
+                reference.claim_id
+                for reference in self.artifacts.list_entity_references(status="active")
+                if reference.entity_id in current_entity_ids
+            )
+
+        claims = {
+            claim.claim_id: claim
+            for claim in self.artifacts.list_claims(status="active")
+            if claim.dream_disposition != "excluded_source_policy"
+        }
+        return sorted(
+            (claims[claim_id] for claim_id in claim_ids if claim_id in claims),
+            key=lambda item: (item.recorded_at, item.claim_id),
+        )
+
+    @staticmethod
+    def _merge_revision_routing(
+        initial: RoutingResult, revision: RoutingResult
+    ) -> RoutingResult:
+        """Keep initial identity evidence while making revised routes authoritative."""
+        entities = {
+            entity.entity_id: entity
+            for entity in [*initial.new_entities, *revision.new_entities]
+        }
+        decisions = {
+            decision.decision_id: decision
+            for decision in [
+                *initial.entity_decisions,
+                *revision.entity_decisions,
+            ]
+        }
+        encounters = {
+            encounter.encounter_id: encounter
+            for encounter in [*initial.encounters, *revision.encounters]
+        }
+        revision.new_entities = list(entities.values())
+        revision.entity_decisions = list(decisions.values())
+        revision.encounters = list(encounters.values())
+        return revision
+
+    def _retention_records(
+        self,
+        sources: list[SourceDocument],
+        claim_ids: set[str],
+        episodes_by_source: dict,
+    ) -> list[NonWikiRetentionRecord]:
+        """Compile structural/extraction exclusions before ownership planning."""
+        now = datetime.now().astimezone().isoformat()
+        records: dict[str, NonWikiRetentionRecord] = {}
+        source_by_id = {source.source_id: source for source in sources}
+
+        for source in sources:
+            episode = episodes_by_source.get(source.source_id)
+            if episode is None:
+                continue
+            segments = {segment.segment_id: segment for segment in source.segments}
+            for segment_id in episode.ignored_segment_ids:
+                segment = segments.get(segment_id)
+                role = str(
+                    (segment.role or segment.speaker) if segment else ""
+                ).strip().lower()
+                if role == "assistant":
+                    reason = "assistant_unadopted"
+                    origin = "source_structure"
+                elif role == "system":
+                    reason = "system_control"
+                    origin = "source_structure"
+                else:
+                    reason = "extractor_rejected"
+                    origin = "extraction"
+                record_id = f"retention-segment-{segment_id}"
+                records[record_id] = NonWikiRetentionRecord(
+                    retention_id=record_id,
+                    target_type="segment",
+                    source_id=source.source_id,
+                    segment_ids=[segment_id],
+                    reason=reason,
+                    policy_origin=origin,
+                    created_at=now,
+                )
+
+        for claim in self.artifacts.list_claims(status="active"):
+            if claim.claim_id not in claim_ids:
+                continue
+            ignored_segment_ids = {
+                segment_id
+                for provenance in claim.provenance
+                for segment_id in (
+                    episodes_by_source.get(provenance.source_id).ignored_segment_ids
+                    if episodes_by_source.get(provenance.source_id) is not None
+                    else []
+                )
+            }
+            claim_segment_ids = {
+                segment_id
+                for provenance in claim.provenance
+                for segment_id in provenance.segment_ids
+            }
+            excluded_by_extraction = bool(
+                claim_segment_ids and claim_segment_ids <= ignored_segment_ids
+            )
+            admitted = self._claim_is_admitted(claim, source_by_id)
+            if admitted and not claim.derivation_operation and not excluded_by_extraction:
+                continue
+            for provenance in claim.provenance:
+                if provenance.source_id not in source_by_id:
+                    continue
+                if excluded_by_extraction:
+                    reason = "extractor_rejected"
+                    origin = "extraction"
+                elif claim.derivation_operation:
+                    reason = "legacy_derived"
+                    origin = "extraction"
+                else:
+                    source = source_by_id[provenance.source_id]
+                    wanted = set(provenance.segment_ids)
+                    roles = {
+                        str(segment.role or segment.speaker or "").strip().lower()
+                        for segment in source.segments
+                        if segment.segment_id in wanted
+                    }
+                    reason = (
+                        "system_control" if "system" in roles
+                        else "assistant_unadopted"
+                    )
+                    origin = "source_structure"
+                record_id = f"retention-claim-{claim.claim_id}"
+                records[record_id] = NonWikiRetentionRecord(
+                    retention_id=record_id,
+                    target_type="claim",
+                    source_id=provenance.source_id,
+                    segment_ids=list(provenance.segment_ids),
+                    claim_id=claim.claim_id,
+                    reason=reason,
+                    policy_origin=origin,
+                    created_at=now,
+                )
+        return list(records.values())
+
     def _build_evidence(
         self,
         sources: list[SourceDocument],
         queued_claim_ids: set[str],
+        episodes_by_source: dict,
+        incoming_claim_ids: set[str],
     ) -> tuple[list[ClaimEvidence], dict[str, DreamClaimDecision]]:
         source_by_id = {source.source_id: source for source in sources}
         evidence: list[ClaimEvidence] = []
@@ -369,25 +638,62 @@ class DreamProcess:
             if matching_source is None:
                 continue
             raw_log_id = matching_source.raw_log_entry_id
-            admitted = self._claim_is_admitted(claim, source_by_id)
+            ignored_segment_ids = {
+                segment_id
+                for provenance in claim.provenance
+                for segment_id in (
+                    episodes_by_source.get(provenance.source_id).ignored_segment_ids
+                    if episodes_by_source.get(provenance.source_id) is not None
+                    else []
+                )
+            }
+            claim_segment_ids = {
+                segment_id
+                for provenance in claim.provenance
+                for segment_id in provenance.segment_ids
+            }
+            excluded_by_extraction = bool(
+                claim_segment_ids and claim_segment_ids <= ignored_segment_ids
+            )
+            admitted = (
+                self._claim_is_admitted(claim, source_by_id)
+                and not excluded_by_extraction
+            )
             is_legacy_derivation = bool(claim.derivation_operation)
+            existing_placement = self.artifacts.placement_for_claim(claim.claim_id)
+            revising_existing = claim.claim_id not in incoming_claim_ids
+            previous_disposition = claim.dream_disposition
+            previous_reason = claim.dream_disposition_reason
+            previous_slugs: list[str] = []
+            if existing_placement and existing_placement.owner_entity_id:
+                previous_slugs = [
+                    self.artifacts.get_entity(existing_placement.owner_entity_id).slug
+                ]
             decisions[claim.claim_id] = DreamClaimDecision(
                 claim_id=claim.claim_id,
                 evidence_id=f"{claim.claim_id}::claim",
                 source_id=matching_source.source_id,
                 raw_log_entry_id=raw_log_id,
                 disposition=(
-                    "ignored_semantic"
-                    if is_legacy_derivation
-                    else "pending" if admitted else "excluded_assistant"
+                    previous_disposition
+                    if revising_existing
+                    else
+                    "pending" if admitted and not is_legacy_derivation
+                    else "excluded_source_policy"
                 ),
                 reason=(
-                    "Legacy Dream-derived claims are not part of the source-grounded pipeline."
+                    previous_reason or "Awaiting scope revision."
+                    if revising_existing
+                    else
+                    "Excluded by the typed legacy-derived retention policy."
                     if is_legacy_derivation
+                    else "Excluded by the typed extraction-retention policy."
+                    if excluded_by_extraction
                     else "Awaiting page assignment."
                     if admitted
-                    else "Assistant or system output remains source history, not durable memory."
+                    else "Excluded by the typed source-structure retention policy."
                 ),
+                page_slugs=previous_slugs if revising_existing else [],
             )
             if admitted and not is_legacy_derivation:
                 evidence.append(ClaimEvidence(claim, matching_source))

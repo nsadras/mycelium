@@ -147,7 +147,7 @@ class PageMaterializer:
     def regenerate_all(self) -> MaterializationResult:
         return self.regenerate({
             entity.entity_id for entity in self.artifacts.list_entities()
-            if entity.status != "merged"
+            if entity.status != "merged" and entity.materialization_state == "materialized"
         })
 
     def _stage_entities(
@@ -181,7 +181,11 @@ class PageMaterializer:
 
         for entity_id in sorted(entity_ids):
             entity = entities.get(entity_id)
-            if entity is None or entity.status != "active":
+            if (
+                entity is None
+                or entity.status != "active"
+                or entity.materialization_state != "materialized"
+            ):
                 continue
             entity_claims = []
             for placement in placements.values():
@@ -585,7 +589,9 @@ class PageMaterializer:
                 "entity_type": entity.entity_type,
             }
             for entity in sorted(entities.values(), key=lambda value: (value.entity_type, value.title.lower()))
-            if entity.entity_id != "you" and entity.status == "active"
+            if entity.entity_id != "you"
+            and entity.status == "active"
+            and entity.materialization_state == "materialized"
         ]
 
     @staticmethod
@@ -593,7 +599,9 @@ class PageMaterializer:
         values = sorted(
             (
                 entity for entity in entities.values()
-                if entity.entity_id != "you" and entity.status == "active"
+                if entity.entity_id != "you"
+                and entity.status == "active"
+                and entity.materialization_state == "materialized"
             ),
             key=lambda value: (value.updated_at, value.entity_id),
             reverse=True,

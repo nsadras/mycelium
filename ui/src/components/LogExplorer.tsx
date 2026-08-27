@@ -12,38 +12,30 @@ export default function LogExplorer() {
   const [logs, setLogs] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [content, setContent] = useState('');
-
-  useEffect(() => {
-    fetchLogs();
-  }, []);
   const [isUnconsolidating, setIsUnconsolidating] = useState(false);
 
   useEffect(() => {
-    if (selectedFile) {
-      fetchLogContent(selectedFile);
-    }
+    let cancelled = false;
+    api.get('/memory/logs')
+      .then((res) => {
+        if (cancelled) return;
+        setLogs(res.data);
+        setSelectedFile(current => current ?? res.data[0] ?? null);
+      })
+      .catch((err) => console.error("Failed to fetch logs", err));
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedFile) return;
+    let cancelled = false;
+    api.get(`/memory/logs/${selectedFile}`)
+      .then((res) => {
+        if (!cancelled) setContent(res.data.content);
+      })
+      .catch((err) => console.error("Failed to fetch log content", err));
+    return () => { cancelled = true; };
   }, [selectedFile]);
-
-  const fetchLogs = async () => {
-    try {
-      const res = await api.get('/memory/logs');
-      setLogs(res.data);
-      if (res.data.length > 0 && !selectedFile) {
-        setSelectedFile(res.data[0]);
-      }
-    } catch (err) {
-      console.error("Failed to fetch logs", err);
-    }
-  };
-
-  const fetchLogContent = async (filename: string) => {
-    try {
-      const res = await api.get(`/memory/logs/${filename}`);
-      setContent(res.data.content);
-    } catch (err) {
-      console.error("Failed to fetch log content", err);
-    }
-  };
 
   const handleUnconsolidate = async () => {
     if (!selectedFile || isUnconsolidating) return;

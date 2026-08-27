@@ -159,3 +159,7 @@ agent_memory/
 mycelium_store/
 benchmark_runs/
 test_outputs/
+.llm-debug/
+mnemos_store/
+AMI/
+*.tuxedo-lock

@@ -349,6 +349,28 @@ class Encoder:
                 evidence_modality = "inference"
             elif evidence_modality == "inference":
                 evidence_modality = "speech"
+            cited_segments = [
+                segment for segment in source.segments
+                if segment.segment_id in segment_ids
+            ]
+            timestamped_segments = [
+                segment for segment in cited_segments if segment.timestamp
+            ]
+            anchor_segment_id = str(
+                raw.get("temporal_anchor_segment_id") or ""
+            ).strip()
+            anchor_segment = next(
+                (
+                    segment for segment in timestamped_segments
+                    if segment.segment_id == anchor_segment_id
+                ),
+                None,
+            )
+            temporal_anchor = (
+                anchor_segment.timestamp
+                if anchor_segment is not None
+                else None if timestamped_segments else source.occurred_at
+            )
             claim = MemoryClaim(
                 claim_id=f"claim-{uuid.uuid4().hex[:12]}",
                 text=claim_text,
@@ -366,7 +388,7 @@ class Encoder:
                 inferred=inferred,
                 slot=str(raw["slot"]).strip() if raw.get("slot") else None,
                 facets=normalize_temporal_facets(
-                    facets, source.occurred_at, claim_text
+                    facets, temporal_anchor, claim_text
                 ),
                 claim_type=str(raw.get("claim_type") or "unknown"),
                 predicate=str(raw["predicate"]) if raw.get("predicate") else None,

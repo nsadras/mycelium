@@ -19,6 +19,7 @@ from mycelium.materialization import sections_markdown
 from mycelium.short_term import ShortTermMemoryQueue, ShortTermMemoryStatus
 from mycelium.artifacts import (
     ArtifactStore,
+    SourceSegment,
     query_temporal_record,
     temporal_intervals_overlap,
     temporal_record,
@@ -326,8 +327,27 @@ class Mycelium:
             yield sess
         finally:
             if sess.transcript:
-                transcript_str = "\n".join([f"{msg['role'].upper()}: {msg['content']}" for msg in sess.transcript])
-                await self.encoder.encode_session(transcript_str, session_id)
+                transcript_str = "\n".join(
+                    f"[{msg['timestamp']}] {msg['role'].upper()}: {msg['content']}"
+                    for msg in sess.transcript
+                )
+                segments = [
+                    SourceSegment(
+                        segment_id="",
+                        index=index,
+                        speaker=msg["role"],
+                        role=msg["role"],
+                        content=msg["content"],
+                        timestamp=msg["timestamp"],
+                    )
+                    for index, msg in enumerate(sess.transcript)
+                ]
+                await self.encoder.encode_session(
+                    transcript_str,
+                    session_id,
+                    occurred_at=segments[0].timestamp,
+                    segments=segments,
+                )
             
     def short_term_memory_status(
         self, *, now: datetime | None = None

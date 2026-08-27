@@ -1,10 +1,10 @@
 from server import main
 
 
-def test_app_uses_the_memory_lifecycle_context():
+def test_app_has_no_automatic_memory_lifecycle_hooks():
     assert main.app.router.on_startup == []
     assert main.app.router.on_shutdown == []
-    assert main.app.router.lifespan_context is not None
+    assert not hasattr(main, "memory_lifecycle_loop")
 
 
 def test_generated_wiki_routes_are_read_only():

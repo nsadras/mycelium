@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -8,7 +9,14 @@ from mycelium.config import Config
 from mycelium.encoder import Encoder
 from mycelium.store import LogStore
 from server import runtime
+from server.api import sessions
 from server.runtime import append_tool_event_logs, ensure_session_record
+
+
+@pytest.fixture(autouse=True)
+def reset_runtime_locks(monkeypatch):
+    monkeypatch.setattr(runtime, "_meta_lock", None)
+    monkeypatch.setattr(runtime, "_session_locks", {})
 
 
 def test_ensure_session_record_initializes_episode():
@@ -21,25 +29,14 @@ def test_ensure_session_record_initializes_episode():
     assert record["active_episode"]["buffer"] == []
 
 
-def test_no_entries_flush_should_preserve_buffer_shape():
+def test_timestamp_free_session_messages_are_rejected():
     record = {
-        "query": "Test",
+        "query": "Old chat",
         "transcript": [{"role": "user", "content": "hello"}],
-        "episode_seq": 1,
-        "encoded_episodes": [],
-        "active_episode": {
-            "id": "ses-ep-1",
-            "started_at": "2026-05-19T00:00:00+00:00",
-            "last_activity_at": "2026-05-19T00:00:00+00:00",
-            "buffer": [{"role": "user", "content": "hello"}],
-            "turn_count": 1,
-        },
     }
 
-    ensure_session_record(record, "ses")
-
-    assert record["active_episode"]["turn_count"] == 1
-    assert record["encoded_episodes"] == []
+    with pytest.raises(ValueError, match="timestamp-free transcript"):
+        ensure_session_record(record, "legacy")
 
 
 @pytest.mark.asyncio
@@ -88,6 +85,7 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
             }
         ],
         turn_count=2,
+        occurred_at="2026-08-27T12:00:00+00:00",
     )
 
     entries = log_store.get_unconsolidated()
@@ -101,4 +99,174 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
     assert '"query": "local llm news"' in entries[0].content
     assert "Useful new information." in entries[0].content
     assert artifacts.list_sources()[0].source_type == "tool_observation"
+    assert artifacts.list_sources()[0].occurred_at == "2026-08-27T12:00:00+00:00"
+    assert artifacts.list_sources()[0].segments[0].timestamp == "2026-08-27T12:00:00+00:00"
     assert artifacts.list_claims()[0].evidence_modality == "tool"
+
+
+@pytest.mark.asyncio
+async def test_manual_flush_preserves_each_message_timestamp(tmp_path, monkeypatch):
+    sessions_file = tmp_path / "sessions_meta.json"
+    monkeypatch.setattr(runtime, "SESSIONS_FILE", sessions_file)
+    runtime.save_meta({
+        "chat-1": {
+            "query": "Long chat",
+            "transcript": [],
+            "episode_seq": 1,
+            "encoded_episodes": [],
+            "active_episode": {
+                "id": "chat-1-ep-1",
+                "started_at": "2026-08-26T23:59:00+00:00",
+                "last_activity_at": "2026-08-27T08:00:01+00:00",
+                "buffer": [
+                    {
+                        "role": "user",
+                        "content": "I will finish this tomorrow.",
+                        "timestamp": "2026-08-26T23:59:00+00:00",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "Understood.",
+                        "timestamp": "2026-08-27T08:00:01+00:00",
+                    },
+                ],
+                "turn_count": 1,
+            },
+        }
+    })
+    encoder = AsyncMock()
+    encoder.encode_session.return_value = [SimpleNamespace(entry_id="entry-1")]
+    monkeypatch.setattr(runtime, "get_mem", lambda: SimpleNamespace(encoder=encoder))
+
+    result = await runtime.flush_session_episode("chat-1")
+
+    assert result["status"] == "flushed"
+    _, episode_id = encoder.encode_session.call_args.args
+    kwargs = encoder.encode_session.call_args.kwargs
+    assert episode_id == "chat-1-ep-1"
+    assert kwargs["occurred_at"] == "2026-08-26T23:59:00+00:00"
+    assert [segment.timestamp for segment in kwargs["segments"]] == [
+        "2026-08-26T23:59:00+00:00",
+        "2026-08-27T08:00:01+00:00",
+    ]
+    assert runtime.load_meta()["chat-1"]["active_episode"]["buffer"] == []
+
+
+@pytest.mark.asyncio
+async def test_chat_and_manual_flush_are_serialized(tmp_path, monkeypatch):
+    sessions_file = tmp_path / "sessions_meta.json"
+    monkeypatch.setattr(runtime, "SESSIONS_FILE", sessions_file)
+    runtime.save_meta({
+        "chat-1": {
+            "query": "Concurrency",
+            "transcript": [],
+            "episode_seq": 1,
+            "encoded_episodes": [],
+            "active_episode": {
+                "id": "chat-1-ep-1",
+                "started_at": "2026-08-27T10:00:00+00:00",
+                "last_activity_at": "2026-08-27T10:00:00+00:00",
+                "buffer": [],
+                "turn_count": 0,
+            },
+        }
+    })
+    generation_started = asyncio.Event()
+    finish_generation = asyncio.Event()
+
+    async def call_messages(_messages):
+        generation_started.set()
+        await finish_generation.wait()
+        return SimpleNamespace(content="Saved reply", tool_events=[])
+
+    encoder = AsyncMock()
+    encoder.encode_session.return_value = [SimpleNamespace(entry_id="entry-1")]
+    mem = SimpleNamespace(
+        load_context=AsyncMock(return_value=[]),
+        llm=SimpleNamespace(call_messages=call_messages),
+        encoder=encoder,
+    )
+    monkeypatch.setattr(runtime, "get_mem", lambda: mem)
+    monkeypatch.setattr(sessions, "get_mem", lambda: mem)
+    timestamps = iter([
+        "2026-08-27T10:01:00+00:00",
+        "2026-08-27T10:01:02+00:00",
+    ])
+    monkeypatch.setattr(sessions, "iso_now", lambda: next(timestamps))
+
+    chat_task = asyncio.create_task(
+        sessions.chat("chat-1", sessions.ChatRequest(message="Save this"))
+    )
+    await generation_started.wait()
+    flush_task = asyncio.create_task(runtime.flush_session_episode("chat-1"))
+    await asyncio.sleep(0)
+    assert not flush_task.done()
+
+    finish_generation.set()
+    chat_result = await chat_task
+    flush_result = await flush_task
+
+    assert chat_result["user_timestamp"] == "2026-08-27T10:01:00+00:00"
+    assert chat_result["assistant_timestamp"] == "2026-08-27T10:01:02+00:00"
+    assert flush_result["status"] == "flushed"
+    saved = runtime.load_meta()["chat-1"]
+    assert [message["timestamp"] for message in saved["transcript"]] == [
+        "2026-08-27T10:01:00+00:00",
+        "2026-08-27T10:01:02+00:00",
+    ]
+    assert saved["encoded_episodes"][0]["id"] == "chat-1-ep-1"
+    assert saved["active_episode"]["buffer"] == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_chats_in_different_sessions_preserve_both(tmp_path, monkeypatch):
+    sessions_file = tmp_path / "sessions_meta.json"
+    monkeypatch.setattr(runtime, "SESSIONS_FILE", sessions_file)
+    runtime.save_meta({
+        session_id: {
+            "query": session_id,
+            "transcript": [],
+            "episode_seq": 1,
+            "encoded_episodes": [],
+            "active_episode": {
+                "id": f"{session_id}-ep-1",
+                "started_at": "2026-08-27T10:00:00+00:00",
+                "last_activity_at": "2026-08-27T10:00:00+00:00",
+                "buffer": [],
+                "turn_count": 0,
+            },
+        }
+        for session_id in ("chat-1", "chat-2")
+    })
+    both_started = asyncio.Event()
+    started_count = 0
+
+    async def call_messages(messages):
+        nonlocal started_count
+        started_count += 1
+        if started_count == 2:
+            both_started.set()
+        await both_started.wait()
+        return SimpleNamespace(
+            content=f"Reply to {messages[-1]['content']}",
+            tool_events=[],
+        )
+
+    mem = SimpleNamespace(
+        load_context=AsyncMock(return_value=[]),
+        llm=SimpleNamespace(call_messages=call_messages),
+    )
+    monkeypatch.setattr(sessions, "get_mem", lambda: mem)
+
+    await asyncio.gather(
+        sessions.chat("chat-1", sessions.ChatRequest(message="First")),
+        sessions.chat("chat-2", sessions.ChatRequest(message="Second")),
+    )
+
+    saved = runtime.load_meta()
+    assert [message["content"] for message in saved["chat-1"]["transcript"]] == [
+        "First", "Reply to First",
+    ]
+    assert [message["content"] for message in saved["chat-2"]["transcript"]] == [
+        "Second", "Reply to Second",
+    ]

@@ -26,6 +26,7 @@ class ExtractedClaimOutput(BaseModel):
     temporal_status: Literal[
         "past", "current", "future", "recurring", "atemporal", "unknown"
     ] = "unknown"
+    temporal_anchor_segment_id: str | None = None
     about: list[ExtractedEntityOutput] = Field(default_factory=list, max_length=12)
     segment_ids: list[str] = Field(min_length=1, max_length=32)
     speaker: str | None = None
@@ -54,6 +55,10 @@ def extraction_output_model(
         segment_ids=(
             list[segment_id_type],  # type: ignore[valid-type]
             Field(min_length=1, max_length=32),
+        ),
+        temporal_anchor_segment_id=(
+            segment_id_type | None,  # type: ignore[valid-type, operator]
+            None,
         ),
     )
     return create_model(

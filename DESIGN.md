@@ -65,7 +65,11 @@ The tool-specific extraction policy keeps source-grounded project facts while ig
 
 ### 3. Episode encoding
 
-Each web chat keeps an active episode buffer. An episode is flushed explicitly:
+Each saved chat message carries its own server-recorded UTC timestamp. This lets one active episode span
+multiple days without treating every message as if it happened when the episode began or was flushed.
+
+Each web chat keeps an active episode buffer. An episode is flushed only through an explicit API or web UI
+operation:
 
 - Manually through **Flush Current** or **Flush All**
 - Through **Flush Idle** when the caller wants idle or large episodes processed
@@ -120,11 +124,16 @@ The direct Python API uses the `Mycelium.session()` async context manager. It re
 
 ## Memory operations
 
-The backend starts one lifecycle task with the FastAPI application. By default it checks every five minutes,
-flushes episodes idle for 20 minutes or containing at least 25 user turns, and runs Dream when its queue age or
-size policy is ready. The web UI and API also expose explicit operations for current, idle, or all episode
-flushing; Dream consolidation; proposal review; and development resets. The direct Python API leaves Dream
-invocation to its caller.
+The backend does not start a scheduled memory task. The web UI and API expose explicit operations for current,
+idle, or all episode flushing; Dream consolidation; proposal review; and development resets. **Flush Idle**
+evaluates the idle and size rules only when the user invokes it. The direct Python API leaves Dream invocation
+to its caller. Immediate tool-observation capture and direct session encoding remain part of the explicit chat
+or library call that initiated them.
+
+Chat and flush operations for one session are serialized. Session metadata is written atomically, so a flush
+cannot overwrite a turn that arrived while model work was in progress. Relative dates in chat are anchored to
+the timestamp of their exact supporting message segment. Sources without per-segment wall-clock timestamps use
+their declared source occurrence time.
 
 ## Architecture authority and validation
 

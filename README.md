@@ -78,15 +78,15 @@ The UI is organized around five main areas:
 A typical workflow is simple:
 
 1. Start a chat and use the assistant normally.
-2. The server flushes idle episodes into source-grounded claims, which enter inspectable short-term memory.
-3. Dream runs when the queue reaches its size or age threshold; **Dream Pass** remains available for an
-   immediate manual consolidation and deferred-memory review.
+2. Use **Flush Current**, **Flush Idle**, or **Flush All** when you want chat episodes encoded into
+   source-grounded claims and inspectable short-term memory.
+3. Run **Dream Pass** when you want to consolidate pending claims and review deferred memory.
 4. Start another chat about the same subject. Mycelium retrieves relevant pages and includes them in the assistant's context.
 5. Open **Memory** to trace what was remembered and approve or reject proposed contradictions and replacements.
 
 The sidebar provides manual controls for flushing episodes, running Dream, and clearing the development
-store. While the server is running, its lifecycle task checks idle conversations and Dream readiness every
-five minutes. It invokes the same public Encoder and Dream mechanisms as the manual controls.
+store. The server does not schedule memory work in the background. **Flush Idle** checks idle and episode-size
+conditions only when selected; elapsed time and queue thresholds do not trigger work by themselves.
 
 ### Memory lifecycle
 
@@ -112,7 +112,8 @@ source reference. When current evidence cannot establish a page or owner,
 the claim becomes `deferred` instead of being discarded or permanently unassigned. A later Dream can revisit
 it alongside newly accumulated evidence.
 
-The default server policy runs Dream at 20 pending/retryable claims or when the oldest has waited 24 hours.
+Dream readiness becomes true at 20 pending/retryable claims or when the oldest has waited 24 hours. This is
+advisory until a user explicitly runs Dream or a caller invokes the run-if-ready API.
 Deferred claims receive a broader review after seven days. Queue thresholds only choose when to invoke Dream;
 they do not introduce another consolidation path. Failed routing remains retryable, and manual assignment
 uses the same placement and deterministic materialization records.
@@ -225,7 +226,6 @@ context_budget_tokens = 32768
 queue_claim_threshold = 20
 max_pending_hours = 24
 deferred_revisit_hours = 168
-lifecycle_poll_seconds = 300
 ```
 
 The default memory store is `./mycelium_store`. Because it consists primarily of Markdown and JSON, it can be inspected with normal text tools or opened as a wiki outside the app. Raw logs and claim artifacts are canonical; wiki Markdown is a generated view and should not be edited directly.
@@ -235,8 +235,10 @@ pages. BM25 selects two page candidates, title/entity matches can add explicitly
 then are page-linked source windows ranked and attached. The index is disposable and automatically refreshes
 when page versions or content change; the Markdown wiki remains the durable human-readable memory store.
 
-Relative dates are normalized once at encoding against the source occurrence time and retained with their
-original wording, bounds, certainty, and semantic role (event time or deadline). Temporal questions such as
+Every saved chat message has its own server-recorded UTC timestamp. Relative dates are normalized once at
+encoding against the timestamp of the exact supporting message; sources without message-level wall-clock
+times use their declared source occurrence time. Original wording, bounds, certainty, and semantic role
+(event time or deadline) are retained. Temporal questions such as
 “What deadlines are due next week?” resolve against the query time and select active claims whose intervals
 overlap, then load those claims' wiki pages and provenance-linked source logs. This structured temporal branch
 augments page FTS; it does not introduce a second durable index or guess dates for phrases such as “soon.”

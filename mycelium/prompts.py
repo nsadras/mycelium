@@ -194,8 +194,10 @@ interaction/observation/unknown), an open predicate, evidence_modality, temporal
 speaker, confidence, optional replaceable-state slot, and open facets. Put exact time wording in
 facets.when for event times and facets.deadline for due dates. Never convert relative time yourself;
 preserve phrases such as “by Friday” or “in three days” exactly so the deterministic resolver can anchor
-them to OCCURRED AT. Use inferred only for a strong implication with facets.inference_basis and confidence at
-most 0.7.
+them to their evidence time. When timestamped segments are supplied, a claim with relative time must copy the
+one cited segment ID containing that time expression into temporal_anchor_segment_id. Otherwise leave
+temporal_anchor_segment_id empty and the date will remain unresolved. Use inferred only for a strong
+implication with facets.inference_basis and confidence at most 0.7.
 
 The about list is semantic routing data, not a keyword list. Include the primary subject whose state,
 belief, preference, plan, relationship, or action the claim predicates, with role=subject. Include a

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
+import os
+import tempfile
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -19,8 +21,8 @@ DEFAULT_MAX_TURNS = 25
 _mem: mycelium.Mycelium | None = None
 _engram: EngramService | None = None
 _dream_lock: asyncio.Lock | None = None
-
-logger = logging.getLogger(__name__)
+_meta_lock: asyncio.Lock | None = None
+_session_locks: dict[str, asyncio.Lock] = {}
 
 
 def utc_now() -> datetime:
@@ -57,8 +59,38 @@ def load_meta() -> dict[str, Any]:
 
 def save_meta(meta: dict[str, Any]) -> None:
     SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(SESSIONS_FILE, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=SESSIONS_FILE.parent,
+        prefix=f".{SESSIONS_FILE.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(meta, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, SESSIONS_FILE)
+    except Exception:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def get_meta_lock() -> asyncio.Lock:
+    global _meta_lock
+    if _meta_lock is None:
+        _meta_lock = asyncio.Lock()
+    return _meta_lock
+
+
+def get_session_lock(session_id: str) -> asyncio.Lock:
+    lock = _session_locks.get(session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _session_locks[session_id] = lock
+    return lock
 
 
 def ensure_session_record(record: dict[str, Any], session_id: str) -> dict[str, Any]:
@@ -74,6 +106,17 @@ def ensure_session_record(record: dict[str, Any], session_id: str) -> dict[str, 
             "buffer": [],
             "turn_count": 0,
         }
+    for collection_name in ("transcript", "buffer"):
+        messages = (
+            record["active_episode"].get("buffer", [])
+            if collection_name == "buffer"
+            else record.get("transcript", [])
+        )
+        if any(not str(message.get("timestamp") or "").strip() for message in messages):
+            raise ValueError(
+                f"Session {session_id} contains timestamp-free {collection_name} messages; "
+                "reset the incompatible session store before continuing"
+            )
     return record
 
 
@@ -82,15 +125,22 @@ def append_turn(
     session_id: str,
     user_message: str,
     assistant_message: str,
+    user_timestamp: str,
+    assistant_timestamp: str,
     loaded_pages: list[dict[str, Any]] | None = None,
     tool_events: list[dict[str, Any]] | None = None,
 ) -> None:
     record = ensure_session_record(meta[session_id], session_id)
-    now = iso_now()
-    record["transcript"].append({"role": "user", "content": user_message})
+    user_record = {
+        "role": "user",
+        "content": user_message,
+        "timestamp": user_timestamp,
+    }
+    record["transcript"].append(user_record)
     assistant_record: dict[str, Any] = {
         "role": "assistant",
         "content": assistant_message,
+        "timestamp": assistant_timestamp,
     }
     if loaded_pages is not None:
         assistant_record["loaded_pages"] = loaded_pages
@@ -99,10 +149,10 @@ def append_turn(
     record["transcript"].append(assistant_record)
 
     episode = record["active_episode"]
-    episode["buffer"].append({"role": "user", "content": user_message})
-    episode["buffer"].append(assistant_record)
+    episode["buffer"].append(dict(user_record))
+    episode["buffer"].append(deepcopy(assistant_record))
     episode["turn_count"] = int(episode.get("turn_count", 0)) + 1
-    episode["last_activity_at"] = now
+    episode["last_activity_at"] = assistant_timestamp
 
 
 def _format_tool_observation_content(
@@ -144,6 +194,7 @@ async def append_tool_event_logs(
     episode_id: str,
     tool_events: list[dict[str, Any]],
     turn_count: int,
+    occurred_at: str,
 ) -> list[LogEntry]:
     if not tool_events:
         return []
@@ -164,6 +215,7 @@ async def append_tool_event_logs(
             content,
             episode_id,
             source_type="tool_observation",
+            occurred_at=occurred_at,
             metadata={
                 "chat_session_id": session_id,
                 "episode_id": episode_id,
@@ -179,6 +231,7 @@ async def append_tool_event_logs(
                 speaker=tool_name,
                 role="tool",
                 content=result or "Tool call produced no result.",
+                timestamp=occurred_at,
             )],
         )
         created_entries.extend(entries)
@@ -193,7 +246,26 @@ def recent_thread_context(record: dict[str, Any], limit: int = 8) -> str:
 
 def episode_transcript(record: dict[str, Any]) -> str:
     episode = record.get("active_episode", {})
-    return "\n".join(f"{m.get('role', '').upper()}: {m.get('content', '')}" for m in episode.get("buffer", []))
+    return "\n".join(
+        f"[{message['timestamp']}] {message.get('role', '').upper()}: "
+        f"{message.get('content', '')}"
+        for message in episode.get("buffer", [])
+    )
+
+
+def episode_segments(record: dict[str, Any]) -> list[SourceSegment]:
+    episode = record.get("active_episode", {})
+    return [
+        SourceSegment(
+            segment_id="",
+            index=index,
+            speaker=str(message.get("role") or "unknown"),
+            role=str(message.get("role") or "unknown"),
+            content=str(message.get("content") or ""),
+            timestamp=str(message["timestamp"]),
+        )
+        for index, message in enumerate(episode.get("buffer", []))
+    ]
 
 
 def start_new_episode(record: dict[str, Any], session_id: str) -> dict[str, Any]:
@@ -210,73 +282,80 @@ def start_new_episode(record: dict[str, Any], session_id: str) -> dict[str, Any]
 
 
 async def flush_session_episode(session_id: str, reason: str = "manual") -> dict[str, Any]:
-    meta = load_meta()
-    if session_id not in meta:
-        return {"session_id": session_id, "status": "missing", "entries_encoded": 0}
+    async with get_session_lock(session_id):
+        async with get_meta_lock():
+            meta = load_meta()
+            if session_id not in meta:
+                return {"session_id": session_id, "status": "missing", "entries_encoded": 0}
+            record = ensure_session_record(meta[session_id], session_id)
+            episode = deepcopy(record["active_episode"])
+            record_snapshot = {"active_episode": episode}
 
-    record = ensure_session_record(meta[session_id], session_id)
-    episode = record["active_episode"]
-    transcript = episode_transcript(record)
-    turn_count = int(episode.get("turn_count", 0))
-    transcript_chars = len(transcript)
-    if not transcript.strip():
-        save_meta(meta)
+        transcript = episode_transcript(record_snapshot)
+        segments = episode_segments(record_snapshot)
+        turn_count = int(episode.get("turn_count", 0))
+        transcript_chars = len(transcript)
+        if not transcript.strip():
+            return {
+                "session_id": session_id,
+                "episode_id": episode["id"],
+                "status": "empty",
+                "entries_encoded": 0,
+                "turn_count": turn_count,
+                "transcript_chars": transcript_chars,
+            }
+
+        try:
+            entries = await get_mem().encoder.encode_session(
+                transcript,
+                episode["id"],
+                occurred_at=segments[0].timestamp,
+                segments=segments,
+            )
+        except Exception as exc:
+            return {
+                "session_id": session_id,
+                "episode_id": episode["id"],
+                "status": "encode_error",
+                "error": str(exc),
+                "entries_encoded": 0,
+                "turn_count": turn_count,
+                "transcript_chars": transcript_chars,
+            }
+        if not entries:
+            return {
+                "session_id": session_id,
+                "episode_id": episode["id"],
+                "status": "no_entries",
+                "entries_encoded": 0,
+                "turn_count": turn_count,
+                "transcript_chars": transcript_chars,
+            }
+
+        async with get_meta_lock():
+            meta = load_meta()
+            record = ensure_session_record(meta[session_id], session_id)
+            if record["active_episode"]["id"] != episode["id"]:
+                raise RuntimeError("Active episode changed while its session lock was held")
+            record["encoded_episodes"].append(
+                {
+                    "id": episode["id"],
+                    "encoded_at": iso_now(),
+                    "reason": reason,
+                    "turn_count": turn_count,
+                    "entries_encoded": len(entries),
+                }
+            )
+            start_new_episode(record, session_id)
+            save_meta(meta)
         return {
             "session_id": session_id,
             "episode_id": episode["id"],
-            "status": "empty",
-            "entries_encoded": 0,
-            "turn_count": turn_count,
-            "transcript_chars": transcript_chars,
-        }
-
-    mem = get_mem()
-    try:
-        entries = await mem.encoder.encode_session(
-            transcript,
-            episode["id"],
-        )
-    except Exception as exc:
-        save_meta(meta)
-        return {
-            "session_id": session_id,
-            "episode_id": episode["id"],
-            "status": "encode_error",
-            "error": str(exc),
-            "entries_encoded": 0,
-            "turn_count": turn_count,
-            "transcript_chars": transcript_chars,
-        }
-    if not entries:
-        save_meta(meta)
-        return {
-            "session_id": session_id,
-            "episode_id": episode["id"],
-            "status": "no_entries",
-            "entries_encoded": 0,
-            "turn_count": turn_count,
-            "transcript_chars": transcript_chars,
-        }
-
-    record["encoded_episodes"].append(
-        {
-            "id": episode["id"],
-            "encoded_at": iso_now(),
-            "reason": reason,
-            "turn_count": turn_count,
+            "status": "flushed",
             "entries_encoded": len(entries),
+            "turn_count": turn_count,
+            "transcript_chars": transcript_chars,
         }
-    )
-    start_new_episode(record, session_id)
-    save_meta(meta)
-    return {
-        "session_id": session_id,
-        "episode_id": episode["id"],
-        "status": "flushed",
-        "entries_encoded": len(entries),
-        "turn_count": turn_count,
-        "transcript_chars": transcript_chars,
-    }
 
 
 async def flush_idle_episodes(
@@ -284,7 +363,8 @@ async def flush_idle_episodes(
     max_turns: int = DEFAULT_MAX_TURNS,
     force: bool = False,
 ) -> dict[str, Any]:
-    meta = load_meta()
+    async with get_meta_lock():
+        meta = load_meta()
     now = utc_now()
     candidates: list[str] = []
 
@@ -301,7 +381,6 @@ async def flush_idle_episodes(
         if force or is_idle or is_large:
             candidates.append(session_id)
 
-    save_meta(meta)
     results = [await flush_session_episode(session_id, "manual") for session_id in candidates]
     return {"flushed": len([r for r in results if r["status"] == "flushed"]), "results": results}
 
@@ -349,19 +428,6 @@ async def run_dream_if_ready() -> dict[str, Any]:
         "queue": status.as_dict(),
         "report": _dream_report_response(report) if report is not None else None,
     }
-
-
-async def memory_lifecycle_loop() -> None:
-    """Periodically flush idle episodes and enforce queue age/size policies."""
-    while True:
-        try:
-            await flush_idle_episodes()
-            await run_dream_if_ready()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Automatic memory lifecycle iteration failed")
-        await asyncio.sleep(get_mem().config.dream.lifecycle_poll_seconds)
 
 
 def clear_memory_store() -> dict[str, int]:

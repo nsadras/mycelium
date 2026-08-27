@@ -1,32 +1,16 @@
-import asyncio
 import logging
-from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from server.api import sessions, memory, engram
-from server.runtime import memory_lifecycle_loop
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    lifecycle_task = asyncio.create_task(memory_lifecycle_loop())
-    try:
-        yield
-    finally:
-        lifecycle_task.cancel()
-        try:
-            await lifecycle_task
-        except asyncio.CancelledError:
-            pass
-
-
-app = FastAPI(title="Mycelium API", lifespan=lifespan)
+app = FastAPI(title="Mycelium API")
 
 # Configure CORS for frontend communication
 app.add_middleware(

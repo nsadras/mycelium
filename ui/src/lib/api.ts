@@ -15,6 +15,7 @@ export function engramAudioUrl(meetingId: string) {
 export interface Message {
   role: string;
   content: string;
+  timestamp: string;
   loaded_pages?: LoadedPage[];
   tool_events?: ToolEvent[];
 }

@@ -237,7 +237,8 @@ export default function Chat({
     e.preventDefault();
     if (!input.trim() || !selectedId || isLoading) return;
 
-    const userMsg: Message = { role: 'user', content: input };
+    const optimisticTimestamp = new Date().toISOString();
+    const userMsg: Message = { role: 'user', content: input, timestamp: optimisticTimestamp };
     setMessages([...messages, userMsg]);
     setInput('');
     setIsLoading(true);
@@ -251,12 +252,20 @@ export default function Chat({
       } else {
         setAssistantStatus({ activity: 'responding', label: 'Responding', detail: 'Rendering reply' });
       }
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: res.data.response,
-        loaded_pages: res.data.loaded_pages,
-        tool_events: res.data.tool_events,
-      }]);
+      setMessages(prev => [
+        ...prev.map(message => (
+          message.role === 'user' && message.timestamp === optimisticTimestamp
+            ? { ...message, timestamp: res.data.user_timestamp }
+            : message
+        )),
+        {
+          role: 'assistant',
+          content: res.data.response,
+          timestamp: res.data.assistant_timestamp,
+          loaded_pages: res.data.loaded_pages,
+          tool_events: res.data.tool_events,
+        },
+      ]);
     } catch (err) {
       console.error("Chat error", err);
       shouldResetStatus = false;
@@ -264,7 +273,11 @@ export default function Chat({
       window.setTimeout(() => {
         setAssistantStatus({ activity: 'idle', label: 'Idle', detail: 'Ready' });
       }, 2500);
-      setMessages(prev => [...prev, { role: 'assistant', content: "Error: Failed to get response from agent." }]);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: "Error: Failed to get response from agent.",
+        timestamp: new Date().toISOString(),
+      }]);
     } finally {
       setIsLoading(false);
       if (shouldResetStatus) {

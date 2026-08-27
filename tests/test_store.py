@@ -305,8 +305,14 @@ def test_clear_memory_store_removes_artifacts_and_preserves_conversations(tmp_pa
     monkeypatch.setattr(runtime, "get_mem", lambda: myc)
     monkeypatch.setattr(runtime, "SESSIONS_FILE", sessions_file)
     transcript = [
-        {"role": "user", "content": "Remember tea."},
-        {"role": "assistant", "content": "I will."},
+        {
+            "role": "user", "content": "Remember tea.",
+            "timestamp": "2026-07-22T10:00:00+00:00",
+        },
+        {
+            "role": "assistant", "content": "I will.",
+            "timestamp": "2026-07-22T10:00:01+00:00",
+        },
     ]
     runtime.save_meta({
         "session-1": {
@@ -315,7 +321,11 @@ def test_clear_memory_store_removes_artifacts_and_preserves_conversations(tmp_pa
             "episode_seq": 2,
             "encoded_episodes": ["session-1-ep-1"],
             "active_episode": {
-                "id": "session-1-ep-2", "buffer": [], "turn_count": 0,
+                "id": "session-1-ep-2",
+                "started_at": "2026-07-22T10:00:01+00:00",
+                "last_activity_at": "2026-07-22T10:00:01+00:00",
+                "buffer": [],
+                "turn_count": 0,
             },
         }
     })

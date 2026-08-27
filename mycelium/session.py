@@ -1,4 +1,5 @@
-from typing import List, Dict, TYPE_CHECKING
+from datetime import datetime, timezone
+from typing import Any, List, TYPE_CHECKING
 
 from mycelium.models import WikiPage
 from mycelium.materialization import sections_markdown
@@ -16,7 +17,7 @@ class Session:
         self.session_id = session_id
         self.query = query
         self.loaded_pages: List[WikiPage] = []
-        self.transcript: List[Dict[str, str]] = []
+        self.transcript: List[dict[str, Any]] = []
         self._mycelium = mycelium
 
     @property
@@ -58,4 +59,8 @@ class Session:
 
     def record(self, role: str, content: str) -> None:
         """Appends to self.transcript."""
-        self.transcript.append({"role": role, "content": content})
+        self.transcript.append({
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })

@@ -143,7 +143,7 @@
     font-weight="600"
     font-size="20"
     letter-spacing="0.5"
-  >Self-Consolidating Plaintext Memory Store for LLM Agents</text>
+  >Self-Consolidating Memory Store for Local LLM Agents</text>
 
   <text
     x="455"
@@ -153,7 +153,7 @@
     font-weight="400"
     font-size="14.5"
     letter-spacing="0.2"
-  >Encodes chat sessions into episodic logs, consolidates technical facts into a Markdown wiki,</text>
+  >Captures conversations as source-grounded episodic claims, the consolidates them</text>
   <text
     x="455"
     y="248"
@@ -162,7 +162,7 @@
     font-weight="400"
     font-size="14.5"
     letter-spacing="0.2"
-  >and manages memory state using Ebbinghaus forgetting curves.</text>
+  >into an entity-owned Markdown wiki with provenance-aware retrieval.</text>
 
   <!-- 5. GLOWING OPT-IN FEATURE BADGES -->
   <!-- Badge 1: EPISODIC LOGGING -->
@@ -195,7 +195,7 @@
     >DREAM CONSOLIDATION</text>
   </g>
 
-  <!-- Badge 3: COGNITIVE FORGETTING -->
+  <!-- Badge 3: GROUNDED RETRIEVAL -->
   <g transform="translate(830, 290)">
     <rect width="195" height="30" rx="15" fill="#090e0c" stroke="#10b981" stroke-opacity="0.25" stroke-width="1" />
     <circle cx="20" cy="15" r="4" fill="#a78bfa" />
@@ -207,6 +207,6 @@
       font-weight="700"
       font-size="10.5"
       letter-spacing="1"
-    >COGNITIVE FORGETTING</text>
+    >GROUNDED RETRIEVAL</text>
   </g>
 </svg>

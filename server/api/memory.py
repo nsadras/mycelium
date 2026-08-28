@@ -474,21 +474,6 @@ async def get_log_content(filename: str):
     with open(log_path, "r", encoding="utf-8") as f:
         return {"filename": filename, "content": f.read()}
 
-@router.post("/logs/{filename}/unconsolidate")
-async def unconsolidate_log(filename: str):
-    if "/" in filename or "\\" in filename or not filename.endswith(".md"):
-        raise HTTPException(status_code=400, detail="Invalid log filename")
-    
-    date_str = filename.replace(".md", "")
-    mem = get_mem()
-    mem.log_store.mark_unconsolidated(date_str)
-    
-    log_path = mem.log_store.logs_dir / filename
-    if not log_path.exists():
-        raise HTTPException(status_code=404, detail="Log not found")
-    with open(log_path, "r", encoding="utf-8") as f:
-        return {"filename": filename, "content": f.read(), "status": "success"}
-
 @router.post("/dream")
 async def run_dream():
     return await run_dream_process()

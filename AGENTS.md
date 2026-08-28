@@ -42,15 +42,3 @@
 - Treat timeouts, malformed contracts, and sandbox connectivity as invalid experimental evidence. Fix or remove the
   environmental or structural problem and rerun before judging the semantic approach.
 - Record direct-probe findings, in-situ run paths, meaningful failures, and validation results in `DEVLOG.md`.
-  Required repeated primary trials and transfer fixtures still govern milestone acceptance.
-
-## Architecture and completion standards
-
-- Treat `DESIGN.md` as the authority for the intended current production architecture. Dated planning files are
-  historical records unless they explicitly declare otherwise. Update `DESIGN.md` and user-facing README
-  behavior in the same change as an architectural mechanism.
-- Do not mark a milestone complete merely because its implementation checklist is present. Its declared
-  acceptance conditions, transfer fixtures, and required repeated trials must pass, with the results recorded.
-- Before checkpointing a change, run the documented Python checks, UI lint/build, and `git diff --check` from
-  `DESIGN.md`. A semantic milestone also requires its named behavioral fixture protocol; mocked unit tests alone
-  are not acceptance evidence.

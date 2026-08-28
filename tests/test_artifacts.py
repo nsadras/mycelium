@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimProvenance,
-    ClaimReconciler,
     EpisodeManifest,
     MemoryClaim,
     ReconsolidationProposal,
@@ -89,6 +88,41 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
     assert claim.evidence_modality == "speech"
     assert claim.temporal_status == "atemporal"
     assert artifacts.coverage_report()["segment_coverage"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_encoder_preserves_repeated_claims_as_separate_source_events(tmp_path):
+    llm = AsyncMock()
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    encoder = Encoder(llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts)
+
+    async def response(system, user, output_type, **kwargs):
+        segment_id = user.split("[", 1)[1].split("]", 1)[0]
+        return {
+            "claims": [{
+                "text": "Ava prefers tea.",
+                "claim_type": "preference",
+                "predicate": "prefers",
+                "about": [{"entity": "Ava"}],
+                "segment_ids": [segment_id],
+            }],
+            "ignored_segment_ids": [],
+        }
+
+    llm.call_structured.side_effect = response
+    for session_id in ("session-1", "session-2"):
+        await encoder.encode_session(
+            "Ava: I prefer tea.",
+            session_id,
+            source_type="multi_party_conversation",
+            occurred_at="2024-01-10",
+        )
+
+    claims = artifacts.list_claims()
+    assert len(claims) == 2
+    assert len({claim.claim_id for claim in claims}) == 2
+    assert len({claim.provenance[0].source_id for claim in claims}) == 2
+    assert {claim.text for claim in claims} == {"Ava prefers tea."}
 
 
 @pytest.mark.asyncio
@@ -672,89 +706,6 @@ async def test_encoder_batches_large_initial_extractions(tmp_path):
     assert artifacts.list_episodes()[0].extraction_status == "complete"
 
 
-def test_reconciler_merges_duplicates_but_leaves_slot_changes_for_review(tmp_path):
-    store = ArtifactStore(tmp_path / "artifacts")
-    reconcile = ClaimReconciler(store).reconcile
-    common = dict(
-        kind="preference", about=[{"entity": "Ava"}], recorded_at=datetime.now().isoformat(),
-        provenance=[ClaimProvenance("source-1", ["source-1#seg-0001"])],
-    )
-    first = reconcile(MemoryClaim(claim_id="claim-1", text="Ava prefers tea.", slot="favorite_drink", **common))
-    duplicate = reconcile(MemoryClaim(claim_id="claim-2", text="Ava prefers tea.", slot="favorite_drink", **common))
-    replacement = reconcile(MemoryClaim(claim_id="claim-3", text="Ava now prefers coffee.", slot="favorite_drink", **common))
-
-    assert duplicate.claim_id == first.claim_id
-    assert store.get_claim("claim-1").status == "active"
-    assert replacement.links == []
-
-
-def test_reconciler_does_not_merge_changed_deadline(tmp_path):
-    store = ArtifactStore(tmp_path / "artifacts")
-    common = dict(
-        text="Ava will send the report.",
-        kind="commitment",
-        about=[{"entity": "Ava"}],
-        recorded_at="2024-01-10",
-        claim_type="commitment",
-        predicate="send_report",
-    )
-    first = MemoryClaim(
-        claim_id="first",
-        provenance=[ClaimProvenance("source-1", ["segment-1"])],
-        facets={"temporal": {
-            "expression": "Friday", "role": "deadline", "status": "resolved",
-            "certainty": "exact", "start": "2024-01-12", "end": "2024-01-12",
-        }},
-        **common,
-    )
-    changed = MemoryClaim(
-        claim_id="changed",
-        provenance=[ClaimProvenance("source-2", ["segment-2"])],
-        facets={"temporal": {
-            "expression": "next Friday", "role": "deadline", "status": "resolved",
-            "certainty": "exact", "start": "2024-01-19", "end": "2024-01-19",
-        }},
-        **common,
-    )
-
-    reconciler = ClaimReconciler(store)
-    reconciler.reconcile(first)
-    reconciled = reconciler.reconcile(changed)
-
-    assert reconciled.claim_id == "changed"
-    assert {claim.claim_id for claim in store.list_claims()} == {"first", "changed"}
-
-
-def test_reconciler_merges_same_normalized_deadline_from_different_wording(tmp_path):
-    store = ArtifactStore(tmp_path / "artifacts")
-    common = dict(
-        text="Ava will send the report.", kind="commitment",
-        about=[{"entity": "Ava"}], recorded_at="2024-01-10",
-        claim_type="commitment", predicate="send_report",
-    )
-    first = MemoryClaim(
-        claim_id="first", provenance=[ClaimProvenance("source-1", ["segment-1"])],
-        facets={"temporal": {
-            "expression": "Friday", "role": "deadline", "status": "resolved",
-            "certainty": "exact", "start": "2024-01-12", "end": "2024-01-12",
-        }}, **common,
-    )
-    duplicate = MemoryClaim(
-        claim_id="duplicate", provenance=[ClaimProvenance("source-2", ["segment-2"])],
-        facets={"temporal": {
-            "expression": "tomorrow", "role": "deadline", "status": "resolved",
-            "certainty": "exact", "start": "2024-01-12", "end": "2024-01-12",
-        }}, **common,
-    )
-
-    reconciler = ClaimReconciler(store)
-    reconciler.reconcile(first)
-    reconciled = reconciler.reconcile(duplicate)
-
-    assert reconciled.claim_id == "first"
-    assert len(reconciled.provenance) == 2
-
-
 def test_semantic_envelope_does_not_infer_from_kind_or_prose():
     provenance = [ClaimProvenance("source-1", ["source-1#seg-0001"])]
     unknown = MemoryClaim(
@@ -970,48 +921,6 @@ def test_temporal_interval_overlap_is_inclusive():
     )
 
 
-def test_reconciler_merges_identical_text_despite_kind_label_drift(tmp_path):
-    store = ArtifactStore(tmp_path / "artifacts")
-    first = MemoryClaim(
-        "first", "Ava prefers tea.", "preference", [{"entity": "Ava"}],
-        [ClaimProvenance("source-1", ["segment-1"])], "2024-01-01",
-    )
-    second = MemoryClaim(
-        "second", "Ava prefers tea.", "personal fact", [{"entity": "Ava"}],
-        [ClaimProvenance("source-2", ["segment-2"])], "2024-01-02",
-    )
-
-    reconciler = ClaimReconciler(store)
-    reconciler.reconcile(first)
-    merged = reconciler.reconcile(second)
-
-    assert merged.claim_id == "first"
-    assert {item.source_id for item in merged.provenance} == {"source-1", "source-2"}
-
-
-def test_reconciler_upgrades_unknown_semantics_from_structured_duplicate(tmp_path):
-    store = ArtifactStore(tmp_path / "artifacts")
-    unknown = MemoryClaim(
-        "unknown", "Ava will send the report.", "action_item", [{"entity": "Ava"}],
-        [ClaimProvenance("source-1", ["segment-1"])], "2024-01-01",
-    )
-    structured = MemoryClaim(
-        "structured", "Ava will send the report.", "open subtype", [{"entity": "Ava"}],
-        [ClaimProvenance("source-2", ["segment-2"])], "2024-01-02",
-        claim_type="commitment", predicate="send_report", evidence_modality="speech",
-        temporal_status="future",
-    )
-
-    reconciler = ClaimReconciler(store)
-    reconciler.reconcile(unknown)
-    merged = reconciler.reconcile(structured)
-
-    assert merged.claim_id == "unknown"
-    assert merged.claim_type == "commitment"
-    assert merged.predicate == "send_report"
-    assert merged.temporal_status == "future"
-
-
 def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
     store = ArtifactStore(tmp_path / "artifacts")
     store.save_source(SourceDocument(
@@ -1064,26 +973,3 @@ def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
     assert store.list_episodes() == []
     assert store.list_claims() == []
     assert store.list_reconsolidation_proposals() == []
-
-
-def test_reconciler_uses_structured_relation_across_open_kind_drift(tmp_path):
-    store = ArtifactStore(tmp_path / "artifacts")
-    first = MemoryClaim(
-        "first", "Ava prefers quiet morning meetings.", "personal preference",
-        [{"entity": "Ava"}], [ClaimProvenance("source-1", ["segment-1"])],
-        "2024-01-01", claim_type="preference", predicate="prefers_meeting_time",
-        evidence_modality="speech", temporal_status="recurring",
-    )
-    second = MemoryClaim(
-        "second", "Ava prefers quiet morning work meetings.", "schedule constraint",
-        [{"entity": "Ava"}], [ClaimProvenance("source-2", ["segment-2"])],
-        "2024-01-02", claim_type="preference", predicate="prefers_meeting_time",
-        evidence_modality="speech", temporal_status="recurring",
-    )
-
-    reconciler = ClaimReconciler(store)
-    reconciler.reconcile(first)
-    merged = reconciler.reconcile(second)
-
-    assert merged.claim_id == "first"
-    assert {item.source_id for item in merged.provenance} == {"source-1", "source-2"}

@@ -14,7 +14,6 @@ import tempfile
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable, cast
 
@@ -1478,27 +1477,6 @@ def temporal_record(facets: dict[str, Any]) -> dict[str, Any] | None:
     return value if isinstance(value, dict) and value.get("expression") else None
 
 
-def temporal_signature(facets: dict[str, Any]) -> tuple[str, ...] | None:
-    temporal = temporal_record(facets)
-    if temporal is None:
-        return None
-    start = str(temporal.get("start") or "")
-    end = str(temporal.get("end") or "")
-    unresolved_expression = (
-        str(temporal.get("expression") or "").strip().lower()
-        if not start and not end
-        else ""
-    )
-    return (
-        str(temporal.get("role") or "event_time"),
-        str(temporal.get("status") or "unresolved"),
-        str(temporal.get("certainty") or "unknown"),
-        start,
-        end,
-        unresolved_expression,
-    )
-
-
 def query_temporal_record(query: str, anchor: datetime) -> dict[str, Any] | None:
     facets = normalize_temporal_facets({}, anchor.isoformat(), query)
     temporal = temporal_record(facets)
@@ -1562,7 +1540,6 @@ def _deadline_boundary(expression: str, anchor: datetime) -> date | None:
             day=calendar.monthrange(year, month)[1],
         )
     return None
-
 
 def _vague_temporal_interval(
     expression: str, anchor: datetime
@@ -1638,74 +1615,3 @@ def parse_source_datetime(value: str | None) -> datetime | None:
         except ValueError:
             continue
     return None
-
-
-class ClaimReconciler:
-    """Conservative deterministic reconciliation; uncertain semantics remain separate."""
-    def __init__(self, store: ArtifactStore):
-        self.store = store
-
-    def reconcile(self, incoming: MemoryClaim) -> MemoryClaim:
-        incoming.text = re.sub(r"\s+", " ", incoming.text).strip()
-        current = self.store.list_claims(status="active")
-        incoming_entities = self._entities(incoming)
-        for existing in current:
-            similarity = SequenceMatcher(None, existing.text.lower(), incoming.text.lower()).ratio()
-            predicates_compatible = (
-                not existing.predicate
-                or not incoming.predicate
-                or existing.predicate == incoming.predicate
-            )
-            structured_shape = (
-                existing.claim_type != "unknown"
-                and existing.claim_type == incoming.claim_type
-                and predicates_compatible
-            )
-            same_semantic_shape = structured_shape and similarity >= 0.92
-            effectively_identical = similarity >= 0.98
-            temporal_compatible = temporal_signature(existing.facets) == temporal_signature(
-                incoming.facets
-            )
-            if incoming_entities == self._entities(existing) and (
-                same_semantic_shape or effectively_identical
-            ) and temporal_compatible:
-                existing.provenance = self._merge_provenance(existing.provenance, incoming.provenance)
-                existing.confidence = max(existing.confidence, incoming.confidence)
-                existing.salience = max(existing.salience, incoming.salience)
-                if incoming.claim_type != "unknown" and (
-                    existing.claim_type == "unknown"
-                ):
-                    existing.claim_type = incoming.claim_type
-                if incoming.predicate and not existing.predicate:
-                    existing.predicate = incoming.predicate
-                if incoming.evidence_modality != "unknown":
-                    if existing.evidence_modality == "unknown":
-                        existing.evidence_modality = incoming.evidence_modality
-                    elif existing.evidence_modality != incoming.evidence_modality:
-                        existing.evidence_modality = "mixed"
-                if incoming.temporal_status != "unknown" and (
-                    existing.temporal_status == "unknown"
-                ):
-                    existing.temporal_status = incoming.temporal_status
-                if incoming.derivation_operation and not existing.derivation_operation:
-                    existing.derivation_operation = incoming.derivation_operation
-                existing.facets.update(incoming.facets)
-                self.store.save_claim(existing)
-                return existing
-        self.store.save_claim(incoming)
-        return incoming
-
-    @staticmethod
-    def _entities(claim: MemoryClaim) -> tuple[str, ...]:
-        return tuple(sorted(str(item.get("entity", "")).strip().lower() for item in claim.about if item.get("entity")))
-
-    @staticmethod
-    def _merge_provenance(left: list[ClaimProvenance], right: list[ClaimProvenance]) -> list[ClaimProvenance]:
-        result = list(left)
-        keys = {(item.source_id, tuple(item.segment_ids)) for item in left}
-        for item in right:
-            key = (item.source_id, tuple(item.segment_ids))
-            if key not in keys:
-                result.append(item)
-                keys.add(key)
-        return result

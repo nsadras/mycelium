@@ -12,7 +12,6 @@ from mycelium.encoder import Encoder
 from mycelium.budget import count_tokens
 from mycelium.context import render_memory_context
 from mycelium.session import Session
-from mycelium.facts import routing_recall_index
 from mycelium.sources import source_contexts_for_pages
 from mycelium.page_search import PageSearchIndex
 from mycelium.memory_tools import MemoryToolset
@@ -280,28 +279,6 @@ class Mycelium:
                 page.source_context = ""
                 
         return loaded_pages
-
-    def _routing_index(self) -> str:
-        base_index = self.wiki.get_index()
-        pages = self.wiki.list_all()
-        if not pages:
-            return base_index
-
-        metadata_lines = [
-            "## Page Metadata",
-            *[
-                (
-                    f"- [[{p.slug}]]: confidence={p.confidence:.2f}; "
-                    f"importance={p.importance:.2f}"
-                )
-                for p in pages
-            ],
-        ]
-        recall_index = routing_recall_index(pages)
-        parts = [base_index, "\n".join(metadata_lines)]
-        if recall_index:
-            parts.append(recall_index)
-        return "\n\n".join(parts)
 
     @asynccontextmanager
     async def session(self, query: str, session_id: Optional[str] = None):

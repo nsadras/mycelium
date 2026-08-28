@@ -1,5 +1,20 @@
 # Development Log
 
+## 2026-08-28 — Remove fuzzy ingestion reconciliation and dead recall routing
+
+- Removed the pre-Dream `SequenceMatcher` claim reconciler. Every extracted occurrence now persists as a
+  distinct claim with its own source provenance; semantic grouping remains the responsibility of structured
+  Dream fact consolidation and reviewable reconsolidation.
+- Added a focused encoding regression proving identical statements from separate episodes retain separate claim
+  and source IDs.
+- Removed the unused Markdown recall-section parser, its tests, and the unreachable `_routing_index()` facade.
+  Production retrieval continues through the retained full-page FTS, temporal, short-term, and source-evidence
+  paths.
+- No production prompt, structured-output schema, or ontology changed, so this cleanup did not require a direct
+  Ollama semantic-contract probe.
+- Validation: Ruff passed; the 226-test non-Engram suite passed; focused encoding, Dream, reconsolidation,
+  retrieval, source, session, and context coverage passed as part of that run.
+
 ## 2026-07-22 — Wiki and recorded-memory quality
 
 Goal: improve the completeness, trustworthiness, and concision of recorded memory across varied

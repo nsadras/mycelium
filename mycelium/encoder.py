@@ -12,7 +12,6 @@ from mycelium.structured_outputs import extraction_output_model
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimProvenance,
-    ClaimReconciler,
     EpisodeManifest,
     MemoryClaim,
     SourceDocument,
@@ -171,7 +170,6 @@ class Encoder:
         ]
         try:
             allowed_ids = {segment.segment_id for segment in source.segments}
-            reconciler = ClaimReconciler(self.artifacts)
             claim_ids: list[str] = []
             covered_ids: set[str] = set()
             ignored_ids = set(programmatic_ignored_ids)
@@ -205,7 +203,7 @@ class Encoder:
                     )
                     self._validate_batch_accounting(response, batch_ids)
                     covered_ids.update(self._persist_extracted_claims(
-                        source, response, batch_ids, reconciler, claim_ids
+                        source, response, batch_ids, claim_ids
                     ))
                     ignored_ids.update(
                         value for value in response.get("ignored_segment_ids", [])
@@ -305,7 +303,6 @@ class Encoder:
         source: SourceDocument,
         response: dict[str, Any],
         allowed_ids: set[str],
-        reconciler: ClaimReconciler,
         claim_ids: list[str],
     ) -> set[str]:
         covered_ids: set[str] = set()
@@ -395,9 +392,8 @@ class Encoder:
                 evidence_modality=evidence_modality,
                 temporal_status=str(raw.get("temporal_status") or "unknown"),
             )
-            canonical = reconciler.reconcile(claim)
-            if canonical.claim_id not in claim_ids:
-                claim_ids.append(canonical.claim_id)
+            self.artifacts.save_claim(claim)
+            claim_ids.append(claim.claim_id)
         return covered_ids
 
     @staticmethod

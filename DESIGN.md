@@ -78,6 +78,9 @@ operation:
 - Through **Flush Idle** when the caller wants idle or large episodes processed
 
 The encoder writes the complete conversation episode into a durable raw log, a structured source document, an episode manifest, and atomic claims. Extraction makes one logical pass and records claimed, ignored, partial, and failed segment coverage.
+Each extracted occurrence remains a distinct source-grounded claim with its own provenance. Semantic grouping and
+conflict handling happen later through Dream fact consolidation and reviewable reconsolidation, not through fuzzy
+text matching during ingestion.
 
 Encoded episode IDs are tracked in `mycelium_store/sessions_meta.json`, preventing an already-flushed episode from being encoded repeatedly unless the memory store is cleared.
 

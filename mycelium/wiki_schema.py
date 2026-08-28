@@ -24,6 +24,18 @@ DEFAULT_SECTIONS: dict[str, dict[str, str]] = {
         "commitment": "next_steps_deadlines", "decision": "decisions", "relationship": "people_organizations",
         "event": "timeline", "interaction": "timeline", "observation": "overview", "unknown": "overview",
     },
+    "series": {
+        "identity": "overview", "state": "current_context", "preference": "current_context",
+        "belief": "current_context", "plan": "schedule_pattern", "commitment": "schedule_pattern",
+        "decision": "current_context", "relationship": "participants", "event": "occurrences",
+        "interaction": "occurrences", "observation": "overview", "unknown": "overview",
+    },
+    "artifact": {
+        "identity": "overview", "state": "current_state", "preference": "requirements_constraints",
+        "belief": "requirements_constraints", "plan": "current_state", "commitment": "current_state",
+        "decision": "decisions", "relationship": "related_projects", "event": "timeline",
+        "interaction": "timeline", "observation": "overview", "unknown": "overview",
+    },
     "topic": {
         "identity": "why_it_matters", "state": "current_understanding", "preference": "preferences_positions",
         "belief": "preferences_positions", "plan": "why_it_matters", "commitment": "why_it_matters",

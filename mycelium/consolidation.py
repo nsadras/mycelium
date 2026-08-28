@@ -127,7 +127,7 @@ class ClaimRouter:
                 system,
                 user,
                 graph_model,
-                num_predict=4096,
+                num_predict=8192,
                 debug_label="dream-subject-graph",
             )
             graph_plan = graph_model.model_validate(response).model_dump()
@@ -294,7 +294,16 @@ class ClaimRouter:
                         f"{verification['reason']}"
                     )
 
-        admission_model = graph_admission_output_model(tuple(graph_nodes))
+        contained_nodes = {
+            str(edge["source_node"])
+            for edge in graph_plan["edges"]
+            if edge["relation"] in {"component_of", "occurrence_of"}
+            and edge["source_node"] in graph_nodes
+        }
+        admission_model = graph_admission_output_model(
+            tuple(graph_nodes),
+            contained_node_ids=contained_nodes,
+        )
         resolved_graph = self._format_subject_graph(
             graph_nodes,
             graph_plan["edges"],
@@ -318,11 +327,6 @@ class ClaimRouter:
             ]
             if set(admissions) != set(graph_nodes):
                 raise ValueError("Admission did not cover exact graph nodes")
-            for admission in admissions.values():
-                independent = admission["memory_role"] == "independent"
-                applicable = admission["continuity"] != "not_applicable"
-                if independent != applicable:
-                    raise ValueError("Admission role and continuity were inconsistent")
         except Exception as exc:
             return self._fail_batch(
                 evidence,
@@ -351,10 +355,13 @@ class ClaimRouter:
             ]
             confidence = float(decision["confidence"])
             accepted = confidence >= 0.7
-            if admission["memory_role"] == "independent":
+            if admission["scope_role"] == "independent":
                 page_state = (
                     "materialized"
-                    if admission["continuity"] == "established"
+                    if (
+                        admission["memory_evidence"] == "accumulating"
+                        and admission["evidence_maturity"] == "established"
+                    )
                     else "provisional"
                 )
             else:
@@ -955,8 +962,9 @@ class ClaimRouter:
             if admissions is not None:
                 admission = admissions[node_id]
                 details.extend([
-                    f"memory_role={admission['memory_role']}",
-                    f"continuity={admission['continuity']}",
+                    f"scope_role={admission['scope_role']}",
+                    f"memory_evidence={admission['memory_evidence']}",
+                    f"evidence_maturity={admission['evidence_maturity']}",
                 ])
             if entities is not None:
                 entity = entities.get(node_id)

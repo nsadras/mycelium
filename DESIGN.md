@@ -110,19 +110,26 @@ Important behavior:
 - `source_only` is not a model-authored scope outcome: every admitted claim is placed or explicitly deferred.
 - Entity identity and page admission are separate. A known identity may remain provisional until supported by
   enough durable evidence; creation and participant-resolution decisions retain support, confidence, and review state.
-- Identity planning starts with one type-neutral subject graph. Person and Organization are agents, Project is a
-  continuing effort, Event is one bounded occurrence, Topic is a non-agent subject, and Place is physical. Graph
-  edges preserve containment, participation, subject matter, location, and other explicit relationships before any
-  page decision is made. Unresolved subjects use batch-local node IDs; already-known endpoints may copy only exact
+- Identity planning starts with one type-neutral subject graph. Person and Organization are agents; Project is an
+  intentional continuing effort; Series is a recurring frame; Event is one bounded occurrence; Artifact is a made
+  physical or digital object; Topic is an abstract subject; and Place is physical. A particular occurrence remains
+  separate from the Project or Series that contains it. Graph edges preserve strict containment, occurrence,
+  participation, subject matter, location, use, production, and other explicit relationships before any page
+  decision is made. Unresolved subjects use batch-local node IDs; already-known endpoints may copy only exact
   registry IDs. Evidence citations, stable endpoints, and participant references are constrained by the response
-  schema to the exact values supplied for that cohort.
+  schema to the exact values supplied for that cohort. Node and edge citations provide the graph audit trail;
+  redundant explanatory prose is not requested.
 - Every graph node then resolves to an exact same-type stable ID or a new identity. Proposed existing matches receive
   a separate pairwise check before they can mutate or own that identity. The configured user is the one structural
   exception: a redundant Person node may resolve to the singleton `you` ID and is still verified before mutation.
-- Admission classifies each resolved node as independently useful, a component of another subject, or incidental.
-  Independent established subjects materialize; independent emerging subjects stay provisional; components and
-  incidental details get no new page. Existing materialized pages are never demoted by a thin later cohort.
-  These page states are derived only from the model's declared role and continuity values.
+- Admission keeps three decisions separate. Scope says whether memory belongs independently, on a parent, or only
+  in context. Memory evidence says whether useful personal state or history is accumulating, thin, or unclear.
+  Evidence maturity says whether distinct source episodes or explicit prior history establish the subject, or it is
+  still emerging. A graph node declared as `component_of` or `occurrence_of` is structurally constrained to component
+  scope; this implements the meaning of those model-authored relations rather than reinterpreting source language in
+  code. Only an independent node with accumulating memory and established evidence materializes. Other independent
+  nodes stay provisional, while components and context-only details get no page. Existing materialized pages are
+  never demoted by a thin later cohort.
 - Claim ownership receives both the completed stable registry and the resolved graph. This lets a claim about a
   session, tool, milestone, feature, issue, or deliverable route to its lasting parent even though that component has
   no page. A final decision resolves subject, object, and context endpoints; links are those endpoints minus owner.

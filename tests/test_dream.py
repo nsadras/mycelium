@@ -52,6 +52,7 @@ def discover(alias: str, title: str, entity_type: str = "topic") -> dict:
         "topic": "intentional_topic", "project": "project_continuity",
         "person": "durable_person", "organization": "lasting_organization",
         "place": "lasting_place", "event": "substantial_event",
+        "series": "recurring_series", "artifact": "lasting_artifact",
     }
     return {alias: {
         "candidate": {
@@ -141,7 +142,6 @@ def split_scope_plan(plan: dict) -> list[dict]:
                     "title": candidate["title"],
                     "entity_type": candidate["entity_type"],
                     "supporting_evidence": candidate["supporting_evidence"],
-                    "reason": candidate["reason"],
                 }
                 for candidate in plan.get("candidates", [])
             ],
@@ -161,8 +161,13 @@ def split_scope_plan(plan: dict) -> list[dict]:
         },
         {"admissions": {
             candidate["candidate_id"]: {
-                "memory_role": "independent",
-                "continuity": (
+                "scope_role": "independent",
+                "memory_evidence": (
+                    "accumulating"
+                    if candidate["confidence"] >= 0.7
+                    else "thin"
+                ),
+                "evidence_maturity": (
                     "established"
                     if candidate["confidence"] >= 0.7
                     else "emerging"
@@ -578,7 +583,7 @@ async def test_ineligible_identity_is_known_before_it_has_a_page(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_project_continuity_is_separate_from_identity_confidence(tmp_path):
+async def test_evidence_maturity_is_separate_from_identity_confidence(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
     _, source = add_source(logs, artifacts)
     claim = add_claim(
@@ -591,7 +596,7 @@ async def test_project_continuity_is_separate_from_identity_confidence(tmp_path)
     responses = split_scope_plan(new_scope(
         "C001", "Archive Effort", "project"
     ))
-    responses[2]["admissions"]["N001"]["continuity"] = "emerging"
+    responses[2]["admissions"]["N001"]["evidence_maturity"] = "emerging"
     llm.call_structured.side_effect = responses
 
     await dream.run()
@@ -890,7 +895,6 @@ async def test_subject_graph_accepts_an_existing_person_participant(tmp_path):
         "target_node": "you",
         "relation": "related_to",
         "supporting_evidence": ["C001", "P001"],
-        "reason": "The recorded conversation relates Ava and the user.",
     }]
     dream.llm.call_structured.side_effect = responses
 
@@ -957,11 +961,11 @@ async def test_project_components_have_no_identity_creation_path(tmp_path):
         "target_node": "N001",
         "relation": "component_of",
         "supporting_evidence": ["C002"],
-        "reason": "The recording is one component of the archive effort.",
     }]
     responses[2]["admissions"]["N002"] = {
-        "memory_role": "component",
-        "continuity": "not_applicable",
+        "scope_role": "component",
+        "memory_evidence": "accumulating",
+        "evidence_maturity": "established",
         "reason": "Its memory value belongs to the Archive Project.",
     }
     llm.call_structured.side_effect = responses
@@ -988,7 +992,6 @@ def test_subject_graph_contract_accepts_typed_nodes():
             "title": "Archive",
             "entity_type": "project",
             "supporting_evidence": ["C001"],
-            "reason": "The evidence establishes a continuing effort.",
         }],
         "edges": [],
         "participants": {},
@@ -1024,14 +1027,35 @@ def test_identity_resolution_contract_uses_exact_node_and_same_type_ids():
 def test_graph_admission_contract_requires_exact_nodes():
     output_model = graph_admission_output_model(["N001"])
     valid = {"admissions": {"N001": {
-        "memory_role": "independent",
-        "continuity": "established",
+        "scope_role": "independent",
+        "memory_evidence": "accumulating",
+        "evidence_maturity": "established",
         "reason": "This subject has useful continuing history.",
     }}}
 
     assert output_model.model_validate(valid).model_dump() == valid
     with pytest.raises(ValidationError):
         output_model.model_validate({"admissions": {}})
+
+
+def test_graph_admission_contract_keeps_declared_children_with_parent():
+    output_model = graph_admission_output_model(
+        ["N001"], contained_node_ids=["N001"]
+    )
+    decision = {
+        "memory_evidence": "accumulating",
+        "evidence_maturity": "established",
+        "reason": "The occurrence has useful history on its parent.",
+    }
+
+    parsed = output_model.model_validate({
+        "admissions": {"N001": {"scope_role": "component", **decision}}
+    })
+    assert parsed.admissions.N001.scope_role == "component"
+    with pytest.raises(ValidationError):
+        output_model.model_validate({
+            "admissions": {"N001": {"scope_role": "independent", **decision}}
+        })
 
 
 @pytest.mark.asyncio
@@ -1045,7 +1069,6 @@ async def test_redundant_user_person_node_resolves_to_singleton_you(tmp_path):
             "title": "You",
             "entity_type": "person",
             "supporting_evidence": ["C001"],
-            "reason": "The claim describes the configured user.",
         }], "edges": [], "participants": {}},
         {"resolutions": {"N001": {
             "entity_id": "you",
@@ -1059,8 +1082,9 @@ async def test_redundant_user_person_node_resolves_to_singleton_you(tmp_path):
             "reason": "The evidence identifies the configured user.",
         }}},
         {"admissions": {"N001": {
-            "memory_role": "independent",
-            "continuity": "established",
+            "scope_role": "independent",
+            "memory_evidence": "accumulating",
+            "evidence_maturity": "established",
             "reason": "The user identity already has continuing history.",
         }}},
         {"assignments": {"C001": {

@@ -15,6 +15,7 @@ from mycelium.organization import (
     FactCurationService,
 )
 from mycelium.store import WikiStore
+from mycelium.wiki_schema import default_section
 
 
 def claim(claim_id: str, text: str, claim_type: str = "state", modality: str = "speech"):
@@ -335,3 +336,26 @@ def test_clear_projection_preserves_claims_and_removes_legacy_assignment(tmp_pat
     assert counts["claims_requeued"] == 1
     assert artifacts.get_claim("claim-1").text == item.text
     assert artifacts.get_claim("claim-1").dream_disposition == "pending"
+
+
+@pytest.mark.parametrize(
+    ("entity_type", "claim_type", "section", "heading"),
+    [
+        ("series", "event", "occurrences", "Occurrences"),
+        ("artifact", "state", "current_state", "Current State"),
+    ],
+)
+def test_new_ontology_types_materialize_in_their_own_sections(
+    tmp_path, entity_type, claim_type, section, heading
+):
+    artifacts, wiki, materializer, _, _ = setup_store(tmp_path)
+    entity = artifacts.create_entity(entity_type, f"Test {entity_type.title()}")
+    item = claim(f"claim-{entity_type}", "The subject has useful memory.", claim_type)
+    assert default_section(entity_type, item) == section
+    place(artifacts, item, entity, section)
+
+    materializer.regenerate({entity.entity_id})
+
+    page = wiki.get(entity.slug)
+    assert page.page_type == entity_type
+    assert f"## {heading}" in page.content

@@ -18,7 +18,8 @@ function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 
 const PAGE_GROUPS: { type: PageType; label: string }[] = [
   { type: 'you', label: 'You' }, { type: 'project', label: 'Projects' },
-  { type: 'person', label: 'People' }, { type: 'topic', label: 'Topics' },
+  { type: 'series', label: 'Series' }, { type: 'person', label: 'People' },
+  { type: 'artifact', label: 'Artifacts' }, { type: 'topic', label: 'Topics' },
   { type: 'organization', label: 'Organizations' }, { type: 'place', label: 'Places' },
   { type: 'event', label: 'Events' },
 ];
@@ -27,6 +28,8 @@ const SECTION_KEYS: Record<PageType, string[]> = {
   you: ['profile', 'current_context', 'priorities_plans', 'preferences_working_style', 'important_relationships'],
   person: ['relationship_to_you', 'profile', 'current_context', 'interests_views', 'goals_plans', 'shared_projects', 'timeline', 'research_references'],
   project: ['overview', 'objective', 'current_status', 'requirements_constraints', 'decisions', 'next_steps_deadlines', 'people_organizations', 'timeline', 'research_references'],
+  series: ['overview', 'schedule_pattern', 'current_context', 'participants', 'occurrences', 'related_topics', 'research_references'],
+  artifact: ['overview', 'purpose', 'current_state', 'requirements_constraints', 'decisions', 'related_projects', 'timeline', 'research_references'],
   topic: ['why_it_matters', 'current_understanding', 'preferences_positions', 'related_projects', 'timeline', 'research_references'],
   organization: ['overview', 'relationship_to_you', 'people', 'related_projects', 'current_context', 'timeline', 'research_references'],
   place: ['overview', 'why_it_matters', 'current_context', 'associated_people_projects', 'visits_events', 'research_references'],

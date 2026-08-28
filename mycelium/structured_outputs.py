@@ -127,9 +127,20 @@ class EventCandidateOutput(_EntityCandidateBase):
     creation_basis: Literal["substantial_event"]
 
 
+class SeriesCandidateOutput(_EntityCandidateBase):
+    entity_type: Literal["series"]
+    creation_basis: Literal["recurring_series"]
+
+
+class ArtifactCandidateOutput(_EntityCandidateBase):
+    entity_type: Literal["artifact"]
+    creation_basis: Literal["lasting_artifact"]
+
+
 EntityCandidateOutput = Annotated[
     PersonCandidateOutput | ProjectCandidateOutput | TopicCandidateOutput
-    | OrganizationCandidateOutput | PlaceCandidateOutput | EventCandidateOutput,
+    | OrganizationCandidateOutput | PlaceCandidateOutput | EventCandidateOutput
+    | SeriesCandidateOutput | ArtifactCandidateOutput,
     Field(discriminator="entity_type"),
 ]
 
@@ -145,10 +156,10 @@ class SubjectGraphNodeOutput(BaseModel):
     node_id: str = Field(pattern=r"^N[0-9]{3}$")
     title: str = Field(min_length=1, max_length=160)
     entity_type: Literal[
-        "person", "project", "topic", "organization", "place", "event"
+        "person", "project", "series", "event", "artifact", "topic",
+        "organization", "place",
     ]
     supporting_evidence: list[str] = Field(min_length=1, max_length=48)
-    reason: str = Field(min_length=1, max_length=500)
 
 
 class SubjectGraphEdgeOutput(BaseModel):
@@ -156,10 +167,10 @@ class SubjectGraphEdgeOutput(BaseModel):
     source_node: str = Field(min_length=1, max_length=160)
     target_node: str = Field(min_length=1, max_length=160)
     relation: Literal[
-        "component_of", "participant_in", "about", "located_at", "related_to"
+        "component_of", "occurrence_of", "participant_in", "about",
+        "located_at", "uses", "produced_by", "related_to",
     ]
     supporting_evidence: list[str] = Field(min_length=1, max_length=48)
-    reason: str = Field(min_length=1, max_length=500)
 
 
 class IdentityResolutionOutput(BaseModel):
@@ -173,8 +184,9 @@ class IdentityResolutionOutput(BaseModel):
 
 class GraphAdmissionOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    memory_role: Literal["independent", "component", "incidental"]
-    continuity: Literal["established", "emerging", "not_applicable"]
+    scope_role: Literal["independent", "component", "context_only"]
+    memory_evidence: Literal["accumulating", "thin", "unclear"]
+    evidence_maturity: Literal["established", "emerging"]
     reason: str = Field(min_length=1, max_length=500)
 
 
@@ -356,11 +368,22 @@ def identity_resolution_output_model(
 
 def graph_admission_output_model(
     node_ids: Collection[str],
+    *,
+    contained_node_ids: Collection[str] = (),
 ) -> type[BaseModel]:
-    """Build exact memory-role and continuity decisions for graph nodes."""
-    admission_fields: dict[str, Any] = {
-        str(node_id): (GraphAdmissionOutput, ...) for node_id in node_ids
-    }
+    """Build exact scope-role and personal-memory decisions for graph nodes."""
+    contained = {str(node_id) for node_id in contained_node_ids}
+    admission_fields: dict[str, Any] = {}
+    for node_id in node_ids:
+        node_id = str(node_id)
+        decision_model = GraphAdmissionOutput
+        if node_id in contained:
+            decision_model = create_model(
+                f"{node_id}ContainedGraphAdmission",
+                __base__=GraphAdmissionOutput,
+                scope_role=(Literal["component"], ...),
+            )
+        admission_fields[node_id] = (decision_model, ...)
     admissions_model = create_model(
         "ExactGraphAdmissions",
         __config__=ConfigDict(extra="forbid"),

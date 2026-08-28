@@ -3,10 +3,12 @@ from datetime import datetime
 from typing import Literal
 
 PageType = Literal[
-    'you', 'person', 'project', 'topic', 'organization', 'place', 'event'
+    'you', 'person', 'project', 'series', 'event', 'artifact', 'topic',
+    'organization', 'place'
 ]
 PAGE_TYPES: tuple[PageType, ...] = (
-    'you', 'person', 'project', 'topic', 'organization', 'place', 'event'
+    'you', 'person', 'project', 'series', 'event', 'artifact', 'topic',
+    'organization', 'place'
 )
 
 PAGE_SECTION_KEYS: dict[PageType, tuple[tuple[str, str], ...]] = {
@@ -39,6 +41,27 @@ PAGE_SECTION_KEYS: dict[PageType, tuple[tuple[str, str], ...]] = {
         ("decisions", "Decisions"),
         ("next_steps_deadlines", "Next Steps & Deadlines"),
         ("people_organizations", "People & Organizations"),
+        ("timeline", "Timeline"),
+        ("research_references", "Research & References"),
+        ("needs_review", "Needs Review"),
+    ),
+    "series": (
+        ("overview", "Overview"),
+        ("schedule_pattern", "Schedule & Pattern"),
+        ("current_context", "Current Context"),
+        ("participants", "Participants"),
+        ("occurrences", "Occurrences"),
+        ("related_topics", "Related Topics"),
+        ("research_references", "Research & References"),
+        ("needs_review", "Needs Review"),
+    ),
+    "artifact": (
+        ("overview", "Overview"),
+        ("purpose", "Purpose"),
+        ("current_state", "Current State"),
+        ("requirements_constraints", "Requirements & Constraints"),
+        ("decisions", "Decisions"),
+        ("related_projects", "Related Projects"),
         ("timeline", "Timeline"),
         ("research_references", "Research & References"),
         ("needs_review", "Needs Review"),

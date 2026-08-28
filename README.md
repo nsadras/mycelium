@@ -94,6 +94,10 @@ Flushing a conversation preserves the original transcript and extracts source-li
 short-term memory. Running Dream organizes useful claims into the Markdown wiki. Both operations happen only when
 you request them through the UI or API.
 
+The wiki distinguishes people, organizations, ongoing projects, recurring series, individual events, artifacts,
+places, and abstract topics. A meeting, tool, or deliverable can remain part of its larger context without creating
+an unnecessary standalone page.
+
 Every wiki fact links back to its source. When new information conflicts with existing memory, Mycelium creates a
 review proposal instead of silently overwriting either version. The Memory and Wiki views let you inspect evidence,
 correct organization, merge duplicate subjects, and approve or reject proposed changes.

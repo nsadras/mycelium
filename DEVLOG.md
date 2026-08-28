@@ -1728,3 +1728,47 @@ one prose-similarity summary.
 - Validation after the graph iteration: **247 passed, 2 skipped**; Ruff passed; UI lint and build passed with the
   existing 829.82 kB chunk warning; `git diff --check` passed. Repeated primary trials and transfer fixtures remain
   intentionally unrun because the primary acceptance gates fail.
+
+## 2026-08-27 — Ontology roles, recurring frames, and personal-memory maturity
+
+- Reviewed established ontology and agent-memory patterns before changing production. The useful common pattern was
+  small and application-scoped: distinguish agents, continuing activity, individual occurrences, made artifacts,
+  abstract concepts, and places; keep relationship roles separate from entity types; and keep page admission and
+  provenance separate from both. Mycelium retains its JSON and Markdown stores rather than adopting RDF, OWL, or a
+  graph database.
+- Added Series for a recurring frame and Artifact for made physical or digital objects. Topic now means only an
+  abstract subject instead of also serving as a tool, feature, issue, service, and deliverable catchall. Added exact
+  `occurrence_of`, `uses`, and `produced_by` relations and clarified the direction of all graph edges. A bounded Event
+  cannot contain multiple occurrences; an occurrence is represented separately from its Project or Series.
+- Replaced the overloaded role/continuity admission pair with three independent judgments: scope role, accumulating
+  personal-memory evidence, and evidence maturity. Maturity requires distinct source episodes or explicit prior
+  history, so several claims from one episode do not prematurely materialize an otherwise useful Project. Only an
+  independent subject with accumulating memory and established evidence creates a page. Nodes already declared by
+  the semantic graph as `component_of` or `occurrence_of` are constrained to component scope; code does not inspect
+  claim language to make that decision.
+- Direct `gemma4:12b` probes used the production prompts and schemas. A continuing family-recording effort became a
+  Project with a separate scheduled Event; a weekly book club became a Series with a separate meeting Event; tools
+  became Artifacts; and incidental places and tools stayed context-only. A counterexample kept a one-episode app idea
+  emerging while establishing an ongoing effort supported by distinct sources. The exact previously failing
+  oral-history cohort also produced a Project plus its dated Event when isolated.
+- Removed unused explanation fields from graph nodes and edges. Their exact evidence citations remain the audit trail,
+  while identity and admission retain focused rationales. The subject-graph stage now permits 8,192 output tokens:
+  its bounded schema allows up to 32 nodes and 64 edges, which can legitimately exceed the previous 4,096-token cap.
+- Frozen-extraction replays recorded the progression rather than treating intermediate failures as acceptance:
+  `daily-driver-v1-ontology-v2-20260827` exposed graph verbosity and late 4,096-token truncation;
+  `daily-driver-v1-ontology-v2-compact-20260827` restored zero routing failures but still missed the oral-history
+  frame; `daily-driver-v1-ontology-v2-maturity-20260827` found all six required identities and passed delayed page
+  admission; and `daily-driver-v1-ontology-v2-contained-20260827` showed the value of graph-derived containment but
+  again hit the old graph output cap in its late revision.
+- The final structurally valid replay is `benchmark_runs/daily-driver-v1-ontology-v2-final-20260827`. It had no graph
+  routing failures, found **6/6** required identities with two extras, reached **23/30** ownership decisions and
+  **5/29** required wiki facts, and reduced cross-project contamination to **6/30**. It passed false-attribution,
+  cross-project separation, and no-premature-page gates, for **3/5 gates** and **3/17 dimensions** overall. The
+  remaining hard gates are source retraction and short-term retrieval; other weak dimensions still include section
+  placement, lifecycle handling, and fact projection.
+- The identity milestone remains incomplete. Three-trial primary acceptance and both transfer fixtures were not run
+  because the single primary replay still fails its declared gates. No benchmark names, phrases, aliases, or expected
+  artifacts were added to production prompts or code.
+- Final validation: **250 passed, 2 skipped**; Ruff and UI lint passed; UI build passed with the existing 830.15 kB
+  chunk-size warning; `git diff --check` passed. Repository-wide `ruff format --check` remains a pre-existing dirty
+  baseline that would reformat 53 unrelated files, so no bulk formatting rewrite was performed.

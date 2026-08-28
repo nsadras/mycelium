@@ -5,11 +5,13 @@ def entity_discovery_prompt(index_content: str, evidence: str) -> tuple[str, str
     system = """Discover durable semantic entities that deserve their own wiki pages.
 
 This is entity discovery, not claim placement. Return only genuinely new entities absent from the
-registry. Projects are named outcomes or continuing endeavors with continuity, commitment, or multiple
+registry. Projects are named outcomes or continuing endeavors with commitment or multiple
 supporting claims; they do not require a brand name. Examples include opening a dance studio or building
 an online clothing store. People need a durable relationship or recurring substantive relevance. Topics
-need intentional ongoing research or two non-equivalent claims. Organizations and places need lasting
-relevance. Events must be named, substantial, and consequential. Do not create pages for incidental
+are abstract subjects and need intentional ongoing research or two non-equivalent claims. A recurring
+Series groups related occurrences. Artifacts are made objects such as documents, tools, products, and
+deliverables. Organizations and places need lasting relevance. Events must be named, substantial, and
+consequential. Do not create pages for incidental
 objects, generic activities, routine appointments, broad catchalls, or a second entity already represented
 by an existing title or alias.
 
@@ -47,21 +49,38 @@ inside a Project.
 Use this identity ontology exactly:
 - Person is a human.
 - Organization is a group.
-- Project is an intentional effort with an outcome whose plans, work, decisions, or status continue over time. A
-  planned series of sessions with a continuing outcome is one Project.
-- Event is one bounded occurrence, not a continuing series or Project component.
-- Topic is a non-agent subject, body of knowledge, technology, tool, method, service, feature, issue, or deliverable
-  when it needs a graph node.
+- Project is an intentional effort toward an outcome whose plans, work, decisions, or status continue over time.
+- Series is a recurring frame that groups related occurrences. It is not one occurrence. If recurring work is
+  organized around a continuing outcome, use Project for the effort and Event for each occurrence; use Series when
+  the recurrence itself is the lasting subject without a Project outcome.
+- Event is one bounded occurrence. A session or appointment is an Event even when it belongs to a Project or Series.
+- Artifact is a made physical or digital object, including a document, tool, product, model, or deliverable.
+- Topic is an abstract subject, field, idea, question, or body of knowledge. Do not use Topic as a fallback for an
+  Artifact, Project component, service, feature, issue, or unknown subject.
 - Place is a physical or geographic location only. Never create nodes for temporal expressions.
 
-Define every subject once with an N001-style ID. Use `component_of` whenever a tool, pilot, session, milestone,
-feature, issue, vendor, or deliverable gets its memory meaning from a Project. Use `participant_in` only for a Person,
-Organization, or `you` involved in a Project or Event. Use `about` for a Project or Event concerning a Topic,
-`located_at` only for a physical Place, and otherwise `related_to`. Every edge endpoint must be a declared node or
+Whenever the evidence identifies a particular occurrence by its time, place, participants, outcome, or record,
+represent that occurrence as an Event distinct from its Project or Series. Do not create a Topic merely to restate
+what a Project or Event concerns; the evidence must identify the Topic as a distinct subject of memory.
+An Event never contains multiple occurrences. Evidence about a repeated practice, multiple sessions, or both a
+current practice and a next occurrence requires a separate Project or Series frame even when that frame has no
+proper name.
+
+Define every subject once with an N001-style ID. Edge direction is always source then target:
+- dependent component -> `component_of` -> parent Project or Series;
+- Event -> `occurrence_of` -> parent Project or Series;
+- Person, Organization, or `you` -> `participant_in` -> Project, Series, or Event;
+- Project, Series, Event, or Artifact -> `about` -> abstract Topic;
+- located subject -> `located_at` -> physical Place;
+- activity or Agent -> `uses` -> Artifact;
+- Artifact -> `produced_by` -> producing activity.
+Use `related_to` only when none of the more precise relations applies. A tool used by a Project is not automatically
+part of that Project. Every edge endpoint must be a declared node or
 an exact stable ID copied from the supplied registry. Use a stable registry endpoint when the subject is already
 unambiguous; use an N001-style node when identity still needs resolution. Cite only supplied C001-style claims or
 P001-style participants. Resolve every supplied participant exactly once to `you`, an exact existing Person ID, or
-a declared Person node. Do not decide whether a node deserves a page."""
+a declared Person node. Cite evidence but do not add explanatory prose to nodes or edges. Do not decide whether a
+node deserves a page."""
     user = f"""ENTITY REGISTRY CONTEXT:
 {index_content}
 
@@ -99,22 +118,31 @@ def graph_admission_prompt(
     graph: str,
     evidence: str,
 ) -> tuple[str, str]:
-    system = """Classify every resolved subject-graph node for user-memory admission.
+    system = """Classify every resolved subject-graph node for personal-memory admission.
 
-`independent` means the subject can accumulate useful continuing state or history separately. `component` means
-its memory value derives from a parent Project. `incidental` means it is a routine or one-off detail without
-separately useful history. `established` means the source evidence itself shows stable continuity: continuing plans,
-work, or state across distinct episodes, a durable personal relationship, or already useful accumulated history.
-`emerging` means the identity is real but tentative or thinly supported. `not_applicable` is only for component or
-incidental nodes.
+Judge three independent questions. `scope_role` says where the subject's memory belongs: `independent` means it can
+hold useful personal history separately; `component` means its relevant state and history belong to a parent Project
+or Series; `context_only` means it only helps explain this evidence and should not own memory. A graph relation alone
+does not make a subject a component. Use the meaning of the relation and evidence.
 
-Being a Project or being related to another subject does not make a node a component; only derived containment does.
-A planned series with a continuing outcome across distinct episodes is an established independent Project. A tool,
-deliverable, pilot, session, feature, issue, vendor, or Project-only research subject is a component when all of its
-memory value comes from that Project. A routine appointment or ordinary bounded occurrence is incidental unless
-the evidence shows independent lasting consequences. Use source-grounded memory value, never general-world
-importance. Classify every supplied node exactly once. Do not decide a page label, change identities, or assign
-claim ownership."""
+`memory_evidence` says how much source-grounded evidence supports accumulating personal memory: `accumulating`
+means the supplied evidence already shows useful state, decisions, plans, relationship, or history that can grow over
+time; `thin` means the subject is real but the supplied personal evidence is only a small or one-off detail; `unclear`
+means the evidence does not support a reliable judgment. This is not a judgment of whether the subject itself is
+real, stable, famous, named, recurring, or important in the wider world. Those facts alone never establish
+accumulating personal memory.
+
+`evidence_maturity` says whether the supplied evidence is sufficient to establish a lasting subject. `established`
+requires support across distinct source episodes or explicit evidence of meaningful prior history. `emerging` means
+the subject appears in only one source episode or remains tentative. Several claims extracted from one source are
+still one episode and do not by themselves establish maturity. Maturity is not identity confidence and is not the
+same as whether the real-world subject is stable.
+
+A component may have accumulating information, but that information accumulates on its parent rather than a new
+page. An Event that is one occurrence remains distinct from its Project or Series. A routine appointment, incidental
+Place, mentioned Organization, or merely used Artifact is normally context-only or thin unless the evidence itself
+shows independent personal history. Classify every supplied node exactly once. Do not change identities, infer from
+general-world knowledge, or assign claim ownership."""
     user = f"""RESOLVED ENTITY REGISTRY:
 {index_content}
 

@@ -42,7 +42,7 @@ export interface Session {
   transcript?: Message[];
 }
 
-export type PageType = 'you' | 'person' | 'project' | 'topic' | 'organization' | 'place' | 'event';
+export type PageType = 'you' | 'person' | 'project' | 'series' | 'event' | 'artifact' | 'topic' | 'organization' | 'place';
 
 export interface WikiPage {
   slug: string;

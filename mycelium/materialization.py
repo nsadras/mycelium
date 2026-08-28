@@ -25,7 +25,9 @@ from mycelium.wiki_schema import is_project_role, project_role_section
 INDEX_GROUPS: tuple[tuple[PageType, str], ...] = (
     ("you", "You"),
     ("project", "Projects"),
+    ("series", "Series"),
     ("person", "People"),
+    ("artifact", "Artifacts"),
     ("topic", "Topics"),
     ("organization", "Organizations"),
     ("place", "Places"),

@@ -269,7 +269,7 @@ class ClaimEntityReference:
 
 @dataclass
 class EntityResolutionDecision:
-    """Append-only identity creation or participant-resolution evidence."""
+    """Append-only identity scope or participant-resolution evidence."""
 
     decision_id: str
     decision_type: str

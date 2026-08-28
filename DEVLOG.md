@@ -1633,3 +1633,98 @@ one prose-similarity summary.
   run because the primary gate is already known to fail.
 - Validation: **249 passed, 2 skipped**; Ruff passed; UI lint and build passed (with the existing 829.62 kB chunk
   warning); all three Daily Driver fixtures validate; `git diff --check` passes. M1 remains acceptance-incomplete.
+
+## 2026-08-27 — Root-first identity planning and frozen-registry ownership
+
+- Split Dream's combined identity-and-ownership response into seven focused model calls. The first finds only
+  Project roots without deciding whether they are new. The second resolves every root to an exact existing ID, a
+  new identity, or deferral, and separately returns provisional or materialized page readiness. The third finds the
+  remaining independent identities and resolves participants. The fourth resolves each admitted root to an exact
+  same-type existing ID or a new identity and decides page readiness. The fifth verifies proposed existing matches.
+  The sixth assigns only owners using the completed stable registry. The seventh resolves subject, object, and
+  context endpoints after ownership is fixed.
+- Replaced claim-count and claim-type page-admission rules with source-cited structured model decisions. Code still
+  validates exact IDs, evidence coverage, confidence, and response completeness, and fails
+  closed when those structural contracts are not satisfied.
+- Kept each model-facing schema intentionally small. Direct `gemma4:12b` probes showed that a large per-type union
+  caused inconsistent choices. A first hierarchical version with separate independent and subordinate lists worked
+  on small neutral examples but failed the fixed-extraction Daily Driver replay: the same subject could appear in
+  both lists, producing duplicate paths (3/17 dimensions and 2/5 gates in
+  `daily-driver-v1-hierarchical-identity-20260827`). Root-only Project and non-Project probes against the failing
+  mixed cohort then found the intended oral-history Project and Grandmother Person while omitting Project components.
+  A separate continuity probe updated an early descriptive Project identity to the later explicit name. Owner-only
+  and endpoint-only decisions remained reliable across the neutral scenarios. These direct probes are development
+  evidence, not milestone acceptance evidence.
+- The first root-only in-situ replay, `daily-driver-v1-root-hierarchy-20260827`, still scored 3/17 dimensions and
+  2/5 gates. It found all six expected entities, kept oral history separate from Lantern, and created Grandmother,
+  but repeated Dreams created historical duplicate Project IDs and later cohorts still admitted WhisperX and a
+  small integration effort. Direct follow-up probes showed that an exact-ID resolver maps a repeated oral-history
+  root to its existing ID and keeps an early tentative meeting-memory effort provisional. That resolver is now a
+  separate production stage.
+- Fresh replay `daily-driver-v1-project-resolver-20260827` remained acceptance-incomplete at 3/17 dimensions and
+  1/5 gates, but eliminated duplicate Project IDs, reduced extra entities from 11 to 5, improved ownership from
+  8/30 to 21/30, reduced cross-project contamination from 22/30 to 9/30, and increased correctly placed wiki facts
+  from 1/29 to 4/29. Its new false-attribution failure came from repeated non-Project identities, especially shorter
+  and fuller names for the same Person. A direct exact-ID probe mapped the shorter Person name to the existing full
+  identity. The same resolver is now applied after affirmative non-Project admission; this latest extension still
+  needs a fresh in-situ replay before it counts as acceptance evidence.
+- Replay `daily-driver-v1-shared-identity-resolver-20260827` reached 5/17 dimensions and restored the false-attribution
+  gate, but was invalid acceptance evidence because many later batches failed closed: its resolver schema allowed
+  any non-Project registry ID and Gemma selected some IDs whose types did not match their candidates. The contract
+  now gives each candidate an enum containing only same-type registry IDs. Focused tests cover rejection of a
+  cross-type ID.
+- The same-type replay, `daily-driver-v1-same-type-identity-resolver-20260827`, exposed a second contradictory
+  state: Gemma could choose `existing` while leaving the exact ID empty. Because non-Project admission is already
+  complete before resolution, the separate resolution label and deferred branch were unnecessary. The contract now
+  uses one unambiguous field: a same-type stable ID means existing, and an empty ID means new. This simplified
+  contract still needs a fresh in-situ replay.
+- Valid replay `daily-driver-v1-id-only-identity-resolver-20260827` completed without routing failures at 3/17
+  dimensions and 2/5 gates. Relative to the Project-only resolver baseline it reduced extras from 5 to 2, improved
+  entity precision/recall from 6/11 to 5/8, ownership from 21/30 to 23/30, and cross-project contamination from
+  9/30 to 4/30. It still missed Grandmother and admitted Northstar and a small integration effort. More importantly,
+  artifact inspection found a same-type false merge hidden by the aggregate gates: an Omar candidate was mapped to
+  Priya Raman's ID and renamed it. A direct pairwise probe correctly rejected that match. Production now verifies
+  every proposed existing non-Project match before mutation or routing. The first production verifier probe exposed
+  an unnecessary 0–1 confidence field that Gemma rendered as 100; removing that field left a reliable boolean and
+  evidence-based reason. The verifier still needs an in-situ replay.
+- Final validation for this iteration: **245 passed, 2 skipped**; Ruff, UI lint, UI build, and `git diff --check`
+  passed. The existing UI chunk-size warning remains at 829.82 kB. The identity milestone remains incomplete.
+- Replaced tests for the removed deterministic admission thresholds with contract and integration coverage for the
+  root-only page path, stable Project renaming, and frozen-registry ownership sequence.
+
+### Entity-graph identity experiment
+
+- Replaced the separate Project and non-Project discovery branches with one typed subject graph. The graph records
+  unresolved subjects, known stable endpoints, Project components, participants, subject matter, and locations
+  before identity or page admission. Every unresolved node then receives one same-type identity decision, proposed
+  existing matches are verified, and a separate admission pass labels the node independent, component, or incidental
+  with established or emerging continuity. Only independent nodes can create pages. Ownership and endpoint prompts
+  receive the resolved graph so a component claim can route to its parent without creating a component page.
+- Direct `gemma4:12b` probes established the useful contract before integration. The mixed Lantern/oral-history case
+  produced one Lantern Project, one continuing oral-history Project, Grandmother as a Person, and tools and builds as
+  components without turning dates into Places. A thin one-episode effort remained emerging. A reserved-user probe
+  now uses `you` rather than creating `person-you`, and a known meeting participant may be represented by an exact
+  stable Person endpoint. A redundant Person node for the configured user resolves to `you` and passes the separate
+  verifier.
+- In-situ integration exposed three representation mismatches before semantic results were usable. An initial run
+  timed out while the host GPU was contended and is not evidence about the design. Later runs showed that Gemma
+  naturally copies known participant and registry IDs into graph edges and sometimes misspells an evidence alias or
+  stable-looking endpoint. The production schema now permits exact registry endpoints, constrains citations to the
+  supplied `C###`/`P###` values, constrains stable endpoints to exact registry IDs, and permits `you` only as the
+  singleton compatible target for a configured-user Person node. These are structural constraints over declared
+  IDs, not semantic fallbacks.
+- The first structurally valid replay is
+  `benchmark_runs/daily-driver-v1-entity-graph-v4-20260827`. It had no subject-graph contract failures and found five
+  of six required final identities, including Grandmother, while keeping Omar separate from Priya and avoiding a
+  duplicate user. Ownership was 20/25 and entity types were 5/5. It nevertheless passed only **3/17 dimensions and
+  0/5 gates**. It missed the Family Oral History Project, materialized a recurring interview as an Event, and
+  over-admitted Places, tools, organizations, and Project deliverables. Entity precision/recall was 5/22,
+  cross-project contamination was 5/25, and one unrelated TranscribeCloud observation rendered. This is not milestone
+  acceptance evidence and the required repeated and transfer trials were not run.
+- Conclusion: retain the graph representation and exact structural contracts, but do not call the identity milestone
+  complete. The next semantic iteration should clarify that real-world stability is not memory continuity, make
+  Project components derive their admission from graph containment, and distinguish a continuing series from one
+  bounded Event. Those are general product rules; benchmark names and phrases must stay out of production prompts.
+- Validation after the graph iteration: **247 passed, 2 skipped**; Ruff passed; UI lint and build passed with the
+  existing 829.82 kB chunk warning; `git diff --check` passed. Repeated primary trials and transfer fixtures remain
+  intentionally unrun because the primary acceptance gates fail.

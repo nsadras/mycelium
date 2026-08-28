@@ -27,6 +27,23 @@
 - Do not conclude that Ollama is down from a sandboxed connection failure. Verify it with a read-only `/api/tags` request using sandbox/network escalation.
 - Run Ollama-dependent tests and benchmarks with the same escalation so they can reach the host loopback interface. Do not start another Ollama process, change the configured URL, or use a fallback model to work around sandbox isolation.
 
+## LLM semantic development workflow
+
+- For changes to prompts, ontologies, or divisions of model labor, prove the proposed decision contract with
+  direct calls to the configured host Ollama model before integrating it into the production pipeline.
+- Direct probes should use the real production prompt and structured-output schema whenever possible. Start with
+  small, neutral examples that isolate the decision, then include a relevant counterexample. Keep benchmark names,
+  expected answers, and fixture-specific vocabulary out of prompts and production code.
+- Integrate the smallest proven mechanism in situ only after the direct output has the intended meaning and shape.
+  Add focused contract and pipeline tests for structural invariants; mocked tests do not establish model behavior.
+- After integration, run the named behavioral fixture with the real configured Ollama model. For downstream semantic
+  changes, prefer a frozen-extraction replay so extraction variance does not obscure the result. Inspect persisted
+  entities, decisions, ownership, and failure reasons instead of relying only on an aggregate score.
+- Treat timeouts, malformed contracts, and sandbox connectivity as invalid experimental evidence. Fix or remove the
+  environmental or structural problem and rerun before judging the semantic approach.
+- Record direct-probe findings, in-situ run paths, meaningful failures, and validation results in `DEVLOG.md`.
+  Required repeated primary trials and transfer fixtures still govern milestone acceptance.
+
 ## Architecture and completion standards
 
 - Treat `DESIGN.md` as the authority for the intended current production architecture. Dated planning files are

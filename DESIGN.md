@@ -85,16 +85,21 @@ The dream process converts source-grounded claims into semantic wiki pages:
 ```mermaid
 flowchart TD
     A[Unconsolidated source-grounded claims] --> B[Compile typed source retention]
-    B --> C[Discover identities and plan admitted claim scope]
-    C --> D{New entity materialized?}
-    D -->|yes| E[Re-plan explicit persisted scope neighborhood]
-    D -->|no| F[Use initial scope]
-    E --> F
-    F --> G[Classify additive, support, contradiction, or supersession]
-    G --> H[Create review proposals for unsafe changes]
-    H --> I[Deterministically materialize active facts]
-    I --> J[Persist scope, identity, references, cohorts, and Dream audit]
-    J --> K[Mark completed logs consolidated]
+    B --> C[Build one typed subject graph]
+    C --> D[Resolve every node to a same-type identity]
+    D --> E[Verify proposed existing-identity matches when needed]
+    E --> F[Classify independent subjects, components, and incidental details]
+    F --> H[Assign claims using the resolved graph and identity registry]
+    H --> I[Resolve stable subject, object, and context endpoints]
+    I --> J{New entity materialized?}
+    J -->|yes| K[Re-plan explicit persisted scope neighborhood]
+    J -->|no| L[Use initial scope]
+    K --> L
+    L --> M[Classify additive, support, contradiction, or supersession]
+    M --> N[Create review proposals for unsafe changes]
+    N --> O[Deterministically materialize active facts]
+    O --> P[Persist scope, identity, references, cohorts, and Dream audit]
+    P --> Q[Mark completed logs consolidated]
 ```
 
 Important behavior:
@@ -105,6 +110,22 @@ Important behavior:
 - `source_only` is not a model-authored scope outcome: every admitted claim is placed or explicitly deferred.
 - Entity identity and page admission are separate. A known identity may remain provisional until supported by
   enough durable evidence; creation and participant-resolution decisions retain support, confidence, and review state.
+- Identity planning starts with one type-neutral subject graph. Person and Organization are agents, Project is a
+  continuing effort, Event is one bounded occurrence, Topic is a non-agent subject, and Place is physical. Graph
+  edges preserve containment, participation, subject matter, location, and other explicit relationships before any
+  page decision is made. Unresolved subjects use batch-local node IDs; already-known endpoints may copy only exact
+  registry IDs. Evidence citations, stable endpoints, and participant references are constrained by the response
+  schema to the exact values supplied for that cohort.
+- Every graph node then resolves to an exact same-type stable ID or a new identity. Proposed existing matches receive
+  a separate pairwise check before they can mutate or own that identity. The configured user is the one structural
+  exception: a redundant Person node may resolve to the singleton `you` ID and is still verified before mutation.
+- Admission classifies each resolved node as independently useful, a component of another subject, or incidental.
+  Independent established subjects materialize; independent emerging subjects stay provisional; components and
+  incidental details get no new page. Existing materialized pages are never demoted by a thin later cohort.
+  These page states are derived only from the model's declared role and continuity values.
+- Claim ownership receives both the completed stable registry and the resolved graph. This lets a claim about a
+  session, tool, milestone, feature, issue, or deliverable route to its lasting parent even though that component has
+  no page. A final decision resolves subject, object, and context endpoints; links are those endpoints minus owner.
 - Claim entity references preserve extracted surface mentions and stable subject, object, context, and owner IDs.
 - Scope revision uses persisted source/cohort/entity-reference neighborhoods, never token or alias overlap.
 - `_index.md` is rebuilt deterministically from materialized pages.
@@ -153,6 +174,28 @@ git diff --check
 
 Semantic milestones must additionally run their named behavioral fixture protocol, including required transfer
 fixtures and repeated trials. Unit tests with mocked model outputs establish mechanics, not semantic acceptance.
+
+### Semantic LLM development workflow
+
+Prompt, ontology, and model-labor changes follow a direct-first workflow:
+
+1. State the product-level semantic invariant without referring to a benchmark example.
+2. Call the configured host Ollama model directly with the real production prompt and structured schema. Use a
+   small neutral case that isolates the decision, followed by a counterexample that could expose over-admission or
+   false identity merging.
+3. Integrate only the smallest mechanism that worked directly. Exact evidence aliases, schema values, and registry
+   IDs belong in structured contracts; human-language meaning remains a model decision with cited evidence.
+4. Run focused contract and pipeline tests, then exercise the integrated path with the real configured model.
+5. For downstream semantic work, replay frozen extraction artifacts so extraction variance does not obscure entity,
+   admission, ownership, or projection changes. Inspect persisted decisions and failure reasons as well as scores.
+6. Treat timeouts, connectivity failures, and malformed contracts as invalid semantic evidence. Rerun after the
+   environmental or structural problem is resolved.
+7. Record direct probes, in-situ run paths, results, and remaining failures in `DEVLOG.md`. A candidate reaches
+   acceptance only after the fixture's required repeated primary and transfer trials pass.
+
+The host Ollama service is normally `http://localhost:11434`. Sandboxed agents must verify it through a read-only
+`/api/tags` request with network escalation and use the same escalation for probes and benchmarks. They must not
+start another server, change the configured URL, or substitute a fallback model to bypass sandbox isolation.
 
 ## Storage layout
 
@@ -341,6 +384,30 @@ QA_MODEL=llama3.1:8b MEMORY_MODEL=gemma4:12b RUN_TAG=claim-pipeline scripts/benc
 ```
 
 Full runs default to `DREAM_POLICY=per-case`; this can be changed, for example, with `DREAM_POLICY=per-batch scripts/benchmark-locomo-full.sh mycelium`. Results are written beneath `benchmark_runs/<run-id>/` as predictions, JSONL rows, and summaries. MemoryAgentBench may require its own dependencies and Hugging Face dataset downloads.
+
+The Daily Driver fixture is the behavioral protocol for entity, ownership, lifecycle, and wiki-coherence work.
+Validate it before use:
+
+```bash
+uv run python -m benchmarks.mycelium_bench.daily_driver \
+  validate benchmarks/fixtures/daily_driver_v1
+```
+
+For a downstream semantic iteration, replay a known extraction store into a fresh output directory:
+
+```bash
+uv run python -m benchmarks.mycelium_bench.daily_driver run \
+  benchmarks/fixtures/daily_driver_v1 \
+  --output-dir benchmark_runs/<candidate> \
+  --replay-extraction-store benchmark_runs/<baseline>/store \
+  --config-path mycelium.toml
+```
+
+This replay copies only source, episode, claim, and raw-log evidence, then reruns identity, admission, ownership,
+reconsolidation, materialization, retrieval, and evaluation. Projection-only work may instead replay assignments;
+retrieval-only work may use an exact frozen store. See the
+[fixture guide](benchmarks/fixtures/daily_driver_v1/README.md) for those modes, three-trial primary acceptance, and
+the paraphrased and unrelated-domain transfer fixtures.
 
 ## Development
 

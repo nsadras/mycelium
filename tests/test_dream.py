@@ -19,56 +19,10 @@ from mycelium.dream import DreamProcess
 from mycelium.models import LogEntry
 from mycelium.store import LogStore, WikiStore
 from mycelium.structured_outputs import (
-    claim_owner_output_model,
-    claim_reference_output_model,
-    claim_section_output_model,
-    consolidation_output_model,
-    entity_discovery_output_model,
-    graph_admission_output_model,
-    identity_resolution_output_model,
+    claim_routing_output_model,
+    entity_plan_output_model,
     subject_node_output_model,
-    subject_relationship_output_model,
 )
-
-
-def route(alias: str, page: str, page_type: str = "topic") -> dict:
-    if page == "user-profile":
-        owner = "you"
-    elif page_type == "entity":
-        owner = f"person-{page}"
-    elif page_type == "event":
-        owner = f"event-{page}"
-    else:
-        owner = f"topic-{page}"
-    return {
-        alias: {
-            "owner_entity": owner,
-            "linked_entities": [],
-            "reason": "The claim changes this entity.",
-        },
-    }
-
-
-def discover(alias: str, title: str, entity_type: str = "topic") -> dict:
-    bases = {
-        "topic": "intentional_topic", "project": "project_continuity",
-        "person": "durable_person", "organization": "lasting_organization",
-        "place": "lasting_place", "event": "substantial_event",
-        "series": "recurring_series", "artifact": "lasting_artifact",
-    }
-    return {alias: {
-        "candidate": {
-            "title": title,
-            "entity_type": entity_type,
-            "aliases": [],
-            "creation_basis": bases[entity_type],
-        },
-        "reason": "The evidence establishes a durable page subject.",
-    }}
-
-
-def no_discovery(alias: str = "C001") -> dict:
-    return {alias: {"reason": "The claim does not establish a new entity."}}
 
 
 def assignment(
@@ -163,7 +117,7 @@ def split_scope_plan(plan: dict) -> list[dict]:
         entity_type = "you" if owner == "you" else owner.split("-", 1)[0]
         return defaults[entity_type]
 
-    responses = [
+    return [
         {
             "nodes": [
                 {
@@ -175,81 +129,54 @@ def split_scope_plan(plan: dict) -> list[dict]:
                 for candidate in plan.get("candidates", [])
             ],
         },
-        {"edges": [], "participants": dict(plan.get("participants", {}))},
-        {"resolutions": {
-            candidate["candidate_id"]: {
-                "entity_id": "",
-                "preferred_title": candidate["title"],
-                "aliases": [],
-                "confidence": candidate["confidence"],
-                "reason": candidate["reason"],
-            }
-            for candidate in plan.get("candidates", [])
+        {
+            "decisions": {
+                candidate["candidate_id"]: {
+                    "entity_id": "",
+                    "preferred_title": candidate["title"],
+                    "aliases": [],
+                    "parent_entity": "",
+                    "containment": "none",
+                    "page_state": (
+                        "materialized"
+                        if candidate["confidence"] >= 0.7
+                        else "provisional"
+                    ),
+                    "confidence": candidate["confidence"],
+                    "reason": candidate["reason"],
+                }
+                for candidate in plan.get("candidates", [])
+            },
+            "participants": dict(plan.get("participants", {})),
         },
-        },
-    ]
-    responses.extend(
-        {"admissions": {
-            candidate["candidate_id"]: {
-                "scope_role": "independent",
-                "memory_evidence": (
-                    "accumulating"
-                    if candidate["confidence"] >= 0.7
-                    else "thin"
-                ),
-                "evidence_maturity": (
-                    "established"
-                    if candidate["confidence"] >= 0.7
-                    else "emerging"
-                ),
-                "reason": candidate["reason"],
-            }
-        }}
-        for candidate in plan.get("candidates", [])
-    )
-    responses.extend([
-        {"assignments": {
+        {"decisions": {
             alias: {
                 "owner_entity": (
                     stable(decision.get("owner_entity", ""))
                     if decision.get("disposition") == "canonical"
                     else ""
                 ),
-                "confidence": decision["confidence"],
-                "reason": decision["reason"],
-            }
-            for alias, decision in assignments.items()
-        }},
-        {"references": {
-            alias: {
-                "relationship_kind": decision.get("relationship_kind", "none"),
-                "subject_entity": stable(decision.get("subject_entity", "")),
-                "object_entities": [
-                    stable(value) for value in decision.get("object_entities", [])
-                ],
-                "contextual_entities": list(
-                    stable(value) for value in decision.get(
-                        "contextual_entities", decision.get("linked_entities", [])
-                    )
-                ),
-                "confidence": decision["confidence"],
-                "reason": decision["reason"],
-            }
-            for alias, decision in assignments.items()
-        }},
-        {"sections": {
-            alias: {
                 "section": test_section(
                     stable(decision.get("owner_entity", ""))
                     if decision.get("disposition") == "canonical"
                     else ""
                 ),
-                "reason": "The claim belongs in this section.",
+                "relationship_kind": decision.get("relationship_kind", "none"),
+                "subject_entity": stable(decision.get("subject_entity", "")),
+                "object_entities": [
+                    stable(value) for value in decision.get("object_entities", [])
+                ],
+                "contextual_entities": [
+                    stable(value) for value in decision.get(
+                        "contextual_entities", decision.get("linked_entities", [])
+                    )
+                ],
+                "confidence": decision["confidence"],
+                "reason": decision["reason"],
             }
             for alias, decision in assignments.items()
         }},
-    ])
-    return responses
+    ]
 
 
 def set_scope_response(llm, plan: dict) -> None:
@@ -288,18 +215,37 @@ def test_subject_node_contract_rejects_extra_fields():
         output_model.model_validate({**valid, "edges": []})
 
 
-def test_runtime_cohort_contract_requires_every_exact_alias():
-    output_model = claim_owner_output_model(["C001", "C002"], ["you"])
-    valid = {"assignments": {
-        "C001": {"owner_entity": "you", "confidence": 0.9, "reason": "Known."},
-        "C002": {"owner_entity": "", "confidence": 0.2, "reason": "Unknown."},
-    }}
-    assert set(output_model.model_validate(valid).model_dump()["assignments"]) == {
+def test_claim_routing_contract_requires_exact_claims_and_registry_values():
+    output_model = claim_routing_output_model(
+        ["C001", "C002"],
+        {"you": ["profile"], "project-cedar": ["overview", "current_status"]},
+    )
+    decision = {
+        "owner_entity": "you",
+        "section": "profile",
+        "relationship_kind": "none",
+        "subject_entity": "you",
+        "object_entities": [],
+        "contextual_entities": [],
+        "confidence": 0.9,
+        "reason": "The claim changes the user's profile.",
+    }
+    valid = {"decisions": {"C001": decision, "C002": {
+        **decision,
+        "owner_entity": "project-cedar",
+        "section": "current_status",
+        "subject_entity": "project-cedar",
+    }}}
+
+    assert set(output_model.model_validate(valid).decisions.model_dump()) == {
         "C001", "C002"
     }
     with pytest.raises(ValidationError):
-        output_model.model_validate({"assignments": {
-            "C001": {"owner_entity": "you", "confidence": 0.9, "reason": "Known."}
+        output_model.model_validate({"decisions": {"C001": decision}})
+    with pytest.raises(ValidationError):
+        output_model.model_validate({"decisions": {
+            **valid["decisions"],
+            "C001": {**decision, "owner_entity": "source_only"},
         }})
 
 
@@ -308,52 +254,49 @@ def test_claim_decision_batches_preserve_every_alias_once():
 
     batches = list(ClaimRouter._alias_batches(aliases))
 
-    assert [len(batch) for batch in batches] == [12, 12, 2]
+    assert [len(batch) for batch in batches] == [24, 2]
     assert [alias for batch in batches for alias in batch] == list(aliases)
 
 
-def test_runtime_cohort_contract_requires_participant_resolution():
-    output_model = subject_relationship_output_model(
-        {}, {"P001": "user"}, ["P001"], {"you": "you"}
+def test_entity_plan_contract_combines_identity_containment_and_participants():
+    output_model = entity_plan_output_model(
+        {"N001": "event", "N002": "person"},
+        {"P001": "user"},
+        {"you": "you", "project-cedar": "project", "person-rosa": "person"},
     )
-    valid = {
-        "edges": [],
-        "participants": {"P001": participant("you")},
-    }
+    valid = {"decisions": {
+        "N001": {
+            "entity_id": "",
+            "preferred_title": "Cedar review",
+            "aliases": [],
+            "parent_entity": "project-cedar",
+            "containment": "occurrence_of",
+            "page_state": "no_page",
+            "confidence": 0.9,
+            "reason": "This is one review within the project.",
+        },
+        "N002": {
+            "entity_id": "person-rosa",
+            "preferred_title": "Rosa Vale",
+            "aliases": ["Rosa"],
+            "parent_entity": "",
+            "containment": "none",
+            "page_state": "materialized",
+            "confidence": 0.9,
+            "reason": "The evidence continues this person.",
+        },
+    }, "participants": {"P001": participant("you")}}
 
-    parsed = output_model.model_validate(valid).model_dump()
-
-    assert parsed["participants"]["P001"]["entity"] == "you"
+    parsed = output_model.model_validate(valid)
+    assert parsed.decisions.N001.parent_entity == "project-cedar"
+    assert parsed.participants.P001.entity == "you"
     with pytest.raises(ValidationError):
-        output_model.model_validate({
-            "edges": [],
-            "participants": {},
-        })
-
-
-def test_subject_relationship_contract_only_allows_one_level_hierarchy():
-    output_model = subject_relationship_output_model(
-        {"N001": "event", "N002": "project"},
-        {},
-        ["C001"],
-        {"project-known": "project"},
-    )
-    valid = {
-        "edges": [{
-            "source_node": "N001",
-            "target_node": "project-known",
-            "relation": "occurrence_of",
-            "supporting_evidence": ["C001"],
-        }],
-        "participants": {},
-    }
-
-    assert output_model.model_validate(valid).model_dump()["edges"] == valid["edges"]
+        output_model.model_validate({**valid, "participants": {}})
     with pytest.raises(ValidationError):
-        output_model.model_validate({
-            "edges": [{**valid["edges"][0], "relation": "related_to"}],
-            "participants": {},
-        })
+        output_model.model_validate({"decisions": {
+            **valid["decisions"],
+            "N002": {**valid["decisions"]["N002"], "entity_id": "project-cedar"},
+        }, "participants": valid["participants"]})
 
 
 def test_scope_evidence_preserves_extracted_roles_and_stable_references(tmp_path):
@@ -392,42 +335,6 @@ def test_scope_evidence_preserves_extracted_roles_and_stable_references(tmp_path
     assert "source_title=none" in rendered
     assert f"[{source.segments[0].segment_id}]" in rendered
     assert source.segments[0].content in rendered
-
-
-def test_consolidation_schema_requires_one_destination_for_every_exact_alias():
-    output_model = consolidation_output_model(["C001", "C002"])
-    valid = {
-        **route("C001", "ava", "entity"),
-        **route("C002", "tea", "topic"),
-    }
-
-    assert set(output_model.model_validate(valid).model_dump()) == {"C001", "C002"}
-    for invalid in (
-        route("C001", "ava", "entity"),
-        {**valid, **route("C003", "extra")},
-        {"routes": []},
-        {"C001": {"page": "", "page_type": "entity"}, **route("C002", "tea")},
-        {"C001": {"page": "ava"}, **route("C002", "tea")},
-    ):
-        with pytest.raises(ValidationError):
-            output_model.model_validate(invalid)
-
-
-def test_entity_discovery_allows_omitted_nulls_but_enforces_type_basis():
-    output_model = entity_discovery_output_model(["C001", "C002"])
-    valid = {
-        "C001": {"reason": "No new entity."},
-        "C002": discover("C002", "Dance Studio", "project")["C002"],
-    }
-
-    parsed = output_model.model_validate(valid).model_dump()
-
-    assert parsed["C001"]["candidate"] is None
-    assert parsed["C002"]["candidate"]["entity_type"] == "project"
-    invalid = discover("C002", "Dance Studio", "project")
-    invalid["C002"]["candidate"]["creation_basis"] = "durable_person"
-    with pytest.raises(ValidationError):
-        output_model.model_validate({"C001": {"reason": "none"}, **invalid})
 
 
 def build_dream(tmp_path, *, llm_response: dict):
@@ -677,8 +584,8 @@ async def test_evidence_maturity_is_separate_from_identity_confidence(tmp_path):
     responses = split_scope_plan(new_scope(
         "C001", "Archive Effort", "project"
     ))
-    responses[3]["admissions"]["N001"]["evidence_maturity"] = "emerging"
-    responses[6]["sections"]["C001"]["section"] = ""
+    responses[1]["decisions"]["N001"]["page_state"] = "provisional"
+    responses[2]["decisions"]["C001"]["section"] = ""
     llm.call_structured.side_effect = responses
 
     await dream.run()
@@ -726,8 +633,8 @@ async def test_later_distinct_source_can_promote_its_provisional_owner(tmp_path)
     first_responses = split_scope_plan(new_scope(
         "C001", "Archive Effort", "project"
     ))
-    first_responses[3]["admissions"]["N001"]["evidence_maturity"] = "emerging"
-    first_responses[6]["sections"]["C001"]["section"] = ""
+    first_responses[1]["decisions"]["N001"]["page_state"] = "provisional"
+    first_responses[2]["decisions"]["C001"]["section"] = ""
     llm.call_structured.side_effect = first_responses
     await dream.run()
     assert artifacts.get_entity(
@@ -783,7 +690,7 @@ async def test_model_declared_project_role_projects_to_both_endpoint_pages(tmp_p
             relationship_kind="project_role",
         ),
     }))
-    responses[-1]["sections"]["C001"]["section"] = "shared_projects"
+    responses[-1]["decisions"]["C001"]["section"] = "shared_projects"
     llm.call_structured.side_effect = responses
 
     await dream.run()
@@ -856,7 +763,7 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
     assert len(artifacts.list_scope_decisions(claim_id=early.claim_id)) == 2
     scope_calls = [
         call for call in dream.llm.call_structured.await_args_list
-        if call.kwargs.get("debug_label") == "dream-claim-owner"
+        if call.kwargs.get("debug_label") == "dream-claim-routing"
     ]
     revision_prompt = scope_calls[-1].args[1]
     assert "topic-supporting-concept" in revision_prompt
@@ -971,7 +878,7 @@ async def test_deferred_owner_does_not_block_placed_sibling(tmp_path):
     assert logs.get(second_entry.entry_id).consolidated is True
     assert wiki.exists("coffee")
     assert artifacts.get_claim("claim-first").dream_disposition == "deferred"
-    assert llm.call_structured.await_count == 7
+    assert llm.call_structured.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -989,7 +896,7 @@ async def test_partial_extraction_routes_available_claims_without_repair(tmp_pat
 
     assert report.completed_source_ids == [entry.entry_id]
     assert wiki.exists("partial-memory")
-    assert llm.call_structured.await_count == 7
+    assert llm.call_structured.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -1108,7 +1015,7 @@ async def test_subject_graph_rejects_an_undeclared_participant_identity(tmp_path
 
     assert report.completed_source_ids == [entry.entry_id]
     assert len(report.failures) == 1
-    assert "Subject relationship response did not satisfy the contract" in report.failures[0][
+    assert "Entity plan response did not satisfy the contract" in report.failures[0][
         "reason"
     ]
     assert artifacts.list_entity_resolution_decisions() == []
@@ -1137,18 +1044,12 @@ async def test_project_components_have_no_identity_creation_path(tmp_path):
             scope_candidate("N002", "Tuesday Recording", "event", ["C002"]),
         ],
     ))
-    responses[1]["edges"] = [{
-        "source_node": "N002",
-        "target_node": "N001",
-        "relation": "occurrence_of",
-        "supporting_evidence": ["C002"],
-    }]
-    responses[4]["admissions"]["N002"] = {
-        "scope_role": "component",
-        "memory_evidence": "accumulating",
-        "evidence_maturity": "established",
+    responses[1]["decisions"]["N002"].update({
+        "parent_entity": "N001",
+        "containment": "occurrence_of",
+        "page_state": "no_page",
         "reason": "Its memory value belongs to the Archive Project.",
-    }
+    })
     llm.call_structured.side_effect = responses
 
     result = await dream.router.route([
@@ -1179,84 +1080,6 @@ def test_subject_node_contract_accepts_typed_nodes():
     assert parsed.nodes[0].title == "Archive"
 
 
-def test_identity_resolution_contract_uses_exact_node_and_same_type_ids():
-    output_model = identity_resolution_output_model(
-        {"N001": "project"},
-        {"project-archive": "project", "person-priya": "person"},
-    )
-    valid = {"resolutions": {"N001": {
-        "entity_id": "project-archive",
-        "preferred_title": "Archive",
-        "aliases": [],
-        "confidence": 0.9,
-        "reason": "This is the same continuing effort.",
-    }}}
-
-    assert output_model.model_validate(valid).model_dump() == valid
-    with pytest.raises(ValidationError):
-        output_model.model_validate({"resolutions": {"N002": valid["resolutions"]["N001"]}})
-    invalid = {"resolutions": {"N001": {
-        **valid["resolutions"]["N001"],
-        "entity_id": "person-priya",
-    }}}
-    with pytest.raises(ValidationError):
-        output_model.model_validate(invalid)
-
-
-def test_graph_admission_contract_requires_exact_nodes():
-    output_model = graph_admission_output_model(["N001"])
-    valid = {"admissions": {"N001": {
-        "scope_role": "independent",
-        "memory_evidence": "accumulating",
-        "evidence_maturity": "established",
-        "reason": "This subject has useful continuing history.",
-    }}}
-
-    assert output_model.model_validate(valid).model_dump() == valid
-    with pytest.raises(ValidationError):
-        output_model.model_validate({"admissions": {}})
-
-
-def test_graph_admission_contract_keeps_declared_children_with_parent():
-    output_model = graph_admission_output_model(
-        ["N001"], contained_node_ids=["N001"]
-    )
-    decision = {
-        "memory_evidence": "accumulating",
-        "evidence_maturity": "established",
-        "reason": "The occurrence has useful history on its parent.",
-    }
-
-    parsed = output_model.model_validate({
-        "admissions": {"N001": {"scope_role": "component", **decision}}
-    })
-    assert parsed.admissions.N001.scope_role == "component"
-    with pytest.raises(ValidationError):
-        output_model.model_validate({
-            "admissions": {"N001": {"scope_role": "independent", **decision}}
-        })
-
-
-def test_graph_admission_contract_keeps_verified_context_off_pages():
-    output_model = graph_admission_output_model(
-        ["N001"], context_only_node_ids=["N001"]
-    )
-    decision = {
-        "memory_evidence": "thin",
-        "evidence_maturity": "emerging",
-        "reason": "The recurring activity is only personal context.",
-    }
-
-    parsed = output_model.model_validate({
-        "admissions": {"N001": {"scope_role": "context_only", **decision}}
-    })
-    assert parsed.admissions.N001.scope_role == "context_only"
-    with pytest.raises(ValidationError):
-        output_model.model_validate({
-            "admissions": {"N001": {"scope_role": "independent", **decision}}
-        })
-
-
 @pytest.mark.asyncio
 async def test_redundant_user_person_node_resolves_to_singleton_you(tmp_path):
     dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
@@ -1269,41 +1092,26 @@ async def test_redundant_user_person_node_resolves_to_singleton_you(tmp_path):
             "entity_type": "person",
             "supporting_evidence": ["C001"],
         }]},
-        {"edges": [], "participants": {}},
-        {"resolutions": {"N001": {
+        {"decisions": {"N001": {
             "entity_id": "you",
             "preferred_title": "You",
             "aliases": [],
+            "parent_entity": "",
+            "containment": "none",
+            "page_state": "materialized",
             "confidence": 1.0,
             "reason": "This node is the configured user.",
-        }}},
-        {"verifications": {"N001": {
-            "same_identity": True,
-            "reason": "The evidence identifies the configured user.",
-        }}},
-        {"admissions": {"N001": {
-            "scope_role": "independent",
-            "memory_evidence": "accumulating",
-            "evidence_maturity": "established",
-            "reason": "The user identity already has continuing history.",
-        }}},
-            {"assignments": {"C001": {
+        }}, "participants": {}},
+        {"decisions": {"C001": {
                 "owner_entity": "you",
-                "confidence": 1.0,
-                "reason": "The claim changes the user's preferences.",
-            }}},
-            {"references": {"C001": {
+                "section": "preferences_working_style",
             "relationship_kind": "none",
             "subject_entity": "you",
             "object_entities": [],
             "contextual_entities": [],
             "confidence": 1.0,
-            "reason": "The user is the subject.",
+            "reason": "The claim changes the user's preferences.",
         }}},
-            {"sections": {"C001": {
-                "section": "preferences_working_style",
-                "reason": "This claim records a user preference.",
-            }}},
     ]
 
     result = await dream.router.route([ClaimEvidence(claim, source)])
@@ -1311,6 +1119,7 @@ async def test_redundant_user_person_node_resolves_to_singleton_you(tmp_path):
     assert result.failures == []
     assert result.routes[0].owner_entity_id == "you"
     assert all(entity.entity_id != "person-you" for entity in result.new_entities)
+    assert llm.call_structured.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -1330,17 +1139,13 @@ async def test_shorter_person_name_resolves_to_existing_identity(tmp_path):
         {"C001": assignment(person.entity_id, supporting=["C001"])},
         [candidate],
     ))
-    responses[2]["resolutions"]["N001"].update({
+    responses[1]["decisions"]["N001"].update({
         "entity_id": person.entity_id,
         "preferred_title": "Priya Raman",
         "aliases": ["Priya"],
         "confidence": 0.95,
         "reason": "The shorter name refers to the same person.",
     })
-    responses.insert(3, {"verifications": {"N001": {
-            "same_identity": True,
-            "reason": "The shorter name and full name identify the same person.",
-        }}})
     llm.call_structured.side_effect = responses
 
     result = await dream.router.route([ClaimEvidence(claim, source)])
@@ -1367,17 +1172,6 @@ async def test_rejected_identity_match_cannot_mutate_existing_person(tmp_path):
         {"C001": assignment("N001", supporting=["C001"])},
         [candidate],
     ))
-    responses[2]["resolutions"]["N001"].update({
-        "entity_id": person.entity_id,
-        "preferred_title": "Omar Haddad",
-        "aliases": [],
-        "confidence": 0.9,
-        "reason": "Proposed existing match.",
-    })
-    responses.insert(3, {"verifications": {"N001": {
-            "same_identity": False,
-            "reason": "Omar and Priya are different people.",
-        }}})
     llm.call_structured.side_effect = responses
 
     result = await dream.router.route([ClaimEvidence(claim, source)])
@@ -1408,17 +1202,13 @@ async def test_later_project_name_updates_stable_identity_without_duplicate(tmp_
         {"C001": assignment(project.entity_id, supporting=["C001"])},
         [candidate],
     ))
-    responses[2]["resolutions"]["N001"].update({
+    responses[1]["decisions"]["N001"].update({
         "entity_id": project.entity_id,
         "preferred_title": "Lantern",
         "aliases": ["Meeting Memory Assistant"],
         "confidence": 0.95,
         "reason": "The claim explicitly names the continuing effort.",
     })
-    responses.insert(3, {"verifications": {"N001": {
-        "same_identity": True,
-        "reason": "The new name explicitly identifies the continuing Project.",
-    }}})
     llm.call_structured.side_effect = responses
 
     result = await dream.router.route([ClaimEvidence(claim, source)])
@@ -1431,47 +1221,6 @@ async def test_later_project_name_updates_stable_identity_without_duplicate(tmp_
         project.entity_id
     ) == 1
     assert result.routes[0].owner_entity_id == project.entity_id
-
-
-def test_scope_contract_rejects_model_authored_source_only():
-    output_model = claim_owner_output_model(["C001"], ["you"])
-
-    with pytest.raises(ValidationError):
-        output_model.model_validate({"assignments": {
-            "C001": {
-                "owner_entity": "source_only",
-                "confidence": 0.9,
-                "reason": "Not a registry ID.",
-            },
-        }})
-    reference_model = claim_reference_output_model(["C001"], ["you"])
-    with pytest.raises(ValidationError):
-        reference_model.model_validate({"references": {"C001": {
-            "relationship_kind": "none",
-            "subject_entity": "source_only",
-            "object_entities": [],
-            "contextual_entities": [],
-            "confidence": 0.9,
-            "reason": "Not a registry ID.",
-        }}})
-
-
-def test_claim_section_contract_uses_per_owner_exact_sections():
-    output_model = claim_section_output_model({
-        "C001": ["overview", "current_status"],
-        "C002": ["shared_projects"],
-    })
-    valid = {"sections": {
-        "C001": {"section": "current_status", "reason": "Current project state."},
-        "C002": {"section": "shared_projects", "reason": "A person's project role."},
-    }}
-
-    assert output_model.model_validate(valid).sections.C001.section == "current_status"
-    with pytest.raises(ValidationError):
-        output_model.model_validate({"sections": {
-            **valid["sections"],
-            "C001": {"section": "shared_projects", "reason": "Wrong page schema."},
-        }})
 
 
 @pytest.mark.asyncio

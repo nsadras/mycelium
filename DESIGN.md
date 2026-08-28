@@ -86,14 +86,9 @@ The dream process converts source-grounded claims into semantic wiki pages:
 flowchart TD
     A[Unconsolidated source-grounded claims] --> B[Compile typed source retention]
     B --> C[Declare a typed subject census]
-    C --> D[Build a bounded containment hierarchy and resolve participants]
-    D --> E[Resolve every node to a same-type identity]
-    E --> F[Verify proposed existing-identity matches when needed]
-    F --> G[Verify recurring frames and classify each node separately]
-    G --> H[Assign claims in small exact batches]
-    H --> I[Resolve stable endpoints and relationship kinds]
-    I --> J[Choose typed page sections]
-    J --> K{New entity materialized?}
+    C --> D[Plan identity, containment, page state, and participants together]
+    D --> E[Route each claim to an owner, relationship, and section together]
+    E --> K{New entity materialized?}
     K -->|yes| L[Re-plan explicit persisted scope neighborhood]
     K -->|no| M[Use initial scope]
     L --> M
@@ -112,40 +107,25 @@ Important behavior:
 - `source_only` is not a model-authored scope outcome: every admitted claim is placed or explicitly deferred.
 - Entity identity and page admission are separate. A known identity may remain provisional until supported by
   enough durable evidence; creation and participant-resolution decisions retain support, confidence, and review state.
-- Identity planning starts with a type-neutral subject census, followed by a bounded hierarchy decision limited to
-  census nodes and exact Project or Series registry IDs. This pass records only `component_of` and `occurrence_of`
-  parents and resolves source participants. Claim-level references later handle participation, subject matter,
-  location, use, production, and other relationships. The smaller contract prevents an open-ended edge list or one
-  invented endpoint from discarding an otherwise valid census.
-  Person and Organization are agents; Project is an
-  intentional continuing effort; Series is a recurring frame; Event is one bounded occurrence; Artifact is a made
-  physical or digital object; Topic is an abstract subject; and Place is physical. A particular occurrence remains
-  separate from the Project or Series that contains it. Unresolved subjects use batch-local node IDs; already-known
-  parent endpoints may copy only exact
-  registry IDs. Evidence citations, stable endpoints, and participant references are constrained by the response
-  schema to the exact values supplied for that cohort. Node and edge citations provide the graph audit trail;
-  redundant explanatory prose is not requested.
-- Every graph node then resolves to an exact same-type stable ID or a new identity. Proposed existing matches receive
-  a separate pairwise check with only that candidate's evidence and a compact grounded profile of the proposed page
-  before they can mutate or own that identity. The configured user is the one structural exception: a redundant
-  Person node may resolve to the singleton `you` ID and is still verified before mutation.
-- A proposed Series receives a focused check that distinguishes an organized recurring frame from a person's
-  occupation, habit, or other context. Admission then runs separately for each node so unrelated cohort details
-  cannot inflate its maturity. Admission keeps three decisions separate. Scope says whether memory belongs independently, on a parent, or only
-  in context. Memory evidence says whether useful personal state or history is accumulating, thin, or unclear.
-  Evidence maturity says whether distinct source episodes or explicit prior history establish the subject, or it is
-  still emerging. A graph node declared as `component_of` or `occurrence_of` is structurally constrained to component
-  scope; this implements the meaning of those model-authored relations rather than reinterpreting source language in
-  code. Only an independent node with accumulating memory and established evidence can materialize. A newly admitted
-  identity still remains provisional until a claim owns it or a source-declared participant encounter gives it page
-  content; this prevents empty context pages. Provisional identities are reconsidered when later evidence adds their
-  own history. Other independent nodes stay provisional, while components and context-only details get no page.
-  Existing materialized pages are never demoted by a thin later cohort.
-- Claim ownership receives both the completed stable registry and the resolved graph. This lets a claim about a
-  session, tool, milestone, feature, issue, or deliverable route to its lasting parent even though that component has
-  no page. Ownership, references, and sections use small exact claim batches. References resolve subject, object, and
-  context endpoints before section selection and explicitly declare project-role relationships. A project-role claim
-  has one canonical owner but renders on both the Person/You and Project pages with the same provenance.
+- Identity planning starts with a type-neutral subject census. One second model call then decides same-type identity,
+  optional Project or Series containment, page state, and participant resolution for every fixed node. Considering
+  these together avoids contradictory decisions without a chain of corrective calls. Containment records only
+  `component_of` and `occurrence_of`; claim-level routing handles other relationships.
+  Person and Organization are agents; Project is an intentional continuing effort; Series is a recurring frame;
+  Event is one bounded occurrence; Artifact is a made physical or digital object; Topic is an abstract subject; and
+  Place is physical. Evidence references, stable endpoints, and participants are constrained to exact values
+  supplied for the cohort. Existing page facts ground identity continuity. A Person node may resolve to the
+  singleton `you` only when the source identifies that person as the configured user.
+- The entity plan gives each node one of three page states. Materialized subjects have useful independent personal
+  history and established continuation; plausible but thin subjects remain provisional; components, bounded
+  occurrences, and context receive no page. Existing materialized pages are never demoted by a thin later cohort.
+  Provisional identities return to the census when later evidence adds their own history.
+- One final routing call decides owner, subject/object/context endpoints, relationship kind, and typed page section
+  together for every claim. Ordinary cohorts therefore use three page-structure model calls: census, entity plan,
+  and claim routing. Only unusually large claim sets are split into batches of 24.
+- A project-role claim has one canonical owner but renders on both the Person/You and Project pages with the same
+  provenance. A newly proposed owner must be materialized before its claim can be placed; otherwise the claim remains
+  deferred for later evidence or user review.
 - Claim entity references preserve extracted surface mentions and stable subject, object, context, and owner IDs.
 - Scope revision uses persisted source/cohort/entity-reference neighborhoods, never token or alias overlap.
 - `_index.md` is rebuilt deterministically from materialized pages.

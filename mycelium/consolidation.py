@@ -22,16 +22,12 @@ from mycelium.artifacts import (
 from mycelium.models import PAGE_SECTION_KEYS, PAGE_TYPES
 from mycelium.ollama import OllamaClient
 from mycelium.structured_outputs import (
-    claim_owner_output_model,
-    claim_reference_output_model,
-    claim_section_output_model,
-    graph_admission_output_model,
-    identity_resolution_output_model,
-    identity_verification_output_model,
-    series_subjecthood_output_model,
+    claim_routing_output_model,
+    entity_plan_output_model,
     subject_node_output_model,
-    subject_relationship_output_model,
 )
+
+
 def slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
 
@@ -157,57 +153,59 @@ class ClaimRouter:
                 f"{type(exc).__name__}: {exc}",
             )
 
+        node_types = {
+            node_id: str(node["entity_type"])
+            for node_id, node in graph_nodes.items()
+        }
         try:
-            relationship_model = subject_relationship_output_model(
-                {
-                    node_id: str(node["entity_type"])
-                    for node_id, node in graph_nodes.items()
-                },
+            entity_model = entity_plan_output_model(
+                node_types,
                 {alias: role for alias, (_, _, role) in participants.items()},
-                allowed_evidence,
                 registry_types,
             )
-            node_summary = self._format_subject_graph(graph_nodes, [])
-            system, user = prompts.subject_relationship_prompt(
-                self._entity_catalog(planned.values()),
-                node_summary,
+            system, user = prompts.entity_plan_prompt(
+                self._entity_planning_catalog(planned.values()),
+                self._format_subject_graph(graph_nodes, []),
                 self._format_evidence(aliases, participants),
             )
             response = await self.llm.call_structured(
                 system,
                 user,
-                relationship_model,
-                num_predict=4096,
-                debug_label="dream-subject-relationships",
+                entity_model,
+                num_predict=8192,
+                debug_label="dream-entity-plan",
             )
-            relationship_plan = relationship_model.model_validate(
-                response
-            ).model_dump()
-            if any(
-                set(edge["supporting_evidence"]) - allowed_evidence
-                for edge in relationship_plan["edges"]
-            ):
-                raise ValueError("Subject relationships cited an unknown evidence alias")
-            parent_by_node: dict[str, str] = {}
-            for edge in relationship_plan["edges"]:
-                source_node = str(edge["source_node"])
-                target_node = str(edge["target_node"])
-                if source_node == target_node:
-                    raise ValueError("A subject cannot contain itself")
-                if source_node in parent_by_node:
-                    raise ValueError("A subject hierarchy node used more than one parent")
-                parent_by_node[source_node] = target_node
-                expected_relation = (
-                    "occurrence_of"
-                    if graph_nodes[source_node]["entity_type"] == "event"
-                    else "component_of"
-                )
-                if edge["relation"] != expected_relation:
-                    raise ValueError("Subject hierarchy used the wrong containment relation")
-            graph_plan = {"nodes": node_plan["nodes"], **relationship_plan}
-            if set(graph_plan["participants"]) != set(participants):
-                raise ValueError("Subject graph did not resolve exact participants")
-            for resolution in graph_plan["participants"].values():
+            entity_plan = entity_model.model_validate(response).model_dump()
+            entity_decisions = entity_plan["decisions"]
+            if set(entity_decisions) != set(graph_nodes):
+                raise ValueError("Entity plan did not cover exact census nodes")
+            if set(entity_plan["participants"]) != set(participants):
+                raise ValueError("Entity plan did not resolve exact participants")
+            for node_id, decision in entity_decisions.items():
+                parent = str(decision["parent_entity"])
+                containment = str(decision["containment"])
+                if parent:
+                    if parent == node_id:
+                        raise ValueError("An entity cannot contain itself")
+                    expected = (
+                        "occurrence_of"
+                        if graph_nodes[node_id]["entity_type"] == "event"
+                        else "component_of"
+                    )
+                    if containment != expected or decision["page_state"] != "no_page":
+                        raise ValueError("Contained entity plan is internally inconsistent")
+                    if parent in graph_nodes:
+                        parent_decision = entity_decisions[parent]
+                        if (
+                            not parent_decision["entity_id"]
+                            and parent_decision["page_state"] == "no_page"
+                        ):
+                            raise ValueError(
+                                "Entity plan parent did not resolve to a reusable identity"
+                            )
+                elif containment != "none":
+                    raise ValueError("Containment requires an exact parent entity")
+            for resolution in entity_plan["participants"].values():
                 entity_ref = str(resolution["entity"])
                 if entity_ref == "you":
                     continue
@@ -222,242 +220,31 @@ class ClaimRouter:
         except Exception as exc:
             return self._fail_batch(
                 evidence,
-                "Subject relationship response did not satisfy the contract: "
+                "Entity plan response did not satisfy the contract: "
                 f"{type(exc).__name__}: {exc}",
             )
-        resolution_model = identity_resolution_output_model(
+
+        graph_edges = [
             {
-                node_id: str(node["entity_type"])
-                for node_id, node in graph_nodes.items()
-            },
-            registry_types,
-        )
-        graph_summary = self._format_subject_graph(
-            graph_nodes, graph_plan["edges"]
-        )
-        system, user = prompts.graph_identity_resolution_prompt(
-            self._entity_catalog(planned.values()),
-            graph_summary,
-            self._format_evidence(aliases, participants),
-        )
-        try:
-            response = await self.llm.call_structured(
-                system,
-                user,
-                resolution_model,
-                num_predict=4096,
-                debug_label="dream-graph-identity-resolution",
-            )
-            identity_resolutions = resolution_model.model_validate(
-                response
-            ).model_dump()["resolutions"]
-            if set(identity_resolutions) != set(graph_nodes):
-                raise ValueError("Identity resolution did not cover exact graph nodes")
-            for node_id, decision in identity_resolutions.items():
-                entity_id = str(decision["entity_id"])
-                if entity_id:
-                    entity = planned.get(entity_id)
-                    if (
-                        entity is None
-                        or entity_id not in registry_types
-                        or (
-                            entity.entity_type != graph_nodes[node_id]["entity_type"]
-                            and not (
-                                graph_nodes[node_id]["entity_type"] == "person"
-                                and entity.entity_type == "you"
-                            )
-                        )
-                    ):
-                        raise ValueError(
-                            "Existing identity resolution used an invalid same-type ID"
-                        )
-        except Exception as exc:
-            return self._fail_batch(
-                evidence,
-                "Identity resolution response did not satisfy the contract: "
-                f"{type(exc).__name__}: {exc}",
-            )
-
-        proposed_matches = {
-            node_id: str(decision["entity_id"])
-            for node_id, decision in identity_resolutions.items()
-            if decision["entity_id"]
+                "source_node": node_id,
+                "target_node": decision["parent_entity"],
+                "relation": decision["containment"],
+                "supporting_evidence": graph_nodes[node_id]["supporting_evidence"],
+            }
+            for node_id, decision in entity_decisions.items()
+            if decision["parent_entity"]
+        ]
+        graph_plan = {
+            "nodes": node_plan["nodes"],
+            "edges": graph_edges,
+            "participants": entity_plan["participants"],
         }
-        for node_id, entity_id in proposed_matches.items():
-            verification_model = identity_verification_output_model((node_id,))
-            node = graph_nodes[node_id]
-            match_summary = (
-                f"- {node_id}: candidate_type={node['entity_type']}; "
-                f"candidate_title={node['title']!r}; "
-                f"supporting_evidence={','.join(node['supporting_evidence'])}\n"
-                f"{self._identity_profile(planned[entity_id])}"
-            )
-            match_aliases = {
-                alias: aliases[alias]
-                for alias in node["supporting_evidence"]
-                if alias in aliases
-            }
-            match_participants = {
-                alias: participants[alias]
-                for alias in node["supporting_evidence"]
-                if alias in participants
-            }
-            system, user = prompts.identity_verification_prompt(
-                match_summary,
-                self._format_evidence(match_aliases, match_participants),
-            )
-            try:
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    verification_model,
-                    num_predict=768,
-                    debug_label="dream-identity-verification",
-                )
-                verification = verification_model.model_validate(
-                    response
-                ).model_dump()["verifications"][node_id]
-            except Exception as exc:
-                return self._fail_batch(
-                    evidence,
-                    "Identity verification response did not satisfy the contract: "
-                    f"{type(exc).__name__}: {exc}",
-                )
-            decision = identity_resolutions[node_id]
-            if not verification["same_identity"]:
-                decision["entity_id"] = ""
-                decision["preferred_title"] = node["title"]
-                decision["aliases"] = []
-                decision["reason"] = verification["reason"]
-            else:
-                decision["reason"] = (
-                    f"{decision['reason']} Verified match: "
-                    f"{verification['reason']}"
-                )
-
-        contained_nodes = {
-            str(edge["source_node"])
-            for edge in graph_plan["edges"]
-            if edge["relation"] in {"component_of", "occurrence_of"}
-            and edge["source_node"] in graph_nodes
-        }
-        contextual_series_nodes: set[str] = set()
-        series_reasons: dict[str, str] = {}
-        for node_id, node in graph_nodes.items():
-            if node["entity_type"] != "series" or node_id in contained_nodes:
-                continue
-            relevant_evidence = set(node["supporting_evidence"])
-            node_aliases = {
-                alias: aliases[alias]
-                for alias in relevant_evidence
-                if alias in aliases
-            }
-            node_participants = {
-                alias: participants[alias]
-                for alias in relevant_evidence
-                if alias in participants
-            }
-            series_model = series_subjecthood_output_model(node_id)
-            candidate = (
-                f"- {node_id}: title={node['title']!r}; "
-                f"supporting_evidence={','.join(node['supporting_evidence'])}"
-            )
-            system, user = prompts.series_subjecthood_prompt(
-                candidate,
-                self._format_evidence(node_aliases, node_participants),
-            )
-            try:
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    series_model,
-                    num_predict=512,
-                    debug_label="dream-series-subjecthood",
-                )
-                series_decision = series_model.model_validate(
-                    response
-                ).model_dump()["decisions"][node_id]
-            except Exception as exc:
-                return self._fail_batch(
-                    evidence,
-                    "Series subjecthood response did not satisfy the contract: "
-                    f"{type(exc).__name__}: {exc}",
-                )
-            series_reasons[node_id] = str(series_decision["reason"])
-            if series_decision["classification"] == "personal_attribute_or_context":
-                contextual_series_nodes.add(node_id)
-
-        admissions: dict[str, dict] = {}
-        for node_id, node in graph_nodes.items():
-            incident_edges = [
-                edge for edge in graph_plan["edges"]
-                if edge["source_node"] == node_id
-                or edge["target_node"] == node_id
-            ]
-            relevant_evidence = {
-                *node["supporting_evidence"],
-                *(
-                    alias
-                    for edge in incident_edges
-                    for alias in edge["supporting_evidence"]
-                ),
-            }
-            node_aliases = {
-                alias: aliases[alias]
-                for alias in relevant_evidence
-                if alias in aliases
-            }
-            node_participants = {
-                alias: participants[alias]
-                for alias in relevant_evidence
-                if alias in participants
-            }
-            admission_model = graph_admission_output_model(
-                (node_id,),
-                contained_node_ids=(node_id,) if node_id in contained_nodes else (),
-                context_only_node_ids=(
-                    (node_id,) if node_id in contextual_series_nodes else ()
-                ),
-            )
-            resolved_node = self._format_subject_graph(
-                {node_id: node},
-                incident_edges,
-                resolutions={node_id: identity_resolutions[node_id]},
-            )
-            system, user = prompts.graph_admission_prompt(
-                self._entity_catalog(planned.values()),
-                resolved_node,
-                self._format_evidence(node_aliases, node_participants),
-            )
-            try:
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    admission_model,
-                    num_predict=768,
-                    debug_label="dream-graph-admission",
-                )
-                admissions[node_id] = admission_model.model_validate(
-                    response
-                ).model_dump()["admissions"][node_id]
-                if node_id in series_reasons:
-                    admissions[node_id]["reason"] = (
-                        f"Series verification: {series_reasons[node_id]} "
-                        f"Admission: {admissions[node_id]['reason']}"
-                    )
-            except Exception as exc:
-                return self._fail_batch(
-                    evidence,
-                    "Graph admission response did not satisfy the contract: "
-                    f"{type(exc).__name__}: {exc}",
-                )
 
         candidate_entities: dict[str, EntityRecord] = {}
         candidate_support: dict[str, tuple[str, ...]] = {}
         now = datetime.now().astimezone().isoformat()
         for node_id, node in graph_nodes.items():
-            decision = identity_resolutions[node_id]
-            admission = admissions[node_id]
+            decision = entity_decisions[node_id]
             support = tuple(
                 value for value in dict.fromkeys(node["supporting_evidence"])
                 if value in aliases
@@ -473,17 +260,7 @@ class ClaimRouter:
             ]
             confidence = float(decision["confidence"])
             accepted = confidence >= 0.7
-            if admission["scope_role"] == "independent":
-                page_state = (
-                    "materialized"
-                    if (
-                        admission["memory_evidence"] == "accumulating"
-                        and admission["evidence_maturity"] == "established"
-                    )
-                    else "provisional"
-                )
-            else:
-                page_state = "no_page"
+            page_state = str(decision["page_state"])
             entity: EntityRecord | None = None
             if decision["entity_id"]:
                 entity = planned[str(decision["entity_id"])]
@@ -552,57 +329,69 @@ class ClaimRouter:
                     ],
                 ],
                 confidence=confidence,
-                reason=f"{decision['reason']} Admission: {admission['reason']}",
+                reason=str(decision["reason"]),
                 review_state="accepted" if accepted else "review_required",
                 dream_run_id=dream_run_id,
                 created_at=now,
             ))
 
-        registry_ids = tuple(
-            entity.entity_id for entity in planned.values()
+        entity_sections = {
+            entity.entity_id: tuple(
+                key for key, _ in PAGE_SECTION_KEYS[entity.entity_type]
+            )
+            for entity in planned.values()
             if entity.status == "active"
-        )
-        resolved_graph = self._format_subject_graph(
+        }
+        resolved_plan = self._format_resolved_entity_plan(
             graph_nodes,
-            graph_plan["edges"],
-            resolutions=identity_resolutions,
-            admissions=admissions,
-            entities=candidate_entities,
+            entity_decisions,
+            candidate_entities,
+            planned,
+            entity_plan["participants"],
         )
-        owner_assignments: dict[str, dict] = {}
+        routing_decisions: dict[str, dict] = {}
         for batch_aliases in self._alias_batches(aliases):
             batch_participants = self._participants_for_evidence(
                 batch_aliases, participants
             )
-            routed_evidence = (
-                f"{self._format_evidence(batch_aliases, batch_participants)}\n\n"
-                f"[RESOLVED SUBJECT GRAPH]\n{resolved_graph}"
+            routing_model = claim_routing_output_model(
+                batch_aliases,
+                entity_sections,
             )
-            owner_model = claim_owner_output_model(batch_aliases, registry_ids)
-            system, user = prompts.claim_owner_prompt(
+            system, user = prompts.claim_routing_prompt(
                 self._entity_catalog(planned.values()),
-                routed_evidence,
+                resolved_plan,
+                self._format_evidence(batch_aliases, batch_participants),
             )
             try:
                 response = await self.llm.call_structured(
                     system,
                     user,
-                    owner_model,
-                    num_predict=4096,
-                    debug_label="dream-claim-owner",
+                    routing_model,
+                    num_predict=8192,
+                    debug_label="dream-claim-routing",
                 )
-                owner_assignments.update(
-                    owner_model.model_validate(response).model_dump()["assignments"]
-                )
+                batch_decisions = routing_model.model_validate(
+                    response
+                ).model_dump()["decisions"]
+                for alias, decision in batch_decisions.items():
+                    owner_id = str(decision["owner_entity"])
+                    section = str(decision["section"])
+                    if not owner_id:
+                        if section:
+                            raise ValueError("Deferred claim selected a page section")
+                        continue
+                    if section and section not in entity_sections[owner_id]:
+                        raise ValueError("Claim selected a section invalid for its owner")
+                routing_decisions.update(batch_decisions)
             except Exception as exc:
                 return self._fail_batch(
                     evidence,
-                    "Claim owner response did not satisfy the contract: "
+                    "Claim routing response did not satisfy the contract: "
                     f"{type(exc).__name__}: {exc}",
                 )
-        owner_plan = {"assignments": owner_assignments}
 
-        for alias, decision in owner_assignments.items():
+        for alias, decision in routing_decisions.items():
             owner_id = str(decision["owner_entity"] or "")
             if owner_id not in initially_provisional:
                 continue
@@ -624,122 +413,6 @@ class ClaimRouter:
             ):
                 result.new_entities.append(entity)
 
-        section_options: dict[str, tuple[str, ...]] = {}
-        section_evidence: dict[str, str] = {}
-        cohort_as_of = max(
-            (str(item.source.occurred_at or "") for item in aliases.values()),
-            default="unknown",
-        ) or "unknown"
-        for alias, item in aliases.items():
-            owner_id = owner_plan["assignments"][alias]["owner_entity"]
-            owner = planned.get(owner_id) or candidate_entities.get(owner_id)
-            if (
-                owner is None
-                or owner.status != "active"
-                or owner.materialization_state != "materialized"
-            ):
-                section_options[alias] = ("",)
-            else:
-                section_options[alias] = tuple(
-                    key for key, _ in PAGE_SECTION_KEYS[owner.entity_type]
-                )
-            section_evidence[alias] = (
-                f"[{alias}] fixed_owner={owner_id or 'deferred'}; "
-                f"owner_type={owner.entity_type if owner else 'none'}; "
-                f"owner_title={owner.title if owner else 'none'}; "
-                f"claim_type={item.claim.claim_type}; "
-                f"predicate={item.claim.predicate or 'none'}; "
-                f"temporal_status={item.claim.temporal_status}; "
-                f"evidence_modality={item.claim.evidence_modality}; "
-                f"source_type={item.source.source_type}; "
-                f"cohort_as_of={cohort_as_of}; "
-                f"temporal_qualifiers={item.claim.facets.get('temporal') or 'none'}; "
-                f"allowed_sections={','.join(section_options[alias])}\n"
-                f"claim={item.claim.text}"
-            )
-
-        reference_decisions: dict[str, dict] = {}
-        for batch_aliases in self._alias_batches(aliases):
-            batch_participants = self._participants_for_evidence(
-                batch_aliases, participants
-            )
-            batch_evidence = self._format_evidence(
-                batch_aliases, batch_participants
-            )
-            reference_model = claim_reference_output_model(
-                batch_aliases, registry_ids
-            )
-            fixed_owners = "\n".join(
-                f"- {alias}: fixed_owner="
-                f"{owner_plan['assignments'][alias]['owner_entity'] or 'deferred'}"
-                for alias in batch_aliases
-            )
-            system, user = prompts.claim_reference_prompt(
-                self._entity_catalog(planned.values()),
-                f"{batch_evidence}\n\n"
-                f"[RESOLVED SUBJECT GRAPH]\n{resolved_graph}\n\n"
-                f"[FIXED CLAIM OWNERS]\n{fixed_owners}",
-            )
-            try:
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    reference_model,
-                    num_predict=4096,
-                    debug_label="dream-claim-references",
-                )
-                reference_decisions.update(
-                    reference_model.model_validate(response).model_dump()["references"]
-                )
-            except Exception as exc:
-                return self._fail_batch(
-                    evidence,
-                    "Claim reference response did not satisfy the contract: "
-                    f"{type(exc).__name__}: {exc}",
-                )
-        reference_plan = {"references": reference_decisions}
-
-        section_decisions: dict[str, dict] = {}
-        for batch_aliases in self._alias_batches(aliases):
-            batch_options = {
-                alias: section_options[alias] for alias in batch_aliases
-            }
-            section_model = claim_section_output_model(batch_options)
-            enriched_section_evidence = []
-            for alias in batch_aliases:
-                references = reference_plan["references"][alias]
-                enriched_section_evidence.append(
-                    f"{section_evidence[alias]}\n"
-                    f"owner_reason={owner_plan['assignments'][alias]['reason']}\n"
-                    f"relationship_kind={references['relationship_kind']}; "
-                    f"subject_entity={references['subject_entity'] or 'none'}; "
-                    f"object_entities="
-                    f"{','.join(references['object_entities']) or 'none'}; "
-                    f"contextual_entities="
-                    f"{','.join(references['contextual_entities']) or 'none'}"
-                )
-            system, user = prompts.claim_section_prompt(
-                "\n\n".join(enriched_section_evidence)
-            )
-            try:
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    section_model,
-                    num_predict=4096,
-                    debug_label="dream-claim-sections",
-                )
-                section_decisions.update(
-                    section_model.model_validate(response).model_dump()["sections"]
-                )
-            except Exception as exc:
-                return self._fail_batch(
-                    evidence,
-                    "Claim section response did not satisfy the contract: "
-                    f"{type(exc).__name__}: {exc}",
-                )
-        section_plan = {"sections": section_decisions}
-
         result.encounters = self._participant_encounters(
             participants,
             graph_plan["participants"],
@@ -756,20 +429,21 @@ class ClaimRouter:
         ))
 
         for alias, item in aliases.items():
-            owner = owner_plan["assignments"][alias]
-            references = reference_plan["references"][alias]
+            routing = routing_decisions[alias]
             decision = {
-                "disposition": "canonical" if owner["owner_entity"] else "deferred",
-                "owner_entity": owner["owner_entity"],
-                "section": section_plan["sections"][alias]["section"],
+                "disposition": (
+                    "canonical" if routing["owner_entity"] else "deferred"
+                ),
+                "owner_entity": routing["owner_entity"],
+                "section": routing["section"],
                 "linked_entities": [],
-                "subject_entity": references["subject_entity"],
-                "object_entities": references["object_entities"],
-                "contextual_entities": references["contextual_entities"],
-                "relationship_kind": references["relationship_kind"],
+                "subject_entity": routing["subject_entity"],
+                "object_entities": routing["object_entities"],
+                "contextual_entities": routing["contextual_entities"],
+                "relationship_kind": routing["relationship_kind"],
                 "supporting_claims": [],
-                "confidence": owner["confidence"],
-                "reason": owner["reason"],
+                "confidence": routing["confidence"],
+                "reason": routing["reason"],
             }
             result.routes.append(self._route_decision(
                 alias,
@@ -905,9 +579,9 @@ class ClaimRouter:
 
     @staticmethod
     def _alias_batches(
-        aliases: dict[str, ClaimEvidence], size: int = 12
+        aliases: dict[str, ClaimEvidence], size: int = 24
     ) -> Iterable[dict[str, ClaimEvidence]]:
-        """Keep exact per-claim decisions small enough for reliable model attention."""
+        """Bound unusually large routing responses without splitting ordinary cohorts."""
         items = list(aliases.items())
         for start in range(0, len(items), size):
             yield dict(items[start:start + size])
@@ -1214,32 +888,69 @@ class ClaimRouter:
             lines.append("- none yet")
         return "\n".join(lines)
 
-    def _identity_profile(self, entity: EntityRecord) -> str:
-        aliases = ", ".join(entity.aliases) or "none"
-        lines = [
-            f"  existing_id={entity.entity_id}; existing_type={entity.entity_type}; "
-            f"existing_title={entity.title!r}; existing_aliases={aliases}",
-            "  existing_grounded_facts:",
-        ]
-        facts = self.artifacts.list_consolidated_facts(
-            owner_entity_id=entity.entity_id,
-            state="active",
+    def _entity_planning_catalog(self, entities: Iterable[EntityRecord]) -> str:
+        lines = ["Existing canonical entities and grounded page facts:"]
+        found = False
+        for entity in sorted(entities, key=lambda item: item.entity_id):
+            if entity.status != "active":
+                continue
+            found = True
+            aliases = ", ".join(entity.aliases) or "none"
+            lines.append(
+                f"- id={entity.entity_id}; type={entity.entity_type}; "
+                f"title={entity.title!r}; aliases={aliases}; "
+                f"page_state={entity.materialization_state}"
+            )
+            facts = self.artifacts.list_consolidated_facts(
+                owner_entity_id=entity.entity_id,
+                state="active",
+            )
+            lines.extend(f"  - fact: {fact.text}" for fact in facts[:6])
+        if not found:
+            lines.append("- none yet")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_resolved_entity_plan(
+        nodes: dict[str, dict],
+        decisions: dict[str, dict],
+        candidates: dict[str, EntityRecord],
+        entities: dict[str, EntityRecord],
+        participants: dict[str, dict],
+    ) -> str:
+        lines = ["Subjects:"]
+        for node_id, node in nodes.items():
+            decision = decisions[node_id]
+            entity = candidates.get(node_id) or entities.get(
+                str(decision["entity_id"])
+            )
+            parent_ref = str(decision["parent_entity"])
+            parent = candidates.get(parent_ref) or entities.get(parent_ref)
+            lines.append(
+                f"- {node_id}: type={node['entity_type']}; "
+                f"evidence_title={node['title']!r}; "
+                f"stable_id={entity.entity_id if entity else 'no_page'}; "
+                f"stable_title={entity.title if entity else 'none'}; "
+                f"page_state={decision['page_state']}; "
+                f"containment={decision['containment']}; "
+                f"parent={parent.entity_id if parent else parent_ref or 'none'}; "
+                f"evidence={','.join(node['supporting_evidence'])}"
+            )
+        lines.append("Participants:")
+        lines.extend(
+            f"- {alias}: entity={decision['entity']}"
+            for alias, decision in participants.items()
         )
-        lines.extend(f"  - {fact.text}" for fact in facts[:12])
-        if not facts:
-            lines.append("  - none yet")
+        if not participants:
+            lines.append("- none")
         return "\n".join(lines)
 
     @staticmethod
     def _format_subject_graph(
         nodes: dict[str, dict],
         edges: list[dict],
-        *,
-        resolutions: dict[str, dict] | None = None,
-        admissions: dict[str, dict] | None = None,
-        entities: dict[str, EntityRecord] | None = None,
     ) -> str:
-        """Render validated graph facts without adding semantic decisions."""
+        """Render the fixed census without adding semantic decisions."""
         lines = ["Nodes:"]
         for node_id, node in nodes.items():
             details = [
@@ -1247,24 +958,6 @@ class ClaimRouter:
                 f"title={node['title']!r}",
                 f"evidence={','.join(node['supporting_evidence'])}",
             ]
-            if resolutions is not None:
-                resolution = resolutions[node_id]
-                details.extend([
-                    f"resolved_id={resolution['entity_id'] or 'new'}",
-                    f"preferred_title={resolution['preferred_title']!r}",
-                ])
-            if admissions is not None:
-                admission = admissions[node_id]
-                details.extend([
-                    f"scope_role={admission['scope_role']}",
-                    f"memory_evidence={admission['memory_evidence']}",
-                    f"evidence_maturity={admission['evidence_maturity']}",
-                ])
-            if entities is not None:
-                entity = entities.get(node_id)
-                details.append(
-                    f"stable_id={entity.entity_id if entity else 'no_page'}"
-                )
             lines.append(f"- {node_id}: {'; '.join(details)}")
         lines.append("Edges:")
         lines.extend(

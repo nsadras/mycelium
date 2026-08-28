@@ -1837,3 +1837,24 @@ one prose-similarity summary.
   issue should be addressed in a later iteration rather than hidden by a benchmark-specific rule.
 - Checkpoint validation: **259 passed, 2 skipped**; Ruff, UI lint, UI build, and `git diff --check` passed. The existing
   830.15 kB UI chunk-size warning remains.
+
+### Simplified page-structure decisions
+
+- Replaced the high-water-mark sequence of hierarchy, identity, pairwise verification, Series verification,
+  per-node admission, ownership, references, and section calls with two coherent decisions after the subject census.
+  One entity plan now decides identity, containment, page state, and participants; one claim plan decides owner,
+  relationship endpoints, relationship kind, and page section. Ordinary cohorts now use three page-structure model
+  calls in total. Claims are split only when an unusual cohort exceeds 24 claims.
+- Removed the retired prompts, response contracts, and their duplicate contract tests. Production code still makes
+  no language decisions with keyword lists or benchmark vocabulary: exact IDs and schema values are validated in
+  code, while meaning remains a source-grounded Gemma decision.
+- A neutral direct probe with the production prompts and `gemma4:12b` kept a bounded review under its existing
+  Project, kept a named Person separate from `you`, treated a possible future effort as provisional, and produced
+  coherent ownership, project-role, and section decisions. An ambiguous “only an idea” phrase was typed as a Topic
+  by the census; this is recorded as an ontology boundary rather than patched with a lexical exception.
+- A neutral integrated router smoke test made exactly three successful model calls, produced no failures or new
+  pages, and routed existing Project history and its scheduled review to `timeline` and `next_steps_deadlines`.
+  Focused mocked integration coverage passes with 35 tests. No benchmark fixture was used to design or tune this
+  simplification, and the milestone is not declared complete from this smoke evidence. Repository validation passed
+  with **250 tests and 2 skips**, Ruff, UI lint, UI build, and `git diff --check`; the existing UI chunk-size warning
+  remains.

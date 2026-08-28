@@ -9,13 +9,13 @@ from mycelium.store import WikiStore, LogStore
 from mycelium.config import Config
 from mycelium.ollama import OllamaClient
 from mycelium.encoder import Encoder
-from mycelium.budget import ContextBudget
+from mycelium.budget import count_tokens
+from mycelium.context import render_memory_context
 from mycelium.session import Session
 from mycelium.facts import routing_recall_index
 from mycelium.sources import source_contexts_for_pages
 from mycelium.page_search import PageSearchIndex
 from mycelium.memory_tools import MemoryToolset
-from mycelium.materialization import sections_markdown
 from mycelium.short_term import ShortTermMemoryQueue, ShortTermMemoryStatus
 from mycelium.artifacts import (
     ArtifactStore,
@@ -160,7 +160,6 @@ class Mycelium:
     ) -> List[WikiPage]:
         
         budget_tokens = budget_tokens or self.config.context_budget_tokens
-        budget = ContextBudget(budget_tokens)
         
         pages = self.wiki.list_all()
         loaded_pages: list[WikiPage] = []
@@ -182,22 +181,21 @@ class Mycelium:
                 ],
             ]
             content = "\n".join(lines)
-            block = f"=== RECENT UNCONSOLIDATED MEMORY ===\n{content}"
-            if budget.fits(block):
-                budget.consume(block)
-                loaded_pages.append(WikiPage(
-                    slug="_short-term-memory",
-                    title="Recent, unconsolidated memory",
-                    content=content,
-                    created=datetime.now().astimezone(),
-                    last_updated=datetime.now().astimezone(),
-                    version=1,
-                    confidence=0.7,
-                    importance=0.9,
-                    page_type=None,
-                    tags=["short-term-memory"],
-                    entity_id="_short-term-memory",
-                ))
+            recent_page = WikiPage(
+                slug="_short-term-memory",
+                title="Recent, unconsolidated memory",
+                content=content,
+                created=datetime.now().astimezone(),
+                last_updated=datetime.now().astimezone(),
+                version=1,
+                confidence=0.7,
+                importance=0.9,
+                page_type=None,
+                tags=["short-term-memory"],
+                entity_id="_short-term-memory",
+            )
+            if count_tokens(render_memory_context([recent_page])) <= budget_tokens:
+                loaded_pages.append(recent_page)
 
         selection_priorities = {
             hit.slug: rank
@@ -257,28 +255,15 @@ class Mycelium:
             key=lambda item: (item[0], item[1]),
         )
 
-        budgeted_project_role_claim_ids: set[str] = set()
         for priority, slug in selections:
             if not self.wiki.exists(slug):
                 continue
                 
             page = self.wiki.get(slug)
-            candidate_role_ids = set(budgeted_project_role_claim_ids)
-            page_body = (
-                sections_markdown(page.sections, candidate_role_ids)
-                if page.sections
-                else page.content
-            )
-            content = (
-                f"=== MEMORY: {page.title} "
-                f"(confidence: {page.confidence:.2f}, v{page.version}) ===\n"
-                f"{page_body}\n=== END MEMORY ==="
-            )
-            
-            if budget.fits(content):
-                budget.consume(content)
+            if count_tokens(
+                render_memory_context([*loaded_pages, page])
+            ) <= budget_tokens:
                 loaded_pages.append(page)
-                budgeted_project_role_claim_ids = candidate_role_ids
 
         source_contexts = source_contexts_for_pages(
             loaded_pages,
@@ -288,9 +273,11 @@ class Mycelium:
         )
         for page in loaded_pages:
             source_context = source_contexts.get(page.slug, "")
-            if source_context and budget.fits(source_context):
-                budget.consume(source_context)
-                page.source_context = source_context
+            if not source_context:
+                continue
+            page.source_context = source_context
+            if count_tokens(render_memory_context(loaded_pages)) > budget_tokens:
+                page.source_context = ""
                 
         return loaded_pages
 

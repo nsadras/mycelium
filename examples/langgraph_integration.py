@@ -17,14 +17,7 @@ async def memory_node(state: AgentState) -> AgentState:
     """Load relevant memory into agent state."""
     # We load pages without starting a full session just for context
     pages = await mem.load_context(query=state['input'])
-    
-    # We can format the pages manually if we aren't using the session context manager
-    blocks = []
-    for page in pages:
-        header = f"=== MEMORY: {page.title} (confidence: {page.confidence:.2f}, v{page.version}) ==="
-        blocks.append(f"{header}\n{page.content}")
-        
-    state['memory_context'] = "\n\n".join(blocks) + "\n\n=== END MEMORY ===" if blocks else ""
+    state['memory_context'] = mycelium.render_memory_context(pages)
     return state
 
 async def record_node(state: AgentState) -> AgentState:

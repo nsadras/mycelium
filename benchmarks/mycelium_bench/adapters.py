@@ -11,6 +11,7 @@ from typing import Annotated, Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from mycelium.context import render_memory_context
 from mycelium.core import Mycelium
 from mycelium.artifacts import ArtifactStore, MemoryClaim
 from mycelium.store import LogStore
@@ -337,19 +338,7 @@ class MyceliumMemorySystem:
             self._errors.append({"stage": "load_context", "question": question, "error": str(exc)})
             loaded_pages = []
         memory_construction_time = time.perf_counter() - start
-        wiki_context = "\n\n".join(
-            f"=== MEMORY: {page.title} ({page.slug}) ===\n{format_page_for_prompt(page)}"
-            for page in loaded_pages
-        )
-        source_context = "\n\n".join(
-            page.source_context for page in loaded_pages if page.source_context
-        )
-        context = wiki_context
-        if source_context:
-            context = (
-                f"SYNTHESIZED MEMORY PAGES:\n{wiki_context}\n\n"
-                f"CANONICAL SOURCE EVIDENCE:\n{source_context}"
-            )
+        context = render_memory_context(loaded_pages)
         answer = await self.qa_client.answer(question, context)
         answer.memory_construction_time = memory_construction_time
         answer.metadata.update(
@@ -563,19 +552,7 @@ class MemoryAgentSystem(MyceliumMemorySystem):
             budget_tokens=self.context_budget_tokens,
             session_id=str(metadata.get("query_id") or f"{self.case_id}-query"),
         )
-        wiki_context = "\n\n".join(
-            f"=== MEMORY: {page.title} ({page.slug}) ===\n{format_page_for_prompt(page)}"
-            for page in loaded_pages
-        )
-        source_context = "\n\n".join(
-            page.source_context for page in loaded_pages if page.source_context
-        )
-        initial_context = wiki_context
-        if source_context:
-            initial_context = (
-                f"SYNTHESIZED MEMORY PAGES:\n{wiki_context}\n\n"
-                f"CANONICAL SOURCE EVIDENCE:\n{source_context}"
-            )
+        initial_context = render_memory_context(loaded_pages)
 
         escalation_reason = memory_escalation_reason(question)
         context = initial_context
@@ -778,13 +755,7 @@ class FullWikiMemorySystem(MyceliumMemorySystem):
         # Sort by slug to be deterministic
         all_pages.sort(key=lambda p: p.slug)
         
-        # Format all pages into one single context
-        context_parts = []
-        for page in all_pages:
-            context_parts.append(
-                f"=== MEMORY: {page.title} ({page.slug}) ===\n{format_page_for_prompt(page)}"
-            )
-        context = "\n\n".join(context_parts)
+        context = render_memory_context(all_pages)
         
         start = time.perf_counter()
         answer = await self.qa_client.answer(question, context)
@@ -910,14 +881,6 @@ def format_messages_for_memory(messages: list[BenchmarkMessage], metadata: dict[
         body_lines.append(" ".join(pieces))
 
     return "\n".join([*prefix_lines, *body_lines]).strip()
-
-
-def format_page_for_prompt(page: Any, *, include_source: bool = False) -> str:
-    body = page.content
-    source_context = getattr(page, "source_context", "") if include_source else ""
-    if source_context:
-        return f"{body}\n\n{source_context}"
-    return body
 
 
 def sanitize_path_part(value: str) -> str:

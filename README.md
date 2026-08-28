@@ -167,10 +167,11 @@ if __name__ == "__main__":
 ```
 
 The context manager retrieves relevant canonical pages and short-term claims on entry and records the
-exchange on exit. `dream()` manually consolidates pending and deferred claims. Library integrations can call
-`dream_if_ready()` to apply the configured queue policy. See [`examples/basic_session.py`](examples/basic_session.py)
-for a runnable example and [`examples/langgraph_integration.py`](examples/langgraph_integration.py) for a
-LangGraph integration pattern.
+exchange on exit. Web and library integrations use the same budgeted memory-context renderer; integrations that
+load pages directly can call `mycelium.render_memory_context(pages)`. `dream()` manually consolidates pending and
+deferred claims. Library integrations can call `dream_if_ready()` to apply the configured queue policy. See
+[`examples/basic_session.py`](examples/basic_session.py) for a runnable example and
+[`examples/langgraph_integration.py`](examples/langgraph_integration.py) for a LangGraph integration pattern.
 
 ## Configuration
 

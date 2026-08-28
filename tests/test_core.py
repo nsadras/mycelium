@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock
 from mycelium.core import Mycelium
+from mycelium.budget import count_tokens
+from mycelium.context import render_memory_context
 from mycelium.models import WikiPage
 from datetime import datetime
 from mycelium.artifacts import ClaimPlacement, ClaimProvenance, EntityRecord, MemoryClaim
@@ -149,3 +151,32 @@ async def test_load_context_exposes_relevant_short_term_memory_without_wiki_writ
     recent = next(page for page in loaded if page.slug == "_short-term-memory")
     assert claim.text in recent.content
     assert not temp_mycelium.wiki.exists("_short-term-memory")
+
+
+@pytest.mark.asyncio
+async def test_load_context_budgets_the_authoritative_rendering(temp_mycelium):
+    now = datetime.now()
+    page = WikiPage(
+        slug="project-orchid",
+        title="Project Orchid",
+        content="Orchid planning details " * 20,
+        created=now,
+        last_updated=now,
+        version=1,
+        confidence=0.8,
+        importance=0.5,
+        page_type="project",
+        entity_id="project-orchid",
+    )
+    temp_mycelium.wiki.save(page)
+    exact_tokens = count_tokens(render_memory_context([page]))
+
+    loaded = await temp_mycelium.load_context(
+        "Orchid planning", budget_tokens=exact_tokens
+    )
+    rejected = await temp_mycelium.load_context(
+        "Orchid planning", budget_tokens=exact_tokens - 1
+    )
+
+    assert [item.slug for item in loaded] == [page.slug]
+    assert rejected == []

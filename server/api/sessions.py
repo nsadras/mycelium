@@ -4,7 +4,7 @@ from dataclasses import asdict
 from typing import List, Optional
 import uuid
 
-from mycelium.facts import page_recall_context
+from mycelium.context import render_memory_context
 from server.runtime import (
     append_tool_event_logs,
     append_turn,
@@ -116,17 +116,7 @@ async def chat(session_id: str, req: ChatRequest):
         )
 
         loaded_pages = await mem.load_context(retrieval_query, session_id=episode_id)
-        memory_context = ""
-        if loaded_pages:
-            blocks = []
-            for page in loaded_pages:
-                header = f"=== MEMORY: {page.title} (confidence: {page.confidence:.2f}, v{page.version}) ==="
-                recall_context = page_recall_context(page)
-                body = f"{recall_context}\n\n{page.content}" if recall_context else page.content
-                if page.source_context:
-                    body = f"{body}\n\n{page.source_context}"
-                blocks.append(f"{header}\n{body}")
-            memory_context = "\n\n".join(blocks) + "\n\n=== END MEMORY ==="
+        memory_context = render_memory_context(loaded_pages)
 
         system_prompt = (
             "You are a helpful and intelligent AI assistant. "

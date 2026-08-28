@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 from typing import Any, List, TYPE_CHECKING
 
+from mycelium.context import render_memory_context
 from mycelium.models import WikiPage
-from mycelium.materialization import sections_markdown
 
 if TYPE_CHECKING:
     from mycelium.core import Mycelium
@@ -22,31 +22,8 @@ class Session:
 
     @property
     def memory_context(self) -> str:
-        """
-        Returns loaded wiki pages formatted for prompt injection:
-        === MEMORY: <title> (confidence: X.XX, v<N>) ===
-        <page content>
-        === END MEMORY ===
-        """
-        if not self.loaded_pages:
-            return ""
-            
-        blocks = []
-        seen_project_role_claim_ids: set[str] = set()
-        for page in self.loaded_pages:
-            header = f"=== MEMORY: {page.title} (confidence: {page.confidence:.2f}, v{page.version}) ==="
-            body = (
-                sections_markdown(page.sections, seen_project_role_claim_ids)
-                if page.sections
-                else page.content
-            )
-            if page.source_context:
-                body = f"{body}\n\n{page.source_context}"
-            if not body.strip():
-                continue
-            blocks.append(f"{header}\n{body}")
-            
-        return "\n\n".join(blocks) + "\n\n=== END MEMORY ==="
+        """Return loaded pages in the canonical assistant-context format."""
+        return render_memory_context(self.loaded_pages)
 
     def build_prompt(self, user_message: str) -> str:
         """

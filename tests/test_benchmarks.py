@@ -13,7 +13,6 @@ from benchmarks.mycelium_bench.adapters import (
     GoldEvidenceMemorySystem,
     OllamaQaClient,
     format_messages_for_memory,
-    format_page_for_prompt,
 )
 from benchmarks.mycelium_bench.adapters import MyceliumMemorySystem
 from benchmarks.mycelium_bench.locomo import (
@@ -24,6 +23,7 @@ from benchmarks.mycelium_bench.locomo import (
 )
 from benchmarks.mycelium_bench.scoring import locomo_score
 from mycelium.core import Mycelium
+from mycelium.context import render_memory_context
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimProvenance,
@@ -32,7 +32,7 @@ from mycelium.artifacts import (
     SourceDocument,
     SourceSegment,
 )
-from mycelium.models import LogEntry
+from mycelium.models import LogEntry, WikiPage
 from mycelium.store import LogStore
 
 
@@ -119,15 +119,19 @@ def test_format_messages_includes_metadata_and_speaker():
 
 
 def test_benchmark_page_rendering_renders_nested_recall_fact_once():
-    page = type(
-        "Page", (),
-        {
-            "content": "## Key Facts\n\n### Current Context\n- A single useful fact.",
-            "source_context": "",
-        },
-    )()
+    now = datetime.now().astimezone()
+    page = WikiPage(
+        slug="single-fact",
+        title="Single Fact",
+        content="## Key Facts\n\n### Current Context\n- A single useful fact.",
+        created=now,
+        last_updated=now,
+        version=1,
+        confidence=0.8,
+        importance=0.5,
+    )
 
-    assert format_page_for_prompt(page).count("A single useful fact") == 1
+    assert render_memory_context([page]).count("A single useful fact") == 1
 
 
 def test_locomo_score_matches_multi_answer_parts():

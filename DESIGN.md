@@ -48,7 +48,10 @@ When a user sends a message, the backend builds a retrieval query from the chat 
 and current message. A disposable in-memory SQLite FTS5 index ranks complete wiki pages with BM25. Exact
 title/entity mentions and structured temporal matches may add pages before the context budget is applied.
 
-Loaded pages are placed in the chat system prompt along with compact snippets from their backlinked raw logs. The entire current session transcript is then passed to the chat model.
+Loaded pages are placed in the chat system prompt along with compact snippets from their backlinked raw logs. One
+authoritative renderer formats and deduplicates this context for both web chats and direct library sessions, and the
+retrieval budget is applied to that exact rendered text. The entire current session transcript is then passed to the
+chat model.
 
 Retrieval is read-only. It never reinforces, destabilizes, or rewrites a page.
 

@@ -19,7 +19,7 @@ from mycelium.config import Config
 from mycelium.consolidation import ClaimRoute, placement_from_route
 from mycelium.models import Edge, PAGE_SECTION_KEYS, PageType, UpdateLogEntry, WikiPage
 from mycelium.store import WikiStore
-from mycelium.wiki_schema import is_project_role, project_role_section
+from mycelium.wiki_schema import project_role_section
 
 
 INDEX_GROUPS: tuple[tuple[PageType, str], ...] = (
@@ -292,14 +292,18 @@ class PageMaterializer:
     ) -> ConsolidatedFact | None:
         if fact.state != "active":
             return None
-        role_claims = [
-            claims[claim_id] for claim_id in fact.member_claim_ids
-            if claim_id in claims and is_project_role(claims[claim_id])
+        role_claim_ids = [
+            claim_id
+            for claim_id in fact.member_claim_ids
+            if claim_id in claims
+            and claim_id in placements
+            and placements[claim_id].relationship_kind == "project_role"
         ]
-        if role_claims:
+        if role_claim_ids:
             endpoints = set()
-            for claim in role_claims:
-                placement = placements.get(claim.claim_id)
+            for claim_id in role_claim_ids:
+                claim = claims[claim_id]
+                placement = placements.get(claim_id)
                 if placement is not None:
                     endpoints.update(
                         cls._project_role_endpoints(claim, placement, entities)
@@ -322,7 +326,7 @@ class PageMaterializer:
         entities: dict[str, EntityRecord],
     ) -> set[str]:
         """Identify one person/You and one Project named by a role claim."""
-        if not is_project_role(claim) or not placement.owner_entity_id:
+        if placement.relationship_kind != "project_role" or not placement.owner_entity_id:
             return set()
         canonical_owner = entities.get(placement.owner_entity_id)
         if (
@@ -558,7 +562,14 @@ class PageMaterializer:
                 "canonical_owner_entity_ids": canonical_owner_ids,
                 "canonical_linked_entity_ids": canonical_linked_ids,
                 "relationship_kind": (
-                    "project_role" if is_project_role(claim) else None
+                    "project_role"
+                    if any(
+                        canonical_placements[claim_id].relationship_kind
+                        == "project_role"
+                        for claim_id in member_ids
+                        if claim_id in canonical_placements
+                    )
+                    else None
                 ),
                 "projection": (
                     "shared_endpoint"

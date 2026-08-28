@@ -96,7 +96,8 @@ you request them through the UI or API.
 
 The wiki distinguishes people, organizations, ongoing projects, recurring series, individual events, artifacts,
 places, and abstract topics. A meeting, tool, or deliverable can remain part of its larger context without creating
-an unnecessary standalone page.
+an unnecessary standalone page. Responsibilities shared between a person and a project appear on both pages while
+remaining one source-backed memory.
 
 Every wiki fact links back to its source. When new information conflicts with existing memory, Mycelium creates a
 review proposal instead of silently overwriting either version. The Memory and Wiki views let you inspect evidence,

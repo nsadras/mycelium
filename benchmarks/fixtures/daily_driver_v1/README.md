@@ -12,6 +12,15 @@ such as an issue-tracker assignee, resolve to the same identity.
 The benchmark is primarily about memory artifacts and lifecycle behavior. Question answering is a secondary
 test of whether those artifacts remain useful during retrieval.
 
+The current page-structure milestone is narrower than the full scenario. Its release gates cover conservative
+page creation, stable identity separation, and correct ownership. Correction, retraction, short-term retrieval,
+and answering remain measured in the same run, but their gates are listed under `deferred_gates` and belong to
+later milestones. The rubric's `acceptance.dimensions` list names the page and entity quality measures that must
+also reach their declared targets; passing the safety gates alone does not complete the milestone. Provenance,
+required page identities, entity types, and duplicate safety remain exact. Ownership must reach 90%, while section
+and current-fact projection accuracy must each reach 80%; these semantic thresholds allow adjacent reasonable
+classifications without weakening the hard attribution, project-separation, or delayed-admission gates.
+
 ## Scenario
 
 Maya is building a local meeting-memory application. Early conversations refer only to "the meeting idea";
@@ -88,10 +97,11 @@ uv run python -m benchmarks.mycelium_bench.daily_driver \
 
 The run directory contains the complete Mycelium store, a snapshot, generated Markdown,
 and retrieval/answer probe results for every checkpoint. `evaluation.json` contains all
-rubric dimensions, executable hard gates, proposition completeness, checkpoint diffs,
+rubric dimensions, active and deferred gates, proposition completeness, checkpoint diffs,
 ownership confusion, duplicate facts, retrieval required/forbidden facts, and structured
-page diffs. `comparison.json` retains the earlier review-oriented diagnostics. The runner
-never simulates unsupported lifecycle operations;
+page diffs. `comparison.json` retains the earlier review-oriented diagnostics. Active `gates` are hard blockers,
+and the current `acceptance.dimensions` must also pass; `deferred_gates` preserve named checks for later milestones.
+The runner never simulates unsupported lifecycle operations;
 for example, source retraction is recorded as a capability gap until Mycelium implements
 it. Recompute the deterministic comparison after changing comparison logic without
 calling the LLM again:

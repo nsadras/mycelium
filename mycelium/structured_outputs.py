@@ -196,6 +196,14 @@ class IdentityMatchVerificationOutput(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class SeriesSubjecthoodOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    classification: Literal[
+        "independent_recurring_frame", "personal_attribute_or_context"
+    ]
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class ClaimOwnerDecisionOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     owner_entity: str = Field(max_length=160)
@@ -203,8 +211,15 @@ class ClaimOwnerDecisionOutput(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class ClaimSectionDecisionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    section: str = Field(max_length=160)
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class ClaimReferenceDecisionOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    relationship_kind: Literal["project_role", "other", "none"]
     subject_entity: str = Field(max_length=160)
     object_entities: list[str] = Field(max_length=12)
     contextual_entities: list[str] = Field(max_length=12)
@@ -237,13 +252,6 @@ ParticipantScopeResolutionOutput = (
 )
 
 
-class SubjectGraphPlanOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    nodes: list[SubjectGraphNodeOutput] = Field(max_length=32)
-    edges: list[SubjectGraphEdgeOutput] = Field(max_length=64)
-    participants: dict[str, ParticipantScopeResolutionOutput]
-
-
 class ConsolidatedFactGroupOutput(BaseModel):
     """A presentation-level grouping of compatible claims in one fixed scope."""
 
@@ -259,77 +267,93 @@ class ConsolidatedFactPlanOutput(BaseModel):
     facts: list[ConsolidatedFactGroupOutput] = Field(min_length=1, max_length=96)
 
 
-def subject_graph_output_model(
-    participant_aliases: Collection[str] | Mapping[str, str | None] = (),
-    *,
-    evidence_aliases: Collection[str] = (),
-    existing_entity_types: Mapping[str, str] | None = None,
+def subject_node_output_model(
+    evidence_aliases: Collection[str],
 ) -> type[BaseModel]:
-    """Build a graph contract with exact evidence, registry, and participant values."""
-    existing_entity_types = existing_entity_types or {}
-    participant_roles = (
-        {str(alias): role for alias, role in participant_aliases.items() if alias}
-        if isinstance(participant_aliases, Mapping)
-        else {str(alias): None for alias in participant_aliases if alias}
-    )
-    node_ref = Annotated[str, Field(pattern=r"^N[0-9]{3}$")]
-    person_ids = tuple(
-        entity_id
-        for entity_id, entity_type in existing_entity_types.items()
-        if entity_type == "person"
-    )
-    person_ref = (
-        node_ref | Literal.__getitem__(person_ids)
-        if person_ids
-        else node_ref
-    )
-    exact_person_participant = create_model(
-        "ExactPersonParticipantResolution",
-        __base__=PersonParticipantResolutionOutput,
-        entity=(person_ref, ...),
-    )
-    participant_fields: dict[str, Any] = {}
-    for alias, role in participant_roles.items():
-        participant_fields[alias] = (
-            UserParticipantResolutionOutput
-            if str(role or "").lower() == "user"
-            else exact_person_participant,
-            ...,
-        )
-    participants_model = create_model(
-        "ExactCohortParticipants",
-        __config__=ConfigDict(extra="forbid"),
-        **participant_fields,
-    )
+    """Build an evidence-constrained subject census before relationship planning."""
     evidence_values = tuple(str(alias) for alias in evidence_aliases if alias)
-    evidence_ref = (
-        Literal.__getitem__(evidence_values) if evidence_values else str
-    )
+    if not evidence_values:
+        raise ValueError("Subject node planning requires evidence aliases")
+    evidence_ref = Literal.__getitem__(evidence_values)
     graph_node = create_model(
-        "ExactEvidenceSubjectGraphNode",
+        "ExactEvidenceSubjectNode",
         __base__=SubjectGraphNodeOutput,
         supporting_evidence=(
             list[evidence_ref],  # type: ignore[valid-type]
             Field(min_length=1, max_length=48),
         ),
     )
-    stable_endpoints = tuple(sorted({"you", *existing_entity_types}))
-    endpoint_ref = node_ref | Literal.__getitem__(stable_endpoints)
-    graph_edge = create_model(
-        "ExactEndpointSubjectGraphEdge",
-        __base__=SubjectGraphEdgeOutput,
-        source_node=(endpoint_ref, ...),
-        target_node=(endpoint_ref, ...),
-        supporting_evidence=(
-            list[evidence_ref],  # type: ignore[valid-type]
-            Field(min_length=1, max_length=48),
-        ),
-    )
     return create_model(
-        "ExactSubjectGraphPlan",
+        "ExactSubjectNodePlan",
         __config__=ConfigDict(extra="forbid"),
         nodes=(list[graph_node], Field(max_length=32)),
-        edges=(list[graph_edge], Field(max_length=64)),
+    )
+
+
+def subject_relationship_output_model(
+    node_types: Mapping[str, str],
+    participant_roles: Mapping[str, str | None],
+    evidence_aliases: Collection[str],
+    existing_entity_types: Mapping[str, str],
+) -> type[BaseModel]:
+    """Constrain the subject hierarchy and participants to a declared census."""
+    node_ids = tuple(str(value) for value in node_types)
+    stable_ids = tuple(str(value) for value in existing_entity_types)
+    endpoints = tuple(dict.fromkeys((*node_ids, *stable_ids)))
+    if not endpoints:
+        raise ValueError("Subject relationships require declared endpoints")
+    evidence_values = tuple(str(alias) for alias in evidence_aliases if alias)
+    evidence_ref = Literal.__getitem__(evidence_values)
+    graph_edge: type[BaseModel] = SubjectGraphEdgeOutput
+    if node_ids:
+        source_type = Literal.__getitem__(node_ids)
+        parent_ids = tuple(
+            endpoint
+            for endpoint in endpoints
+            if node_types.get(endpoint) in {"project", "series"}
+            or existing_entity_types.get(endpoint) in {"project", "series"}
+        )
+        target_type = Literal.__getitem__(parent_ids or endpoints)
+        graph_edge = create_model(
+            "ExactDeclaredSubjectEdge",
+            __base__=SubjectGraphEdgeOutput,
+            source_node=(source_type, ...),  # type: ignore[valid-type]
+            target_node=(target_type, ...),  # type: ignore[valid-type]
+            relation=(Literal["component_of", "occurrence_of"], ...),
+            supporting_evidence=(
+                list[evidence_ref],  # type: ignore[valid-type]
+                Field(min_length=1, max_length=48),
+            ),
+        )
+    person_refs = tuple(
+        value
+        for value in endpoints
+        if node_types.get(value) == "person"
+        or existing_entity_types.get(value) == "person"
+    )
+    participant_fields: dict[str, Any] = {}
+    for alias, role in participant_roles.items():
+        if str(role or "").lower() == "user":
+            participant_fields[str(alias)] = (UserParticipantResolutionOutput, ...)
+            continue
+        if not person_refs:
+            raise ValueError("Non-user participants require a declared Person endpoint")
+        person_type = Literal.__getitem__(person_refs)
+        exact_person = create_model(
+            f"ExactParticipant{alias}",
+            __base__=PersonParticipantResolutionOutput,
+            entity=(person_type, ...),  # type: ignore[valid-type]
+        )
+        participant_fields[str(alias)] = (exact_person, ...)
+    participants_model = create_model(
+        "ExactDeclaredParticipants",
+        __config__=ConfigDict(extra="forbid"),
+        **participant_fields,
+    )
+    return create_model(
+        "ExactSubjectRelationshipPlan",
+        __config__=ConfigDict(extra="forbid"),
+        edges=(list[graph_edge], Field(max_length=len(node_ids))),
         participants=(participants_model, ...),
     )
 
@@ -370,9 +394,11 @@ def graph_admission_output_model(
     node_ids: Collection[str],
     *,
     contained_node_ids: Collection[str] = (),
+    context_only_node_ids: Collection[str] = (),
 ) -> type[BaseModel]:
     """Build exact scope-role and personal-memory decisions for graph nodes."""
     contained = {str(node_id) for node_id in contained_node_ids}
+    context_only = {str(node_id) for node_id in context_only_node_ids}
     admission_fields: dict[str, Any] = {}
     for node_id in node_ids:
         node_id = str(node_id)
@@ -382,6 +408,12 @@ def graph_admission_output_model(
                 f"{node_id}ContainedGraphAdmission",
                 __base__=GraphAdmissionOutput,
                 scope_role=(Literal["component"], ...),
+            )
+        elif node_id in context_only:
+            decision_model = create_model(
+                f"{node_id}ContextGraphAdmission",
+                __base__=GraphAdmissionOutput,
+                scope_role=(Literal["context_only"], ...),
             )
         admission_fields[node_id] = (decision_model, ...)
     admissions_model = create_model(
@@ -416,6 +448,20 @@ def identity_verification_output_model(
     )
 
 
+def series_subjecthood_output_model(node_id: str) -> type[BaseModel]:
+    """Build one exact recurring-frame verification decision."""
+    decisions_model = create_model(
+        "ExactSeriesSubjecthoodDecisions",
+        __config__=ConfigDict(extra="forbid"),
+        **{str(node_id): (SeriesSubjecthoodOutput, ...)},
+    )
+    return create_model(
+        "ExactSeriesSubjecthoodPlan",
+        __config__=ConfigDict(extra="forbid"),
+        decisions=(decisions_model, ...),
+    )
+
+
 def claim_owner_output_model(
     evidence_aliases: Collection[str],
     entity_ids: Collection[str],
@@ -445,6 +491,36 @@ def claim_owner_output_model(
         "ExactClaimOwnerPlan",
         __config__=ConfigDict(extra="forbid"),
         assignments=(assignments_model, ...),
+    )
+
+
+def claim_section_output_model(
+    section_options: Mapping[str, Collection[str]],
+) -> type[BaseModel]:
+    """Build a per-claim section contract after ownership is fixed."""
+    section_fields: dict[str, Any] = {}
+    for alias, values in section_options.items():
+        sections = tuple(dict.fromkeys(str(value) for value in values))
+        if not sections:
+            raise ValueError(f"Claim section options are empty for {alias}")
+        section_type = Literal.__getitem__(sections)
+        decision_model = create_model(
+            f"ClaimSectionDecision{alias}",
+            __base__=ClaimSectionDecisionOutput,
+            section=(section_type, ...),  # type: ignore[valid-type]
+        )
+        section_fields[str(alias)] = (decision_model, ...)
+    if not section_fields:
+        raise ValueError("Claim section planning requires at least one evidence alias")
+    sections_model = create_model(
+        "ExactClaimSectionAssignments",
+        __config__=ConfigDict(extra="forbid"),
+        **section_fields,
+    )
+    return create_model(
+        "ExactClaimSectionPlan",
+        __config__=ConfigDict(extra="forbid"),
+        sections=(sections_model, ...),
     )
 
 

@@ -53,6 +53,9 @@ def place(artifacts, item, owner, section, *, links=None):
         reason="test",
         created_at="2026-08-12T10:00:00-07:00",
         updated_at="2026-08-12T10:00:00-07:00",
+        relationship_kind=(
+            "project_role" if item.predicate == "project_role" else None
+        ),
     ))
     artifacts.save_consolidated_fact(ConsolidatedFact(
         fact_id=f"fact-{item.claim_id}",
@@ -160,6 +163,7 @@ def test_project_role_placement_requires_person_owner_and_one_project(tmp_path):
             reason="invalid role",
             created_at="2026-08-12T10:00:00-07:00",
             updated_at="2026-08-12T10:00:00-07:00",
+            relationship_kind="project_role",
         ))
 
 

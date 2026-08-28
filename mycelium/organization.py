@@ -147,6 +147,7 @@ class EntityCurationService:
                 claim_id, owner_entity_id, section_key,
                 list(linked_entity_ids if linked_entity_ids is not None else (old.linked_entity_ids if old else [])),
                 "placed", reason, old.created_at if old else now, now,
+                old.relationship_kind if old else None,
             )
             affected.update({owner_entity_id, *placement.linked_entity_ids})
         self.artifacts.save_placement(placement)

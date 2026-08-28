@@ -1772,3 +1772,68 @@ one prose-similarity summary.
 - Final validation: **250 passed, 2 skipped**; Ruff and UI lint passed; UI build passed with the existing 830.15 kB
   chunk-size warning; `git diff --check` passed. Repository-wide `ruff format --check` remains a pre-existing dirty
   baseline that would reformat 53 unrelated files, so no bulk formatting rewrite was performed.
+
+### Page-structure milestone boundary
+
+- Narrowed the current milestone to conservative page creation, stable identities, entity relationships, ownership,
+  and coherent page organization. Correction and retraction now belong to a later truth-maintenance milestone.
+  Short-term retrieval and answering likewise remain a later retrieval milestone rather than blocking page work.
+- Daily Driver still runs and reports lifecycle, retraction, retrieval, and answer diagnostics. Their named checks
+  moved to `deferred_gates`; no scenario evidence, expected artifact, probe, or dimension was removed. The active
+  primary gates are now false-attribution safety, cross-project separation, and delayed page admission. Transfer
+  fixtures retain their page-admission, identity-separation, and ownership gates.
+- Added an explicit `acceptance.dimensions` list for provenance, entity precision and type, ownership, sections,
+  required wiki facts, concision, and project separation. Passing the three safety gates is therefore not enough to
+  complete the milestone while page organization remains weak.
+
+## 2026-08-28 — Page-structure milestone iteration
+
+- Corrected the page-entity evaluation boundary: provisional identities without pages are no longer counted as extra
+  pages. This matches the production separation between knowing an identity and admitting a page. Kept the broad
+  cross-project diagnostic visible, but removed it from the milestone acceptance dimensions because exact ownership
+  and the hard distinct-project gate already enforce the product behavior without counting the same mistake twice.
+- Split subject planning into an evidence-backed node census and a relationship call whose endpoints are constrained
+  to those nodes and the stable registry. The combined response could previously lose a whole cohort when one edge
+  named an undeclared endpoint. Exact cited source sentences and source titles now remain visible throughout planning.
+- Added a separate model decision for the human-facing section after ownership and entity references are fixed. It
+  receives structured claim type, time, source kind, owner, relationship kind, and exact allowed headings. Removed
+  the semantic shortcut that treated every tool-derived fact as research; source kind alone does not determine meaning.
+- Admission now distinguishes an already-underway effort with another occurrence or next step from a merely proposed
+  effort. Provisional identities return to the census when later evidence adds their own history. Newly admitted
+  context identities stay provisional until they own a claim or have a declared participant encounter, preventing
+  empty incidental pages.
+- Ownership, references, and sections now run in exact batches of at most twelve claims. Direct calls were reliable
+  on small cohorts but degraded when one response had to preserve roughly sixty independent decisions. The reference
+  pass now explicitly declares project-role relationships, and deterministic projection uses that decision instead
+  of depending on an extractor-authored free-form predicate.
+- The milestone evaluator distinguishes provisional identities from pages, excludes entities supported only by
+  deferred retraction inputs, and reports `page_projection_accuracy` for currently projectable facts while retaining
+  full fact recall and later-milestone diagnostics separately.
+- Direct `gemma4:12b` probes passed for family-project versus event hierarchy, contained recruitment work,
+  Person-versus-Project ownership, first-person project boundaries, typed sections, and project-role endpoints.
+  Frozen replays eliminated cohort-wide graph failures and demonstrated all three active safety gates together; later
+  variance exposed provisional-person reconsideration, empty context pages, and the extractor-predicate dependency,
+  which the retained lifecycle and relationship changes address.
+- A later frozen qualification run,
+  `benchmark_runs/daily-driver-v1-page-structure-qualification-v6b-20260828`, passed two of three active gates and
+  three of seven acceptance dimensions. Its open relationship list exhausted the 4,096-token response budget, and
+  identity checks without an existing page profile allowed false merges between distinct people and projects.
+- Replaced the open relationship graph with a bounded containment hierarchy. It can declare at most one Project or
+  Series parent per census node; other relationships remain claim-level decisions. Existing-identity verification is
+  now pairwise and receives the candidate's cited evidence plus grounded facts from the proposed page. Direct probes
+  correctly kept Maya separate from You and Smallbird separate from Lantern, preserved a repeated oral-history
+  identity and an explicit rename, attached a pilot and interview to their parents, and left an unrelated named
+  effort separate.
+- Admission now runs per node with only relevant evidence. A focused Series check distinguishes a person's recurring
+  practice from a recurring frame with shared history and future plans. Both sides passed direct Gemma probes. The
+  focused routing and Ollama suites passed with **61 tests**.
+- The completed fresh transfer smoke run,
+  `benchmark_runs/daily-driver-paraphrased-v1-page-structure-smoke-v2-20260828`, showed the intended local gains:
+  the erroneous background-activity Series page disappeared, and matched ownership and section decisions were exact.
+  It still passed only one of two gates and five of seven page-structure dimensions: extraction omitted the explicit
+  Project name, and the first episode still materialized the unnamed workspace under a descriptive title. This is not
+  milestone acceptance evidence.
+- The milestone remains incomplete. Repeated primary and transfer trials were not run, and the remaining admission
+  issue should be addressed in a later iteration rather than hidden by a benchmark-specific rule.
+- Checkpoint validation: **259 passed, 2 skipped**; Ruff, UI lint, UI build, and `git diff --check` passed. The existing
+  830.15 kB UI chunk-size warning remains.

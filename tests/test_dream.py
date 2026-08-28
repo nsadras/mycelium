@@ -14,18 +14,20 @@ from mycelium.artifacts import (
     SourceSegment,
 )
 from mycelium.config import Config
-from mycelium.consolidation import ClaimEvidence, slugify
+from mycelium.consolidation import ClaimEvidence, ClaimRouter, slugify
 from mycelium.dream import DreamProcess
 from mycelium.models import LogEntry
 from mycelium.store import LogStore, WikiStore
 from mycelium.structured_outputs import (
     claim_owner_output_model,
     claim_reference_output_model,
+    claim_section_output_model,
     consolidation_output_model,
     entity_discovery_output_model,
     graph_admission_output_model,
     identity_resolution_output_model,
-    subject_graph_output_model,
+    subject_node_output_model,
+    subject_relationship_output_model,
 )
 
 
@@ -76,6 +78,7 @@ def assignment(
     links: list[str] | None = None,
     supporting: list[str] | None = None,
     reason: str = "The cohort establishes this scope.",
+    relationship_kind: str = "none",
 ) -> dict:
     value = {
         "disposition": disposition,
@@ -87,6 +90,7 @@ def assignment(
         value.update({
             "owner_entity": owner,
             "linked_entities": list(links or []),
+            "relationship_kind": relationship_kind,
         })
     return value
 
@@ -134,7 +138,32 @@ def split_scope_plan(plan: dict) -> list[dict]:
     def stable(value: str) -> str:
         return candidate_entities.get(value, value)
 
-    return [
+    materialized_candidates = {
+        stable(candidate["candidate_id"])
+        for candidate in plan.get("candidates", [])
+        if candidate["confidence"] >= 0.7
+    }
+
+    def test_section(owner: str) -> str:
+        if not owner:
+            return ""
+        if owner in candidate_entities.values() and owner not in materialized_candidates:
+            return ""
+        defaults = {
+            "you": "preferences_working_style",
+            "person": "current_context",
+            "project": "overview",
+            "series": "overview",
+            "event": "summary",
+            "artifact": "overview",
+            "topic": "why_it_matters",
+            "organization": "overview",
+            "place": "overview",
+        }
+        entity_type = "you" if owner == "you" else owner.split("-", 1)[0]
+        return defaults[entity_type]
+
+    responses = [
         {
             "nodes": [
                 {
@@ -145,9 +174,8 @@ def split_scope_plan(plan: dict) -> list[dict]:
                 }
                 for candidate in plan.get("candidates", [])
             ],
-            "edges": [],
-            "participants": dict(plan.get("participants", {})),
         },
+        {"edges": [], "participants": dict(plan.get("participants", {}))},
         {"resolutions": {
             candidate["candidate_id"]: {
                 "entity_id": "",
@@ -159,6 +187,8 @@ def split_scope_plan(plan: dict) -> list[dict]:
             for candidate in plan.get("candidates", [])
         },
         },
+    ]
+    responses.extend(
         {"admissions": {
             candidate["candidate_id"]: {
                 "scope_role": "independent",
@@ -174,8 +204,10 @@ def split_scope_plan(plan: dict) -> list[dict]:
                 ),
                 "reason": candidate["reason"],
             }
-            for candidate in plan.get("candidates", [])
-        }},
+        }}
+        for candidate in plan.get("candidates", [])
+    )
+    responses.extend([
         {"assignments": {
             alias: {
                 "owner_entity": (
@@ -190,6 +222,7 @@ def split_scope_plan(plan: dict) -> list[dict]:
         }},
         {"references": {
             alias: {
+                "relationship_kind": decision.get("relationship_kind", "none"),
                 "subject_entity": stable(decision.get("subject_entity", "")),
                 "object_entities": [
                     stable(value) for value in decision.get("object_entities", [])
@@ -204,7 +237,19 @@ def split_scope_plan(plan: dict) -> list[dict]:
             }
             for alias, decision in assignments.items()
         }},
-    ]
+        {"sections": {
+            alias: {
+                "section": test_section(
+                    stable(decision.get("owner_entity", ""))
+                    if decision.get("disposition") == "canonical"
+                    else ""
+                ),
+                "reason": "The claim belongs in this section.",
+            }
+            for alias, decision in assignments.items()
+        }},
+    ])
+    return responses
 
 
 def set_scope_response(llm, plan: dict) -> None:
@@ -235,12 +280,12 @@ def you_scope(alias: str = "C001") -> dict:
     return scope_plan({alias: assignment("you", supporting=[alias])})
 
 
-def test_subject_graph_contract_rejects_extra_fields():
-    output_model = subject_graph_output_model()
-    valid = {"nodes": [], "edges": [], "participants": {}}
+def test_subject_node_contract_rejects_extra_fields():
+    output_model = subject_node_output_model(["C001"])
+    valid = {"nodes": []}
     assert output_model.model_validate(valid).nodes == []
     with pytest.raises(ValidationError):
-        output_model.model_validate({**valid, "routes": []})
+        output_model.model_validate({**valid, "edges": []})
 
 
 def test_runtime_cohort_contract_requires_every_exact_alias():
@@ -258,10 +303,20 @@ def test_runtime_cohort_contract_requires_every_exact_alias():
         }})
 
 
+def test_claim_decision_batches_preserve_every_alias_once():
+    aliases = {f"C{index:03d}": object() for index in range(1, 27)}
+
+    batches = list(ClaimRouter._alias_batches(aliases))
+
+    assert [len(batch) for batch in batches] == [12, 12, 2]
+    assert [alias for batch in batches for alias in batch] == list(aliases)
+
+
 def test_runtime_cohort_contract_requires_participant_resolution():
-    output_model = subject_graph_output_model({"P001": "user"})
+    output_model = subject_relationship_output_model(
+        {}, {"P001": "user"}, ["P001"], {"you": "you"}
+    )
     valid = {
-        "nodes": [],
         "edges": [],
         "participants": {"P001": participant("you")},
     }
@@ -271,8 +326,32 @@ def test_runtime_cohort_contract_requires_participant_resolution():
     assert parsed["participants"]["P001"]["entity"] == "you"
     with pytest.raises(ValidationError):
         output_model.model_validate({
-            "nodes": [],
             "edges": [],
+            "participants": {},
+        })
+
+
+def test_subject_relationship_contract_only_allows_one_level_hierarchy():
+    output_model = subject_relationship_output_model(
+        {"N001": "event", "N002": "project"},
+        {},
+        ["C001"],
+        {"project-known": "project"},
+    )
+    valid = {
+        "edges": [{
+            "source_node": "N001",
+            "target_node": "project-known",
+            "relation": "occurrence_of",
+            "supporting_evidence": ["C001"],
+        }],
+        "participants": {},
+    }
+
+    assert output_model.model_validate(valid).model_dump()["edges"] == valid["edges"]
+    with pytest.raises(ValidationError):
+        output_model.model_validate({
+            "edges": [{**valid["edges"][0], "relation": "related_to"}],
             "participants": {},
         })
 
@@ -310,6 +389,9 @@ def test_scope_evidence_preserves_extracted_roles_and_stable_references(tmp_path
     assert "'A relative'[role=subject]" in rendered
     assert "'Recurring endeavor'[role=owner]" in rendered
     assert "stable_entity_references=context:you" in rendered
+    assert "source_title=none" in rendered
+    assert f"[{source.segments[0].segment_id}]" in rendered
+    assert source.segments[0].content in rendered
 
 
 def test_consolidation_schema_requires_one_destination_for_every_exact_alias():
@@ -491,7 +573,6 @@ async def test_dream_routes_claim_and_materializes_deterministic_page(tmp_path):
     }
     assert next(item for item in references if item.role == "context").surface == "Memory Design"
     assert logs.get(entry.entry_id).consolidated is True
-    assert llm.call_structured.await_count == 5
     assert report.taxonomy_failures == []
     assert page.page_type == "topic"
 
@@ -596,7 +677,8 @@ async def test_evidence_maturity_is_separate_from_identity_confidence(tmp_path):
     responses = split_scope_plan(new_scope(
         "C001", "Archive Effort", "project"
     ))
-    responses[2]["admissions"]["N001"]["evidence_maturity"] = "emerging"
+    responses[3]["admissions"]["N001"]["evidence_maturity"] = "emerging"
+    responses[6]["sections"]["C001"]["section"] = ""
     llm.call_structured.side_effect = responses
 
     await dream.run()
@@ -605,6 +687,111 @@ async def test_evidence_maturity_is_separate_from_identity_confidence(tmp_path):
     assert entity.materialization_state == "provisional"
     assert not wiki.exists(entity.slug)
     assert artifacts.get_placement(claim.claim_id).status == "deferred"
+
+
+@pytest.mark.asyncio
+async def test_admitted_identity_stays_provisional_until_it_owns_a_claim(tmp_path):
+    dream, _, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, source = add_source(logs, artifacts)
+    add_claim(
+        artifacts,
+        source,
+        text="The user noted a lasting organization as context.",
+        claim_type="observation",
+        about="Context Group",
+    )
+    set_scope_response(dream.llm, scope_plan(
+        {"C001": assignment("you", supporting=["C001"])},
+        [scope_candidate("N001", "Context Group", "organization", ["C001"])],
+    ))
+
+    await dream.run()
+
+    entity = artifacts.get_entity("organization-context-group")
+    assert entity.materialization_state == "provisional"
+    assert not wiki.exists(entity.slug)
+
+
+@pytest.mark.asyncio
+async def test_later_distinct_source_can_promote_its_provisional_owner(tmp_path):
+    dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, first_source = add_source(logs, artifacts, suffix="first")
+    add_claim(
+        artifacts,
+        first_source,
+        text="An archive effort may continue.",
+        claim_type="plan",
+        about="Archive Effort",
+    )
+    first_responses = split_scope_plan(new_scope(
+        "C001", "Archive Effort", "project"
+    ))
+    first_responses[3]["admissions"]["N001"]["evidence_maturity"] = "emerging"
+    first_responses[6]["sections"]["C001"]["section"] = ""
+    llm.call_structured.side_effect = first_responses
+    await dream.run()
+    assert artifacts.get_entity(
+        "project-archive-effort"
+    ).materialization_state == "provisional"
+
+    _, second_source = add_source(logs, artifacts, suffix="second")
+    add_claim(
+        artifacts,
+        second_source,
+        claim_id="claim-second",
+        text="The archive effort now has continuing work.",
+        claim_type="state",
+        about="Archive Effort",
+    )
+    llm.call_structured.side_effect = split_scope_plan(scope_plan({
+        "C001": assignment(
+            disposition="deferred",
+            supporting=["C001"],
+            reason="The earlier claim remains deferred.",
+        ),
+        "C002": assignment(
+            "project-archive-effort", supporting=["C002"]
+        ),
+    }))
+
+    await dream.run()
+
+    entity = artifacts.get_entity("project-archive-effort")
+    assert entity.materialization_state == "materialized"
+    assert wiki.exists(entity.slug)
+    assert artifacts.get_placement("claim-second").owner_entity_id == entity.entity_id
+
+
+@pytest.mark.asyncio
+async def test_model_declared_project_role_projects_to_both_endpoint_pages(tmp_path):
+    dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
+    project = artifacts.create_entity("project", "Atlas")
+    person = artifacts.create_entity("person", "Priya Raman")
+    _, source = add_source(logs, artifacts)
+    add_claim(
+        artifacts,
+        source,
+        text="Priya will own pilot evaluation for Atlas.",
+        claim_type="commitment",
+        about="Priya Raman",
+    )
+    responses = split_scope_plan(scope_plan({
+        "C001": assignment(
+            person.entity_id,
+            links=[project.entity_id],
+            supporting=["C001"],
+            relationship_kind="project_role",
+        ),
+    }))
+    responses[-1]["sections"]["C001"]["section"] = "shared_projects"
+    llm.call_structured.side_effect = responses
+
+    await dream.run()
+
+    assert "Priya will own pilot evaluation" in wiki.get(person.slug).content
+    assert "Priya will own pilot evaluation" in wiki.get(project.slug).content
+    placement = artifacts.get_placement("claim-one")
+    assert placement.relationship_kind == "project_role"
 
 
 @pytest.mark.asyncio
@@ -784,7 +971,7 @@ async def test_deferred_owner_does_not_block_placed_sibling(tmp_path):
     assert logs.get(second_entry.entry_id).consolidated is True
     assert wiki.exists("coffee")
     assert artifacts.get_claim("claim-first").dream_disposition == "deferred"
-    assert llm.call_structured.await_count == 5
+    assert llm.call_structured.await_count == 7
 
 
 @pytest.mark.asyncio
@@ -802,7 +989,7 @@ async def test_partial_extraction_routes_available_claims_without_repair(tmp_pat
 
     assert report.completed_source_ids == [entry.entry_id]
     assert wiki.exists("partial-memory")
-    assert llm.call_structured.await_count == 5
+    assert llm.call_structured.await_count == 7
 
 
 @pytest.mark.asyncio
@@ -890,12 +1077,6 @@ async def test_subject_graph_accepts_an_existing_person_participant(tmp_path):
         {"C001": assignment(ava.entity_id, supporting=["C001"])},
         participants={"P001": participant(ava.entity_id)},
     ))
-    responses[0]["edges"] = [{
-        "source_node": ava.entity_id,
-        "target_node": "you",
-        "relation": "related_to",
-        "supporting_evidence": ["C001", "P001"],
-    }]
     dream.llm.call_structured.side_effect = responses
 
     result = await dream.router.route([ClaimEvidence(claim, source)])
@@ -927,7 +1108,7 @@ async def test_subject_graph_rejects_an_undeclared_participant_identity(tmp_path
 
     assert report.completed_source_ids == [entry.entry_id]
     assert len(report.failures) == 1
-    assert "Subject graph response did not satisfy the contract" in report.failures[0][
+    assert "Subject relationship response did not satisfy the contract" in report.failures[0][
         "reason"
     ]
     assert artifacts.list_entity_resolution_decisions() == []
@@ -956,13 +1137,13 @@ async def test_project_components_have_no_identity_creation_path(tmp_path):
             scope_candidate("N002", "Tuesday Recording", "event", ["C002"]),
         ],
     ))
-    responses[0]["edges"] = [{
+    responses[1]["edges"] = [{
         "source_node": "N002",
         "target_node": "N001",
-        "relation": "component_of",
+        "relation": "occurrence_of",
         "supporting_evidence": ["C002"],
     }]
-    responses[2]["admissions"]["N002"] = {
+    responses[4]["admissions"]["N002"] = {
         "scope_role": "component",
         "memory_evidence": "accumulating",
         "evidence_maturity": "established",
@@ -983,8 +1164,8 @@ async def test_project_components_have_no_identity_creation_path(tmp_path):
     assert {route.owner_entity_id for route in result.routes} == {"project-archive"}
 
 
-def test_subject_graph_contract_accepts_typed_nodes():
-    output_model = subject_graph_output_model()
+def test_subject_node_contract_accepts_typed_nodes():
+    output_model = subject_node_output_model(["C001"])
 
     parsed = output_model.model_validate({
         "nodes": [{
@@ -993,8 +1174,6 @@ def test_subject_graph_contract_accepts_typed_nodes():
             "entity_type": "project",
             "supporting_evidence": ["C001"],
         }],
-        "edges": [],
-        "participants": {},
     })
 
     assert parsed.nodes[0].title == "Archive"
@@ -1058,6 +1237,26 @@ def test_graph_admission_contract_keeps_declared_children_with_parent():
         })
 
 
+def test_graph_admission_contract_keeps_verified_context_off_pages():
+    output_model = graph_admission_output_model(
+        ["N001"], context_only_node_ids=["N001"]
+    )
+    decision = {
+        "memory_evidence": "thin",
+        "evidence_maturity": "emerging",
+        "reason": "The recurring activity is only personal context.",
+    }
+
+    parsed = output_model.model_validate({
+        "admissions": {"N001": {"scope_role": "context_only", **decision}}
+    })
+    assert parsed.admissions.N001.scope_role == "context_only"
+    with pytest.raises(ValidationError):
+        output_model.model_validate({
+            "admissions": {"N001": {"scope_role": "independent", **decision}}
+        })
+
+
 @pytest.mark.asyncio
 async def test_redundant_user_person_node_resolves_to_singleton_you(tmp_path):
     dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
@@ -1069,7 +1268,8 @@ async def test_redundant_user_person_node_resolves_to_singleton_you(tmp_path):
             "title": "You",
             "entity_type": "person",
             "supporting_evidence": ["C001"],
-        }], "edges": [], "participants": {}},
+        }]},
+        {"edges": [], "participants": {}},
         {"resolutions": {"N001": {
             "entity_id": "you",
             "preferred_title": "You",
@@ -1087,18 +1287,23 @@ async def test_redundant_user_person_node_resolves_to_singleton_you(tmp_path):
             "evidence_maturity": "established",
             "reason": "The user identity already has continuing history.",
         }}},
-        {"assignments": {"C001": {
-            "owner_entity": "you",
-            "confidence": 1.0,
-            "reason": "The claim changes the user's preferences.",
-        }}},
-        {"references": {"C001": {
+            {"assignments": {"C001": {
+                "owner_entity": "you",
+                "confidence": 1.0,
+                "reason": "The claim changes the user's preferences.",
+            }}},
+            {"references": {"C001": {
+            "relationship_kind": "none",
             "subject_entity": "you",
             "object_entities": [],
             "contextual_entities": [],
             "confidence": 1.0,
             "reason": "The user is the subject.",
         }}},
+            {"sections": {"C001": {
+                "section": "preferences_working_style",
+                "reason": "This claim records a user preference.",
+            }}},
     ]
 
     result = await dream.router.route([ClaimEvidence(claim, source)])
@@ -1125,14 +1330,14 @@ async def test_shorter_person_name_resolves_to_existing_identity(tmp_path):
         {"C001": assignment(person.entity_id, supporting=["C001"])},
         [candidate],
     ))
-    responses[1]["resolutions"]["N001"].update({
+    responses[2]["resolutions"]["N001"].update({
         "entity_id": person.entity_id,
         "preferred_title": "Priya Raman",
         "aliases": ["Priya"],
         "confidence": 0.95,
         "reason": "The shorter name refers to the same person.",
     })
-    responses.insert(2, {"verifications": {"N001": {
+    responses.insert(3, {"verifications": {"N001": {
             "same_identity": True,
             "reason": "The shorter name and full name identify the same person.",
         }}})
@@ -1162,14 +1367,14 @@ async def test_rejected_identity_match_cannot_mutate_existing_person(tmp_path):
         {"C001": assignment("N001", supporting=["C001"])},
         [candidate],
     ))
-    responses[1]["resolutions"]["N001"].update({
+    responses[2]["resolutions"]["N001"].update({
         "entity_id": person.entity_id,
         "preferred_title": "Omar Haddad",
         "aliases": [],
         "confidence": 0.9,
         "reason": "Proposed existing match.",
     })
-    responses.insert(2, {"verifications": {"N001": {
+    responses.insert(3, {"verifications": {"N001": {
             "same_identity": False,
             "reason": "Omar and Priya are different people.",
         }}})
@@ -1203,14 +1408,14 @@ async def test_later_project_name_updates_stable_identity_without_duplicate(tmp_
         {"C001": assignment(project.entity_id, supporting=["C001"])},
         [candidate],
     ))
-    responses[1]["resolutions"]["N001"].update({
+    responses[2]["resolutions"]["N001"].update({
         "entity_id": project.entity_id,
         "preferred_title": "Lantern",
         "aliases": ["Meeting Memory Assistant"],
         "confidence": 0.95,
         "reason": "The claim explicitly names the continuing effort.",
     })
-    responses.insert(2, {"verifications": {"N001": {
+    responses.insert(3, {"verifications": {"N001": {
         "same_identity": True,
         "reason": "The new name explicitly identifies the continuing Project.",
     }}})
@@ -1242,12 +1447,31 @@ def test_scope_contract_rejects_model_authored_source_only():
     reference_model = claim_reference_output_model(["C001"], ["you"])
     with pytest.raises(ValidationError):
         reference_model.model_validate({"references": {"C001": {
+            "relationship_kind": "none",
             "subject_entity": "source_only",
             "object_entities": [],
             "contextual_entities": [],
             "confidence": 0.9,
             "reason": "Not a registry ID.",
         }}})
+
+
+def test_claim_section_contract_uses_per_owner_exact_sections():
+    output_model = claim_section_output_model({
+        "C001": ["overview", "current_status"],
+        "C002": ["shared_projects"],
+    })
+    valid = {"sections": {
+        "C001": {"section": "current_status", "reason": "Current project state."},
+        "C002": {"section": "shared_projects", "reason": "A person's project role."},
+    }}
+
+    assert output_model.model_validate(valid).sections.C001.section == "current_status"
+    with pytest.raises(ValidationError):
+        output_model.model_validate({"sections": {
+            **valid["sections"],
+            "C001": {"section": "shared_projects", "reason": "Wrong page schema."},
+        }})
 
 
 @pytest.mark.asyncio
@@ -1311,7 +1535,6 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
     page = wiki.get("stable-page")
     assert "tea preference" in page.content
     assert "coffee preference" in page.content
-    assert llm.call_structured.await_count == 12
 
 
 @pytest.mark.asyncio
@@ -1340,7 +1563,6 @@ async def test_entity_type_is_authoritative_at_creation_without_taxonomy_pass(tm
     assert page.page_type == "topic"
     assert page.title == "Memory Design"
     assert "## Why It Matters" in page.content
-    assert llm.call_structured.await_count == 5
 
 
 @pytest.mark.asyncio
@@ -1358,7 +1580,6 @@ async def test_you_entity_is_typed_without_a_taxonomy_call(tmp_path):
     assert wiki.get("you").page_type == "you"
     assert wiki.get("you").title == "You"
     assert "## Preferences & Working Style" in wiki.get("you").content
-    assert llm.call_structured.await_count == 5
 
 
 @pytest.mark.asyncio

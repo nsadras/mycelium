@@ -336,10 +336,39 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
             if evidence_id not in segment_ids:
                 errors.append(f"probe {probe_id}: unknown evidence {evidence_id}")
 
-    dimension_ids = _unique_ids(
-        rubric.get("dimensions") or [], "rubric dimension", errors
+    dimension_rows = rubric.get("dimensions") or []
+    dimension_ids = _unique_ids(dimension_rows, "rubric dimension", errors)
+    dimensions_by_id = {str(row.get("id")): row for row in dimension_rows}
+    for row in dimension_rows:
+        if "target" not in row:
+            continue
+        try:
+            target = float(row["target"])
+        except (TypeError, ValueError):
+            errors.append(f"rubric dimension {row.get('id')}: target must be numeric")
+            continue
+        if not 0.0 <= target <= 1.0:
+            errors.append(
+                f"rubric dimension {row.get('id')}: target must be between 0 and 1"
+            )
+    acceptance_dimension_ids = rubric.get("acceptance", {}).get("dimensions") or []
+    if len(acceptance_dimension_ids) != len(set(acceptance_dimension_ids)):
+        errors.append("rubric acceptance dimensions contain duplicates")
+    for dimension_id in acceptance_dimension_ids:
+        if dimension_id not in dimension_ids:
+            errors.append(
+                f"rubric acceptance: unknown dimension {dimension_id}"
+            )
+        elif "target" not in dimensions_by_id[dimension_id]:
+            errors.append(
+                f"rubric acceptance: dimension {dimension_id} has no declared target"
+            )
+    active_gates = rubric.get("gates") or []
+    deferred_gates = rubric.get("deferred_gates") or []
+    gate_ids = _unique_ids(active_gates, "rubric gate", errors)
+    all_gate_ids = _unique_ids(
+        [*active_gates, *deferred_gates], "rubric active or deferred gate", errors
     )
-    gate_ids = _unique_ids(rubric.get("gates") or [], "rubric gate", errors)
     supported_gate_checks = {
         "checkpoint_checks",
         "probe",
@@ -347,7 +376,7 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
         "forbidden_evidence_absent",
         "ownership_exact",
     }
-    for gate in rubric.get("gates") or []:
+    for gate in [*active_gates, *deferred_gates]:
         check = gate.get("check") or {}
         if check.get("type") not in supported_gate_checks:
             errors.append(
@@ -402,7 +431,9 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
         "checkpoints": len(checkpoint_ids),
         "probes": len(probe_ids),
         "rubric_dimensions": len(dimension_ids),
+        "acceptance_dimensions": len(acceptance_dimension_ids),
         "rubric_gates": len(gate_ids),
+        "deferred_rubric_gates": len(all_gate_ids) - len(gate_ids),
         "errors": errors,
     }
     if errors:

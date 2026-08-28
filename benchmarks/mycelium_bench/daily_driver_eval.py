@@ -60,7 +60,10 @@ def _entity_map(
     fixture: dict[str, Any], snapshot: dict[str, Any]
 ) -> tuple[dict[str, str], list[dict[str, Any]], list[dict[str, Any]]]:
     generated = [
-        row for row in snapshot.get("entities") or [] if row.get("status") == "active"
+        row
+        for row in snapshot.get("entities") or []
+        if row.get("status") == "active"
+        and row.get("materialization_state") == "materialized"
     ]
     used: set[str] = set()
     mapping: dict[str, str] = {}
@@ -119,7 +122,45 @@ def _entity_map(
                 "name_similarity": round(selected[1], 4) if selected else 0.0,
             }
         )
-    extras = [row for row in generated if str(row.get("entity_id")) not in used]
+    claims_by_id = {
+        str(row.get("claim_id")): row for row in snapshot.get("claims") or []
+    }
+    page_claim_ids: dict[str, set[str]] = defaultdict(set)
+    for page in snapshot.get("pages") or []:
+        entity_id = str(page.get("entity_id") or "")
+        for section in page.get("sections") or []:
+            for item in section.get("items") or []:
+                page_claim_ids[entity_id].update(
+                    map(str, item.get("claim_ids") or [])
+                )
+    deferred_retraction_evidence = {
+        str(value)
+        for row in fixture.get("gold_claims", {}).get("claims") or []
+        if row.get("state") == "retracted"
+        for value in row.get("evidence") or []
+    }
+    deferred_retraction_evidence.update(
+        str(segment["id"])
+        for episode in fixture.get("scenario", {}).get("episodes") or []
+        for segment in episode.get("segments") or []
+        if segment.get("retention") == "retraction_instruction"
+    )
+
+    def supported_only_by_deferred_retraction(entity: dict[str, Any]) -> bool:
+        claim_ids = page_claim_ids.get(str(entity.get("entity_id")), set())
+        evidence = {
+            value
+            for claim_id in claim_ids
+            for value in _claim_evidence(claims_by_id.get(claim_id, {}))
+        }
+        return bool(evidence) and evidence <= deferred_retraction_evidence
+
+    extras = [
+        row
+        for row in generated
+        if str(row.get("entity_id")) not in used
+        and not supported_only_by_deferred_retraction(row)
+    ]
     return mapping, rows, extras
 
 
@@ -148,6 +189,7 @@ def match_snapshot(fixture: dict[str, Any], snapshot: dict[str, Any]) -> dict[st
             {
                 "gold_claim_id": gold["id"],
                 "gold_fact_id": gold.get("fact_id"),
+                "gold_state": gold.get("state"),
                 "gold_owner": gold.get("owner"),
                 "gold_section": gold.get("section"),
                 "gold_evidence": sorted(gold_evidence),
@@ -286,7 +328,13 @@ def match_snapshot(fixture: dict[str, Any], snapshot: dict[str, Any]) -> dict[st
                 "expected_locations": expected_locations,
                 "expected_generated_locations": expected_generated_locations,
                 "gold_claim_ids": gold_fact.get("claim_ids") or [],
+                "semantic_claim_available": bool(generated_member_ids),
                 "generated_fact_id": selected.get("fact_id") if selected else None,
+                "generated_member_claim_ids": (
+                    list(map(str, selected.get("member_claim_ids") or []))
+                    if selected
+                    else []
+                ),
                 "generated_owner": selected.get("owner_entity_id")
                 if selected
                 else None,
@@ -768,6 +816,11 @@ def evaluate_run(
     wiki_fact_rows = [
         row for row in fact_rows if row["gold_fact_id"] in final_gold_fact_ids
     ]
+    projectable_fact_rows = [
+        row
+        for row in wiki_fact_rows
+        if row["semantic_claim_available"] and row["gold_state"] == "current"
+    ]
     probes_by_id = {row["probe_id"]: row for row in probe_results}
     rubric_dimensions = fixture["rubric"].get("dimensions") or []
     final_entity_rows = [
@@ -811,11 +864,26 @@ def evaluate_run(
     ownership_rows = [
         row
         for row in claim_rows
-        if row["semantic_candidate"] and row["expected_generated_owner"]
+        if row["semantic_candidate"]
+        and row["expected_generated_owner"]
+        and row["gold_state"] == "active"
     ]
     section_rows = [row for row in ownership_rows if row.get("gold_section")]
+    final_placements = {
+        str(row.get("claim_id")): row
+        for row in final_snapshot.get("placements") or []
+    }
     expected_render_count = {
-        row["gold_fact_id"]: len(row["expected_locations"]) for row in wiki_fact_rows
+        row["gold_fact_id"]: (
+            2
+            if any(
+                final_placements.get(claim_id, {}).get("relationship_kind")
+                == "project_role"
+                for claim_id in row["generated_member_claim_ids"]
+            )
+            else len(row["expected_locations"])
+        )
+        for row in wiki_fact_rows
     }
     duplicate_rows = [
         {
@@ -928,6 +996,13 @@ def evaluate_run(
             denominator=len(wiki_fact_rows),
             target=1.0,
         ),
+        "page_projection_accuracy": _ratio_metric(
+            numerator=sum(
+                bool(row["rendered_correctly"]) for row in projectable_fact_rows
+            ),
+            denominator=len(projectable_fact_rows),
+            target=1.0,
+        ),
         "wiki_concision": _ratio_metric(
             numerator=len(duplicate_rows),
             denominator=max(1, len(wiki_fact_rows)),
@@ -1002,6 +1077,13 @@ def evaluate_run(
                 definition["id"], _ratio_metric(numerator=0, denominator=0, target=1.0)
             )
         )
+        if "target" in definition:
+            metric["target"] = float(definition["target"])
+            metric["passed"] = bool(metric["evaluated"]) and (
+                metric["value"] <= metric["target"]
+                if metric["direction"] == "at_most"
+                else metric["value"] >= metric["target"]
+            )
         metric.update(
             {
                 "id": definition["id"],
@@ -1144,6 +1226,16 @@ def evaluate_run(
         },
         "generated_pages": generated_pages,
     }
+    acceptance_dimension_ids = set(
+        fixture["rubric"].get("acceptance", {}).get("dimensions") or []
+    )
+    acceptance_dimensions = [
+        row for row in dimensions if row["id"] in acceptance_dimension_ids
+    ]
+    gates_pass = all(row["passed"] for row in gate_results)
+    acceptance_dimensions_pass = all(
+        row["evaluated"] and row["passed"] for row in acceptance_dimensions
+    )
     return {
         "final_checkpoint": final_id,
         "dimensions": dimensions,
@@ -1151,9 +1243,13 @@ def evaluate_run(
         "summary": {
             "dimensions_passed": sum(row["passed"] for row in dimensions),
             "dimensions_total": len(dimensions),
+            "acceptance_dimensions_passed": sum(
+                row["passed"] for row in acceptance_dimensions
+            ),
+            "acceptance_dimensions_total": len(acceptance_dimensions),
             "gates_passed": sum(row["passed"] for row in gate_results),
             "gates_total": len(gate_results),
-            "release_ready": all(row["passed"] for row in gate_results),
+            "release_ready": gates_pass and acceptance_dimensions_pass,
         },
         "proposition_completeness": propositions,
         "checkpoint_diffs": checkpoint_results,
@@ -1228,7 +1324,9 @@ def evaluate_gates(
             selected = [
                 row
                 for row in match["claim_rows"]
-                if row.get("gold_owner") in owners and row.get("semantic_candidate")
+                if row.get("gold_owner") in owners
+                and row.get("semantic_candidate")
+                and row.get("gold_state") == "active"
             ]
             ownership_offending = [
                 {

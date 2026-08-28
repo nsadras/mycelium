@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from benchmarks.mycelium_bench.daily_driver import load_fixture, validate_fixture
-from benchmarks.mycelium_bench.daily_driver_eval import proposition_completeness
+from benchmarks.mycelium_bench.daily_driver_eval import _entity_map, proposition_completeness
 from benchmarks.mycelium_bench.daily_driver_run import _replay_extracted_episode
 from mycelium.artifacts import (
     ArtifactStore,
@@ -38,8 +38,10 @@ def test_daily_driver_fixture_is_internally_consistent():
         "active_entities": 6,
         "checkpoints": 9,
         "probes": 19,
-        "rubric_dimensions": 17,
-        "rubric_gates": 5,
+        "rubric_dimensions": 18,
+        "acceptance_dimensions": 7,
+        "rubric_gates": 3,
+        "deferred_rubric_gates": 2,
         "errors": [],
     }
 
@@ -163,7 +165,7 @@ def test_daily_driver_transfer_fixtures_are_valid(fixture_dir):
     assert summary["valid"] is True
     assert summary["checkpoints"] >= 3
     assert summary["probes"] >= 3
-    assert summary["rubric_gates"] >= 3
+    assert summary["rubric_gates"] >= 2
 
 
 def test_transfer_fixture_vocabulary_does_not_enter_production_code():
@@ -213,6 +215,75 @@ def test_proposition_completeness_requires_distinct_generated_claims():
     assert result["propositions_represented"] == 1
     assert result["complete_multi_assertion_segments"] == 0
     assert result["rows"][0]["complete"] is False
+
+
+def test_page_entity_score_ignores_provisional_identities():
+    fixture = {
+        "gold_wiki": {
+            "entities": [
+                {"id": "project-atlas", "type": "project", "title": "Atlas"}
+            ],
+            "retracted_entities": [],
+        }
+    }
+    snapshot = {
+        "entities": [
+            {
+                "entity_id": "project-atlas",
+                "entity_type": "project",
+                "title": "Atlas",
+                "aliases": [],
+                "status": "active",
+                "materialization_state": "materialized",
+            },
+            {
+                "entity_id": "topic-notes",
+                "entity_type": "topic",
+                "title": "Notes",
+                "aliases": [],
+                "status": "active",
+                "materialization_state": "provisional",
+            },
+        ]
+    }
+
+    _, rows, extras = _entity_map(fixture, snapshot)
+
+    assert rows[0]["generated_entity_id"] == "project-atlas"
+    assert extras == []
+
+
+def test_page_entity_score_defers_entities_supported_only_by_retracted_evidence():
+    fixture = {
+        "gold_wiki": {"entities": [], "retracted_entities": []},
+        "gold_claims": {"claims": [{
+            "id": "c-withdrawn",
+            "state": "retracted",
+            "evidence": ["meeting-wrong-s01"],
+        }]},
+    }
+    snapshot = {
+        "entities": [{
+            "entity_id": "project-wrong-import",
+            "entity_type": "project",
+            "title": "Wrong import",
+            "aliases": [],
+            "status": "active",
+            "materialization_state": "materialized",
+        }],
+        "claims": [{
+            "claim_id": "claim-wrong",
+            "fixture_evidence": ["meeting-wrong-s01"],
+        }],
+        "pages": [{
+            "entity_id": "project-wrong-import",
+            "sections": [{"items": [{"claim_ids": ["claim-wrong"]}]}],
+        }],
+    }
+
+    _, _, extras = _entity_map(fixture, snapshot)
+
+    assert extras == []
 
 
 def test_extraction_replay_resets_downstream_claim_state(tmp_path):

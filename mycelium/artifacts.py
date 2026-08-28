@@ -324,6 +324,7 @@ class ClaimPlacement:
     reason: str
     created_at: str
     updated_at: str
+    relationship_kind: str | None = None
 
     def __post_init__(self) -> None:
         if self.status not in {"placed", "deferred"}:
@@ -332,6 +333,10 @@ class ClaimPlacement:
             raise ValueError("Placed claims require an owner and section")
         if self.status == "deferred" and (self.owner_entity_id or self.section_key):
             raise ValueError("Deferred claims cannot name an owner or section")
+        if self.relationship_kind not in {None, "project_role", "other"}:
+            raise ValueError(
+                f"Unsupported placement relationship: {self.relationship_kind}"
+            )
         self.linked_entity_ids = sorted({
             value for value in self.linked_entity_ids
             if value and value != self.owner_entity_id
@@ -662,7 +667,7 @@ class ArtifactStore:
         return entity
 
     def save_placement(self, placement: ClaimPlacement) -> None:
-        claim = self.get_claim(placement.claim_id)
+        self.get_claim(placement.claim_id)
         if placement.owner_entity_id:
             entity = self.get_entity(placement.owner_entity_id)
             from mycelium.models import PAGE_SECTION_KEYS, PageType
@@ -673,11 +678,7 @@ class ArtifactStore:
                 raise ValueError(
                     f"Section {placement.section_key!r} is invalid for {entity.entity_type}"
                 )
-            is_project_role = (
-                claim.claim_type == "relationship"
-                and _normalized_label(claim.predicate).replace(" ", "_") == "project_role"
-            )
-            if is_project_role:
+            if placement.relationship_kind == "project_role":
                 project_links = [
                     linked_id
                     for linked_id in placement.linked_entity_ids

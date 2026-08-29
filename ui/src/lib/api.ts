@@ -205,13 +205,27 @@ export interface ArtifactSourceSummary {
   recorded_at: string;
   occurred_at?: string | null;
   participants: string[];
-  raw_log_entry_id?: string | null;
-  metadata: Record<string, unknown>;
   segment_count: number;
 }
 
 export interface ArtifactSource extends Omit<ArtifactSourceSummary, 'segment_count'> {
+  raw_log_entry_id?: string | null;
+  metadata: Record<string, unknown>;
   segments: ArtifactSourceSegment[];
+  segment_accounting: Record<string, 'claimed' | 'ignored' | 'unaccounted'>;
+}
+
+export interface EpisodeArtifactSummary {
+  episode_id: string;
+  source_id: string;
+  source_type: string;
+  occurred_at?: string | null;
+  participants: string[];
+  extraction_status: string;
+  extraction_error?: string | null;
+  segment_count: number;
+  claim_count: number;
+  ignored_segment_count: number;
 }
 
 export interface EpisodeArtifact {
@@ -255,6 +269,92 @@ export interface MemoryClaimArtifact {
   dream_disposition_reason?: string | null;
   dream_run_id?: string | null;
   dream_disposition_at?: string | null;
+  facts?: ConsolidatedFactArtifact[];
+  scope_decisions?: ClaimScopeDecisionArtifact[];
+  entity_references?: ClaimEntityReferenceArtifact[];
+  reconsolidation_proposals?: ReconsolidationProposalArtifact[];
+}
+
+export interface MemoryClaimArtifactSummary {
+  claim_id: string;
+  text: string;
+  recorded_at: string;
+  status: string;
+  claim_type: string;
+  evidence_modality: string;
+  dream_disposition: string;
+  placement?: ClaimPlacementArtifact | null;
+}
+
+export interface ClaimScopeDecisionArtifact {
+  decision_id: string;
+  claim_id: string;
+  owner_entity_id?: string | null;
+  section_key?: string | null;
+  linked_entity_ids: string[];
+  supporting_claim_ids: string[];
+  confidence: number;
+  reason: string;
+  origin: 'automatic' | 'manual' | 'review';
+  dream_run_id?: string | null;
+  status: 'active' | 'superseded' | 'proposed' | 'rejected';
+  created_at: string;
+  superseded_by_decision_id?: string | null;
+}
+
+export interface ClaimEntityReferenceArtifact {
+  reference_id: string;
+  claim_id: string;
+  role: string;
+  surface?: string | null;
+  entity_id?: string | null;
+  confidence: number;
+  reason: string;
+  origin: string;
+  dream_run_id: string;
+  status: string;
+  created_at: string;
+}
+
+export interface ConsolidatedFactArtifact {
+  fact_id: string;
+  text: string;
+  member_claim_ids: string[];
+  owner_entity_id: string;
+  section_key: string;
+  linked_entity_ids: string[];
+  synthesis_origin: 'claim' | 'model' | 'manual';
+  confidence: number;
+  reason: string;
+  created_at: string;
+  updated_at: string;
+  manual_text: boolean;
+}
+
+export interface ConsolidatedFactArtifactSummary {
+  fact_id: string;
+  text: string;
+  owner_entity_id: string;
+  section_key: string;
+  synthesis_origin: 'claim' | 'model' | 'manual';
+  confidence: number;
+  manual_text: boolean;
+  member_claim_count: number;
+  linked_entity_count: number;
+}
+
+export interface ConsolidatedFactDetail extends ConsolidatedFactArtifact {
+  claims: MemoryClaimArtifact[];
+  owner: EntityRecord;
+  linked_entities: EntityRecord[];
+}
+
+export interface EntityArtifactDetail extends EntityRecord {
+  placements: ClaimPlacementArtifact[];
+  facts: ConsolidatedFactArtifact[];
+  encounters: Record<string, unknown>[];
+  resolution_decisions: Record<string, unknown>[];
+  page?: { slug: string; exists: boolean } | null;
 }
 
 export interface DreamClaimDecisionArtifact {
@@ -280,6 +380,18 @@ export interface DreamRunArtifact {
   claim_decisions: DreamClaimDecisionArtifact[];
   failures: Record<string, string>[];
   reconsolidation_proposal_ids: string[];
+}
+
+export interface DreamRunArtifactSummary {
+  run_id: string;
+  started_at: string;
+  completed_at: string;
+  status: string;
+  source_count: number;
+  decision_count: number;
+  failure_count: number;
+  pages_created: number;
+  pages_updated: number;
 }
 
 export interface ReconsolidationProposalArtifact {
@@ -321,6 +433,11 @@ export interface ArtifactCoverage {
 
 export interface ArtifactOverview {
   coverage: ArtifactCoverage;
+  lifecycle: {
+    consolidated_facts: number;
+    entities: number;
+    wiki_pages: number;
+  };
   short_term_memory: {
     pending_claims: number;
     deferred_claims: number;
@@ -357,9 +474,14 @@ export interface StoredMemoryFile {
   content: string;
 }
 
+export interface StoredMemoryFileSummary {
+  filename: string;
+  size: number;
+}
+
 export interface StoredMemoryFiles {
-  wiki_index?: StoredMemoryFile | null;
-  archived_pages: StoredMemoryFile[];
+  wiki_index?: StoredMemoryFileSummary | null;
+  archived_pages: StoredMemoryFileSummary[];
 }
 
 export interface EngramActionItem {

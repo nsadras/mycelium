@@ -13,10 +13,14 @@ export function OverviewPanel({ overview }: { overview: ArtifactOverview }) {
                 ['Sources', overview.coverage.sources],
                 ['Episodes', overview.coverage.episodes],
                 ['Claims', overview.coverage.claims],
+                ['Facts', overview.lifecycle.consolidated_facts],
+                ['Entities', overview.lifecycle.entities],
+                ['Wiki pages', overview.lifecycle.wiki_pages],
                 ['Dream runs', overview.dream_audit.runs],
                 ['Suppressed', overview.coverage.suppressed_claims],
                 ['Segments', overview.coverage.segments],
-                ['Pending reviews', overview.reconsolidation_proposals.pending ?? 0],
+                ['Reconciliation reviews', overview.reconsolidation_proposals.pending ?? 0],
+                ['Organization reviews', overview.organization_proposals.pending ?? 0],
                 ['Archived pages', overview.archived_pages],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-xl border border-slate-200 p-4">

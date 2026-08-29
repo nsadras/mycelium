@@ -6,8 +6,10 @@ from fastapi import HTTPException
 from mycelium.artifacts import (
     ClaimProvenance,
     ClaimPlacement,
+    ConsolidatedFact,
     EpisodeManifest,
     MemoryClaim,
+    OrganizationProposal,
     ReconsolidationProposal,
     SourceDocument,
     SourceSegment,
@@ -99,6 +101,19 @@ def artifact_memory(tmp_path, monkeypatch):
             created_at="2026-07-22T12:00:00",
             updated_at="2026-07-22T12:00:00",
         ))
+    mem.artifacts.save_consolidated_fact(ConsolidatedFact(
+        fact_id="fact-tea-preference",
+        text="The user prefers tea.",
+        member_claim_ids=[claim.claim_id],
+        owner_entity_id="you",
+        section_key="preferences_working_style",
+        linked_entity_ids=[],
+        synthesis_origin="claim",
+        confidence=1.0,
+        reason="Direct display of one canonical claim.",
+        created_at="2026-07-22T12:00:00",
+        updated_at="2026-07-22T12:00:00",
+    ))
     mem.wiki.save(WikiPage(
         slug="archived-page",
         title="Archived",
@@ -122,6 +137,16 @@ def artifact_memory(tmp_path, monkeypatch):
         created_at="2026-07-22T12:00:00",
         affected_entity_ids=["you"],
     ))
+    mem.artifacts.save_organization_proposal(OrganizationProposal(
+        proposal_id="organization-test",
+        proposal_type="assign_claim",
+        explanation="Fixture organization proposal",
+        confidence=0.7,
+        created_at="2026-07-22T12:00:00",
+        claim_id="claim-test",
+        proposed_owner_entity_id="you",
+        proposed_section_key="preferences_working_style",
+    ))
     monkeypatch.setattr(memory_artifacts, "get_mem", lambda: mem)
     monkeypatch.setattr(memory_curation, "get_mem", lambda: mem)
     monkeypatch.setattr(memory_artifacts, "load_meta", lambda: {
@@ -142,15 +167,25 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
     chat_episodes = await memory_artifacts.list_chat_episode_state()
     sources = await memory_artifacts.list_artifact_sources()
     source = await memory_artifacts.get_artifact_source("source-test")
-    episodes = await memory_artifacts.list_artifact_episodes()
+    episode_summaries = await memory_artifacts.list_artifact_episodes()
     episode = await memory_artifacts.get_artifact_episode("episode-test")
-    claims = await memory_artifacts.list_artifact_claims()
+    claim_summaries = await memory_artifacts.list_artifact_claims()
     claim = await memory_artifacts.get_artifact_claim("claim-test")
-    dream_runs = await memory_artifacts.list_artifact_dream_runs()
+    dream_run_summaries = await memory_artifacts.list_artifact_dream_runs()
+    facts = await memory_artifacts.list_consolidated_facts()
+    fact = await memory_artifacts.get_consolidated_fact("fact-tea-preference")
+    entity = await memory_artifacts.get_artifact_entity("you")
     proposals = await memory_artifacts.list_reconsolidation_proposals()
+    organization_proposals = await memory_artifacts.list_organization_proposals()
     files = await memory_artifacts.list_stored_memory_files()
+    wiki_index = await memory_artifacts.get_stored_memory_file("index", "_index.md")
 
     assert overview["coverage"]["accounted_coverage"] == 1.0
+    assert overview["lifecycle"] == {
+        "consolidated_facts": 1,
+        "entities": 1,
+        "wiki_pages": 1,
+    }
     assert overview["projection"] == {
         "page_assignments": 2,
         "assigned_claims": 2,
@@ -192,15 +227,40 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
     }]
     assert sources[0]["segment_count"] == 1
     assert source["segments"][0]["content"] == "I prefer tea."
-    assert episodes == [episode]
+    assert source["segment_accounting"] == {
+        "source-test#seg-0001": "claimed",
+    }
+    assert episode_summaries[0]["claim_count"] == 2
+    assert "claim_ids" not in episode_summaries[0]
     assert episode["claim_ids"] == ["claim-test", "claim-old"]
-    assert {item["claim_id"] for item in claims} == {"claim-old", "claim-test"}
+    assert {item["claim_id"] for item in claim_summaries} == {
+        "claim-old", "claim-test",
+    }
+    assert "provenance" not in claim_summaries[0]
     assert claim["provenance"][0]["segment_ids"] == ["source-test#seg-0001"]
-    assert dream_runs == []
+    assert claim["facts"][0]["fact_id"] == "fact-tea-preference"
+    assert claim["scope_decisions"] == []
+    assert claim["entity_references"] == []
+    assert dream_run_summaries == []
+    assert facts[0]["fact_id"] == "fact-tea-preference"
+    assert facts[0]["member_claim_count"] == 1
+    assert "member_claim_ids" not in facts[0]
+    assert fact["claims"][0]["claim_id"] == "claim-test"
+    assert fact["owner"]["entity_id"] == "you"
+    assert entity["facts"][0]["fact_id"] == "fact-tea-preference"
+    assert {item["claim_id"] for item in entity["placements"]} == {
+        "claim-old", "claim-test",
+    }
     assert proposals[0]["proposal_id"] == "recon-test"
+    assert organization_proposals[0]["proposal_id"] == "organization-test"
     assert overview["reconsolidation_proposals"] == {"pending": 1}
+    assert overview["organization_proposals"] == {"pending": 1}
     assert files["wiki_index"]["filename"] == "_index.md"
+    assert "content" not in files["wiki_index"]
+    assert files["wiki_index"]["size"] > 0
     assert [item["filename"] for item in files["archived_pages"]] == ["archived-page.md"]
+    assert wiki_index["filename"] == "_index.md"
+    assert wiki_index["content"]
 
 
 @pytest.mark.asyncio
@@ -209,6 +269,8 @@ async def test_artifact_detail_endpoints_return_404(artifact_memory):
         (memory_artifacts.get_artifact_source, "source-missing"),
         (memory_artifacts.get_artifact_episode, "episode-missing"),
         (memory_artifacts.get_artifact_claim, "claim-missing"),
+        (memory_artifacts.get_consolidated_fact, "fact-missing"),
+        (memory_artifacts.get_artifact_entity, "entity-missing"),
         (memory_artifacts.get_artifact_dream_run, "dream-missing"),
         (memory_artifacts.get_reconsolidation_proposal, "recon-missing"),
     ):

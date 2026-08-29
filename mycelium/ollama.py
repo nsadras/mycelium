@@ -84,90 +84,6 @@ class OllamaClient:
                     pass
             raise
 
-    async def call(
-        self,
-        system: str,
-        user: str,
-        expect_json: Union[bool, dict, type[BaseModel]] = False,
-        max_retries: int = 3,
-        temperature: Optional[float] = None
-    ) -> Union[str, dict, list]:
-        """
-        Makes a chat completion call to Ollama.
-        If expect_json is a dict, it is passed as a JSON Schema to constrain output.
-        """
-        call_id = str(uuid.uuid4())[:8]
-        sys_prompt = system
-            
-        temp = temperature if temperature is not None else self.temperature
-            
-        messages = [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": user},
-        ]
-        options = {"temperature": temp}
-        output_format: Union[str, dict[str, Any], None] = None
-        response_model: type[BaseModel] | None = None
-        
-        if expect_json:
-            if isinstance(expect_json, type) and issubclass(expect_json, BaseModel):
-                response_model = expect_json
-                output_format = expect_json.model_json_schema()
-            elif isinstance(expect_json, dict):
-                output_format = expect_json
-            else:
-                output_format = "json"
-
-        endpoint = f"{self.url}/api/chat"
-        
-        for attempt in range(max_retries):
-            start_time = time.time()
-            self._log_request(
-                call_id=call_id,
-                attempt=attempt + 1,
-                max_retries=max_retries,
-                endpoint=endpoint,
-                model=self.model,
-                messages=messages,
-                output_format=output_format,
-                options=options,
-            )
-            try:
-                response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
-                    model=self.model,
-                    messages=messages,
-                    stream=False,
-                    format=output_format,
-                    options=options,
-                )
-                content = self._response_content(response)
-                
-                latency_ms = int((time.time() - start_time) * 1000)
-                
-                if expect_json:
-                    try:
-                        parsed = self._parse_structured_response(content, response_model)
-                        self._log_call(call_id, attempt + 1, sys_prompt, user, content, latency_ms, True)
-                        return parsed
-                    except (json.JSONDecodeError, ValidationError, ValueError):
-                        self._log_call(call_id, attempt + 1, sys_prompt, user, content, latency_ms, False)
-                        if attempt == max_retries - 1:
-                            raise ValueError(
-                                f"Failed to parse JSON response from Ollama after {max_retries} attempts"
-                            )
-                        continue # Retry
-                        
-                self._log_call(call_id, attempt + 1, sys_prompt, user, content, latency_ms, True)
-                return content
-                
-            except (RequestError, ResponseError) as e:
-                latency_ms = int((time.time() - start_time) * 1000)
-                self._log_call(call_id, attempt + 1, sys_prompt, user, str(e), latency_ms, False)
-                if attempt == max_retries - 1:
-                    raise
-
-        raise RuntimeError("LLM call exhausted its retry budget")
-
     async def call_messages(
         self,
         messages: list[dict[str, Any]],
@@ -688,14 +604,6 @@ class OllamaClient:
     def _debug_filename_part(self, value: str) -> str:
         normalized = re.sub(r"[^a-zA-Z0-9_.-]+", "-", value).strip("-._")
         return normalized[:80] or "structured"
-
-    def _generate_response_content(self, response: Any) -> str:
-        content = getattr(response, "response", "")
-        if content:
-            return str(content).strip()
-        if isinstance(response, dict):
-            return str(response.get("response", "")).strip()
-        return ""
 
     def _log_request(
         self,

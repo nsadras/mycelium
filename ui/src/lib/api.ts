@@ -234,7 +234,6 @@ export interface MemoryClaimArtifact {
   predicate?: string | null;
   evidence_modality: string;
   temporal_status: string;
-  derivation_operation?: string | null;
   dream_disposition: string;
   dream_disposition_reason?: string | null;
   dream_run_id?: string | null;

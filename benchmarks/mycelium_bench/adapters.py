@@ -259,7 +259,6 @@ class MyceliumMemorySystem:
         self._memory_construction_seconds = 0.0
         self._errors: list[dict[str, Any]] = []
         self._dream_failures: list[dict[str, Any]] = []
-        self._taxonomy_failures: list[dict[str, Any]] = []
         self._evidence_stage_labels_cache: dict[str, set[str]] | None = None
 
     async def reset(self, case_id: str) -> None:
@@ -288,7 +287,6 @@ class MyceliumMemorySystem:
         self._memory_construction_seconds = 0.0
         self._errors = []
         self._dream_failures = []
-        self._taxonomy_failures = []
         self._evidence_stage_labels_cache = None
 
     async def memorize(self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None) -> None:
@@ -332,7 +330,6 @@ class MyceliumMemorySystem:
             loaded_pages = await mem.load_context(
                 question,
                 budget_tokens=self.context_budget_tokens,
-                session_id=str(metadata.get("query_id") or f"{self.case_id}-query"),
             )
         except Exception as exc:
             self._errors.append({"stage": "load_context", "question": question, "error": str(exc)})
@@ -436,15 +433,12 @@ class MyceliumMemorySystem:
             "memory_construction_seconds": self._memory_construction_seconds,
             "errors": self._errors,
             "dream_failures": self._dream_failures,
-            "taxonomy_failures": self._taxonomy_failures,
             "artifact_coverage": coverage,
         }
 
     def _record_dream_report(self, report: Any, *, session_id: str) -> None:
         for failure in getattr(report, "failures", []) or []:
             self._dream_failures.append({"session_id": session_id, **failure})
-        for failure in getattr(report, "taxonomy_failures", []) or []:
-            self._taxonomy_failures.append({"session_id": session_id, **failure})
 
     def _require_mem(self) -> Mycelium:
         if self.mem is None:
@@ -516,7 +510,7 @@ class MyceliumMemorySystem:
 
         eligible = [
             claim for claim in claims
-            if claim.status == "active" and not claim.derivation_operation
+            if claim.status == "active"
         ]
         if eligible and all(
             (placement := mem.artifacts.placement_for_claim(claim.claim_id)) is not None
@@ -550,7 +544,6 @@ class MemoryAgentSystem(MyceliumMemorySystem):
         loaded_pages = await mem.load_context(
             question,
             budget_tokens=self.context_budget_tokens,
-            session_id=str(metadata.get("query_id") or f"{self.case_id}-query"),
         )
         initial_context = render_memory_context(loaded_pages)
 

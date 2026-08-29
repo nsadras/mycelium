@@ -1887,3 +1887,22 @@ one prose-similarity summary.
   simplification, and the milestone is not declared complete from this smoke evidence. Repository validation passed
   with **250 tests and 2 skips**, Ruff, UI lint, UI build, and `git diff --check`; the existing UI chunk-size warning
   remains.
+
+## 2026-08-28 — Dead architecture cleanup
+
+- Removed the abandoned LLM page router prompt and response models. Active page retrieval remains the local page
+  search plus temporal and exact-name candidate augmentation.
+- Removed the retired derived-claim architecture: `MemoryClaim.derivation_operation`, its normalization and retention
+  policy, derived-page exclusions, and downstream fact/materialization/benchmark branches. Claims now have one
+  canonical path into facts and pages.
+- Removed the Engram raw-log compatibility fallback. Meeting finalization now requires the canonical encoder and always
+  enters memory through source documents, episodes, and claims.
+- Removed repository-internal dead API and schema surface: `MemoryResult`, `ContextBudget`, the unused `session_id`
+  argument to `load_context`, the always-empty `taxonomy_failures` report field, the singular source-context renderer,
+  `OllamaClient.call()`, and `_generate_response_content()`.
+- Removed the final old-store migration that stripped claim-level `page_slugs` during projection reset. Current
+  `DreamClaimDecision.page_slugs` remains because it records the pages selected during a Dream run; it is not a
+  compatibility field.
+- No prompt, ontology, or model division-of-labor contract changed, so no Ollama semantic probe was needed. Validation:
+  **241 passed, 2 skipped**; Ruff, UI lint, UI build, and `git diff --check` passed. The existing 829.09 kB UI
+  chunk-size warning remains.

@@ -480,7 +480,6 @@ async def test_dream_routes_claim_and_materializes_deterministic_page(tmp_path):
     }
     assert next(item for item in references if item.role == "context").surface == "Memory Design"
     assert logs.get(entry.entry_id).consolidated is True
-    assert report.taxonomy_failures == []
     assert page.page_type == "topic"
 
 
@@ -1300,7 +1299,6 @@ async def test_entity_type_is_authoritative_at_creation_without_taxonomy_pass(tm
     first = await dream.run()
 
     assert first.completed_source_ids == [entry.entry_id]
-    assert first.taxonomy_failures == []
     assert wiki.get("memory-design").page_type == "topic"
 
     second = await dream.run()
@@ -1308,7 +1306,6 @@ async def test_entity_type_is_authoritative_at_creation_without_taxonomy_pass(tm
     page = wiki.get("memory-design")
     assert second.entries_consolidated == 0
     assert second.pages_updated == 0
-    assert second.taxonomy_failures == []
     assert page.page_type == "topic"
     assert page.title == "Memory Design"
     assert "## Why It Matters" in page.content
@@ -1325,7 +1322,6 @@ async def test_you_entity_is_typed_without_a_taxonomy_call(tmp_path):
     report = await dream.run()
 
     assert report.completed_source_ids == [entry.entry_id]
-    assert report.taxonomy_failures == []
     assert wiki.get("you").page_type == "you"
     assert wiki.get("you").title == "You"
     assert "## Preferences & Working Style" in wiki.get("you").content

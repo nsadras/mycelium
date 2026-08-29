@@ -569,7 +569,6 @@ async def _run_checkpoint_probes(
     for probe in probes:
         loaded_pages = await memory.load_context(
             str(probe["question"]),
-            session_id=f"daily-driver-{checkpoint_id}-{probe['id']}",
         )
         retrieved_gold_facts, retrieved_claim_ids = retrieved_generated_ids(
             loaded_pages, snapshot_match

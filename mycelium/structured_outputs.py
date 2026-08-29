@@ -3,7 +3,7 @@
 from collections.abc import Collection, Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 
 class ExtractedEntityOutput(BaseModel):
@@ -79,16 +79,6 @@ class GroundedAnswerOutput(BaseModel):
     answerable: bool
     answer: str
     evidence: str | None = None
-
-
-class RoutingSelectionOutput(BaseModel):
-    page: str
-    priority: int
-    reason: str | None = None
-
-
-class RoutingOutput(RootModel[list[RoutingSelectionOutput]]):
-    root: list[RoutingSelectionOutput] = Field(default_factory=list, max_length=8)
 
 
 class SubjectGraphNodeOutput(BaseModel):

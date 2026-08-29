@@ -85,7 +85,6 @@ class PageSearchIndex:
                         page.content,
                     )
                     for page in pages
-                    if "derived-memory" not in page.tags
                 ],
             )
         self._fingerprint = fingerprint

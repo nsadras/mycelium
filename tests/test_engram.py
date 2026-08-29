@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from datetime import datetime
 import sys
 import wave
 
@@ -7,10 +8,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from engram.config import EngramConfig
-from engram.memory_adapter import ingest_meeting_into_memory
 from engram.models import MeetingSummary
 from engram.pipeline import EngramService, meeting_response
 from engram.store import EngramStore
+from mycelium.models import LogEntry
 from mycelium.store import LogStore
 from server.api import engram as engram_api
 
@@ -130,40 +131,6 @@ async def test_engram_service_only_updates_transcript_during_review(tmp_path):
         await service.update_transcript(meeting.id, {segment.id: "Too late"})
 
 
-def test_engram_memory_adapter_creates_raw_unconsolidated_log(tmp_path):
-    store = EngramStore(tmp_path / "engram.sqlite")
-    log_store = LogStore(tmp_path / "logs")
-    mem = SimpleNamespace(log_store=log_store)
-
-    meeting = store.create_meeting("Product sync")
-    store.add_segment(
-        meeting.id,
-        start_seconds=1.0,
-        end_seconds=4.0,
-        text="Nitin will validate the Engram upload workflow.",
-        speaker="SPEAKER_01",
-        status="diarized",
-    )
-    store.save_speaker_names(meeting.id, {"SPEAKER_01": "Alice"})
-    store.save_summary(
-        meeting.id,
-        MeetingSummary(
-            summary="Engram upload validation was assigned.",
-            action_items=[{"owner": "Nitin", "task": "Validate the Engram upload workflow", "due": None}],
-        ),
-    )
-
-    entry = ingest_meeting_into_memory(mem, store, meeting.id)
-    entries = log_store.get_unconsolidated(days=None)
-    updated = store.get_meeting(meeting.id)
-
-    assert updated.memory_log_entry_id == entry.entry_id
-    assert entries[0].session_id == f"meeting-{meeting.id}"
-    assert "Raw Engram meeting transcript." in entries[0].content
-    assert "Alice: Nitin will validate the Engram upload workflow." in entries[0].content
-    assert "Nitin will validate the Engram upload workflow." in entries[0].content
-
-
 @pytest.mark.asyncio
 async def test_engram_service_creates_ready_meeting_from_uploaded_audio(tmp_path):
     store = EngramStore(tmp_path / "engram.sqlite")
@@ -265,10 +232,23 @@ async def test_engram_service_processes_then_finalizes_meeting_with_speaker_name
                 segment.status = "diarized"
             return fallback_segments
 
+    class FakeEncoder:
+        async def encode_session(self, transcript, session_id, **kwargs):
+            entry = LogEntry(
+                entry_id="2026-08-28#meeting-test",
+                session_id=session_id,
+                timestamp=datetime.now(),
+                content=transcript,
+                importance=0.8,
+                status="raw",
+            )
+            log_store.append(entry)
+            return [entry]
+
     service = EngramService(
         config,
         store,
-        lambda: SimpleNamespace(log_store=log_store),
+        lambda: SimpleNamespace(log_store=log_store, encoder=FakeEncoder()),
         transcriber_factory=lambda: FakeTranscriber(),
         diarizer_factory=lambda: FakeDiarizer(),
         summarizer_factory=lambda: FakeSummarizer(),

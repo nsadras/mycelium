@@ -50,27 +50,6 @@ async def test_page_search_retrieves_named_entity(temp_mycelium):
 
 
 @pytest.mark.asyncio
-async def test_page_search_does_not_expand_every_derived_page(temp_mycelium):
-    now = datetime.now()
-    temp_mycelium.wiki.save(WikiPage(
-        slug="person-gina", title="Gina", content="Gina is a dancer.",
-        created=now, last_updated=now, version=1, confidence=0.8, importance=0.5,
-        page_type="person", entity_id="person-gina",
-    ))
-    temp_mycelium.wiki.save(WikiPage(
-        slug="person-gina-timeline", title="Gina: Timeline", content="A dated event.",
-        created=now, last_updated=now, version=1, confidence=1.0, importance=0.4,
-        tags=["derived-memory", "timeline", "parent:person-gina"],
-        page_type="person", entity_id="person-gina-timeline",
-    ))
-    loaded = await temp_mycelium.load_context(
-        query="What does Gina enjoy?"
-    )
-
-    assert [page.slug for page in loaded] == ["person-gina"]
-
-
-@pytest.mark.asyncio
 async def test_full_page_search_routes_without_llm(temp_mycelium):
     now = datetime.now()
     temp_mycelium.wiki.save(WikiPage(

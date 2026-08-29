@@ -50,7 +50,6 @@ class FactConsolidator:
         claims = {
             claim.claim_id: claim
             for claim in self.artifacts.list_claims(status="active")
-            if not claim.derivation_operation
         }
         existing = [
             fact for fact in self.artifacts.list_consolidated_facts()

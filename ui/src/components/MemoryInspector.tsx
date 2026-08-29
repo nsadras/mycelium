@@ -552,7 +552,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                   <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Modality</div><strong>{selectedClaim.evidence_modality}</strong></div>
                 </div>
                 <div className="grid gap-3 text-sm md:grid-cols-2">
-                  <div className="rounded-lg border border-slate-200 p-3"><strong>Predicate:</strong> {selectedClaim.predicate ?? 'None'}<br /><strong>Slot:</strong> {selectedClaim.slot ?? 'None'}<br /><strong>Recorded:</strong> {formatDate(selectedClaim.recorded_at)}<br /><strong>Derivation:</strong> {selectedClaim.derivation_operation ?? 'None'}</div>
+                  <div className="rounded-lg border border-slate-200 p-3"><strong>Predicate:</strong> {selectedClaim.predicate ?? 'None'}<br /><strong>Slot:</strong> {selectedClaim.slot ?? 'None'}<br /><strong>Recorded:</strong> {formatDate(selectedClaim.recorded_at)}</div>
                   <div className="rounded-lg border border-slate-200 p-3"><strong>Wiki owner:</strong><div className="mt-2 flex flex-wrap gap-1">{selectedClaim.placement?.owner_entity_id ? <Badge tone="indigo">{selectedClaim.placement.owner_entity_id} · {selectedClaim.placement.section_key}</Badge> : <span className="text-slate-400">Short-term / deferred</span>}</div></div>
                 </div>
                 <section className="rounded-xl border border-slate-200 p-4">

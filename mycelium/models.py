@@ -165,11 +165,4 @@ class DreamReport:
     completed_source_ids: list[str] = field(default_factory=list)
     pending_source_ids: list[str] = field(default_factory=list)
     failures: list[dict[str, str]] = field(default_factory=list)
-    taxonomy_failures: list[dict[str, str]] = field(default_factory=list)
     reconsolidation_proposal_ids: list[str] = field(default_factory=list)
-
-@dataclass
-class MemoryResult:
-    page: WikiPage
-    load_priority: int
-    tokens_used: int

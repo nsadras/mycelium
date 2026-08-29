@@ -115,7 +115,7 @@ async def chat(session_id: str, req: ChatRequest):
             f"USER MESSAGE:\n{req.message}"
         )
 
-        loaded_pages = await mem.load_context(retrieval_query, session_id=episode_id)
+        loaded_pages = await mem.load_context(retrieval_query)
         memory_context = render_memory_context(loaded_pages)
 
         system_prompt = (

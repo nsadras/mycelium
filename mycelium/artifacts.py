@@ -41,10 +41,6 @@ NUMBER_WORDS = {
 }
 EVIDENCE_MODALITIES = {"speech", "visual", "tool", "inference", "mixed", "unknown"}
 TEMPORAL_STATUSES = {"past", "current", "future", "recurring", "atemporal", "unknown"}
-DERIVATION_OPERATIONS = {
-    "temporal_arithmetic", "event_count", "recurring_pattern",
-    "cross_fact_relationship",
-}
 DREAM_DISPOSITIONS = {
     "pending",
     "deferred",
@@ -57,7 +53,6 @@ NON_WIKI_RETENTION_REASONS = {
     "assistant_unadopted",
     "system_control",
     "extractor_rejected",
-    "legacy_derived",
 }
 ENTITY_REFERENCE_ROLES = {"subject", "object", "context", "canonical_owner"}
 RECONSOLIDATION_RELATIONS = {"contradicts", "supersedes"}
@@ -121,7 +116,6 @@ class MemoryClaim:
     predicate: str | None = None
     evidence_modality: str = "unknown"
     temporal_status: str = "unknown"
-    derivation_operation: str | None = None
     dream_disposition: str = "pending"
     dream_disposition_reason: str | None = None
     dream_run_id: str | None = None
@@ -148,8 +142,6 @@ class MemoryClaim:
 
         if self.predicate is not None:
             self.predicate = " ".join(str(self.predicate).split()).strip() or None
-        operation = _normalized_label(self.derivation_operation).replace(" ", "_")
-        self.derivation_operation = operation if operation in DERIVATION_OPERATIONS else None
 
         disposition = str(self.dream_disposition or "pending").strip().lower()
         self.dream_disposition = (
@@ -473,7 +465,6 @@ class DreamRunAudit:
     pages_updated: int
     claim_decisions: list[DreamClaimDecision] = field(default_factory=list)
     failures: list[dict[str, str]] = field(default_factory=list)
-    taxonomy_failures: list[dict[str, str]] = field(default_factory=list)
     reconsolidation_proposal_ids: list[str] = field(default_factory=list)
 
 
@@ -1100,7 +1091,6 @@ class ArtifactStore:
             "scope_cohorts": 0,
             "encounters": 0,
             "consolidated_facts": 0,
-            "legacy_claim_assignments_removed": 0,
             "claims_requeued": 0,
         }
         for label, directory in (
@@ -1118,16 +1108,9 @@ class ArtifactStore:
             for path in directory.glob("*.json"):
                 path.unlink()
                 counts[label] += 1
-        # Clearing the derived wiki is the explicit schema boundary. Older claims
-        # may still contain the retired page_slugs projection field; remove only
-        # that derived field while preserving the canonical claim and evidence.
         for path in self.claims_dir.glob("*.json"):
             data = self._read(path)
             changed = False
-            if "page_slugs" in data:
-                data.pop("page_slugs")
-                counts["legacy_claim_assignments_removed"] += 1
-                changed = True
             if data.get("status", "active") == "active" and data.get(
                 "dream_disposition"
             ) != "excluded_source_policy":

@@ -195,7 +195,6 @@ class PageMaterializer:
                 if (
                     claim is None
                     or placement.status != "placed"
-                    or claim.derivation_operation
                 ):
                     continue
                 page_placement = self._page_placement(

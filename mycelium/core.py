@@ -154,7 +154,6 @@ class Mycelium:
         self,
         query: str,
         budget_tokens: Optional[int] = None,
-        session_id: Optional[str] = None,
         query_time: datetime | None = None,
     ) -> List[WikiPage]:
         
@@ -242,7 +241,7 @@ class Mycelium:
         selected_slugs = set(selection_priorities)
 
         for slug, page in existing_slugs.items():
-            if slug in selected_slugs or "derived-memory" in page.tags:
+            if slug in selected_slugs:
                 continue
             slug_parts = set(slug.split("-")) - exclude_words
             title_words = set(re.findall(r'\b\w+\b', page.title.lower())) - exclude_words
@@ -285,7 +284,7 @@ class Mycelium:
         session_id = session_id or str(uuid.uuid4())
         
         sess = Session(mycelium=self, session_id=session_id, query=query)
-        sess.loaded_pages = await self.load_context(query, session_id=session_id)
+        sess.loaded_pages = await self.load_context(query)
         
         try:
             yield sess

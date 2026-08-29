@@ -325,17 +325,13 @@ def test_manual_fact_group_edit_and_split_preserve_claims(tmp_path):
     assert second.text in wiki.get(project.slug).content
 
 
-def test_clear_projection_preserves_claims_and_removes_legacy_assignment(tmp_path):
+def test_clear_projection_preserves_and_requeues_active_claims(tmp_path):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     item = claim("claim-1", "Mycelium is transparent.")
     artifacts.save_claim(item)
-    path = artifacts.claims_dir / "claim-1.json"
-    text = path.read_text()
-    path.write_text(text.replace('"links": [],', '"links": [],\n  "page_slugs": ["mycelium"],'))
 
     counts = artifacts.clear_projection()
 
-    assert counts["legacy_claim_assignments_removed"] == 1
     assert counts["claims_requeued"] == 1
     assert artifacts.get_claim("claim-1").text == item.text
     assert artifacts.get_claim("claim-1").dream_disposition == "pending"

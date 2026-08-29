@@ -177,13 +177,6 @@ requires clear replacement semantics, not simple recency. Return JSON only."""
     return system, user
 
 
-def routing_prompt(index_content: str, query: str, budget_tokens: int) -> tuple[str, str]:
-    system = f"""Select up to eight existing wiki pages relevant to the user query, within a memory
-budget of {budget_tokens} tokens. Return a JSON list with page, priority (1 highest), and reason.
-Never invent a page not present in the index. Respond with JSON only."""
-    return system, f"WIKI INDEX:\n{index_content}\n\nUSER QUERY:\n{query}"
-
-
 def claim_extraction_prompt(
     source_type: str,
     source_id: str,

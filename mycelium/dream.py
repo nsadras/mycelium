@@ -408,7 +408,6 @@ class DreamProcess:
             completed_source_ids=completed_source_ids,
             pending_source_ids=pending_source_ids,
             failures=failures,
-            taxonomy_failures=[],
             reconsolidation_proposal_ids=[
                 proposal.proposal_id for proposal in proposals
             ],
@@ -577,16 +576,13 @@ class DreamProcess:
                 claim_segment_ids and claim_segment_ids <= ignored_segment_ids
             )
             admitted = self._claim_is_admitted(claim, source_by_id)
-            if admitted and not claim.derivation_operation and not excluded_by_extraction:
+            if admitted and not excluded_by_extraction:
                 continue
             for provenance in claim.provenance:
                 if provenance.source_id not in source_by_id:
                     continue
                 if excluded_by_extraction:
                     reason = "extractor_rejected"
-                    origin = "extraction"
-                elif claim.derivation_operation:
-                    reason = "legacy_derived"
                     origin = "extraction"
                 else:
                     source = source_by_id[provenance.source_id]
@@ -659,7 +655,6 @@ class DreamProcess:
                 self._claim_is_admitted(claim, source_by_id)
                 and not excluded_by_extraction
             )
-            is_legacy_derivation = bool(claim.derivation_operation)
             existing_placement = self.artifacts.placement_for_claim(claim.claim_id)
             revising_existing = claim.claim_id not in incoming_claim_ids
             previous_disposition = claim.dream_disposition
@@ -678,16 +673,14 @@ class DreamProcess:
                     previous_disposition
                     if revising_existing
                     else
-                    "pending" if admitted and not is_legacy_derivation
+                    "pending" if admitted
                     else "excluded_source_policy"
                 ),
                 reason=(
                     previous_reason or "Awaiting scope revision."
                     if revising_existing
                     else
-                    "Excluded by the typed legacy-derived retention policy."
-                    if is_legacy_derivation
-                    else "Excluded by the typed extraction-retention policy."
+                    "Excluded by the typed extraction-retention policy."
                     if excluded_by_extraction
                     else "Awaiting page assignment."
                     if admitted
@@ -695,7 +688,7 @@ class DreamProcess:
                 ),
                 page_slugs=previous_slugs if revising_existing else [],
             )
-            if admitted and not is_legacy_derivation:
+            if admitted:
                 evidence.append(ClaimEvidence(claim, matching_source))
         return evidence, decisions
 
@@ -773,6 +766,5 @@ class DreamProcess:
             pages_updated=report.pages_updated,
             claim_decisions=sorted(decisions.values(), key=lambda item: item.claim_id),
             failures=list(report.failures),
-            taxonomy_failures=list(report.taxonomy_failures),
             reconsolidation_proposal_ids=list(report.reconsolidation_proposal_ids),
         ))

@@ -93,30 +93,6 @@ class FakeWebClient:
 
 
 @pytest.mark.asyncio
-async def test_call_uses_official_sdk_chat():
-    client = OllamaClient("http://localhost:11434", "test-model", temperature=0.3)
-    fake_sdk = FakeSdkClient("hello")
-    client.client = fake_sdk
-
-    response = await client.call("system prompt", "user prompt")
-
-    assert response == "hello"
-    assert fake_sdk.chat_calls == [
-        {
-            "model": "test-model",
-            "messages": [
-                {"role": "system", "content": "system prompt"},
-                {"role": "user", "content": "user prompt"},
-            ],
-            "stream": False,
-            "format": None,
-            "options": {"temperature": 0.3},
-        }
-    ]
-    assert fake_sdk.generate_calls == []
-
-
-@pytest.mark.asyncio
 async def test_call_messages_uses_explicit_message_history():
     client = OllamaClient("http://localhost:11434", "test-model", temperature=0.3)
     fake_sdk = FakeSdkClient("hello")
@@ -268,7 +244,10 @@ async def test_call_log_is_bounded_and_contains_metadata_only():
     client.client = FakeSdkClient("private response")
 
     for index in range(105):
-        await client.call("private system", f"private user {index}")
+        await client.call_messages([
+            {"role": "system", "content": "private system"},
+            {"role": "user", "content": f"private user {index}"},
+        ], enable_tools=False)
 
     assert len(client._call_log) == 100
     serialized = json.dumps(list(client._call_log))
@@ -284,7 +263,10 @@ async def test_info_logs_do_not_include_llm_payloads(caplog):
     client.client = FakeSdkClient("private response")
 
     with caplog.at_level("INFO", logger="mycelium.ollama"):
-        await client.call("private system", "private user")
+        await client.call_messages([
+            {"role": "system", "content": "private system"},
+            {"role": "user", "content": "private user"},
+        ], enable_tools=False)
 
     output = caplog.text
     assert "private system" not in output

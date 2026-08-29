@@ -17,35 +17,6 @@ class SourceSnippet:
     score: float
 
 
-def source_context_for_page(
-    page: WikiPage,
-    logs: LogStore,
-    query: str,
-    *,
-    max_entries: int = 4,
-    max_chars_per_entry: int = 1800,
-) -> str:
-    entries = logs.get_many(page.source_log_entries)
-    snippets = select_source_snippets(
-        entries,
-        query,
-        max_entries=max_entries,
-        max_chars_per_entry=max_chars_per_entry,
-    )
-    if not snippets:
-        return ""
-
-    lines = [f"SOURCE LOG SNIPPETS FOR [[{page.slug}]]:"]
-    for snippet in snippets:
-        lines.append(
-            f"- {snippet.entry_id} "
-            f"(session={snippet.session_id or 'unknown'}, time={snippet.timestamp}, "
-            f"score={snippet.score:.3f})"
-        )
-        lines.append(_indent(snippet.text.strip()))
-    return "\n".join(lines)
-
-
 def source_contexts_for_pages(
     pages: list[WikiPage],
     logs: LogStore,

@@ -400,7 +400,6 @@ def _dream_report_response(report) -> dict[str, Any]:
         "completed_source_ids": report.completed_source_ids,
         "pending_source_ids": report.pending_source_ids,
         "failures": report.failures,
-        "taxonomy_failures": report.taxonomy_failures,
         "reconsolidation_proposal_ids": report.reconsolidation_proposal_ids,
     }
 
@@ -500,7 +499,6 @@ def clear_wiki_store() -> dict[str, int]:
         "scope_decisions_deleted": 0,
         "encounters_deleted": 0,
         "consolidated_facts_deleted": 0,
-        "legacy_claim_assignments_removed": 0,
         "claims_requeued": 0,
     }
 
@@ -530,9 +528,6 @@ def clear_wiki_store() -> dict[str, int]:
     counts["scope_decisions_deleted"] = projection_counts["scope_decisions"]
     counts["encounters_deleted"] = projection_counts["encounters"]
     counts["consolidated_facts_deleted"] = projection_counts["consolidated_facts"]
-    counts["legacy_claim_assignments_removed"] = projection_counts[
-        "legacy_claim_assignments_removed"
-    ]
     counts["claims_requeued"] = projection_counts["claims_requeued"]
     mem._ensure_user_profile()
 

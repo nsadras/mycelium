@@ -1,5 +1,7 @@
 """Production prompts for extraction, routing, and reconsolidation."""
 
+from mycelium.ontology import CLAIM_TYPES
+
 
 def subject_node_prompt(index_content: str, evidence: str) -> tuple[str, str]:
     system = """Build a complete typed census of unresolved subjects in one source-grounded memory cohort.
@@ -15,17 +17,7 @@ relationships about it, declare a candidate node for that subject again. Identit
 the stable ID so admission can reconsider whether its page is now mature; do not omit it merely because it is already
 known provisionally.
 
-Use this ontology exactly:
-- Person is a human.
-- Organization is a group.
-- Project is an intentional continuing effort toward an outcome.
-- Series is an explicitly organized recurring frame whose recurrence has its own identity, state, plans, or history.
-  A person's recurring practice or occupation is an attribute of that Person, not a Series.
-- Event is one bounded occurrence, including a particular session or appointment.
-- Artifact is a made physical or digital object, including a document, tool, product, model, or deliverable.
-- Topic is an abstract subject, field, idea, question, or body of knowledge. It is not a fallback for a component,
-  service, feature, issue, artifact, event, or unknown subject.
-- Place is a physical or geographic location, never a temporal expression.
+Use the typed entity ontology supplied in the registry exactly.
 
 A workstream, feature, milestone, issue, tool, or deliverable inside a larger effort may need a node so its
 relationship can be stated later, but local goals, deadlines, participants, or complexity do not by themselves make
@@ -116,14 +108,9 @@ Resolve explicit subject and object endpoints plus useful context endpoints. `pr
 assigns a continuing responsibility or accountable role to a Person/You within one Project; ordinary participation,
 one completed task, or topical context is `other` or `none`. Do not add endpoints merely because they appear nearby.
 
-Choose the section by the claim's meaning and current temporal role, not its source kind. For people, use profile for
-stable identity, current_context for present circumstances, interests_views for views, goals_plans for intentions,
-shared_projects for continuing project roles, timeline for completed events, and needs_review for unresolved claims.
-For Projects and Artifacts, use overview for identity and purpose, objective for intended outcomes, current_status for
-present condition, requirements_constraints for operating boundaries, decisions for chosen direction,
-next_steps_deadlines for future work, people_organizations for roles, timeline for completed events,
-research_references for supporting findings, and needs_review for unresolved claims. Use the analogous declared
-headings for other page types. Return every claim exactly once and JSON matching the schema."""
+Choose the section by the claim's meaning and current temporal role, not its source kind. Follow the exact section
+descriptions supplied by the typed page ontology in the registry. Return every claim exactly once and JSON matching
+the schema."""
     user = f"""ENTITY REGISTRY AND ALLOWED SECTIONS:
 {registry}
 
@@ -216,8 +203,7 @@ Encode a continuing role or responsibility connecting a person to a project as
 claim_type=relationship and predicate=project_role; include both the person and project in about, with the
 person as subject. Do not classify a one-off action item, attendance, or incidental contribution as a role.
 
-Populate claim_type (identity/state/event/preference/plan/belief/relationship/decision/commitment/
-interaction/observation/unknown), an open predicate, evidence_modality, temporal_status, about,
+Populate claim_type ({"/".join(CLAIM_TYPES)}), an open predicate, evidence_modality, temporal_status, about,
 speaker, confidence, optional replaceable-state slot, and open facets. Evidence modality describes
 the observation channel, never whether a claim is inferred: use speech for spoken or written
 conversation, visual for visible evidence, tool for tool observations, and mixed only when multiple

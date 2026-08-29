@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
+from mycelium.ontology import ClaimType, DiscoverableEntityType
+
 
 class ExtractedEntityOutput(BaseModel):
     entity: str
@@ -13,11 +15,7 @@ class ExtractedEntityOutput(BaseModel):
 
 class ExtractedClaimOutput(BaseModel):
     text: str
-    claim_type: Literal[
-        "identity", "state", "event", "preference", "plan", "belief",
-        "relationship", "decision", "commitment", "interaction", "observation",
-        "unknown",
-    ] = "unknown"
+    claim_type: ClaimType = "unknown"
     predicate: str | None = None
     evidence_modality: Literal[
         "speech", "visual", "tool", "mixed", "unknown"
@@ -84,10 +82,7 @@ class SubjectGraphNodeOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     node_id: str = Field(pattern=r"^N[0-9]{3}$")
     title: str = Field(min_length=1, max_length=160)
-    entity_type: Literal[
-        "person", "project", "series", "event", "artifact", "topic",
-        "organization", "place",
-    ]
+    entity_type: DiscoverableEntityType
     supporting_evidence: list[str] = Field(min_length=1, max_length=48)
 
 

@@ -19,7 +19,11 @@ from mycelium.artifacts import (
     MemoryClaim,
     SourceDocument,
 )
-from mycelium.models import PAGE_SECTION_KEYS, PAGE_TYPES
+from mycelium.ontology import (
+    entity_type_prompt_catalog,
+    section_keys,
+    section_prompt_catalog,
+)
 from mycelium.ollama import OllamaClient
 from mycelium.structured_outputs import (
     claim_routing_output_model,
@@ -124,7 +128,7 @@ class ClaimRouter:
         }
         node_model = subject_node_output_model(allowed_evidence)
         system, user = prompts.subject_node_prompt(
-            self._entity_catalog(planned.values()),
+            self._entity_catalog(planned.values(), include_sections=False),
             self._format_evidence(aliases, participants),
         )
         try:
@@ -336,9 +340,7 @@ class ClaimRouter:
             ))
 
         entity_sections = {
-            entity.entity_id: tuple(
-                key for key, _ in PAGE_SECTION_KEYS[entity.entity_type]
-            )
+            entity.entity_id: section_keys(entity.entity_type)
             for entity in planned.values()
             if entity.status == "active"
         }
@@ -359,7 +361,7 @@ class ClaimRouter:
                 entity_sections,
             )
             system, user = prompts.claim_routing_prompt(
-                self._entity_catalog(planned.values()),
+                self._entity_catalog(planned.values(), include_sections=True),
                 resolved_plan,
                 self._format_evidence(batch_aliases, batch_participants),
             )
@@ -868,11 +870,16 @@ class ClaimRouter:
         )
 
     @staticmethod
-    def _entity_catalog(entities: Iterable[EntityRecord]) -> str:
-        lines = ["Typed section contract:"]
-        for entity_type in PAGE_TYPES:
-            sections = ", ".join(key for key, _ in PAGE_SECTION_KEYS[entity_type])
-            lines.append(f"- type={entity_type}; allowed_sections={sections}")
+    def _entity_catalog(
+        entities: Iterable[EntityRecord], *, include_sections: bool
+    ) -> str:
+        if include_sections:
+            lines = ["Typed page ontology:", section_prompt_catalog()]
+        else:
+            lines = [
+                "Typed entity ontology:",
+                entity_type_prompt_catalog(discoverable_only=True),
+            ]
         lines.extend(["", "Existing canonical entities:"])
         found = False
         for entity in sorted(entities, key=lambda item: item.entity_id):

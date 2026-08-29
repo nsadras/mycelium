@@ -15,14 +15,10 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterable, cast
+from typing import Any, Iterable
 
+from mycelium.ontology import CLAIM_TYPES, ENTITY_TYPES, section_keys
 
-CLAIM_TYPES = {
-    "identity", "state", "event", "preference", "plan", "belief",
-    "relationship", "decision", "commitment", "interaction", "observation",
-    "unknown",
-}
 NUMBER_WORDS = {
     "a": 1,
     "an": 1,
@@ -169,9 +165,7 @@ class EntityRecord:
     merged_into_entity_id: str | None = None
 
     def __post_init__(self) -> None:
-        from mycelium.models import PAGE_TYPES
-
-        if self.entity_type not in PAGE_TYPES:
+        if self.entity_type not in ENTITY_TYPES:
             raise ValueError(f"Unsupported entity type: {self.entity_type}")
         if self.status not in {"active", "archived", "merged"}:
             raise ValueError(f"Unsupported entity status: {self.status}")
@@ -652,10 +646,7 @@ class ArtifactStore:
         self.get_claim(placement.claim_id)
         if placement.owner_entity_id:
             entity = self.get_entity(placement.owner_entity_id)
-            from mycelium.models import PAGE_SECTION_KEYS, PageType
-            allowed = {
-                key for key, _ in PAGE_SECTION_KEYS[cast(PageType, entity.entity_type)]
-            }
+            allowed = set(section_keys(entity.entity_type))
             if placement.section_key not in allowed:
                 raise ValueError(
                     f"Section {placement.section_key!r} is invalid for {entity.entity_type}"
@@ -883,12 +874,9 @@ class ArtifactStore:
 
     def save_consolidated_fact(self, fact: ConsolidatedFact) -> None:
         self.get_entity(fact.owner_entity_id)
-        from mycelium.models import PAGE_SECTION_KEYS, PageType
-        allowed = {
-            key for key, _ in PAGE_SECTION_KEYS[
-                cast(PageType, self.get_entity(fact.owner_entity_id).entity_type)
-            ]
-        }
+        allowed = set(section_keys(
+            self.get_entity(fact.owner_entity_id).entity_type
+        ))
         if fact.section_key not in allowed:
             raise ValueError(
                 f"Section {fact.section_key!r} is invalid for consolidated fact owner"

@@ -21,8 +21,14 @@ from mycelium.organization import (
     FactCurationService,
     OrganizationReviewService,
 )
+from mycelium.ontology import ontology_response
 
 router = APIRouter()
+
+
+@router.get("/ontology")
+async def get_ontology():
+    return ontology_response()
 
 
 class FlushRequest(BaseModel):

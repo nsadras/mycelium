@@ -4,7 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from mycelium.models import PAGE_TYPES, WikiPage, LogEntry, Edge, UpdateLogEntry
+from mycelium.models import Edge, LogEntry, UpdateLogEntry, WikiPage
+from mycelium.ontology import ENTITY_TYPES
 
 def _edge_to_dict(edge: Edge) -> dict:
     return {
@@ -63,7 +64,7 @@ class WikiStore:
                 "Clear and rebuild the wiki from canonical memory artifacts."
             )
         page_type = post.metadata["page_type"]
-        if page_type is not None and page_type not in PAGE_TYPES:
+        if page_type is not None and page_type not in ENTITY_TYPES:
             raise ValueError(f"Wiki page {slug} has invalid page_type: {page_type!r}")
         entity_id = str(post.metadata.get("entity_id") or "")
         if not entity_id:

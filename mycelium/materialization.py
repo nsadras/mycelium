@@ -17,21 +17,14 @@ from mycelium.artifacts import (
 )
 from mycelium.config import Config
 from mycelium.consolidation import ClaimRoute, placement_from_route
-from mycelium.models import Edge, PAGE_SECTION_KEYS, PageType, UpdateLogEntry, WikiPage
+from mycelium.models import Edge, UpdateLogEntry, WikiPage
+from mycelium.ontology import ENTITY_ONTOLOGY, PageType, project_role_section, section_pairs
 from mycelium.store import WikiStore
-from mycelium.wiki_schema import project_role_section
 
 
-INDEX_GROUPS: tuple[tuple[PageType, str], ...] = (
-    ("you", "You"),
-    ("project", "Projects"),
-    ("series", "Series"),
-    ("person", "People"),
-    ("artifact", "Artifacts"),
-    ("topic", "Topics"),
-    ("organization", "Organizations"),
-    ("place", "Places"),
-    ("event", "Events"),
+INDEX_GROUPS: tuple[tuple[PageType, str], ...] = tuple(
+    (cast(PageType, definition.key), definition.plural_label)
+    for definition in ENTITY_ONTOLOGY
 )
 
 
@@ -465,7 +458,7 @@ class PageMaterializer:
                 })
 
         sections: list[dict] = []
-        for key, title in PAGE_SECTION_KEYS[cast(PageType, entity.entity_type)]:
+        for key, title in section_pairs(entity.entity_type):
             if key == "memory_map" and entity.entity_type == "you":
                 links = self._memory_map(entities)
                 if links:

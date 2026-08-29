@@ -17,9 +17,8 @@ from mycelium.artifacts import (
     OrganizationProposal,
 )
 from mycelium.materialization import MaterializationResult, PageMaterializer
-from mycelium.models import PAGE_SECTION_KEYS, PAGE_TYPES, PageType
+from mycelium.ontology import ENTITY_TYPES, default_section, section_keys
 from mycelium.store import WikiStore
-from mycelium.wiki_schema import default_section
 from mycelium.projection import display_claim_text
 
 
@@ -66,7 +65,7 @@ class EntityCurationService:
             raise ValueError("Merged identities cannot be edited")
         if entity.entity_id == "you" and entity_type not in {None, "you"}:
             raise ValueError("The You entity type cannot change")
-        if entity_type is not None and entity_type not in PAGE_TYPES:
+        if entity_type is not None and entity_type not in ENTITY_TYPES:
             raise ValueError(f"Unsupported entity type: {entity_type}")
         old_slug = entity.slug
         old_title = entity.title
@@ -84,7 +83,9 @@ class EntityCurationService:
         if type_changed:
             for placement in self.artifacts.placements_for_entity(entity_id):
                 claim = self.artifacts.get_claim(placement.claim_id)
-                placement.section_key = default_section(entity.entity_type, claim)
+                placement.section_key = default_section(
+                    entity.entity_type, claim.claim_type, claim.predicate
+                )
                 placement.reason = "Section remapped after a manual entity type correction."
                 placement.updated_at = _now()
                 self.artifacts.save_placement(placement)
@@ -92,7 +93,11 @@ class EntityCurationService:
                 owner_entity_id=entity_id
             ):
                 representative = self.artifacts.get_claim(fact.member_claim_ids[0])
-                fact.section_key = default_section(entity.entity_type, representative)
+                fact.section_key = default_section(
+                    entity.entity_type,
+                    representative.claim_type,
+                    representative.predicate,
+                )
                 fact.reason = "Section remapped after a manual entity type correction."
                 fact.updated_at = _now()
                 self.artifacts.save_consolidated_fact(fact)
@@ -228,14 +233,11 @@ class EntityCurationService:
             if placement.owner_entity_id == source_entity_id:
                 placement.owner_entity_id = target_entity_id
                 claim = self.artifacts.get_claim(placement.claim_id)
-                allowed = {
-                    key
-                    for key, _ in PAGE_SECTION_KEYS[
-                        cast(PageType, target.entity_type)
-                    ]
-                }
+                allowed = set(section_keys(target.entity_type))
                 if placement.section_key not in allowed:
-                    placement.section_key = default_section(target.entity_type, claim)
+                    placement.section_key = default_section(
+                        target.entity_type, claim.claim_type, claim.predicate
+                    )
                 changed = True
             if source_entity_id in placement.linked_entity_ids:
                 placement.linked_entity_ids = [
@@ -252,7 +254,11 @@ class EntityCurationService:
             if fact.owner_entity_id == source_entity_id:
                 fact.owner_entity_id = target_entity_id
                 representative = self.artifacts.get_claim(fact.member_claim_ids[0])
-                fact.section_key = default_section(target.entity_type, representative)
+                fact.section_key = default_section(
+                    target.entity_type,
+                    representative.claim_type,
+                    representative.predicate,
+                )
                 changed = True
             if source_entity_id in fact.linked_entity_ids:
                 fact.linked_entity_ids = [
@@ -296,10 +302,15 @@ class EntityCurationService:
         entity = self.artifacts.create_entity(entity_type, title, aliases=aliases)
         for claim_id in selected:
             placement = self.artifacts.get_placement(claim_id)
+            claim = self.artifacts.get_claim(claim_id)
             self.move_claim(
                 claim_id,
                 entity.entity_id,
-                default_section(entity.entity_type, self.artifacts.get_claim(claim_id)),
+                default_section(
+                    entity.entity_type,
+                    claim.claim_type,
+                    claim.predicate,
+                ),
                 linked_entity_ids=list(placement.linked_entity_ids),
                 reason="Manual entity split",
             )

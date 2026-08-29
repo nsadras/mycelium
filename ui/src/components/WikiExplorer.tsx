@@ -8,6 +8,7 @@ import { twMerge } from 'tailwind-merge';
 import api, {
   type EntityRecord,
   type ArtifactSource,
+  type MemoryOntology,
   type OrganizationProposalArtifact,
   type PageType,
   type WikiFactItem,
@@ -16,34 +17,11 @@ import api, {
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 
-const PAGE_GROUPS: { type: PageType; label: string }[] = [
-  { type: 'you', label: 'You' }, { type: 'project', label: 'Projects' },
-  { type: 'series', label: 'Series' }, { type: 'person', label: 'People' },
-  { type: 'artifact', label: 'Artifacts' }, { type: 'topic', label: 'Topics' },
-  { type: 'organization', label: 'Organizations' }, { type: 'place', label: 'Places' },
-  { type: 'event', label: 'Events' },
-];
-
-const SECTION_KEYS: Record<PageType, string[]> = {
-  you: ['profile', 'current_context', 'priorities_plans', 'preferences_working_style', 'important_relationships'],
-  person: ['relationship_to_you', 'profile', 'current_context', 'interests_views', 'goals_plans', 'shared_projects', 'timeline', 'research_references'],
-  project: ['overview', 'objective', 'current_status', 'requirements_constraints', 'decisions', 'next_steps_deadlines', 'people_organizations', 'timeline', 'research_references'],
-  series: ['overview', 'schedule_pattern', 'current_context', 'participants', 'occurrences', 'related_topics', 'research_references'],
-  artifact: ['overview', 'purpose', 'current_state', 'requirements_constraints', 'decisions', 'related_projects', 'timeline', 'research_references'],
-  topic: ['why_it_matters', 'current_understanding', 'preferences_positions', 'related_projects', 'timeline', 'research_references'],
-  organization: ['overview', 'relationship_to_you', 'people', 'related_projects', 'current_context', 'timeline', 'research_references'],
-  place: ['overview', 'why_it_matters', 'current_context', 'associated_people_projects', 'visits_events', 'research_references'],
-  event: ['summary', 'date_location', 'participants', 'what_happened', 'outcomes_decisions', 'follow_ups', 'evidence'],
-};
-
-function pageTypeLabel(pageType: PageType) {
-  return PAGE_GROUPS.find((group) => group.type === pageType)?.label ?? pageType;
-}
-
 export default function WikiExplorer() {
   const [pages, setPages] = useState<WikiPage[]>([]);
   const [entities, setEntities] = useState<EntityRecord[]>([]);
   const [proposals, setProposals] = useState<OrganizationProposalArtifact[]>([]);
+  const [ontology, setOntology] = useState<MemoryOntology | null>(null);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [pageData, setPageData] = useState<WikiPage | null>(null);
   const [search, setSearch] = useState('');
@@ -55,14 +33,16 @@ export default function WikiExplorer() {
   const [groupText, setGroupText] = useState('');
 
   const refresh = async () => {
-    const [pageResponse, entityResponse, proposalResponse] = await Promise.all([
+    const [pageResponse, entityResponse, proposalResponse, ontologyResponse] = await Promise.all([
       api.get<WikiPage[]>('/memory/wiki'),
       api.get<EntityRecord[]>('/memory/artifacts/entities'),
       api.get<OrganizationProposalArtifact[]>('/memory/artifacts/organization-proposals?status=pending'),
+      api.get<MemoryOntology>('/memory/ontology'),
     ]);
     setPages(pageResponse.data);
     setEntities(entityResponse.data);
     setProposals(proposalResponse.data);
+    setOntology(ontologyResponse.data);
   };
 
   useEffect(() => {
@@ -71,11 +51,13 @@ export default function WikiExplorer() {
       api.get<WikiPage[]>('/memory/wiki'),
       api.get<EntityRecord[]>('/memory/artifacts/entities'),
       api.get<OrganizationProposalArtifact[]>('/memory/artifacts/organization-proposals?status=pending'),
-    ]).then(([pageResponse, entityResponse, proposalResponse]) => {
+      api.get<MemoryOntology>('/memory/ontology'),
+    ]).then(([pageResponse, entityResponse, proposalResponse, ontologyResponse]) => {
       if (cancelled) return;
       setPages(pageResponse.data);
       setEntities(entityResponse.data);
       setProposals(proposalResponse.data);
+      setOntology(ontologyResponse.data);
     }).catch((error) => console.error('Failed to load wiki', error));
     return () => { cancelled = true; };
   }, []);
@@ -87,6 +69,10 @@ export default function WikiExplorer() {
   }, [selectedSlug]);
 
   const selectedEntity = entities.find((entity) => entity.entity_id === pageData?.entity_id) ?? null;
+  const entityTypes = ontology?.entity_types ?? [];
+  const pageTypeLabel = (pageType: PageType) => entityTypes.find(
+    (definition) => definition.key === pageType
+  )?.label ?? pageType;
   const filteredPages = pages.filter((page) => [page.title, page.slug, ...page.aliases]
     .some((value) => value.toLowerCase().includes(search.toLowerCase())));
   const archivedEntities = entities.filter((entity) => entity.status === 'archived'
@@ -131,10 +117,10 @@ export default function WikiExplorer() {
           <button onClick={() => setShowReview(!showReview)} className={cn('mt-3 w-full rounded-lg px-3 py-2 text-left text-xs font-semibold', showReview ? 'bg-amber-100 text-amber-800' : 'bg-slate-50 text-slate-600')}>Organization review · {proposals.length}</button>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
-          {showReview ? <ReviewQueue proposals={proposals} entities={entities} onReview={reviewProposal} /> : PAGE_GROUPS.map((group) => {
-            const groupPages = filteredPages.filter((page) => page.page_type === group.type);
+          {showReview ? <ReviewQueue proposals={proposals} entities={entities} onReview={reviewProposal} /> : entityTypes.map((group) => {
+            const groupPages = filteredPages.filter((page) => page.page_type === group.key);
             if (!groupPages.length) return null;
-            return <section key={group.type} className="mb-4"><h2 className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">{group.label}</h2><div className="space-y-1">{groupPages.sort((a, b) => a.title.localeCompare(b.title)).map((page) => <button key={page.entity_id} onClick={() => { setSelectedSlug(page.slug); setShowReview(false); }} className={cn('group w-full rounded-xl p-3 text-left', selectedSlug === page.slug ? 'bg-indigo-50' : 'hover:bg-slate-50')}><div className="flex items-center justify-between"><span className={cn('text-sm font-semibold', selectedSlug === page.slug ? 'text-indigo-700' : 'text-slate-700')}>{page.title}</span><ChevronRight size={14} className="text-slate-300" /></div><div className="mt-1 truncate text-[11px] text-slate-400">{page.slug}</div></button>)}</div></section>;
+            return <section key={group.key} className="mb-4"><h2 className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">{group.plural_label}</h2><div className="space-y-1">{groupPages.sort((a, b) => a.title.localeCompare(b.title)).map((page) => <button key={page.entity_id} onClick={() => { setSelectedSlug(page.slug); setShowReview(false); }} className={cn('group w-full rounded-xl p-3 text-left', selectedSlug === page.slug ? 'bg-indigo-50' : 'hover:bg-slate-50')}><div className="flex items-center justify-between"><span className={cn('text-sm font-semibold', selectedSlug === page.slug ? 'text-indigo-700' : 'text-slate-700')}>{page.title}</span><ChevronRight size={14} className="text-slate-300" /></div><div className="mt-1 truncate text-[11px] text-slate-400">{page.slug}</div></button>)}</div></section>;
           })}{!showReview && archivedEntities.length > 0 && <section className="mb-4 border-t border-slate-100 pt-2"><h2 className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Archived</h2><div className="space-y-1">{archivedEntities.sort((a, b) => a.title.localeCompare(b.title)).map((entity) => <div key={entity.entity_id} className="flex items-center gap-2 rounded-xl p-3 hover:bg-slate-50"><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-slate-500">{entity.title}</div><div className="truncate text-[11px] text-slate-400">{pageTypeLabel(entity.entity_type)}</div></div><button title="Reactivate entity" onClick={() => reactivate(entity.entity_id)} className="rounded-lg bg-slate-100 p-2 text-slate-500 hover:bg-indigo-50 hover:text-indigo-700"><RotateCcw size={14} /></button></div>)}</div></section>}
         </div>
       </aside>
@@ -147,22 +133,24 @@ export default function WikiExplorer() {
             <div className="flex flex-wrap gap-2 text-xs"><span className="rounded-full bg-indigo-50 px-3 py-1.5 font-semibold text-indigo-700">{pageTypeLabel(pageData.page_type as PageType)}</span><span className="rounded-full bg-slate-100 px-3 py-1.5 text-slate-600"><ShieldCheck size={13} className="mr-1 inline" />v{pageData.version}</span><span className="rounded-full bg-slate-100 px-3 py-1.5 font-mono text-slate-500">{pageData.entity_id}</span>{pageData.aliases.map((alias) => <span key={alias} className="rounded-full bg-slate-50 px-3 py-1.5 text-slate-500">alias: {alias}</span>)}</div>
           </header>
 
-          {editing && selectedEntity && <CurationPanel entity={selectedEntity} entities={entities} claimIds={allFactIds} onDone={reloadSelected} onClose={() => setEditing(false)} selectedClaims={selectedClaims} setSelectedClaims={setSelectedClaims} />}
+          {editing && selectedEntity && ontology && <CurationPanel entity={selectedEntity} entities={entities} ontology={ontology} claimIds={allFactIds} onDone={reloadSelected} onClose={() => setEditing(false)} selectedClaims={selectedClaims} setSelectedClaims={setSelectedClaims} />}
 
           {selectedFacts.length >= 2 && <div className="mb-6 flex gap-2 rounded-xl border border-indigo-100 bg-indigo-50 p-3"><input value={groupText} onChange={(event) => setGroupText(event.target.value)} placeholder="Combined fact text" className="min-w-0 flex-1 rounded border-slate-200 text-sm" /><button onClick={groupFacts} className="rounded bg-indigo-600 px-3 py-2 text-xs font-semibold text-white">Group {selectedFacts.length} facts</button></div>}
-          {(pageData.sections?.length ?? 0) > 0 ? <div className="space-y-10">{pageData.sections!.map((section) => <section key={section.key}><h2 className="mb-4 border-b border-slate-100 pb-2 text-xl font-bold text-slate-900">{section.title}</h2><div className="space-y-3">{section.items.map((item, index) => item.kind === 'link' ? <button key={`${item.entity_id}-${index}`} onClick={() => setSelectedSlug(item.slug)} className="block text-left text-sm font-semibold text-indigo-700 hover:underline">{item.title} <span className="font-normal text-slate-400">· {pageTypeLabel(item.entity_type)}</span></button> : item.kind === 'encounter' ? <div key={item.encounter_id} className="rounded-xl bg-slate-50 p-3 text-sm text-slate-600">{item.text}<div className="mt-1 font-mono text-[10px] text-slate-400">{item.source_id}</div></div> : <div key={item.fact_id} className={cn('rounded-xl border p-4', item.authoritative ? 'border-slate-100 bg-white' : 'border-amber-200 bg-amber-50')}><div className="flex gap-3"><input aria-label="Select fact" type="checkbox" checked={selectedFacts.includes(item.fact_id)} onChange={(event) => { setSelectedFacts((current) => event.target.checked ? [...new Set([...current, item.fact_id])] : current.filter((id) => id !== item.fact_id)); setSelectedClaims((current) => event.target.checked ? [...new Set([...current, ...item.claim_ids])] : current.filter((id) => !item.claim_ids.includes(id))); }} /><button className="flex-1 text-left" onClick={() => setExpandedClaim(expandedClaim === item.fact_id ? null : item.fact_id)}><p className="text-sm leading-relaxed text-slate-800">{item.text}</p><div className="mt-2 flex flex-wrap gap-1"><span className="rounded bg-indigo-50 px-2 py-1 text-[10px] text-indigo-600">{item.synthesis_origin}</span>{item.evidence_modality === 'tool' && <span className="rounded bg-sky-50 px-2 py-1 text-[10px] font-bold uppercase text-sky-700">External research</span>}{item.qualifiers.map((qualifier) => <span key={qualifier} className="rounded bg-slate-100 px-2 py-1 text-[10px] text-slate-500">{qualifier}</span>)}</div></button></div>{expandedClaim === item.fact_id && <FactEvidence item={item} entities={entities} currentEntityId={pageData.entity_id} onMoved={reloadSelected} />}</div>)}</div></section>)}</div> : <div className="prose prose-slate max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm]}>{pageData.content || ''}</ReactMarkdown></div>}
+          {(pageData.sections?.length ?? 0) > 0 ? <div className="space-y-10">{pageData.sections!.map((section) => <section key={section.key}><h2 className="mb-4 border-b border-slate-100 pb-2 text-xl font-bold text-slate-900">{section.title}</h2><div className="space-y-3">{section.items.map((item, index) => item.kind === 'link' ? <button key={`${item.entity_id}-${index}`} onClick={() => setSelectedSlug(item.slug)} className="block text-left text-sm font-semibold text-indigo-700 hover:underline">{item.title} <span className="font-normal text-slate-400">· {pageTypeLabel(item.entity_type)}</span></button> : item.kind === 'encounter' ? <div key={item.encounter_id} className="rounded-xl bg-slate-50 p-3 text-sm text-slate-600">{item.text}<div className="mt-1 font-mono text-[10px] text-slate-400">{item.source_id}</div></div> : <div key={item.fact_id} className={cn('rounded-xl border p-4', item.authoritative ? 'border-slate-100 bg-white' : 'border-amber-200 bg-amber-50')}><div className="flex gap-3"><input aria-label="Select fact" type="checkbox" checked={selectedFacts.includes(item.fact_id)} onChange={(event) => { setSelectedFacts((current) => event.target.checked ? [...new Set([...current, item.fact_id])] : current.filter((id) => id !== item.fact_id)); setSelectedClaims((current) => event.target.checked ? [...new Set([...current, ...item.claim_ids])] : current.filter((id) => !item.claim_ids.includes(id))); }} /><button className="flex-1 text-left" onClick={() => setExpandedClaim(expandedClaim === item.fact_id ? null : item.fact_id)}><p className="text-sm leading-relaxed text-slate-800">{item.text}</p><div className="mt-2 flex flex-wrap gap-1"><span className="rounded bg-indigo-50 px-2 py-1 text-[10px] text-indigo-600">{item.synthesis_origin}</span>{item.evidence_modality === 'tool' && <span className="rounded bg-sky-50 px-2 py-1 text-[10px] font-bold uppercase text-sky-700">External research</span>}{item.qualifiers.map((qualifier) => <span key={qualifier} className="rounded bg-slate-100 px-2 py-1 text-[10px] text-slate-500">{qualifier}</span>)}</div></button></div>{expandedClaim === item.fact_id && ontology && <FactEvidence item={item} entities={entities} ontology={ontology} currentEntityId={pageData.entity_id} onMoved={reloadSelected} />}</div>)}</div></section>)}</div> : <div className="prose prose-slate max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm]}>{pageData.content || ''}</ReactMarkdown></div>}
         </div> : <div className="flex h-full flex-col items-center justify-center p-8 text-center text-slate-400"><Book size={42} className="mb-4 opacity-30" /><p>Select a wiki entity to inspect it.</p></div>}
       </main>
     </div>
   );
 }
 
-function FactEvidence({ item, entities, currentEntityId, onMoved }: { item: WikiFactItem; entities: EntityRecord[]; currentEntityId: string; onMoved: (slug?: string | null) => Promise<void> }) {
+function FactEvidence({ item, entities, ontology, currentEntityId, onMoved }: { item: WikiFactItem; entities: EntityRecord[]; ontology: MemoryOntology; currentEntityId: string; onMoved: (slug?: string | null) => Promise<void> }) {
   const canonicalOwnerId = item.canonical_owner_entity_ids[0] ?? currentEntityId;
   const [owner, setOwner] = useState(canonicalOwnerId);
   const ownerEntity = entities.find((entity) => entity.entity_id === owner);
-  const roleSection = (entity?: EntityRecord) => entity?.entity_type === 'you' ? 'priorities_plans' : entity?.entity_type === 'person' ? 'shared_projects' : '';
-  const initialSection = item.relationship_kind === 'project_role' ? roleSection(ownerEntity) : ownerEntity ? SECTION_KEYS[ownerEntity.entity_type][0] : '';
+  const definition = (entity?: EntityRecord) => ontology.entity_types.find((value) => value.key === entity?.entity_type);
+  const roleSection = (entity?: EntityRecord) => definition(entity)?.project_role_section ?? '';
+  const sections = (entity?: EntityRecord) => definition(entity)?.sections.map((value) => value.key) ?? [];
+  const initialSection = item.relationship_kind === 'project_role' ? roleSection(ownerEntity) : sections(ownerEntity)[0] ?? '';
   const [section, setSection] = useState(initialSection);
   const [factText, setFactText] = useState(item.text);
   const [sourceArtifacts, setSourceArtifacts] = useState<Record<string, ArtifactSource>>({});
@@ -178,12 +166,12 @@ function FactEvidence({ item, entities, currentEntityId, onMoved }: { item: Wiki
       .then((values) => setScopeDecisions(values.flat()))
       .catch((error) => console.error('Failed to load scope audit', error));
   }, [item]);
-  const changeOwner = (value: string) => { setOwner(value); const selected = entities.find((entity) => entity.entity_id === value); setSection(item.relationship_kind === 'project_role' ? roleSection(selected) : selected ? SECTION_KEYS[selected.entity_type][0] : ''); };
+  const changeOwner = (value: string) => { setOwner(value); const selected = entities.find((entity) => entity.entity_id === value); setSection(item.relationship_kind === 'project_role' ? roleSection(selected) : sections(selected)[0] ?? ''); };
   const move = async () => { const target = entities.find((entity) => entity.entity_id === owner); await api.post(`/memory/facts/${item.fact_id}/move`, { owner_entity_id: owner, section_key: section, linked_entity_ids: item.canonical_linked_entity_ids, reason: 'Manual wiki fact organization' }); await onMoved(target?.slug); };
   const saveText = async () => { await api.patch(`/memory/facts/${item.fact_id}`, { text: factText, reason: 'Manual wiki fact correction' }); await onMoved(); };
   const split = async () => { const claims = await Promise.all(item.claim_ids.map(async (claimId) => (await api.get<{ claim_id: string; text: string }>(`/memory/artifacts/claims/${encodeURIComponent(claimId)}`)).data)); await api.post(`/memory/facts/${item.fact_id}/split`, { groups: claims.map((claim) => ({ claim_ids: [claim.claim_id], text: claim.text })), reason: 'Manual wiki fact split' }); await onMoved(); };
   const ownerChoices = entities.filter((entity) => entity.status === 'active' && (item.relationship_kind !== 'project_role' || entity.entity_type === 'you' || entity.entity_type === 'person'));
-  const sectionChoices = item.relationship_kind === 'project_role' ? [roleSection(ownerEntity)] : ownerEntity ? SECTION_KEYS[ownerEntity.entity_type] : [];
+  const sectionChoices = item.relationship_kind === 'project_role' ? [roleSection(ownerEntity)].filter(Boolean) : sections(ownerEntity);
   return <div className="mt-4 border-t border-slate-100 pt-3 text-xs text-slate-500">{item.relationship_kind === 'project_role' && <div className="mb-3 rounded bg-indigo-50 px-2 py-1 text-indigo-700">Shared role view · one canonical relationship shown on both endpoint pages</div>}<div className="mb-2 font-semibold text-slate-700">Consolidated fact</div><div className="flex gap-2"><input value={factText} onChange={(event) => setFactText(event.target.value)} className="min-w-0 flex-1 rounded border-slate-200 text-xs" /><button onClick={saveText} className="rounded bg-slate-800 px-3 py-2 font-semibold text-white">Save text</button>{item.claim_ids.length > 1 && <button onClick={split} className="rounded bg-white px-3 py-2 font-semibold text-slate-600 ring-1 ring-slate-200">Split claims</button>}</div><div className="mt-2 text-[11px]">{item.synthesis_reason} · confidence {item.synthesis_confidence.toFixed(2)}</div><div className="mb-2 mt-3 font-semibold text-slate-700">Scope audit</div>{scopeDecisions.map((decision) => <div key={decision.decision_id} className="mb-1 rounded bg-slate-50 p-2"><span className="font-semibold">{decision.origin}</span> · {decision.reason} · {decision.confidence.toFixed(2)}</div>)}<div className="mb-2 mt-3 font-semibold text-slate-700">Canonical claims</div>{item.claim_ids.map((id) => <div key={id} className="break-all font-mono">{id}</div>)}<div className="mt-2">Canonical owner: {entities.find((entity) => entity.entity_id === canonicalOwnerId)?.title ?? canonicalOwnerId}</div><div className="mb-2 mt-3 font-semibold text-slate-700">Exact source evidence</div>{item.sources.map((source, index) => { const artifact = sourceArtifacts[source.source_id]; const segments = artifact?.segments.filter((segment) => source.segment_ids.includes(segment.segment_id)) ?? []; return <div key={`${source.source_id}-${index}`} className="mb-2 rounded bg-slate-50 p-2"><div className="font-mono">{source.source_id}</div>{segments.length ? segments.map((segment) => <div key={segment.segment_id} className="mt-2 border-l-2 border-indigo-200 pl-2"><div className="mb-1 font-mono text-[10px] text-slate-400">{segment.segment_id}{segment.speaker ? ` · ${segment.speaker}` : ''}</div><div className="whitespace-pre-wrap text-slate-700">{segment.content}</div></div>) : <div className="mt-1 break-all">{source.segment_ids.join(', ')}</div>}</div>; })}{item.links.length > 0 && <div className="mt-2">Linked entities: {item.links.map((link) => link.title).join(', ')}</div>}<div className="mt-4 grid gap-2 rounded-lg border border-slate-200 p-3 md:grid-cols-[1fr_1fr_auto]"><select value={owner} onChange={(event) => changeOwner(event.target.value)} className="rounded border-slate-200 text-xs">{ownerChoices.map((entity) => <option key={entity.entity_id} value={entity.entity_id}>{entity.title}</option>)}</select><select value={section} onChange={(event) => setSection(event.target.value)} className="rounded border-slate-200 text-xs">{sectionChoices.map((key) => <option key={key} value={key}>{key.replaceAll('_', ' ')}</option>)}</select><button onClick={move} className="rounded bg-indigo-600 px-3 py-2 font-semibold text-white">Move</button></div></div>;
 }
 
@@ -193,7 +181,7 @@ function ReviewQueue({ proposals, entities, onReview }: { proposals: Organizatio
   return <div className="space-y-3 p-2">{proposals.map((proposal) => <article key={proposal.proposal_id} className="rounded-xl border border-amber-200 bg-amber-50 p-3"><div className="text-xs font-bold uppercase text-amber-700">{proposal.proposal_type.replace('_', ' ')}</div><p className="mt-2 text-sm text-slate-700">{proposal.explanation}</p><p className="mt-2 text-xs text-slate-500">{proposal.proposal_type === 'merge_entities' ? `${name(proposal.source_entity_id)} → ${name(proposal.target_entity_id)}` : `${proposal.claim_id} → ${name(proposal.proposed_owner_entity_id)}`}</p><div className="mt-3 flex gap-2"><button onClick={() => onReview(proposal.proposal_id, 'approve')} className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white">Approve</button><button onClick={() => onReview(proposal.proposal_id, 'reject')} className="rounded bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">Reject</button></div></article>)}</div>;
 }
 
-function CurationPanel({ entity, entities, claimIds, onDone, onClose, selectedClaims, setSelectedClaims }: { entity: EntityRecord; entities: EntityRecord[]; claimIds: string[]; onDone: (slug?: string | null) => Promise<void>; onClose: () => void; selectedClaims: string[]; setSelectedClaims: (ids: string[]) => void }) {
+function CurationPanel({ entity, entities, ontology, claimIds, onDone, onClose, selectedClaims, setSelectedClaims }: { entity: EntityRecord; entities: EntityRecord[]; ontology: MemoryOntology; claimIds: string[]; onDone: (slug?: string | null) => Promise<void>; onClose: () => void; selectedClaims: string[]; setSelectedClaims: (ids: string[]) => void }) {
   const [title, setTitle] = useState(entity.title); const [slug, setSlug] = useState(entity.slug);
   const [aliases, setAliases] = useState(entity.aliases.join(', ')); const [type, setType] = useState<PageType>(entity.entity_type);
   const [mergeTarget, setMergeTarget] = useState(''); const [splitTitle, setSplitTitle] = useState(''); const [splitType, setSplitType] = useState<PageType>('topic');
@@ -201,7 +189,8 @@ function CurationPanel({ entity, entities, claimIds, onDone, onClose, selectedCl
   const archive = async () => { await api.post(`/memory/entities/${entity.entity_id}/archive`); await onDone(null); onClose(); };
   const merge = async () => { if (!mergeTarget) return; await api.post(`/memory/entities/${entity.entity_id}/merge`, { target_entity_id: mergeTarget }); const target = entities.find((value) => value.entity_id === mergeTarget); await onDone(target?.slug); onClose(); };
   const split = async () => { if (!splitTitle || !selectedClaims.length) return; const response = await api.post(`/memory/entities/${entity.entity_id}/split`, { claim_ids: selectedClaims, title: splitTitle, entity_type: splitType, aliases: [] }); setSelectedClaims([]); await onDone(response.data.entity.slug); onClose(); };
-  return <div className="mb-8 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-5"><div className="mb-4 flex items-center justify-between"><h2 className="font-bold text-slate-900">Curate organization</h2><button onClick={onClose}><X size={18} /></button></div><div className="grid gap-3 md:grid-cols-2"><input value={title} onChange={(event) => setTitle(event.target.value)} className="rounded-lg border-slate-200 text-sm" placeholder="Title" /><input value={slug} onChange={(event) => setSlug(event.target.value)} className="rounded-lg border-slate-200 text-sm" placeholder="Slug" /><input value={aliases} onChange={(event) => setAliases(event.target.value)} className="rounded-lg border-slate-200 text-sm" placeholder="Aliases, comma separated" /><select value={type} disabled={entity.entity_id === 'you'} onChange={(event) => setType(event.target.value as PageType)} className="rounded-lg border-slate-200 text-sm">{PAGE_GROUPS.map((group) => <option key={group.type} value={group.type}>{group.label}</option>)}</select></div><button onClick={save} className="mt-3 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white">Save identity</button>
-    {entity.entity_id !== 'you' && <div className="mt-5 grid gap-4 border-t border-indigo-100 pt-5 md:grid-cols-3"><div><div className="mb-2 text-xs font-bold uppercase text-slate-500">Lifecycle</div><button onClick={archive} className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600"><Archive size={14} /> Archive</button></div><div><div className="mb-2 text-xs font-bold uppercase text-slate-500">Merge</div><select value={mergeTarget} onChange={(event) => setMergeTarget(event.target.value)} className="w-full rounded-lg border-slate-200 text-xs"><option value="">Choose target…</option>{entities.filter((value) => value.entity_id !== entity.entity_id && value.status === 'active' && value.entity_type === entity.entity_type).map((value) => <option key={value.entity_id} value={value.entity_id}>{value.title}</option>)}</select><button onClick={merge} className="mt-2 flex items-center gap-2 rounded bg-white px-3 py-2 text-xs"><GitMerge size={14} /> Merge</button></div><div><div className="mb-2 text-xs font-bold uppercase text-slate-500">Split {selectedClaims.length}/{claimIds.length}</div><input value={splitTitle} onChange={(event) => setSplitTitle(event.target.value)} className="w-full rounded-lg border-slate-200 text-xs" placeholder="New page title" /><select value={splitType} onChange={(event) => setSplitType(event.target.value as PageType)} className="mt-2 w-full rounded-lg border-slate-200 text-xs">{PAGE_GROUPS.filter((group) => group.type !== 'you').map((group) => <option key={group.type} value={group.type}>{group.label}</option>)}</select><button onClick={split} className="mt-2 flex items-center gap-2 rounded bg-white px-3 py-2 text-xs"><Split size={14} /> Split selected</button></div></div>}
-    <div className="mt-3 text-[11px] text-slate-400">Allowed sections after type changes: {SECTION_KEYS[type].join(', ')}</div></div>;
+  const selectedDefinition = ontology.entity_types.find((definition) => definition.key === type);
+  return <div className="mb-8 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-5"><div className="mb-4 flex items-center justify-between"><h2 className="font-bold text-slate-900">Curate organization</h2><button onClick={onClose}><X size={18} /></button></div><div className="grid gap-3 md:grid-cols-2"><input value={title} onChange={(event) => setTitle(event.target.value)} className="rounded-lg border-slate-200 text-sm" placeholder="Title" /><input value={slug} onChange={(event) => setSlug(event.target.value)} className="rounded-lg border-slate-200 text-sm" placeholder="Slug" /><input value={aliases} onChange={(event) => setAliases(event.target.value)} className="rounded-lg border-slate-200 text-sm" placeholder="Aliases, comma separated" /><select value={type} disabled={entity.entity_id === 'you'} onChange={(event) => setType(event.target.value as PageType)} className="rounded-lg border-slate-200 text-sm">{ontology.entity_types.map((definition) => <option key={definition.key} value={definition.key}>{definition.label}</option>)}</select></div><button onClick={save} className="mt-3 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white">Save identity</button>
+    {entity.entity_id !== 'you' && <div className="mt-5 grid gap-4 border-t border-indigo-100 pt-5 md:grid-cols-3"><div><div className="mb-2 text-xs font-bold uppercase text-slate-500">Lifecycle</div><button onClick={archive} className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-600"><Archive size={14} /> Archive</button></div><div><div className="mb-2 text-xs font-bold uppercase text-slate-500">Merge</div><select value={mergeTarget} onChange={(event) => setMergeTarget(event.target.value)} className="w-full rounded-lg border-slate-200 text-xs"><option value="">Choose target…</option>{entities.filter((value) => value.entity_id !== entity.entity_id && value.status === 'active' && value.entity_type === entity.entity_type).map((value) => <option key={value.entity_id} value={value.entity_id}>{value.title}</option>)}</select><button onClick={merge} className="mt-2 flex items-center gap-2 rounded bg-white px-3 py-2 text-xs"><GitMerge size={14} /> Merge</button></div><div><div className="mb-2 text-xs font-bold uppercase text-slate-500">Split {selectedClaims.length}/{claimIds.length}</div><input value={splitTitle} onChange={(event) => setSplitTitle(event.target.value)} className="w-full rounded-lg border-slate-200 text-xs" placeholder="New page title" /><select value={splitType} onChange={(event) => setSplitType(event.target.value as PageType)} className="mt-2 w-full rounded-lg border-slate-200 text-xs">{ontology.entity_types.filter((definition) => definition.discoverable).map((definition) => <option key={definition.key} value={definition.key}>{definition.label}</option>)}</select><button onClick={split} className="mt-2 flex items-center gap-2 rounded bg-white px-3 py-2 text-xs"><Split size={14} /> Split selected</button></div></div>}
+    <div className="mt-3 text-[11px] text-slate-400">Allowed sections after type changes: {selectedDefinition?.sections.map((section) => section.key).join(', ') ?? ''}</div></div>;
 }

@@ -1933,3 +1933,35 @@ one prose-similarity summary.
 - Added structural contract and pipeline tests preventing the removed fields and inference-as-modality from returning.
   Persistence tests also require importance-free log and wiki files. Final validation: **242 passed, 2 skipped**;
   Ruff, UI lint, UI build, and `git diff --check` passed. The existing 828.90 kB UI chunk-size warning remains.
+
+## 2026-08-28 — Central authoritative memory ontology
+
+- Added `mycelium/ontology.py` as the single ordered registry for claim types, entity types, user-facing labels,
+  discoverability, section keys and headings, semantic descriptions, claim-type fallback sections, and project-role
+  sections. Pydantic extraction/census contracts, artifact and wiki validation, curation remapping, materialization,
+  index groups, benchmark validation, and production prompt catalogs now derive from that registry.
+- Removed `mycelium/wiki_schema.py` and the duplicate constants in `models.py`. The React memory explorer now loads
+  `/api/memory/ontology`; its groups, labels, entity-type choices, allowed sections, and role destinations no longer
+  carry a separate TypeScript ontology. This also exposes every declared section consistently, including
+  `needs_review`.
+- Removed the old source-modality section shortcut. Tool evidence is subject to the same meaning-based model routing
+  as speech and visual evidence; deterministic fallback uses only the structured claim type and the exact declared
+  `project_role` predicate.
+- Direct `gemma4:12b` probes used the production prompts and structured schemas. The initial entity probe separated a
+  continuing effort, its checklist Artifact, and a bounded kickoff Event. Routing selected Artifact `purpose`,
+  Project `current_status`, and You `profile`, including a tool-observed personal fact without treating its source
+  kind as a page section. A follow-up boundary probe selected Project `requirements_constraints` for a current
+  preference, Person `shared_projects` with a project-role relationship for continuing responsibility, Project
+  `next_steps_deadlines` for a scheduled future event, and Project `timeline` for the completed counterexample.
+- The first frozen-extraction replay,
+  `benchmark_runs/daily-driver-unrelated-v1-central-ontology-20260828`, exposed overlapping section descriptions:
+  a current project preference landed in Timeline and a continuing project responsibility landed in Goals & Plans.
+  The registry descriptions were tightened at those general semantic boundaries rather than adding lexical rules.
+  The refined replay at
+  `benchmark_runs/daily-driver-unrelated-v1-central-ontology-refined-20260828` restored the expected placements,
+  passed both release gates, found all 3/3 entities with no extras, placed and rendered all 10 active claims, and
+  recorded no Dream or routing failures. It matched the prior fresh run's 4/6 section decisions and 3/6 projected
+  page facts; the remaining claim-recall and projection weaknesses are unchanged capability gaps.
+- Validation: **247 passed, 2 skipped** in the full suite before the final description refinement; the final focused
+  ontology, routing, Dream, encoder, wiki, and API suite passed **59 tests**. Ruff, UI lint, UI build, and
+  `git diff --check` passed. The existing 827.70 kB UI chunk-size warning remains.

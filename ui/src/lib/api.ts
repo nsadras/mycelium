@@ -41,7 +41,29 @@ export interface Session {
   transcript?: Message[];
 }
 
-export type PageType = 'you' | 'person' | 'project' | 'series' | 'event' | 'artifact' | 'topic' | 'organization' | 'place';
+export type PageType = string;
+
+export interface OntologySection {
+  key: string;
+  title: string;
+  description: string;
+}
+
+export interface EntityTypeOntology {
+  key: PageType;
+  label: string;
+  plural_label: string;
+  description: string;
+  discoverable: boolean;
+  sections: OntologySection[];
+  default_sections: Record<string, string>;
+  project_role_section?: string | null;
+}
+
+export interface MemoryOntology {
+  claim_types: string[];
+  entity_types: EntityTypeOntology[];
+}
 
 export interface WikiPage {
   slug: string;

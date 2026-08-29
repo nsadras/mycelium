@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from mycelium.models import PAGE_SECTION_KEYS, PAGE_TYPES
+from mycelium.ontology import ENTITY_TYPES, section_keys
 
 
 REQUIRED_FILES = {
@@ -183,7 +183,7 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
     if gold_you and user_name not in set(gold_you.get("aliases") or []):
         errors.append("configured user name must be an alias of the gold You entity")
     for entity in [*entities, *retracted_entities]:
-        if entity.get("type") not in PAGE_TYPES:
+        if entity.get("type") not in ENTITY_TYPES:
             errors.append(
                 f"entity {entity.get('id')}: unsupported type {entity.get('type')}"
             )
@@ -262,7 +262,7 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
         entity_id = str(page.get("entity_id"))
         entity = entity_by_id.get(entity_id)
         if entity:
-            allowed_sections = {key for key, _ in PAGE_SECTION_KEYS[entity["type"]]}
+            allowed_sections = set(section_keys(entity["type"]))
             unknown_sections = set(page.get("sections") or {}) - allowed_sections
             if unknown_sections:
                 errors.append(

@@ -89,7 +89,7 @@ class EntityCurationService:
                 placement.updated_at = _now()
                 self.artifacts.save_placement(placement)
             for fact in self.artifacts.list_consolidated_facts(
-                owner_entity_id=entity_id, state="active"
+                owner_entity_id=entity_id
             ):
                 representative = self.artifacts.get_claim(fact.member_claim_ids[0])
                 fact.section_key = default_section(entity.entity_type, representative)
@@ -187,7 +187,6 @@ class EntityCurationService:
                         owner_entity_id=cast(str, remaining_placement.owner_entity_id),
                         section_key=cast(str, remaining_placement.section_key),
                         linked_entity_ids=list(remaining_placement.linked_entity_ids),
-                        state="active",
                         synthesis_origin="claim",
                         confidence=remaining.confidence,
                         reason="Separated after manual claim-level curation.",
@@ -206,7 +205,6 @@ class EntityCurationService:
                 owner_entity_id=owner_entity_id,
                 section_key=cast(str, section_key),
                 linked_entity_ids=list(placement.linked_entity_ids),
-                state="active",
                 synthesis_origin="claim",
                 confidence=claim.confidence,
                 reason="Manual claim-level curation.",
@@ -249,7 +247,7 @@ class EntityCurationService:
                 placement.updated_at = _now()
                 placement.__post_init__()
                 self.artifacts.save_placement(placement)
-        for fact in self.artifacts.list_consolidated_facts(state="active"):
+        for fact in self.artifacts.list_consolidated_facts():
             changed = False
             if fact.owner_entity_id == source_entity_id:
                 fact.owner_entity_id = target_entity_id
@@ -413,7 +411,6 @@ class FactCurationService:
             linked_entity_ids=sorted({
                 entity_id for fact in facts for entity_id in fact.linked_entity_ids
             }),
-            state="active",
             synthesis_origin="manual",
             confidence=1.0,
             reason=reason,
@@ -463,7 +460,6 @@ class FactCurationService:
                 owner_entity_id=source.owner_entity_id,
                 section_key=source.section_key,
                 linked_entity_ids=list(source.linked_entity_ids),
-                state="active",
                 synthesis_origin="manual",
                 confidence=1.0,
                 reason=reason,

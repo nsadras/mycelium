@@ -10,6 +10,7 @@ from datetime import datetime
 from mycelium import prompts
 from mycelium.artifacts import (
     ArtifactStore,
+    ConsolidatedFact,
     MemoryClaim,
     ReconsolidationProposal,
     temporal_record,
@@ -17,6 +18,7 @@ from mycelium.artifacts import (
 from mycelium.consolidation import ClaimRoute
 from mycelium.materialization import PageMaterializer
 from mycelium.ollama import OllamaClient
+from mycelium.projection import display_claim_text
 from mycelium.structured_outputs import ReconsolidationDecisionsOutput
 
 
@@ -304,6 +306,8 @@ class ReconsolidationReviewService:
                     add_claim_link(target, "superseded_by", incoming.claim_id)
                 self.artifacts.save_claim(incoming)
                 self.artifacts.save_claim(target)
+            if proposal.proposed_relation == "supersedes":
+                self._remove_superseded_fact_views(target.claim_id)
             pages = self.materializer.regenerate(set(proposal.affected_entity_ids))
             proposal.status = "applied"
             proposal.applied_at = datetime.now().astimezone().isoformat()
@@ -367,3 +371,38 @@ class ReconsolidationReviewService:
         proposal.application_error = reason
         proposal.reviewed_at = datetime.now().astimezone().isoformat()
         self.artifacts.save_reconsolidation_proposal(proposal)
+
+    def _remove_superseded_fact_views(self, claim_id: str) -> None:
+        """Delete obsolete display facts without deleting their canonical claims."""
+        now = datetime.now().astimezone().isoformat()
+        for fact in self.artifacts.facts_for_claim(claim_id):
+            self.artifacts.delete_consolidated_fact(fact.fact_id)
+            for member_id in fact.member_claim_ids:
+                if member_id == claim_id:
+                    continue
+                try:
+                    member = self.artifacts.get_claim(member_id)
+                except FileNotFoundError:
+                    continue
+                placement = self.artifacts.placement_for_claim(member_id)
+                if (
+                    member.status != "active"
+                    or placement is None
+                    or placement.status != "placed"
+                    or not placement.owner_entity_id
+                    or not placement.section_key
+                ):
+                    continue
+                self.artifacts.save_consolidated_fact(ConsolidatedFact(
+                    fact_id=f"fact-{uuid.uuid4().hex[:12]}",
+                    text=display_claim_text(member),
+                    member_claim_ids=[member.claim_id],
+                    owner_entity_id=placement.owner_entity_id,
+                    section_key=placement.section_key,
+                    linked_entity_ids=list(placement.linked_entity_ids),
+                    synthesis_origin="claim",
+                    confidence=member.confidence,
+                    reason="Separated after a supporting memory was superseded.",
+                    created_at=now,
+                    updated_at=now,
+                ))

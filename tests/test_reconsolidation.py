@@ -161,7 +161,7 @@ def review_setup(tmp_path, relation: str):
             fact_id=f"fact-{item.claim_id}", text=item.text,
             member_claim_ids=[item.claim_id], owner_entity_id="you",
             section_key="preferences_working_style", linked_entity_ids=[],
-            state="active", synthesis_origin="claim", confidence=item.confidence,
+            synthesis_origin="claim", confidence=item.confidence,
             reason="test", created_at="2026-08-01T12:00:00",
             updated_at="2026-08-01T12:00:00",
         ))
@@ -192,11 +192,47 @@ def test_approve_supersession_updates_claims_and_projection(tmp_path):
     assert result.proposal.status == "applied"
     assert artifacts.get_claim("old").status == "superseded"
     assert artifacts.get_claim("new").links == [{"relation": "supersedes", "target": "old"}]
+    assert {fact.fact_id for fact in artifacts.list_consolidated_facts()} == {"fact-new"}
     page = wiki.get("you")
     assert "prefers coffee" in page.content
     assert "prefers tea" not in page.content
     assert "pending reconciliation" not in page.content
     assert service.approve("recon-1").proposal.status == "applied"
+
+
+def test_approve_supersession_splits_remaining_members_from_grouped_fact(tmp_path):
+    artifacts, wiki, service = review_setup(tmp_path, "supersedes")
+    other = claim("other", "The user prefers herbal tea.")
+    artifacts.save_claim(other)
+    artifacts.save_placement(ClaimPlacement(
+        other.claim_id, "you", "preferences_working_style", [], "placed", "test",
+        "2026-08-01T12:00:00", "2026-08-01T12:00:00",
+    ))
+    artifacts.delete_consolidated_fact("fact-old")
+    artifacts.save_consolidated_fact(ConsolidatedFact(
+        fact_id="grouped-old-and-other",
+        text="The user prefers tea, especially herbal tea.",
+        member_claim_ids=["old", "other"],
+        owner_entity_id="you",
+        section_key="preferences_working_style",
+        linked_entity_ids=[],
+        synthesis_origin="model",
+        confidence=0.8,
+        reason="test grouping",
+        created_at="2026-08-01T12:00:00",
+        updated_at="2026-08-01T12:00:00",
+    ))
+    service.materializer.regenerate({"you"})
+
+    service.approve("recon-1")
+
+    facts = artifacts.list_consolidated_facts()
+    assert "grouped-old-and-other" not in {fact.fact_id for fact in facts}
+    assert any(fact.member_claim_ids == ["other"] for fact in facts)
+    assert all("old" not in fact.member_claim_ids for fact in facts)
+    page = wiki.get("you").content
+    assert "prefers herbal tea" in page
+    assert "prefers tea, especially herbal tea" not in page
 
 
 def test_approve_deadline_supersession_reprojects_only_new_due_date(tmp_path):
@@ -218,7 +254,7 @@ def test_approve_deadline_supersession_reprojects_only_new_due_date(tmp_path):
             text=f"The user will send the report. (deadline: {due})",
             member_claim_ids=[item.claim_id], owner_entity_id=project.entity_id,
             section_key="next_steps_deadlines", linked_entity_ids=[],
-            state="active", synthesis_origin="claim", confidence=item.confidence,
+            synthesis_origin="claim", confidence=item.confidence,
             reason="test", created_at="2026-08-01T12:00:00",
             updated_at="2026-08-01T12:00:00",
         ))
@@ -243,6 +279,9 @@ def test_approve_deadline_supersession_reprojects_only_new_due_date(tmp_path):
     assert "deadline: 2026-08-20" in content
     assert "deadline: 2026-08-15" not in content
     assert artifacts.get_claim("old").status == "superseded"
+    assert {fact.fact_id for fact in artifacts.list_consolidated_facts()} == {
+        "fact-incoming"
+    }
 
 
 def test_reject_leaves_claims_active_and_removes_pending_annotation(tmp_path):

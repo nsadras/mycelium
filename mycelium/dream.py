@@ -287,7 +287,7 @@ class DreamProcess:
             successful_routes,
             retained_new_entities,
             facts=fact_result.facts,
-            retired_fact_ids=fact_result.retired_fact_ids,
+            deleted_fact_ids=fact_result.deleted_fact_ids,
         )
         routed_entities = {
             entity.entity_id: entity

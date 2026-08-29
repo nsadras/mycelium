@@ -82,7 +82,7 @@ class MaterializationResult:
     entities: dict[str, EntityRecord] = field(default_factory=dict)
     placements: dict[str, ClaimPlacement] = field(default_factory=dict)
     facts: dict[str, ConsolidatedFact] = field(default_factory=dict)
-    retired_fact_ids: set[str] = field(default_factory=set)
+    deleted_fact_ids: set[str] = field(default_factory=set)
 
 
 class PageMaterializer:
@@ -96,7 +96,7 @@ class PageMaterializer:
         routes: list[ClaimRoute],
         new_entities: list[EntityRecord] | None = None,
         facts: list[ConsolidatedFact] | None = None,
-        retired_fact_ids: set[str] | None = None,
+        deleted_fact_ids: set[str] | None = None,
     ) -> MaterializationResult:
         result = MaterializationResult()
         result.entities = {entity.entity_id: entity for entity in new_entities or []}
@@ -104,7 +104,7 @@ class PageMaterializer:
         for route in routes:
             result.placements[route.claim_id] = placement_from_route(route, now=now)
         result.facts = {fact.fact_id: fact for fact in facts or []}
-        result.retired_fact_ids = set(retired_fact_ids or ())
+        result.deleted_fact_ids = set(deleted_fact_ids or ())
         affected = {
             entity_id
             for placement in result.placements.values()
@@ -130,7 +130,7 @@ class PageMaterializer:
             self.artifacts.save_entity(entity)
         for placement in result.placements.values():
             self.artifacts.save_placement(placement)
-        for fact_id in result.retired_fact_ids:
+        for fact_id in result.deleted_fact_ids:
             self.artifacts.delete_consolidated_fact(fact_id)
         for fact in result.facts.values():
             self.artifacts.save_consolidated_fact(fact)
@@ -173,8 +173,8 @@ class PageMaterializer:
         encounters = self.artifacts.list_encounters()
         facts = {
             fact.fact_id: fact
-            for fact in self.artifacts.list_consolidated_facts(state="active")
-            if fact.fact_id not in result.retired_fact_ids
+            for fact in self.artifacts.list_consolidated_facts()
+            if fact.fact_id not in result.deleted_fact_ids
         }
         facts.update(result.facts)
         entity_ids = self._expand_project_role_endpoints(
@@ -290,8 +290,6 @@ class PageMaterializer:
         placements: dict[str, ClaimPlacement],
         entities: dict[str, EntityRecord],
     ) -> ConsolidatedFact | None:
-        if fact.state != "active":
-            return None
         role_claim_ids = [
             claim_id
             for claim_id in fact.member_claim_ids

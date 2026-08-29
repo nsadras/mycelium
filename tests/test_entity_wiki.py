@@ -64,7 +64,6 @@ def place(artifacts, item, owner, section, *, links=None):
         owner_entity_id=owner.entity_id,
         section_key=section,
         linked_entity_ids=list(links or []),
-        state="active",
         synthesis_origin="claim",
         confidence=item.confidence,
         reason="test",

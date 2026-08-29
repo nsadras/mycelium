@@ -393,12 +393,12 @@ async def list_scope_decisions(claim_id: str | None = None, status: str | None =
 
 @router.get("/artifacts/consolidated-facts")
 async def list_consolidated_facts(
-    owner_entity_id: str | None = None, state: str | None = None
+    owner_entity_id: str | None = None,
 ):
     return [
         asdict(item)
         for item in get_mem().artifacts.list_consolidated_facts(
-            owner_entity_id=owner_entity_id, state=state
+            owner_entity_id=owner_entity_id
         )
     ]
 

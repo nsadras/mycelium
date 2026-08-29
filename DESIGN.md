@@ -108,6 +108,9 @@ flowchart TD
 Important behavior:
 
 - Routing uses exact batch-local alias accounting and fails closed on malformed output.
+- Source-grounded claims are the canonical memory. Consolidated facts are current presentation artifacts only:
+  obsolete facts are deleted when claims are regrouped or superseded, while the underlying claims and their
+  relationship history remain durable.
 - Assistant/system conversation claims and extraction-rejected segments remain source history under closed,
   provenance-linked retention reasons rather than masquerading as deferred or canonical memory.
 - `source_only` is not a model-authored scope outcome: every admitted claim is placed or explicitly deferred.

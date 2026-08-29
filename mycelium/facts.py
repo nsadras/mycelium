@@ -22,7 +22,7 @@ from mycelium.structured_outputs import ConsolidatedFactPlanOutput
 @dataclass
 class FactConsolidationResult:
     facts: list[ConsolidatedFact] = field(default_factory=list)
-    retired_fact_ids: set[str] = field(default_factory=set)
+    deleted_fact_ids: set[str] = field(default_factory=set)
     failures: list[str] = field(default_factory=list)
 
 
@@ -53,7 +53,7 @@ class FactConsolidator:
             if not claim.derivation_operation
         }
         existing = [
-            fact for fact in self.artifacts.list_consolidated_facts(state="active")
+            fact for fact in self.artifacts.list_consolidated_facts()
             if fact.owner_entity_id in affected_entity_ids
         ]
         manual = [
@@ -119,7 +119,6 @@ class FactConsolidator:
                         linked_id for _, placement in members
                         for linked_id in placement.linked_entity_ids
                     }),
-                    state="active",
                     synthesis_origin="model" if len(members) > 1 else "claim",
                     confidence=confidence,
                     reason=reason,
@@ -130,7 +129,7 @@ class FactConsolidator:
                 result.facts.append(fact)
                 if prior:
                     used_existing.add(prior.fact_id)
-        result.retired_fact_ids = {
+        result.deleted_fact_ids = {
             fact.fact_id for fact in existing
             if fact.fact_id not in {value.fact_id for value in result.facts}
         }

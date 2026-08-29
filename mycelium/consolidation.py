@@ -903,7 +903,6 @@ class ClaimRouter:
             )
             facts = self.artifacts.list_consolidated_facts(
                 owner_entity_id=entity.entity_id,
-                state="active",
             )
             lines.extend(f"  - fact: {fact.text}" for fact in facts[:6])
         if not found:

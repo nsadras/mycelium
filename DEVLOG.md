@@ -1,5 +1,19 @@
 # Development Log
 
+## 2026-08-28 — Make consolidated facts current presentation only
+
+- Removed the unused active/retired lifecycle from consolidated facts and from their artifact API. A persisted fact
+  now means that it belongs to the current wiki representation.
+- Renamed the synthesis/materialization deletion set accordingly; obsolete synthesized facts continue to be deleted
+  when Dream recomputes a grouping.
+- Supersession approval now immediately deletes every display fact containing the superseded claim. Any other active
+  claims from a deleted grouped fact are preserved as independent source-grounded display facts before pages are
+  regenerated. Canonical claims and supersession links remain durable.
+- Added focused coverage for immediate standalone cleanup and grouped-fact preservation. No prompt, ontology, or
+  structured model decision changed, so no direct Ollama probe was required.
+- Validation: Ruff passed; all 227 non-Engram tests passed; frontend lint and production build passed with the
+  existing large-chunk warning; `git diff --check` passed.
+
 ## 2026-08-28 — Remove fuzzy ingestion reconciliation and dead recall routing
 
 - Removed the pre-Dream `SequenceMatcher` claim reconciler. Every extracted occurrence now persists as a

@@ -395,7 +395,6 @@ class ConsolidatedFact:
     owner_entity_id: str
     section_key: str
     linked_entity_ids: list[str]
-    state: str
     synthesis_origin: str
     confidence: float
     reason: str
@@ -404,8 +403,6 @@ class ConsolidatedFact:
     manual_text: bool = False
 
     def __post_init__(self) -> None:
-        if self.state not in {"active", "retired"}:
-            raise ValueError(f"Unsupported consolidated-fact state: {self.state}")
         if self.synthesis_origin not in {"claim", "model", "manual"}:
             raise ValueError(
                 f"Unsupported consolidated-fact origin: {self.synthesis_origin}"
@@ -925,7 +922,7 @@ class ArtifactStore:
         ))
 
     def list_consolidated_facts(
-        self, *, owner_entity_id: str | None = None, state: str | None = None
+        self, *, owner_entity_id: str | None = None
     ) -> list[ConsolidatedFact]:
         values = [
             self.get_consolidated_fact(path.stem)
@@ -934,7 +931,6 @@ class ArtifactStore:
         return [
             item for item in values
             if (owner_entity_id is None or item.owner_entity_id == owner_entity_id)
-            and (state is None or item.state == state)
         ]
 
     def facts_for_claim(self, claim_id: str) -> list[ConsolidatedFact]:

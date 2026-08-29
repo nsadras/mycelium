@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from benchmarks.mycelium_bench.scoring import token_f1
 from mycelium.ollama import OllamaClient
+from mycelium.prompting import render_prompt
 
 
 class ProbeJudgment(BaseModel):
@@ -130,9 +131,7 @@ def _entity_map(
         entity_id = str(page.get("entity_id") or "")
         for section in page.get("sections") or []:
             for item in section.get("items") or []:
-                page_claim_ids[entity_id].update(
-                    map(str, item.get("claim_ids") or [])
-                )
+                page_claim_ids[entity_id].update(map(str, item.get("claim_ids") or []))
     deferred_retraction_evidence = {
         str(value)
         for row in fixture.get("gold_claims", {}).get("claims") or []
@@ -461,13 +460,8 @@ async def judge_probe_answer(
         fact_id: gold_facts[fact_id]["text"]
         for fact_id in probe.get("forbidden_facts") or []
     }
-    system = (
-        "Judge a memory answer by propositions, not wording. Mark a required fact present only if the "
-        "answer entails its relevant content. Mark a forbidden fact present only if the answer asserts it. "
-        "For an unanswerable probe, answerable_decision_correct is true only when the response clearly "
-        "declines to supply the requested fact. Return only the structured result."
-    )
-    user = json.dumps(
+    system = render_prompt("benchmarks/probe_judgment.system.jinja")
+    payload = json.dumps(
         {
             "question": probe["question"],
             "answer": answer,
@@ -478,6 +472,7 @@ async def judge_probe_answer(
         },
         ensure_ascii=False,
     )
+    user = render_prompt("benchmarks/probe_judgment.user.jinja", payload=payload)
     response = await llm.call_structured(system, user, ProbeJudgment, num_predict=512)
     judgment = ProbeJudgment.model_validate(response).model_dump()
     allowed_required = set(required)
@@ -870,8 +865,7 @@ def evaluate_run(
     ]
     section_rows = [row for row in ownership_rows if row.get("gold_section")]
     final_placements = {
-        str(row.get("claim_id")): row
-        for row in final_snapshot.get("placements") or []
+        str(row.get("claim_id")): row for row in final_snapshot.get("placements") or []
     }
     expected_render_count = {
         row["gold_fact_id"]: (

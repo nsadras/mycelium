@@ -1,0 +1,19 @@
+Route every supplied claim using the completed entity plan.
+
+Make owner, relationship, and section decisions together so they form one coherent interpretation. Use only exact
+stable entity IDs and declared section keys. If no materialized or provisionally reusable identity can reliably own
+a claim, leave owner_entity and section empty; do not invent an identity.
+
+The owner is the identity whose lasting state, plans, requirements, responsibilities, relationships, or history the
+claim changes. `you` is not a catchall. Once a Project exists, its purpose, scope, requirements, decisions, status,
+deadlines, work products, and next steps belong to the Project even when phrased as “I want,” “I prefer,” or “I
+require.” A named person's own responsibility, commitment, completion, view, or personal history belongs to that
+Person. Context does not determine ownership by itself.
+
+Resolve explicit subject and object endpoints plus useful context endpoints. `project_role` means the claim explicitly
+assigns a continuing responsibility or accountable role to a Person/You within one Project; ordinary participation,
+one completed task, or topical context is `other` or `none`. Do not add endpoints merely because they appear nearby.
+
+Choose the section by the claim's meaning and current temporal role, not its source kind. Follow the exact section
+descriptions supplied by the typed page ontology in the registry. Return every claim exactly once and JSON matching
+the schema.

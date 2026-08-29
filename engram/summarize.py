@@ -8,6 +8,7 @@ from engram.models import MeetingSummary
 from mycelium.batching import batch_items, split_text_by_tokens, structured_input_budget
 from mycelium.budget import count_tokens
 from mycelium.ollama import OllamaClient
+from mycelium.prompting import render_prompt
 
 
 class ActionItemOutput(BaseModel):
@@ -46,19 +47,23 @@ class EngramSummarizer:
         if not transcript.strip():
             return MeetingSummary(summary="No speech was transcribed.")
 
-        system = (
-            "You summarize meeting transcripts into structured JSON for a local memory system. "
-            "Use only the transcript. Do not invent decisions, owners, deadlines, or questions. "
-            "Keep action item owners null when the transcript does not identify an owner."
-        )
+        system = render_prompt("engram/summary.system.jinja")
         transcript = transcript.strip()
 
         def prompt(text: str) -> str:
-            return "\n".join([f"Meeting title: {title}", "", "Transcript:", text])
+            return render_prompt(
+                "engram/summary.user.jinja",
+                title=title,
+                transcript=text,
+            )
 
-        input_budget = structured_input_budget(self.context_window_tokens, num_predict=4096)
+        input_budget = structured_input_budget(
+            self.context_window_tokens, num_predict=4096
+        )
         if count_tokens(f"{system}\n{prompt(transcript)}") <= input_budget:
-            output = await self._summarize_prompt(system, prompt(transcript), num_predict=4096)
+            output = await self._summarize_prompt(
+                system, prompt(transcript), num_predict=4096
+            )
         else:
             static_tokens = count_tokens(f"{system}\n{prompt('')}")
             piece_budget = max(256, input_budget - static_tokens - 256)
@@ -69,7 +74,9 @@ class EngramSummarizer:
                 input_budget,
             )
             partials = [
-                await self._summarize_prompt(system, prompt("".join(batch)), num_predict=4096)
+                await self._summarize_prompt(
+                    system, prompt("".join(batch)), num_predict=4096
+                )
                 for batch in batches
             ]
             output = await self._reduce_summaries(title, partials)
@@ -104,12 +111,10 @@ class EngramSummarizer:
         title: str,
         summaries: list[MeetingSummaryOutput],
     ) -> MeetingSummaryOutput:
-        system = (
-            "Combine structured summaries from consecutive portions of one meeting. "
-            "Preserve every supported decision, action item, and open question, remove duplicates, "
-            "and do not invent facts. Return one structured meeting summary."
+        system = render_prompt("engram/reduction.system.jinja")
+        input_budget = structured_input_budget(
+            self.context_window_tokens, num_predict=4096
         )
-        input_budget = structured_input_budget(self.context_window_tokens, num_predict=4096)
         current = summaries
         while len(current) > 1:
             serialized = [item.model_dump_json() for item in current]
@@ -123,7 +128,9 @@ class EngramSummarizer:
                 input_budget,
             )
             if len(batches) == len(current):
-                raise ValueError("partial meeting summaries cannot be reduced within the context window")
+                raise ValueError(
+                    "partial meeting summaries cannot be reduced within the context window"
+                )
             current = [
                 await self._summarize_prompt(system, render(batch), num_predict=4096)
                 for batch in batches
@@ -131,13 +138,10 @@ class EngramSummarizer:
         return current[0]
 
     def _reduction_user(self, title: str, summaries: list[str]) -> str:
-        return "\n".join(
-            [
-                f"Meeting title: {title}",
-                "",
-                "Partial summaries in chronological order:",
-                *[f"PART {index}:\n{value}" for index, value in enumerate(summaries, start=1)],
-            ]
+        return render_prompt(
+            "engram/reduction.user.jinja",
+            title=title,
+            summaries=summaries,
         )
 
     def _dedupe_output(self, output: MeetingSummaryOutput) -> MeetingSummaryOutput:

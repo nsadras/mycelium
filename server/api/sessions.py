@@ -5,6 +5,7 @@ from typing import List, Optional
 import uuid
 
 from mycelium.context import render_memory_context
+from mycelium.prompting import render_prompt
 from server.runtime import (
     append_tool_event_logs,
     append_turn,
@@ -31,14 +32,18 @@ def chat_history_messages(record: dict, current_message: str) -> list[dict[str, 
     messages.append({"role": "user", "content": current_message})
     return messages
 
+
 class SessionCreate(BaseModel):
     query: Optional[str] = "New session"
+
 
 class SessionUpdate(BaseModel):
     query: str
 
+
 class ChatRequest(BaseModel):
     message: str
+
 
 class Message(BaseModel):
     role: str
@@ -47,10 +52,12 @@ class Message(BaseModel):
     loaded_pages: Optional[List[dict]] = None
     tool_events: Optional[List[dict]] = None
 
+
 class SessionInfo(BaseModel):
     id: str
     query: str
     transcript: List[Message]
+
 
 @router.get("/", response_model=List[dict])
 async def list_sessions():
@@ -60,6 +67,7 @@ async def list_sessions():
             ensure_session_record(record, session_id)
         save_meta(meta)
     return [{"id": k, "query": v["query"]} for k, v in meta.items()]
+
 
 @router.post("/", response_model=dict)
 async def create_session(req: SessionCreate):
@@ -71,6 +79,7 @@ async def create_session(req: SessionCreate):
         save_meta(meta)
     return {"id": session_id, "query": req.query}
 
+
 @router.get("/{session_id}", response_model=SessionInfo)
 async def get_session(session_id: str):
     async with get_meta_lock():
@@ -80,6 +89,7 @@ async def get_session(session_id: str):
         ensure_session_record(meta[session_id], session_id)
         save_meta(meta)
     return {"id": session_id, **meta[session_id]}
+
 
 @router.patch("/{session_id}", response_model=dict)
 async def update_session(session_id: str, req: SessionUpdate):
@@ -96,6 +106,7 @@ async def update_session(session_id: str, req: SessionUpdate):
             save_meta(meta)
     return {"id": session_id, "query": name}
 
+
 @router.post("/{session_id}/chat")
 async def chat(session_id: str, req: ChatRequest):
     user_timestamp = iso_now()
@@ -109,22 +120,25 @@ async def chat(session_id: str, req: ChatRequest):
 
         mem = get_mem()
         thread_context = recent_thread_context(record)
-        retrieval_query = (
-            f"CHAT TOPIC:\n{record['query']}\n\n"
-            f"RECENT THREAD:\n{thread_context or '(no prior turns)'}\n\n"
-            f"USER MESSAGE:\n{req.message}"
+        retrieval_query = render_prompt(
+            "assistant/retrieval_query.user.jinja",
+            chat_topic=record["query"],
+            recent_thread=thread_context,
+            no_prior_turns="(no prior turns)",
+            user_message=req.message,
         )
 
         loaded_pages = await mem.load_context(retrieval_query)
         memory_context = render_memory_context(loaded_pages)
 
-        system_prompt = (
-            "You are a helpful and intelligent AI assistant. "
-            "You have access to a long-term memory wiki that contains information you've learned from previous interactions. "
-            "Use the following memory context and the conversation history to inform your response if relevant.\n\n"
-            f"MEMORY CONTEXT:\n{memory_context or 'No relevant long-term memory context was found.'}"
+        system_prompt = render_prompt(
+            "assistant/chat.system.jinja",
+            memory_context=memory_context,
+            no_memory_context="No relevant long-term memory context was found.",
         )
-        messages = [{"role": "system", "content": system_prompt}] + chat_history_messages(record, req.message)
+        messages = [
+            {"role": "system", "content": system_prompt}
+        ] + chat_history_messages(record, req.message)
         chat_response = await mem.llm.call_messages(messages)
         assistant_timestamp = iso_now()
         response_text = chat_response.content

@@ -1,5 +1,30 @@
 # Development Log
 
+## 2026-08-28 — Externalize model prompts as strict Jinja templates
+
+- Added one strict Jinja rendering boundary in `mycelium.prompting`. Undefined variables fail closed, templates are
+  loaded from the packaged `mycelium/prompt_templates` tree, and Jinja is now a direct runtime dependency.
+- Moved all repository-owned model-facing prompt text out of Python: memory extraction/census/identity/routing/fact
+  synthesis/reconsolidation, assistant retrieval and chat context, Engram summary/reduction, and benchmark answer,
+  retrieval-plan, and judgment prompts. Python call sites now inject runtime evidence, structured ontology claim
+  types, source-specific extraction policy, conversation context, and serialized evaluation payloads.
+- Kept the six core memory prompts byte-for-byte identical for representative inputs. Added template inventory,
+  strict-undefined, schema injection, multiline preservation, and package-data tests. A built wheel contained the
+  renderer and every `.jinja` file.
+- Direct `gemma4:12b` probes used the production Jinja prompt and structured schemas. Reconsolidation correctly chose
+  `supersedes` for an explicit editor-preference replacement and `additive` for an unrelated scheduled review. A
+  neutral extraction probe retained the two user claims and ignored the assistant proposal. An earlier project probe
+  also invented an unsupported project-lead relationship; this is recorded as a model behavior rather than accepted
+  evidence, and no lexical repair or fixture-derived prompt rule was added.
+- In-situ replay:
+  `benchmark_runs/daily-driver-unrelated-v1-jinja-prompts-20260828`, replaying frozen extraction from
+  `daily-driver-unrelated-v1-central-ontology-refined-20260828`. Both Dream runs completed with zero failures, all ten
+  active claims were routed and rendered, the expected three entities/pages were present, and both safety gates
+  passed. Its evaluation exactly matched the source run at 8/12 dimensions and 5/7 acceptance dimensions; the known
+  presentation-quality misses remain, so the fixture is not release-ready.
+- Validation: 235 non-Engram tests passed; the focused prompt/Engram/core pipeline run passed 80 tests; Ruff and lock
+  validation passed. The corpus-backed AMI path remains outside the fast suite.
+
 ## 2026-08-28 — Split architectural hotspots by responsibility
 
 - Replaced the monolithic artifact module with a small public facade over separate persisted models,

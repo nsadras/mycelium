@@ -3,14 +3,16 @@ from typing import Any, List, TYPE_CHECKING
 
 from mycelium.context import render_memory_context
 from mycelium.models import WikiPage
+from mycelium.prompting import render_prompt
 
 if TYPE_CHECKING:
     from mycelium.core import Mycelium
 
+
 class Session:
     def __init__(
         self,
-        mycelium: 'Mycelium',
+        mycelium: "Mycelium",
         session_id: str,
         query: str,
     ):
@@ -29,15 +31,18 @@ class Session:
         """
         Returns: memory_context + "\n\n" + user_message
         """
-        context = self.memory_context
-        if context:
-            return f"{context}\n\n{user_message}"
-        return user_message
+        return render_prompt(
+            "assistant/library_message.user.jinja",
+            memory_context=self.memory_context,
+            user_message=user_message,
+        )
 
     def record(self, role: str, content: str) -> None:
         """Appends to self.transcript."""
-        self.transcript.append({
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        self.transcript.append(
+            {
+                "role": role,
+                "content": content,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )

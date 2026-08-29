@@ -1,0 +1,6 @@
+Meeting title: {{ title }}
+
+Partial summaries in chronological order:
+{% for summary in summaries %}PART {{ loop.index }}:
+{{ summary }}{% if not loop.last %}
+{% endif %}{% endfor %}

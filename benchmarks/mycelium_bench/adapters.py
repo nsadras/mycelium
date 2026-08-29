@@ -16,6 +16,7 @@ from mycelium.core import Mycelium
 from mycelium.artifacts import ArtifactStore, MemoryClaim
 from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
+from mycelium.prompting import render_prompt
 from mycelium.memory_tools import MemoryToolset
 from mycelium.structured_outputs import GroundedAnswerOutput
 
@@ -60,42 +61,40 @@ class MemoryRetrievalPlan(BaseModel):
 class MemorySystem(Protocol):
     name: str
 
-    async def reset(self, case_id: str) -> None:
-        ...
+    async def reset(self, case_id: str) -> None: ...
 
-    async def memorize(self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None) -> None:
-        ...
+    async def memorize(
+        self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None
+    ) -> None: ...
 
-    async def answer(self, question: str, metadata: dict[str, Any] | None = None) -> BenchmarkAnswer:
-        ...
+    async def answer(
+        self, question: str, metadata: dict[str, Any] | None = None
+    ) -> BenchmarkAnswer: ...
 
-    async def finalize_case(self) -> None:
-        ...
+    async def finalize_case(self) -> None: ...
 
-    def stats(self) -> dict[str, Any]:
-        ...
+    def stats(self) -> dict[str, Any]: ...
 
 
 class OllamaQaClient:
-    def __init__(self, model: str, url: str, temperature: float = 0.0, timeout: int = 120) -> None:
+    def __init__(
+        self, model: str, url: str, temperature: float = 0.0, timeout: int = 120
+    ) -> None:
         self.model = model
-        self.llm = OllamaClient(url=url, model=model, temperature=temperature, timeout=timeout)
-
-    async def answer(self, question: str, context: str, instruction: str | None = None) -> BenchmarkAnswer:
-        system = instruction or (
-            "Answer using only the supplied memory evidence. Raw CANONICAL SOURCE LOG SNIPPETS "
-            "outrank synthesized wiki summaries when they disagree. Ground every relation in the "
-            "exact named subject: never transfer an action, possession, preference, or event from "
-            "one person to another. A question whose premise assigns another person's fact to the "
-            "named subject is unanswerable. Resolve relative dates such as yesterday, last week, "
-            "or next month against the source's conversation_time when possible.\n\n"
-            "Return the shortest exact answer span that satisfies the question. Preserve source "
-            "wording; do not explain or restate the question. For a date, return only the resolved "
-            "date. For yes/no, return only Yes or No. Set answerable=false when the evidence does "
-            "not explicitly support the exact subject-relation-object asked about."
+        self.llm = OllamaClient(
+            url=url, model=model, temperature=temperature, timeout=timeout
         )
-        context_text = context.strip() or "No memory context is available."
-        user = f"MEMORY CONTEXT:\n{context_text}\n\nQUESTION:\n{question}"
+
+    async def answer(
+        self, question: str, context: str, instruction: str | None = None
+    ) -> BenchmarkAnswer:
+        system = instruction or render_prompt("benchmarks/grounded_answer.system.jinja")
+        user = render_prompt(
+            "benchmarks/grounded_answer.user.jinja",
+            memory_context=context.strip(),
+            no_memory_context="No memory context is available.",
+            question=question,
+        )
         start = time.perf_counter()
         response = await self.llm.call_structured(
             system,
@@ -105,7 +104,11 @@ class OllamaQaClient:
         )
         elapsed = time.perf_counter() - start
         answerable = isinstance(response, dict) and bool(response.get("answerable"))
-        output = str(response.get("answer", "")).strip() if isinstance(response, dict) else ""
+        output = (
+            str(response.get("answer", "")).strip()
+            if isinstance(response, dict)
+            else ""
+        )
         if not answerable or not output:
             output = "I do not have enough information to answer this question."
         return BenchmarkAnswer(
@@ -127,10 +130,14 @@ class NullMemorySystem:
     async def reset(self, case_id: str) -> None:
         self.case_id = case_id
 
-    async def memorize(self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None) -> None:
+    async def memorize(
+        self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None
+    ) -> None:
         return None
 
-    async def answer(self, question: str, metadata: dict[str, Any] | None = None) -> BenchmarkAnswer:
+    async def answer(
+        self, question: str, metadata: dict[str, Any] | None = None
+    ) -> BenchmarkAnswer:
         return await self.qa_client.answer(question, "")
 
     async def finalize_case(self) -> None:
@@ -151,10 +158,14 @@ class FullContextMemorySystem:
         self.case_id = case_id
         self.context_parts = []
 
-    async def memorize(self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None) -> None:
+    async def memorize(
+        self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None
+    ) -> None:
         self.context_parts.append(format_messages_for_memory(messages, metadata or {}))
 
-    async def answer(self, question: str, metadata: dict[str, Any] | None = None) -> BenchmarkAnswer:
+    async def answer(
+        self, question: str, metadata: dict[str, Any] | None = None
+    ) -> BenchmarkAnswer:
         return await self.qa_client.answer(question, "\n\n".join(self.context_parts))
 
     async def finalize_case(self) -> None:
@@ -279,7 +290,9 @@ class MyceliumMemorySystem:
             replay_store = self._require_replay_store()
             fixture = ArtifactStore(replay_store / "artifacts")
             for proposal in fixture.list_reconsolidation_proposals():
-                self.mem.artifacts.save_reconsolidation_proposal(copy.deepcopy(proposal))
+                self.mem.artifacts.save_reconsolidation_proposal(
+                    copy.deepcopy(proposal)
+                )
             for entity in fixture.list_entities():
                 self.mem.artifacts.save_entity(copy.deepcopy(entity))
         self._encoded_batches = 0
@@ -289,14 +302,19 @@ class MyceliumMemorySystem:
         self._dream_failures = []
         self._evidence_stage_labels_cache = None
 
-    async def memorize(self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None) -> None:
+    async def memorize(
+        self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None
+    ) -> None:
         if not messages:
             return
         if self.frozen_store is not None:
             return
         mem = self._require_mem()
         metadata = metadata or {}
-        session_id = str(metadata.get("session_id") or f"{self.case_id}-batch-{self._encoded_batches + 1}")
+        session_id = str(
+            metadata.get("session_id")
+            or f"{self.case_id}-batch-{self._encoded_batches + 1}"
+        )
         start = time.perf_counter()
         if self.replay_store is not None:
             replayed_claims = self._replay_session(mem, session_id)
@@ -307,10 +325,13 @@ class MyceliumMemorySystem:
         else:
             transcript = format_messages_for_memory(messages, metadata)
             await mem.encoder.encode_session(
-                transcript, session_id,
+                transcript,
+                session_id,
                 source_type="multi_party_conversation",
                 occurred_at=metadata.get("timestamp"),
-                metadata={key: value for key, value in metadata.items() if value is not None},
+                metadata={
+                    key: value for key, value in metadata.items() if value is not None
+                },
             )
         self._encoded_batches += 1
         if self.dream_policy == "per-batch" and not self.replay_assignments:
@@ -319,10 +340,14 @@ class MyceliumMemorySystem:
                 self._record_dream_report(report, session_id=session_id)
                 self._dream_runs += 1
             except Exception as exc:
-                self._errors.append({"stage": "dream", "session_id": session_id, "error": str(exc)})
+                self._errors.append(
+                    {"stage": "dream", "session_id": session_id, "error": str(exc)}
+                )
         self._memory_construction_seconds += time.perf_counter() - start
 
-    async def answer(self, question: str, metadata: dict[str, Any] | None = None) -> BenchmarkAnswer:
+    async def answer(
+        self, question: str, metadata: dict[str, Any] | None = None
+    ) -> BenchmarkAnswer:
         mem = self._require_mem()
         metadata = metadata or {}
         start = time.perf_counter()
@@ -332,7 +357,9 @@ class MyceliumMemorySystem:
                 budget_tokens=self.context_budget_tokens,
             )
         except Exception as exc:
-            self._errors.append({"stage": "load_context", "question": question, "error": str(exc)})
+            self._errors.append(
+                {"stage": "load_context", "question": question, "error": str(exc)}
+            )
             loaded_pages = []
         memory_construction_time = time.perf_counter() - start
         context = render_memory_context(loaded_pages)
@@ -413,7 +440,9 @@ class MyceliumMemorySystem:
                 self._record_dream_report(report, session_id=self.case_id)
                 self._dream_runs += 1
             except Exception as exc:
-                self._errors.append({"stage": "dream", "case_id": self.case_id, "error": str(exc)})
+                self._errors.append(
+                    {"stage": "dream", "case_id": self.case_id, "error": str(exc)}
+                )
             self._memory_construction_seconds += time.perf_counter() - start
 
     def stats(self) -> dict[str, Any]:
@@ -455,7 +484,8 @@ class MyceliumMemorySystem:
         fixture_artifacts = ArtifactStore(replay_store / "artifacts")
         fixture_logs = LogStore(replay_store / "logs")
         sources = [
-            source for source in fixture_artifacts.list_sources()
+            source
+            for source in fixture_artifacts.list_sources()
             if source.session_id == session_id
             or str(source.metadata.get("session_id", "")) == session_id
         ]
@@ -485,7 +515,9 @@ class MyceliumMemorySystem:
                         mem.artifacts.save_placement(copy.deepcopy(placement))
                 replayed_claims.append(claim)
             if not source.raw_log_entry_id:
-                raise ValueError(f"Replay source {source.source_id} has no raw log entry")
+                raise ValueError(
+                    f"Replay source {source.source_id} has no raw log entry"
+                )
             entry = copy.deepcopy(fixture_logs.get(source.raw_log_entry_id))
             entry.consolidated = False
             mem.log_store.append(entry)
@@ -506,10 +538,7 @@ class MyceliumMemorySystem:
         }
         mem.dream_process.materializer.regenerate(owner_ids)
 
-        eligible = [
-            claim for claim in claims
-            if claim.status == "active"
-        ]
+        eligible = [claim for claim in claims if claim.status == "active"]
         if eligible and all(
             (placement := mem.artifacts.placement_for_claim(claim.claim_id)) is not None
             and placement.status in {"placed", "unassigned"}
@@ -551,26 +580,12 @@ class MemoryAgentSystem(MyceliumMemorySystem):
         plan_trace: dict[str, Any] | None = None
         planner_input_tokens = 0
         if escalation_reason:
-            planner_system = (
-                "Create a small read-only retrieval plan for a private personal-memory archive. "
-                "Do not answer the question. Produce one focused search for each named subject, "
-                "event, relation, or component whose evidence must be combined. Preserve names "
-                "from the question and include the relevant relation terms in every search. Use "
-                "at most four searches, and never emit paraphrases of the same search. For an "
-                "open-ended shared-property question, search each subject separately using the "
-                "same relevant dimensions, such as major events, work or projects, and interests. "
-                "For a causal question, separate the triggering event, motivation, and resulting "
-                "decision. For a multi-attribute description, search distinct dimensions implied "
-                "by the question, such as setting, physical features, and constraints, without "
-                "inventing their values. Set expand_top_hits=true for comparisons, shared-property "
-                "questions, causes, sequences, or when related claims may supply another required "
-                "fact. Set inspect_sources=true only when exact attribution, chronology, or source "
-                "wording must be verified. Never request outside information."
+            planner_system = render_prompt("benchmarks/retrieval_plan.system.jinja")
+            planner_input = render_prompt(
+                "benchmarks/retrieval_plan.user.jinja",
+                question=question,
             )
-            planner_input = f"QUESTION:\n{question}"
-            planner_input_tokens = count_tokens(
-                planner_system + "\n" + planner_input
-            )
+            planner_input_tokens = count_tokens(planner_system + "\n" + planner_input)
             raw_plan = await self.qa_client.llm.call_structured(
                 planner_system,
                 planner_input,
@@ -578,9 +593,7 @@ class MemoryAgentSystem(MyceliumMemorySystem):
                 num_predict=384,
             )
             plan = MemoryRetrievalPlan.model_validate(raw_plan)
-            planned_context, plan_trace = execute_memory_plan(
-                self._memory_tools, plan
-            )
+            planned_context, plan_trace = execute_memory_plan(self._memory_tools, plan)
             context = (
                 f"PLANNED CANONICAL MEMORY EVIDENCE:\n{planned_context}\n\n"
                 f"INITIAL MEMORY EVIDENCE:\n{initial_context}"
@@ -591,31 +604,49 @@ class MemoryAgentSystem(MyceliumMemorySystem):
         answer.memory_construction_time = exploration_seconds
         answer.query_time_len += exploration_seconds
         answer.input_len += planner_input_tokens
-        answer.metadata.update({
-            "loaded_pages": [
-                {
-                    "slug": page.slug,
-                    "title": page.title,
-                    "confidence": page.confidence,
-                }
-                for page in loaded_pages
-            ],
-            "memory_agent": {
-                "escalated": bool(escalation_reason),
-                "reason": escalation_reason,
-                "plan": plan.model_dump() if plan else None,
-                "trace": plan_trace,
-            },
-            "_evidence_stage_labels": self._evidence_stage_labels(context),
-        })
+        answer.metadata.update(
+            {
+                "loaded_pages": [
+                    {
+                        "slug": page.slug,
+                        "title": page.title,
+                        "confidence": page.confidence,
+                    }
+                    for page in loaded_pages
+                ],
+                "memory_agent": {
+                    "escalated": bool(escalation_reason),
+                    "reason": escalation_reason,
+                    "plan": plan.model_dump() if plan else None,
+                    "trace": plan_trace,
+                },
+                "_evidence_stage_labels": self._evidence_stage_labels(context),
+            }
+        )
         if self.include_retrieval_context:
             answer.metadata["retrieval_context"] = context
         return answer
 
 
 _QUESTION_LEAD_WORDS = {
-    "are", "can", "could", "did", "do", "does", "how", "is", "was", "were",
-    "what", "when", "where", "which", "who", "why", "will", "would",
+    "are",
+    "can",
+    "could",
+    "did",
+    "do",
+    "does",
+    "how",
+    "is",
+    "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "will",
+    "would",
 }
 _COMPOSITION_CUES = re.compile(
     r"\b(both|common|shared|same|different|difference|between|each|respectively)\b",
@@ -680,8 +711,7 @@ def execute_memory_plan(
         source_results = tools.sources(list(selected_claims)[:4], neighbor_count=1)
 
     lines = [
-        _format_planned_claim(claim)
-        for claim in list(selected_claims.values())[:24]
+        _format_planned_claim(claim) for claim in list(selected_claims.values())[:24]
     ]
     if source_results:
         lines.append("\nVERIFIED SOURCE SEGMENTS:")
@@ -693,9 +723,7 @@ def execute_memory_plan(
                 content = str(segment.get("content", ""))[
                     :MAX_PLANNED_SOURCE_SEGMENT_CHARS
                 ]
-                lines.append(
-                    f"- [{label}] ({occurred_at}) {speaker}: {content}"
-                )
+                lines.append(f"- [{label}] ({occurred_at}) {speaker}: {content}")
     rendered, truncated = _bounded_evidence(lines)
     trace = {
         "searches": search_trace,
@@ -737,20 +765,22 @@ def _bounded_evidence(lines: list[str]) -> tuple[str, bool]:
 class FullWikiMemorySystem(MyceliumMemorySystem):
     name = "full_wiki"
 
-    async def answer(self, question: str, metadata: dict[str, Any] | None = None) -> BenchmarkAnswer:
+    async def answer(
+        self, question: str, metadata: dict[str, Any] | None = None
+    ) -> BenchmarkAnswer:
         mem = self._require_mem()
-        
+
         # Load all pages in the wiki store
         all_pages = mem.wiki.list_all()
         # Sort by slug to be deterministic
         all_pages.sort(key=lambda p: p.slug)
-        
+
         context = render_memory_context(all_pages)
-        
+
         start = time.perf_counter()
         answer = await self.qa_client.answer(question, context)
         query_time = time.perf_counter() - start
-        
+
         answer.memory_construction_time = 0.0
         answer.query_time_len = query_time
         answer.metadata.update(
@@ -784,7 +814,9 @@ def build_memory_system(
     include_retrieval_context: bool = False,
 ) -> MemorySystem:
     if replay_store is not None and system_name not in {
-        "mycelium", "memory_agent", "full_wiki"
+        "mycelium",
+        "memory_agent",
+        "full_wiki",
     }:
         raise ValueError(
             "--replay-store is only supported by mycelium, memory_agent, and full_wiki"
@@ -849,7 +881,9 @@ def build_memory_system(
     raise ValueError(f"Unknown benchmark system: {system_name}")
 
 
-def format_messages_for_memory(messages: list[BenchmarkMessage], metadata: dict[str, Any]) -> str:
+def format_messages_for_memory(
+    messages: list[BenchmarkMessage], metadata: dict[str, Any]
+) -> str:
     prefix_lines = []
     if metadata.get("session_id"):
         prefix_lines.append(f"Session: {metadata['session_id']}")
@@ -892,4 +926,6 @@ def run_async(coro: Any) -> Any:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
-    raise RuntimeError(f"Cannot run benchmark command inside an existing event loop: {loop}")
+    raise RuntimeError(
+        f"Cannot run benchmark command inside an existing event loop: {loop}"
+    )

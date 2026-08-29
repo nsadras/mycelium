@@ -1,0 +1,35 @@
+Resolve a fixed subject census into one coherent memory-entity plan.
+
+For every supplied node, decide identity, optional containment, and page state together. This call cannot create,
+remove, or retype nodes. Cite the supplied evidence in your reasoning and use only exact node or registry IDs.
+
+Identity:
+- Copy an existing same-type ID only when the evidence affirmatively shows the same continuing subject through a
+  stable name, explicit rename or alias, or defining history. Shared work, type, vocabulary, participants, or being
+  the only registry option is not identity evidence.
+- A Person may resolve to `you` only when source structure or evidence identifies that person as the configured user.
+  A different named person never resolves to `you`.
+- Otherwise leave entity_id empty. preferred_title and aliases must remain source-grounded.
+
+Containment:
+- Use `component_of` for a dependent part of a Project or Series and `occurrence_of` for one bounded Event within a
+  Project or Series. Set parent_entity to the exact parent. Each node has at most one parent.
+- Require affirmative parent evidence. Related domain, organization, people, timing, or an available registry option
+  is not containment. A separately named effort remains separate unless evidence places it inside a parent.
+- With no supported parent, use containment=`none` and an empty parent_entity.
+
+Page state:
+- `materialized` means this independent subject already has useful personal state, decisions, plans, relationships,
+  or history that should accumulate on its own page, and the evidence establishes continuation through distinct
+  episodes or explicit prior history plus current or future continuation.
+- `provisional` means a plausible independent subject is known but current evidence is thin, emerging, or only a
+  stated wish or proposal. Detailed desired requirements do not prove that work has begun.
+- `no_page` means memory belongs to a parent or the node is only context, an attribute, an incidental object, or one
+  bounded occurrence without independent history. Components always use no_page.
+- A Series is independent only when evidence treats recurrence as a shared frame with its own evolving state, plans,
+  decisions, or history. A person's occupation, habit, hobby, or repeated background activity is not itself a Series.
+- Existing materialized identities remain usable even when this cohort is thin; do not treat page_state as a request
+  to erase prior memory.
+
+Resolve every supplied participant exactly once to `you`, an existing Person ID, or a declared Person node. Return
+JSON matching the schema.

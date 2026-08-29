@@ -2,27 +2,24 @@
 
 from __future__ import annotations
 
-import re
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterable
 
 from mycelium import prompts
+from mycelium.consolidation_formatting import RoutingFormatter
+from mycelium.consolidation_models import (
+    ClaimEvidence, ClaimRoute, RoutingFailure, RoutingResult, slugify,
+)
+from mycelium.consolidation_resolution import ResolutionArtifacts
 from mycelium.artifacts import (
     ArtifactStore,
-    ClaimEntityReference,
     ClaimPlacement,
-    EntityEncounter,
     EntityRecord,
     EntityResolutionDecision,
-    MemoryClaim,
-    SourceDocument,
 )
 from mycelium.ontology import (
-    entity_type_prompt_catalog,
     section_keys,
-    section_prompt_catalog,
 )
 from mycelium.ollama import OllamaClient
 from mycelium.structured_outputs import (
@@ -32,66 +29,14 @@ from mycelium.structured_outputs import (
 )
 
 
-def slugify(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
-
-
-@dataclass(frozen=True)
-class ClaimEvidence:
-    claim: MemoryClaim
-    source: SourceDocument
-
-    @property
-    def raw_log_entry_id(self) -> str:
-        return self.source.raw_log_entry_id or self.source.source_id
-
-
-@dataclass(frozen=True)
-class ClaimRoute:
-    claim_id: str
-    owner_entity_id: str | None
-    section_key: str | None
-    linked_entity_ids: tuple[str, ...]
-    raw_log_entry_id: str
-    reason: str
-    disposition: str = "canonical"
-    supporting_claim_ids: tuple[str, ...] = ()
-    confidence: float = 0.8
-    subject_entity_id: str | None = None
-    object_entity_ids: tuple[str, ...] = ()
-    contextual_entity_ids: tuple[str, ...] = ()
-    relationship_kind: str | None = None
-
-    @property
-    def placed(self) -> bool:
-        return self.disposition == "canonical" and bool(
-            self.owner_entity_id and self.section_key
-        )
-
-
-@dataclass(frozen=True)
-class RoutingFailure:
-    claim_id: str
-    raw_log_entry_id: str
-    reason: str
-
-
-@dataclass
-class RoutingResult:
-    routes: list[ClaimRoute] = field(default_factory=list)
-    new_entities: list[EntityRecord] = field(default_factory=list)
-    failures: list[RoutingFailure] = field(default_factory=list)
-    encounters: list[EntityEncounter] = field(default_factory=list)
-    entity_decisions: list[EntityResolutionDecision] = field(default_factory=list)
-    entity_references: list[ClaimEntityReference] = field(default_factory=list)
-
-
 class ClaimRouter:
     """Plan one validated entity owner for every admitted claim."""
 
     def __init__(self, llm: OllamaClient, artifacts: ArtifactStore):
         self.llm = llm
         self.artifacts = artifacts
+        self.formatter = RoutingFormatter(artifacts)
+        self.resolution = ResolutionArtifacts()
 
     async def route(
         self,
@@ -117,7 +62,7 @@ class ClaimRouter:
         if not evidence:
             return result
         aliases = {f"C{index:03d}": item for index, item in enumerate(evidence, start=1)}
-        participants = self._participant_occurrences(
+        participants = self.resolution.participant_occurrences(
             evidence, source_ids=participant_source_ids
         )
         allowed_evidence = {*aliases, *participants}
@@ -128,8 +73,8 @@ class ClaimRouter:
         }
         node_model = subject_node_output_model(allowed_evidence)
         system, user = prompts.subject_node_prompt(
-            self._entity_catalog(planned.values(), include_sections=False),
-            self._format_evidence(aliases, participants),
+            self.formatter.entity_catalog(planned.values(), include_sections=False),
+            self.formatter.format_evidence(aliases, participants),
         )
         try:
             response = await self.llm.call_structured(
@@ -168,9 +113,9 @@ class ClaimRouter:
                 registry_types,
             )
             system, user = prompts.entity_plan_prompt(
-                self._entity_planning_catalog(planned.values()),
-                self._format_subject_graph(graph_nodes, []),
-                self._format_evidence(aliases, participants),
+                self.formatter.entity_planning_catalog(planned.values()),
+                self.formatter.format_subject_graph(graph_nodes, []),
+                self.formatter.format_evidence(aliases, participants),
             )
             response = await self.llm.call_structured(
                 system,
@@ -344,7 +289,7 @@ class ClaimRouter:
             for entity in planned.values()
             if entity.status == "active"
         }
-        resolved_plan = self._format_resolved_entity_plan(
+        resolved_plan = self.formatter.format_resolved_entity_plan(
             graph_nodes,
             entity_decisions,
             candidate_entities,
@@ -353,7 +298,7 @@ class ClaimRouter:
         )
         routing_decisions: dict[str, dict] = {}
         for batch_aliases in self._alias_batches(aliases):
-            batch_participants = self._participants_for_evidence(
+            batch_participants = self.resolution.participants_for_evidence(
                 batch_aliases, participants
             )
             routing_model = claim_routing_output_model(
@@ -361,9 +306,9 @@ class ClaimRouter:
                 entity_sections,
             )
             system, user = prompts.claim_routing_prompt(
-                self._entity_catalog(planned.values(), include_sections=True),
+                self.formatter.entity_catalog(planned.values(), include_sections=True),
                 resolved_plan,
-                self._format_evidence(batch_aliases, batch_participants),
+                self.formatter.format_evidence(batch_aliases, batch_participants),
             )
             try:
                 response = await self.llm.call_structured(
@@ -415,13 +360,13 @@ class ClaimRouter:
             ):
                 result.new_entities.append(entity)
 
-        result.encounters = self._participant_encounters(
+        result.encounters = self.resolution.participant_encounters(
             participants,
             graph_plan["participants"],
             planned,
             candidate_entities,
         )
-        result.entity_decisions.extend(self._participant_decisions(
+        result.entity_decisions.extend(self.resolution.participant_decisions(
             participants,
             graph_plan["participants"],
             planned,
@@ -472,7 +417,7 @@ class ClaimRouter:
                 and entity.entity_id not in encountered_entity_ids
             ):
                 entity.materialization_state = "provisional"
-        result.entity_references = self._claim_entity_references(
+        result.entity_references = self.resolution.claim_entity_references(
             aliases,
             result.routes,
             planned,
@@ -589,223 +534,6 @@ class ClaimRouter:
             yield dict(items[start:start + size])
 
     @staticmethod
-    def _participants_for_evidence(
-        aliases: dict[str, ClaimEvidence],
-        participants: dict[str, tuple[SourceDocument, str, str | None]],
-    ) -> dict[str, tuple[SourceDocument, str, str | None]]:
-        source_ids = {item.source.source_id for item in aliases.values()}
-        return {
-            alias: occurrence
-            for alias, occurrence in participants.items()
-            if occurrence[0].source_id in source_ids
-        }
-
-    @staticmethod
-    def _participant_occurrences(
-        evidence: list[ClaimEvidence],
-        *,
-        source_ids: set[str] | None = None,
-    ) -> dict[str, tuple[SourceDocument, str, str | None]]:
-        """Expose source-declared participant occurrences to the scope contract."""
-        sources = {
-            item.source.source_id: item.source
-            for item in evidence
-            if (source_ids is None or item.source.source_id in source_ids)
-            if item.source.source_type
-            in {"meeting_transcript", "multi_party_conversation"}
-        }
-        occurrences: list[tuple[SourceDocument, str, str | None]] = []
-        for source in sources.values():
-            speakers = dict.fromkeys(
-                (
-                    str(segment.speaker).strip(),
-                    str(segment.role).strip().lower() if segment.role else None,
-                )
-                for segment in source.segments
-                if str(segment.speaker or "").strip()
-            )
-            occurrences.extend(
-                (source, name, role) for name, role in speakers
-            )
-        return {
-            f"P{index:03d}": occurrence
-            for index, occurrence in enumerate(occurrences, start=1)
-        }
-
-    @staticmethod
-    def _participant_encounters(
-        occurrences: dict[str, tuple[SourceDocument, str, str | None]],
-        resolutions: dict[str, dict],
-        entities: dict[str, EntityRecord],
-        candidates: dict[str, EntityRecord],
-    ) -> list[EntityEncounter]:
-        created_at = datetime.now().astimezone().isoformat()
-        encounters: dict[str, EntityEncounter] = {}
-        for alias, (source, _, _) in occurrences.items():
-            resolution = resolutions[alias]
-            entity = candidates.get(resolution["entity"]) or entities.get(
-                resolution["entity"]
-            )
-            if entity is None or entity.entity_type != "person":
-                continue
-            title = str(source.metadata.get("title") or "").strip() or None
-            encounter_id = f"encounter-{entity.entity_id}-{source.source_id}"
-            encounters[encounter_id] = EntityEncounter(
-                encounter_id=encounter_id,
-                entity_id=entity.entity_id,
-                source_id=source.source_id,
-                raw_log_entry_id=source.raw_log_entry_id,
-                occurred_at=source.occurred_at,
-                title=title,
-                created_at=created_at,
-            )
-        return sorted(encounters.values(), key=lambda item: item.encounter_id)
-
-    @staticmethod
-    def _participant_decisions(
-        occurrences: dict[str, tuple[SourceDocument, str, str | None]],
-        resolutions: dict[str, dict],
-        entities: dict[str, EntityRecord],
-        candidates: dict[str, EntityRecord],
-        dream_run_id: str,
-        created_at: str,
-    ) -> list[EntityResolutionDecision]:
-        decisions = []
-        for alias, (source, surface, _) in occurrences.items():
-            resolution = resolutions[alias]
-            entity = candidates.get(resolution["entity"]) or entities.get(
-                resolution["entity"]
-            )
-            confidence = float(resolution["confidence"])
-            if entity is None:
-                decisions.append(EntityResolutionDecision(
-                    decision_id=f"identity-{uuid.uuid4().hex[:12]}",
-                    decision_type="participant_resolution",
-                    entity_id=None,
-                    proposed_entity_type="person",
-                    proposed_title=surface,
-                    source_ids=[source.source_id],
-                    supporting_claim_ids=[],
-                    supporting_segment_ids=[
-                        segment.segment_id
-                        for segment in source.segments
-                        if str(segment.speaker or "").strip() == surface
-                    ],
-                    confidence=confidence,
-                    reason=(
-                        "Review required because the model referenced an undeclared "
-                        f"participant entity {resolution['entity']!r}. "
-                        f"{resolution['reason']}"
-                    ),
-                    review_state="review_required",
-                    dream_run_id=dream_run_id,
-                    created_at=created_at,
-                    participant_surface=surface,
-                ))
-                continue
-            decisions.append(EntityResolutionDecision(
-                decision_id=f"identity-{uuid.uuid4().hex[:12]}",
-                decision_type="participant_resolution",
-                entity_id=entity.entity_id,
-                proposed_entity_type=entity.entity_type,
-                proposed_title=entity.title,
-                source_ids=[source.source_id],
-                supporting_claim_ids=[],
-                supporting_segment_ids=[
-                    segment.segment_id
-                    for segment in source.segments
-                    if str(segment.speaker or "").strip() == surface
-                ],
-                confidence=confidence,
-                reason=str(resolution["reason"]),
-                review_state=("accepted" if confidence >= 0.7 else "review_required"),
-                dream_run_id=dream_run_id,
-                created_at=created_at,
-                participant_surface=surface,
-            ))
-        return decisions
-
-    @staticmethod
-    def _claim_entity_references(
-        aliases: dict[str, ClaimEvidence],
-        routes: list[ClaimRoute],
-        entities: dict[str, EntityRecord],
-        dream_run_id: str,
-        created_at: str,
-    ) -> list[ClaimEntityReference]:
-        """Preserve extracted surfaces and add stable scope endpoints without string matching."""
-        routes_by_claim = {route.claim_id: route for route in routes}
-        references: list[ClaimEntityReference] = []
-        for item in aliases.values():
-            claim = item.claim
-            for mention in claim.about:
-                surface = " ".join(str(mention.get("entity") or "").split()).strip()
-                if not surface:
-                    continue
-                extracted_role = str(mention.get("role") or "").strip().lower()
-                if extracted_role in {"subject", "speaker", "owner", "actor"}:
-                    role = "subject"
-                elif extracted_role in {"object", "value", "target", "recipient"}:
-                    role = "object"
-                else:
-                    role = "context"
-                references.append(ClaimEntityReference(
-                    reference_id=f"ref-{uuid.uuid4().hex[:12]}",
-                    claim_id=claim.claim_id,
-                    role=role,
-                    surface=surface,
-                    entity_id=None,
-                    confidence=claim.confidence,
-                    reason="Surface mention preserved from structured claim extraction.",
-                    origin="extraction",
-                    dream_run_id=dream_run_id,
-                    status="active",
-                    created_at=created_at,
-                ))
-            route = routes_by_claim[claim.claim_id]
-            if route.owner_entity_id:
-                references.append(ClaimEntityReference(
-                    reference_id=f"ref-{uuid.uuid4().hex[:12]}",
-                    claim_id=claim.claim_id,
-                    role="canonical_owner",
-                    surface=None,
-                    entity_id=route.owner_entity_id,
-                    confidence=route.confidence,
-                    reason=route.reason,
-                    origin="scope",
-                    dream_run_id=dream_run_id,
-                    status="active",
-                    created_at=created_at,
-                ))
-            stable_roles = [
-                *([("subject", route.subject_entity_id)] if route.subject_entity_id else []),
-                *(("object", entity_id) for entity_id in route.object_entity_ids),
-                *(("context", entity_id) for entity_id in route.contextual_entity_ids),
-            ]
-            explicitly_typed_ids = {entity_id for _, entity_id in stable_roles}
-            stable_roles.extend(
-                ("context", entity_id)
-                for entity_id in route.linked_entity_ids
-                if entity_id not in explicitly_typed_ids
-            )
-            for role, entity_id in stable_roles:
-                entity = entities.get(entity_id)
-                references.append(ClaimEntityReference(
-                    reference_id=f"ref-{uuid.uuid4().hex[:12]}",
-                    claim_id=claim.claim_id,
-                    role=role,
-                    surface=entity.title if entity else None,
-                    entity_id=entity_id,
-                    confidence=route.confidence,
-                    reason="Stable semantic endpoint from the scope decision.",
-                    origin="scope",
-                    dream_run_id=dream_run_id,
-                    status="active",
-                    created_at=created_at,
-                ))
-        return references
-
-    @staticmethod
     def _user_evidence(item: ClaimEvidence) -> bool:
         wanted = {
             segment_id
@@ -868,169 +596,6 @@ class ClaimRouter:
             updated_at=now,
             materialization_state=materialization_state,
         )
-
-    @staticmethod
-    def _entity_catalog(
-        entities: Iterable[EntityRecord], *, include_sections: bool
-    ) -> str:
-        if include_sections:
-            lines = ["Typed page ontology:", section_prompt_catalog()]
-        else:
-            lines = [
-                "Typed entity ontology:",
-                entity_type_prompt_catalog(discoverable_only=True),
-            ]
-        lines.extend(["", "Existing canonical entities:"])
-        found = False
-        for entity in sorted(entities, key=lambda item: item.entity_id):
-            if entity.status != "active":
-                continue
-            found = True
-            aliases = ", ".join(entity.aliases) or "none"
-            lines.append(
-                f"- id={entity.entity_id}; type={entity.entity_type}; title={entity.title!r}; "
-                f"aliases={aliases}; page_state={entity.materialization_state}"
-            )
-        if not found:
-            lines.append("- none yet")
-        return "\n".join(lines)
-
-    def _entity_planning_catalog(self, entities: Iterable[EntityRecord]) -> str:
-        lines = ["Existing canonical entities and grounded page facts:"]
-        found = False
-        for entity in sorted(entities, key=lambda item: item.entity_id):
-            if entity.status != "active":
-                continue
-            found = True
-            aliases = ", ".join(entity.aliases) or "none"
-            lines.append(
-                f"- id={entity.entity_id}; type={entity.entity_type}; "
-                f"title={entity.title!r}; aliases={aliases}; "
-                f"page_state={entity.materialization_state}"
-            )
-            facts = self.artifacts.list_consolidated_facts(
-                owner_entity_id=entity.entity_id,
-            )
-            lines.extend(f"  - fact: {fact.text}" for fact in facts[:6])
-        if not found:
-            lines.append("- none yet")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _format_resolved_entity_plan(
-        nodes: dict[str, dict],
-        decisions: dict[str, dict],
-        candidates: dict[str, EntityRecord],
-        entities: dict[str, EntityRecord],
-        participants: dict[str, dict],
-    ) -> str:
-        lines = ["Subjects:"]
-        for node_id, node in nodes.items():
-            decision = decisions[node_id]
-            entity = candidates.get(node_id) or entities.get(
-                str(decision["entity_id"])
-            )
-            parent_ref = str(decision["parent_entity"])
-            parent = candidates.get(parent_ref) or entities.get(parent_ref)
-            lines.append(
-                f"- {node_id}: type={node['entity_type']}; "
-                f"evidence_title={node['title']!r}; "
-                f"stable_id={entity.entity_id if entity else 'no_page'}; "
-                f"stable_title={entity.title if entity else 'none'}; "
-                f"page_state={decision['page_state']}; "
-                f"containment={decision['containment']}; "
-                f"parent={parent.entity_id if parent else parent_ref or 'none'}; "
-                f"evidence={','.join(node['supporting_evidence'])}"
-            )
-        lines.append("Participants:")
-        lines.extend(
-            f"- {alias}: entity={decision['entity']}"
-            for alias, decision in participants.items()
-        )
-        if not participants:
-            lines.append("- none")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _format_subject_graph(
-        nodes: dict[str, dict],
-        edges: list[dict],
-    ) -> str:
-        """Render the fixed census without adding semantic decisions."""
-        lines = ["Nodes:"]
-        for node_id, node in nodes.items():
-            details = [
-                f"type={node['entity_type']}",
-                f"title={node['title']!r}",
-                f"evidence={','.join(node['supporting_evidence'])}",
-            ]
-            lines.append(f"- {node_id}: {'; '.join(details)}")
-        lines.append("Edges:")
-        lines.extend(
-            f"- {edge['source_node']} -[{edge['relation']}]-> "
-            f"{edge['target_node']}; evidence="
-            f"{','.join(edge['supporting_evidence'])}"
-            for edge in edges
-        )
-        if not edges:
-            lines.append("- none")
-        return "\n".join(lines)
-
-    def _format_evidence(
-        self,
-        aliases: dict[str, ClaimEvidence],
-        participants: dict[str, tuple[SourceDocument, str, str | None]],
-    ) -> str:
-        blocks = []
-        for alias, item in aliases.items():
-            claim = item.claim
-            cited_segment_ids = {
-                segment_id
-                for provenance in claim.provenance
-                if provenance.source_id == item.source.source_id
-                for segment_id in provenance.segment_ids
-            }
-            source_evidence = "\n".join(
-                f"[{segment.segment_id}] "
-                f"{f'{segment.speaker}: ' if segment.speaker else ''}{segment.content}"
-                for segment in item.source.segments
-                if segment.segment_id in cited_segment_ids
-            ) or "none"
-            source_title = str(item.source.metadata.get("title") or "").strip()
-            entities = ", ".join(
-                f"{str(value.get('entity'))!r}[role={str(value.get('role') or 'unspecified')}]"
-                for value in claim.about if value.get("entity")
-            ) or "unknown"
-            stable_references = ", ".join(
-                f"{reference.role}:{reference.entity_id or 'unresolved'}"
-                for reference in self.artifacts.list_entity_references(
-                    claim_id=claim.claim_id, status="active"
-                )
-            ) or "none"
-            facets = "; ".join(
-                f"{key}={value}" for key, value in sorted(claim.facets.items())
-                if value not in (None, "", [], {})
-            )
-            blocks.append(
-                f"[EVIDENCE {alias}]\nclaim_type={claim.claim_type}; "
-                f"extracted_entity_mentions={entities}; stable_entity_references={stable_references}; "
-                f"temporal_status={claim.temporal_status}; source_id={item.source.source_id}; "
-                f"source_type={item.source.source_type}; occurred_at={item.source.occurred_at or 'unknown'}; "
-                f"participants={','.join(item.source.participants) or 'none'}; "
-                f"source_title={source_title or 'none'}; "
-                f"evidence_modality={claim.evidence_modality}\nclaim={claim.text}\n"
-                f"cited_source_evidence={source_evidence}\n"
-                f"qualifiers={facets or 'none'}"
-            )
-        if participants:
-            blocks.append("[SOURCE-DECLARED PARTICIPANTS]")
-            blocks.extend(
-                f"[{alias}] name={name!r}; source_id={source.source_id}; "
-                f"speaker_role={role or 'participant'}; "
-                f"occurred_at={source.occurred_at or 'unknown'}"
-                for alias, (source, name, role) in participants.items()
-            )
-        return "\n\n".join(blocks)
 
     @staticmethod
     def _failure(item: ClaimEvidence, reason: str) -> RoutingFailure:

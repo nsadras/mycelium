@@ -14,7 +14,8 @@ from mycelium.artifacts import (
 )
 from mycelium.core import Mycelium
 from mycelium.models import LogEntry, WikiPage
-from server.api import memory
+from server.api import memory_artifacts, memory_curation
+from server.api.memory_contracts import ProposalReviewRequest
 
 
 @pytest.fixture
@@ -121,8 +122,9 @@ def artifact_memory(tmp_path, monkeypatch):
         created_at="2026-07-22T12:00:00",
         affected_entity_ids=["you"],
     ))
-    monkeypatch.setattr(memory, "get_mem", lambda: mem)
-    monkeypatch.setattr(memory, "load_meta", lambda: {
+    monkeypatch.setattr(memory_artifacts, "get_mem", lambda: mem)
+    monkeypatch.setattr(memory_curation, "get_mem", lambda: mem)
+    monkeypatch.setattr(memory_artifacts, "load_meta", lambda: {
         "chat-1": {
             "query": "Tea",
             "transcript": [{"role": "user", "content": "Remember tea."}],
@@ -136,17 +138,17 @@ def artifact_memory(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memory):
-    overview = await memory.artifact_overview()
-    chat_episodes = await memory.list_chat_episode_state()
-    sources = await memory.list_artifact_sources()
-    source = await memory.get_artifact_source("source-test")
-    episodes = await memory.list_artifact_episodes()
-    episode = await memory.get_artifact_episode("episode-test")
-    claims = await memory.list_artifact_claims()
-    claim = await memory.get_artifact_claim("claim-test")
-    dream_runs = await memory.list_artifact_dream_runs()
-    proposals = await memory.list_reconsolidation_proposals()
-    files = await memory.list_stored_memory_files()
+    overview = await memory_artifacts.artifact_overview()
+    chat_episodes = await memory_artifacts.list_chat_episode_state()
+    sources = await memory_artifacts.list_artifact_sources()
+    source = await memory_artifacts.get_artifact_source("source-test")
+    episodes = await memory_artifacts.list_artifact_episodes()
+    episode = await memory_artifacts.get_artifact_episode("episode-test")
+    claims = await memory_artifacts.list_artifact_claims()
+    claim = await memory_artifacts.get_artifact_claim("claim-test")
+    dream_runs = await memory_artifacts.list_artifact_dream_runs()
+    proposals = await memory_artifacts.list_reconsolidation_proposals()
+    files = await memory_artifacts.list_stored_memory_files()
 
     assert overview["coverage"]["accounted_coverage"] == 1.0
     assert overview["projection"] == {
@@ -204,11 +206,11 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
 @pytest.mark.asyncio
 async def test_artifact_detail_endpoints_return_404(artifact_memory):
     for loader, artifact_id in (
-        (memory.get_artifact_source, "source-missing"),
-        (memory.get_artifact_episode, "episode-missing"),
-        (memory.get_artifact_claim, "claim-missing"),
-        (memory.get_artifact_dream_run, "dream-missing"),
-        (memory.get_reconsolidation_proposal, "recon-missing"),
+        (memory_artifacts.get_artifact_source, "source-missing"),
+        (memory_artifacts.get_artifact_episode, "episode-missing"),
+        (memory_artifacts.get_artifact_claim, "claim-missing"),
+        (memory_artifacts.get_artifact_dream_run, "dream-missing"),
+        (memory_artifacts.get_reconsolidation_proposal, "recon-missing"),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await loader(artifact_id)
@@ -217,9 +219,9 @@ async def test_artifact_detail_endpoints_return_404(artifact_memory):
 
 @pytest.mark.asyncio
 async def test_reject_proposal_endpoint_applies_immediately(artifact_memory):
-    response = await memory.reject_reconsolidation_proposal(
+    response = await memory_curation.reject_reconsolidation_proposal(
         "recon-test",
-        memory.ProposalReviewRequest(reviewer_note="Both statements remain relevant."),
+        ProposalReviewRequest(reviewer_note="Both statements remain relevant."),
     )
 
     assert response["proposal"]["status"] == "rejected"
@@ -231,8 +233,8 @@ async def test_reject_proposal_endpoint_applies_immediately(artifact_memory):
 @pytest.mark.asyncio
 async def test_review_proposal_endpoint_returns_404(artifact_memory):
     with pytest.raises(HTTPException) as exc_info:
-        await memory.approve_reconsolidation_proposal(
-            "recon-missing", memory.ProposalReviewRequest()
+        await memory_curation.approve_reconsolidation_proposal(
+            "recon-missing", ProposalReviewRequest()
         )
 
     assert exc_info.value.status_code == 404

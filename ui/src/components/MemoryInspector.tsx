@@ -1,7 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
-  CheckCircle2,
   ChevronRight,
   Database,
   FileArchive,
@@ -15,22 +13,11 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from 'lucide-react';
-import api, {
-  type ArtifactOverview,
-  type ArtifactSource,
-  type ArtifactSourceSummary,
-  type ChatEpisodeState,
-  type DreamRunArtifact,
-  type EpisodeArtifact,
-  type MemoryClaimArtifact,
-  type ReconsolidationProposalArtifact,
-  type StoredMemoryFile,
-  type StoredMemoryFiles,
-} from '../lib/api';
-
-type InspectorTab = 'overview' | 'chat' | 'sources' | 'episodes' | 'claims' | 'reconsolidation' | 'dream-runs' | 'files';
-type StoredFileGroup = 'index' | 'archive';
-type SelectedFile = StoredMemoryFile & { group: StoredFileGroup };
+import type { InspectorTab } from './memory-inspector/types';
+import { Badge, EmptyState, JsonBlock } from './memory-inspector/presentation';
+import { OverviewPanel } from './memory-inspector/OverviewPanel';
+import { useMemoryInspector } from './memory-inspector/useMemoryInspector';
+import { formatDate, humanize, percentage } from './memory-inspector/utils';
 
 const tabs: { id: InspectorTab; label: string; icon: typeof Database }[] = [
   { id: 'overview', label: 'Overview', icon: Database },
@@ -43,216 +30,55 @@ const tabs: { id: InspectorTab; label: string; icon: typeof Database }[] = [
   { id: 'files', label: 'Stored files', icon: FileArchive },
 ];
 
-function formatDate(value?: string | null) {
-  if (!value) return 'Unknown';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
-function percentage(value: number) {
-  return `${Math.round(value * 100)}%`;
-}
-
-function humanize(value: string) {
-  return value.replaceAll('_', ' ');
-}
-
-function JsonBlock({ value }: { value: unknown }) {
-  return (
-    <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 p-3 text-xs leading-relaxed text-slate-300">
-      {JSON.stringify(value, null, 2)}
-    </pre>
-  );
-}
-
-function EmptyState({ children }: { children: string }) {
-  return <div className="p-8 text-center text-sm text-slate-400">{children}</div>;
-}
-
-function Badge({ children, tone = 'slate' }: { children: React.ReactNode; tone?: 'slate' | 'green' | 'amber' | 'red' | 'indigo' }) {
-  const colors = {
-    slate: 'bg-slate-100 text-slate-600',
-    green: 'bg-emerald-50 text-emerald-700',
-    amber: 'bg-amber-50 text-amber-700',
-    red: 'bg-rose-50 text-rose-700',
-    indigo: 'bg-indigo-50 text-indigo-700',
-  };
-  return <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${colors[tone]}`}>{children}</span>;
-}
-
 export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: number }) {
-  const [activeTab, setActiveTab] = useState<InspectorTab>('overview');
-  const [overview, setOverview] = useState<ArtifactOverview | null>(null);
-  const [chatEpisodes, setChatEpisodes] = useState<ChatEpisodeState[]>([]);
-  const [sources, setSources] = useState<ArtifactSourceSummary[]>([]);
-  const [episodes, setEpisodes] = useState<EpisodeArtifact[]>([]);
-  const [claims, setClaims] = useState<MemoryClaimArtifact[]>([]);
-  const [proposals, setProposals] = useState<ReconsolidationProposalArtifact[]>([]);
-  const [dreamRuns, setDreamRuns] = useState<DreamRunArtifact[]>([]);
-  const [files, setFiles] = useState<StoredMemoryFiles | null>(null);
-  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
-  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
-  const [selectedSource, setSelectedSource] = useState<ArtifactSource | null>(null);
-  const [failedSourceId, setFailedSourceId] = useState<string | null>(null);
-  const [selectedEpisodeId, setSelectedEpisodeId] = useState<string | null>(null);
-  const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
-  const [selectedDreamRunId, setSelectedDreamRunId] = useState<string | null>(null);
-  const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
-  const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
-  const [reviewNote, setReviewNote] = useState('');
-  const [reviewing, setReviewing] = useState<'approve' | 'reject' | null>(null);
-
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const [overviewResponse, chatResponse, sourceResponse, episodeResponse, claimResponse, proposalResponse, dreamRunResponse, fileResponse] = await Promise.all([
-          api.get<ArtifactOverview>('/memory/artifacts/overview'),
-          api.get<ChatEpisodeState[]>('/memory/artifacts/chat-episodes'),
-          api.get<ArtifactSourceSummary[]>('/memory/artifacts/sources'),
-          api.get<EpisodeArtifact[]>('/memory/artifacts/episodes'),
-          api.get<MemoryClaimArtifact[]>('/memory/artifacts/claims'),
-          api.get<ReconsolidationProposalArtifact[]>('/memory/artifacts/reconsolidation-proposals'),
-          api.get<DreamRunArtifact[]>('/memory/artifacts/dream-runs'),
-          api.get<StoredMemoryFiles>('/memory/artifacts/files'),
-        ]);
-        const orderedSources = [...sourceResponse.data].sort((a, b) => b.recorded_at.localeCompare(a.recorded_at));
-        setOverview(overviewResponse.data);
-        setChatEpisodes(chatResponse.data);
-        setSources(orderedSources);
-        setEpisodes(episodeResponse.data);
-        setClaims(claimResponse.data);
-        const orderedProposals = [...proposalResponse.data].sort((a, b) => {
-          if (a.status === 'pending' && b.status !== 'pending') return -1;
-          if (b.status === 'pending' && a.status !== 'pending') return 1;
-          return b.created_at.localeCompare(a.created_at);
-        });
-        setProposals(orderedProposals);
-        setDreamRuns(dreamRunResponse.data);
-        setFiles(fileResponse.data);
-        setSelectedSourceId(orderedSources[0]?.source_id ?? null);
-        setSelectedChatId(chatResponse.data[0]?.session_id ?? null);
-        setSelectedEpisodeId(episodeResponse.data[0]?.episode_id ?? null);
-        setSelectedClaimId(claimResponse.data[0]?.claim_id ?? null);
-        setSelectedDreamRunId(dreamRunResponse.data[0]?.run_id ?? null);
-        setSelectedProposalId(orderedProposals[0]?.proposal_id ?? null);
-        const initialFile = fileResponse.data.wiki_index;
-        setSelectedFile(initialFile ? { ...initialFile, group: 'index' } : null);
-      } catch (loadError) {
-        console.error('Failed to load memory artifacts', loadError);
-        setError('The memory artifacts could not be loaded. Check the backend logs.');
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-  }, [refreshKey, reloadKey]);
-
-  useEffect(() => {
-    if (!selectedSourceId) {
-      return;
-    }
-    let cancelled = false;
-    api.get<ArtifactSource>(`/memory/artifacts/sources/${encodeURIComponent(selectedSourceId)}`)
-      .then((response) => {
-        if (!cancelled) {
-          setSelectedSource(response.data);
-          setFailedSourceId(null);
-        }
-      })
-      .catch((sourceError) => {
-        console.error('Failed to load source artifact', sourceError);
-        if (!cancelled) setFailedSourceId(selectedSourceId);
-      })
-    return () => { cancelled = true; };
-  }, [selectedSourceId]);
-
-  const query = search.trim().toLowerCase();
-  const filteredSources = sources.filter((source) =>
-    [source.source_id, source.source_type, source.session_id, ...source.participants]
-      .some((value) => value.toLowerCase().includes(query))
-  );
-  const filteredChatEpisodes = chatEpisodes.filter((session) =>
-    [session.session_id, session.query, JSON.stringify(session.active_episode), JSON.stringify(session.encoded_episodes)]
-      .some((value) => value.toLowerCase().includes(query))
-  );
-  const filteredEpisodes = episodes.filter((episode) =>
-    [episode.episode_id, episode.source_id, episode.source_type, episode.extraction_status, ...episode.participants]
-      .some((value) => value.toLowerCase().includes(query))
-  );
-  const filteredClaims = claims.filter((claim) =>
-    [claim.claim_id, claim.text, claim.claim_type, claim.dream_disposition, claim.predicate ?? '', claim.placement?.owner_entity_id ?? '']
-      .some((value) => value.toLowerCase().includes(query))
-  );
-  const filteredDreamRuns = dreamRuns.filter((run) =>
-    [run.run_id, run.status, ...run.source_ids, ...run.claim_decisions.flatMap((decision) => [decision.claim_id, decision.disposition, decision.reason])]
-      .some((value) => value.toLowerCase().includes(query))
-  );
-  const filteredProposals = proposals.filter((proposal) =>
-    [proposal.proposal_id, proposal.incoming_claim_id, proposal.target_claim_id, proposal.proposed_relation, proposal.status, proposal.explanation]
-      .some((value) => value.toLowerCase().includes(query))
-  );
-  const allFiles = useMemo<SelectedFile[]>(() => {
-    if (!files) return [];
-    return [
-      ...(files.wiki_index ? [{ ...files.wiki_index, group: 'index' as const }] : []),
-      ...files.archived_pages.map((file) => ({ ...file, group: 'archive' as const })),
-    ];
-  }, [files]);
-  const filteredFiles = allFiles.filter((file) =>
-    `${file.group} ${file.filename} ${file.content}`.toLowerCase().includes(query)
-  );
-
-  const selectedEpisode = episodes.find((episode) => episode.episode_id === selectedEpisodeId) ?? null;
-  const selectedChatEpisode = chatEpisodes.find((session) => session.session_id === selectedChatId) ?? null;
-  const selectedClaim = claims.find((claim) => claim.claim_id === selectedClaimId) ?? null;
-  const selectedDreamRun = dreamRuns.find((run) => run.run_id === selectedDreamRunId) ?? null;
-  const selectedProposal = proposals.find((proposal) => proposal.proposal_id === selectedProposalId) ?? null;
-  const proposalIncomingClaim = claims.find((claim) => claim.claim_id === selectedProposal?.incoming_claim_id) ?? null;
-  const proposalTargetClaim = claims.find((claim) => claim.claim_id === selectedProposal?.target_claim_id) ?? null;
-  const claimedSegmentIds = useMemo(() => new Set(
-    claims.flatMap((claim) => claim.provenance.flatMap((item) => item.segment_ids))
-  ), [claims]);
-  const ignoredSegmentIds = useMemo(() => new Set(
-    episodes.flatMap((episode) => episode.ignored_segment_ids)
-  ), [episodes]);
-
-  const selectSource = (sourceId: string) => {
-    setSelectedSourceId(sourceId);
-    setSearch('');
-    setActiveTab('sources');
-  };
-  const selectClaim = (claimId: string) => {
-    setSelectedClaimId(claimId);
-    setSearch('');
-    setActiveTab('claims');
-  };
-  const selectTab = (tab: InspectorTab) => {
-    setSearch('');
-    setActiveTab(tab);
-  };
-  const reviewProposal = async (decision: 'approve' | 'reject') => {
-    if (!selectedProposal) return;
-    setReviewing(decision);
-    try {
-      await api.post(
-        `/memory/reconsolidation/proposals/${encodeURIComponent(selectedProposal.proposal_id)}/${decision}`,
-        { reviewer_note: reviewNote.trim() || null },
-      );
-      setReviewNote('');
-      setReloadKey((current) => current + 1);
-    } catch (reviewError) {
-      console.error(`Failed to ${decision} reconsolidation proposal`, reviewError);
-      alert(`The proposal could not be ${decision === 'approve' ? 'approved' : 'rejected'}. It may already have been reviewed or become stale.`);
-    } finally {
-      setReviewing(null);
-    }
-  };
+  const {
+    activeTab,
+    overview,
+    filteredSources,
+    filteredChatEpisodes,
+    filteredEpisodes,
+    filteredClaims,
+    filteredDreamRuns,
+    filteredProposals,
+    filteredFiles,
+    selectedSourceId,
+    selectedChatId,
+    selectedSource,
+    failedSourceId,
+    selectedEpisodeId,
+    selectedClaimId,
+    selectedDreamRunId,
+    selectedProposalId,
+    selectedFile,
+    selectedEpisode,
+    selectedChatEpisode,
+    selectedClaim,
+    selectedDreamRun,
+    selectedProposal,
+    proposalIncomingClaim,
+    proposalTargetClaim,
+    claimedSegmentIds,
+    ignoredSegmentIds,
+    search,
+    loading,
+    error,
+    reviewNote,
+    reviewing,
+    setSelectedSourceId,
+    setSelectedChatId,
+    setSelectedEpisodeId,
+    setSelectedClaimId,
+    setSelectedDreamRunId,
+    setSelectedProposalId,
+    setSelectedFile,
+    setSearch,
+    setReloadKey,
+    setReviewNote,
+    selectSource,
+    selectClaim,
+    selectTab,
+    reviewProposal,
+  } = useMemoryInspector(refreshKey);
 
   if (loading) {
     return <div className="flex flex-1 items-center justify-center bg-white text-slate-500"><Loader2 className="mr-2 animate-spin" /> Loading memory artifacts</div>;
@@ -297,126 +123,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
         </div>
       </header>
 
-      {activeTab === 'overview' && overview && (
-        <div className="flex-1 overflow-y-auto p-4 md:p-8">
-          <div className="mx-auto max-w-6xl space-y-6">
-            <section className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
-              {[
-                ['Sources', overview.coverage.sources],
-                ['Episodes', overview.coverage.episodes],
-                ['Claims', overview.coverage.claims],
-                ['Dream runs', overview.dream_audit.runs],
-                ['Suppressed', overview.coverage.suppressed_claims],
-                ['Segments', overview.coverage.segments],
-                ['Pending reviews', overview.reconsolidation_proposals.pending ?? 0],
-                ['Archived pages', overview.archived_pages],
-              ].map(([label, value]) => (
-                <div key={label} className="rounded-xl border border-slate-200 p-4">
-                  <div className="text-2xl font-bold text-slate-900">{value}</div>
-                  <div className="mt-1 text-xs font-medium text-slate-500">{label}</div>
-                </div>
-              ))}
-            </section>
-
-            <section className="grid gap-4 lg:grid-cols-2">
-              <div className="rounded-xl border border-slate-200 p-5">
-                <div className="mb-4 flex items-center justify-between">
-                  <h2 className="font-bold">Extraction coverage</h2>
-                  <Badge tone={overview.coverage.accounted_coverage === 1 ? 'green' : 'amber'}>{percentage(overview.coverage.accounted_coverage)} accounted</Badge>
-                </div>
-                <div className="space-y-4">
-                  {[
-                    ['Claimed segments', overview.coverage.claimed_segments, overview.coverage.segment_coverage],
-                    ['Ignored segments', overview.coverage.ignored_segments, overview.coverage.segments ? overview.coverage.ignored_segments / overview.coverage.segments : 0],
-                    ['All accounted segments', overview.coverage.accounted_segments, overview.coverage.accounted_coverage],
-                  ].map(([label, count, ratio]) => (
-                    <div key={label as string}>
-                      <div className="mb-1 flex justify-between text-xs"><span>{label}</span><span className="font-semibold">{count} · {percentage(ratio as number)}</span></div>
-                      <div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-indigo-500" style={{ width: percentage(ratio as number) }} /></div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 p-5">
-                <div className="mb-4 flex items-center gap-2">
-                  {overview.integrity.healthy ? <CheckCircle2 className="text-emerald-600" size={20} /> : <AlertTriangle className="text-rose-600" size={20} />}
-                  <h2 className="font-bold">Referential integrity</h2>
-                  <Badge tone={overview.integrity.healthy ? 'green' : 'red'}>{overview.integrity.healthy ? 'Healthy' : 'Issues found'}</Badge>
-                </div>
-                <div className="space-y-2">
-                  {Object.entries(overview.integrity.issues).map(([name, values]) => (
-                    <div key={name} className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2 text-xs">
-                      <span className="font-medium text-slate-600">{humanize(name)}</span>
-                      {values.length === 0 ? <span className="text-emerald-600">None</span> : <span className="text-right text-rose-600">{values.join(', ')}</span>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </section>
-
-            <section className="rounded-xl border border-slate-200 p-5">
-              <div className="mb-3 flex items-center gap-2">
-                <h2 className="font-bold">Short-term memory</h2>
-                <Badge tone={overview.short_term_memory.ready ? 'amber' : 'slate'}>{overview.short_term_memory.ready ? 'Dream ready' : 'Accumulating'}</Badge>
-              </div>
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                {[
-                  ['Pending', overview.short_term_memory.pending_claims],
-                  ['Deferred', overview.short_term_memory.deferred_claims],
-                  ['Retryable failures', overview.short_term_memory.retryable_failures],
-                  ['Total queued', overview.short_term_memory.total_claims],
-                ].map(([label, value]) => <div key={label} className="rounded-lg bg-slate-50 p-3"><div className="text-lg font-bold">{value}</div><div className="text-xs text-slate-500">{label}</div></div>)}
-              </div>
-              <div className="mt-3 text-xs text-slate-500">Triggers: {overview.short_term_memory.reasons.map(humanize).join(', ') || 'none'} · oldest pending {formatDate(overview.short_term_memory.oldest_pending_at)}</div>
-            </section>
-
-            <section className="rounded-xl border border-slate-200 p-5">
-              <h2 className="mb-3 font-bold">Wiki projection</h2>
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-                {[
-                  ['Assignments', overview.projection.page_assignments],
-                  ['Assigned claims', overview.projection.assigned_claims],
-                  ['Multi-page claims', overview.projection.multi_page_claims],
-                  ['Average pages / claim', overview.projection.average_pages_per_claim.toFixed(2)],
-                  ['Maximum pages / claim', overview.projection.max_pages_per_claim],
-                ].map(([label, value]) => <div key={label} className="rounded-lg bg-slate-50 p-3"><div className="text-lg font-bold">{value}</div><div className="text-xs text-slate-500">{label}</div></div>)}
-              </div>
-            </section>
-
-            <section className="rounded-xl border border-slate-200 p-5">
-              <h2 className="mb-3 font-bold">Claim dispositions</h2>
-              <div className="flex flex-wrap gap-2">
-                {Object.entries(overview.dream_audit.claim_dispositions).map(([disposition, count]) => (
-                  <Badge key={disposition} tone={disposition === 'routed' ? 'green' : disposition === 'routing_failed' ? 'red' : disposition === 'pending' || disposition === 'deferred' ? 'amber' : 'slate'}>
-                    {humanize(disposition)} · {count}
-                  </Badge>
-                ))}
-                {!Object.keys(overview.dream_audit.claim_dispositions).length && <span className="text-sm text-slate-400">No claims.</span>}
-              </div>
-            </section>
-
-            <section className="rounded-xl border border-slate-200 p-5">
-              <h2 className="mb-3 font-bold">Extraction warnings</h2>
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                {[
-                  ['Unassigned segments', overview.coverage.unassigned_segment_ids],
-                  ['Unaccounted segments', overview.coverage.unaccounted_segment_ids],
-                  ['Unplaced claims', overview.coverage.unplaced_claim_ids],
-                  ['Unresolved provenance', overview.coverage.unresolved_provenance_ids],
-                  ['Failed episodes', overview.coverage.failed_episode_ids],
-                  ['Partial episodes', overview.coverage.partial_episode_ids],
-                ].map(([label, values]) => (
-                  <div key={label as string} className="rounded-lg bg-slate-50 p-3">
-                    <div className="text-xs font-bold text-slate-600">{label}</div>
-                    <div className={`mt-1 break-all text-xs ${(values as string[]).length ? 'text-amber-700' : 'text-slate-400'}`}>{(values as string[]).join(', ') || 'None'}</div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </div>
-        </div>
-      )}
+      {activeTab === 'overview' && overview && <OverviewPanel overview={overview} />}
 
       {activeTab !== 'overview' && (
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">

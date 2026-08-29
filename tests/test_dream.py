@@ -325,7 +325,7 @@ def test_scope_evidence_preserves_extracted_roles_and_stable_references(tmp_path
         created_at="2026-08-04T10:00:00-07:00",
     ))
 
-    rendered = dream.router._format_evidence(
+    rendered = dream.router.formatter.format_evidence(
         {"C001": ClaimEvidence(item, source)}, {}
     )
 

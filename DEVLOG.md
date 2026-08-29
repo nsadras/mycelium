@@ -1,5 +1,24 @@
 # Development Log
 
+## 2026-08-28 — Split architectural hotspots by responsibility
+
+- Replaced the monolithic artifact module with a small public facade over separate persisted models,
+  filesystem repository, transcript segmentation, temporal logic, and cross-store integrity modules. Existing
+  artifact imports and serialized shapes remain unchanged.
+- Kept Dream orchestration in `DreamProcess` while moving retention, evidence admission, revision, and audit
+  mutations into `DreamPolicy`. Split consolidation support into contract models, prompt formatting, and
+  participant/entity-resolution artifacts without changing the model prompts or call sequence.
+- Replaced the single memory API implementation with composed artifact-inspection, wiki, lifecycle, and curation
+  routers plus shared request/response contracts. HTTP paths remain unchanged; tests now import implementation
+  functions from their owning router modules.
+- Split Engram presentation/formatting helpers from its stateful controller. Split Memory Inspector data loading,
+  selection and review state into a hook, with separate overview and shared presentation components.
+- This was a structural refactor only: no prompt, ontology, structured-output contract, or division of model labor
+  changed, so no direct Ollama probe was required.
+- Validation: Ruff and `git diff --check` passed; 230 non-Engram tests and the focused artifact, Dream, API, and
+  runtime suites passed; frontend lint and production build passed with the existing large-chunk warning. The
+  corpus-backed AMI test remains excluded from the fast suite as documented in the audit.
+
 ## 2026-08-28 — Make consolidated facts current presentation only
 
 - Removed the unused active/retired lifecycle from consolidated facts and from their artifact API. A persisted fact

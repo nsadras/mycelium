@@ -25,7 +25,7 @@ async def test_page_search_retrieves_named_entity(temp_mycelium):
         last_updated=datetime.now(),
         version=1,
         confidence=0.8,
-        importance=0.5, page_type="person", entity_id="person-gina"
+        page_type="person", entity_id="person-gina"
     )
     page_jon = WikiPage(
         slug="person-jon",
@@ -35,7 +35,7 @@ async def test_page_search_retrieves_named_entity(temp_mycelium):
         last_updated=datetime.now(),
         version=1,
         confidence=0.8,
-        importance=0.5, page_type="person", entity_id="person-jon"
+        page_type="person", entity_id="person-jon"
     )
     temp_mycelium.wiki.save(page_gina)
     temp_mycelium.wiki.save(page_jon)
@@ -55,12 +55,12 @@ async def test_full_page_search_routes_without_llm(temp_mycelium):
     temp_mycelium.wiki.save(WikiPage(
         slug="person-gina", title="Gina", content="Gina owns a clothing store.",
         created=now, last_updated=now, version=1, confidence=0.8,
-        importance=0.5, page_type="person", entity_id="person-gina",
+        page_type="person", entity_id="person-gina",
     ))
     temp_mycelium.wiki.save(WikiPage(
         slug="person-jon", title="Jon", content="Jon owns a dance studio.",
         created=now, last_updated=now, version=1, confidence=0.8,
-        importance=0.5, page_type="person", entity_id="person-jon",
+        page_type="person", entity_id="person-jon",
     ))
     loaded = await temp_mycelium.load_context(query="Who owns the dance studio?")
 
@@ -73,7 +73,7 @@ async def test_temporal_claim_routes_generic_deadline_query(temp_mycelium):
     now = datetime.fromisoformat("2026-08-11T10:00:00-07:00")
     temp_mycelium.wiki.save(WikiPage(
         slug="project-alpha", title="Project Alpha", content="Quarterly report work.",
-        created=now, last_updated=now, version=1, confidence=0.9, importance=0.8,
+        created=now, last_updated=now, version=1, confidence=0.9,
         page_type="project", entity_id="project-alpha",
     ))
     deadline = MemoryClaim(
@@ -141,7 +141,6 @@ async def test_load_context_budgets_the_authoritative_rendering(temp_mycelium):
         last_updated=now,
         version=1,
         confidence=0.8,
-        importance=0.5,
         page_type="project",
         entity_id="project-orchid",
     )

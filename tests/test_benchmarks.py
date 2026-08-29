@@ -128,7 +128,6 @@ def test_benchmark_page_rendering_renders_nested_recall_fact_once():
         last_updated=now,
         version=1,
         confidence=0.8,
-        importance=0.5,
     )
 
     assert render_memory_context([page]).count("A single useful fact") == 1
@@ -437,7 +436,6 @@ async def test_mycelium_benchmark_replays_frozen_extraction_artifacts(tmp_path):
         session_id=source.session_id,
         timestamp=datetime(2026, 8, 5, 10, 0),
         content="Frozen transcript",
-        importance=0.8,
         consolidated=True,
     ))
 
@@ -525,7 +523,6 @@ async def test_assignment_replay_preserves_routes_and_rebuilds_pages(tmp_path):
         session_id=source.session_id,
         timestamp=datetime(2026, 8, 5, 10, 0),
         content="Frozen transcript",
-        importance=0.8,
         consolidated=True,
     ))
 

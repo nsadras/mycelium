@@ -32,7 +32,6 @@ export interface LoadedPage {
   slug: string;
   title: string;
   confidence: number;
-  importance?: number;
   version: number;
 }
 
@@ -50,7 +49,6 @@ export interface WikiPage {
   content?: string;
   version?: number;
   confidence: number;
-  importance?: number;
   page_type: PageType | null;
   tags: string[];
   related?: { target: string; relation: string }[];

@@ -22,7 +22,6 @@ async def test_session_lifecycle(temp_mycelium):
             last_updated=None,
             version=1,
             confidence=0.8,
-            importance=0.5
         )
         mock_load.return_value = [mock_page]
         
@@ -60,7 +59,7 @@ def test_memory_context_renders_shared_project_role_once_across_endpoint_pages(t
     }
     project = WikiPage(
         slug="lantern", title="Lantern", content="unused",
-        created=None, last_updated=None, version=1, confidence=0.8, importance=0.5,
+        created=None, last_updated=None, version=1, confidence=0.8,
         sections=[{
             "key": "people_organizations",
             "title": "People & Organizations",
@@ -73,7 +72,7 @@ def test_memory_context_renders_shared_project_role_once_across_endpoint_pages(t
     )
     person = WikiPage(
         slug="priya", title="Priya", content="unused",
-        created=None, last_updated=None, version=1, confidence=0.8, importance=0.5,
+        created=None, last_updated=None, version=1, confidence=0.8,
         sections=[{
             "key": "shared_projects", "title": "Shared Projects", "items": [
                 role,

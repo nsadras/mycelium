@@ -95,7 +95,6 @@ class WikiStore:
             last_updated=last_updated,
             version=post.metadata.get("version", 1),
             confidence=post.metadata.get("confidence", 0.0),
-            importance=post.metadata.get("importance", 0.5),
             page_type=page_type,
             tags=post.metadata.get("tags", []),
             related=related,
@@ -117,7 +116,6 @@ class WikiStore:
         post.metadata["last_updated"] = page.last_updated.isoformat() if page.last_updated else None
         post.metadata["version"] = page.version
         post.metadata["confidence"] = page.confidence
-        post.metadata["importance"] = page.importance
         post.metadata["page_type"] = page.page_type
         post.metadata["tags"] = page.tags
         post.metadata["related"] = [_edge_to_dict(r) for r in page.related]
@@ -200,7 +198,6 @@ class LogStore:
             
             f.write(f"## {entry_name} — {entry.timestamp.strftime('%H:%M')}\n\n")
             f.write(f"**session_id:** {entry.session_id}  \n")
-            f.write(f"**importance:** {entry.importance}  \n")
             f.write(f"**durability:** {entry.durability}  \n")
             f.write(f"**consolidated:** {str(entry.consolidated).lower()}  \n")
             f.write("\n")
@@ -265,7 +262,6 @@ class LogStore:
                 except ValueError:
                     timestamp = datetime.now()
                     
-                importance = float(metadata.get("importance", "0.0"))
                 durability = typing.cast(
                     Literal['ephemeral', 'session', 'durable'],
                     metadata.get("durability", "durable"),
@@ -276,7 +272,6 @@ class LogStore:
                     session_id=metadata.get("session_id", ""),
                     timestamp=timestamp,
                     content="\n".join(body_lines).strip(),
-                    importance=importance,
                     durability=durability,
                     consolidated=is_consolidated,
                 )

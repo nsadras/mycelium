@@ -1911,9 +1911,10 @@ one prose-similarity summary.
 
 - Made `LogEntry.consolidated` the sole log-consolidation state. New Markdown no longer writes `status`, the parser no
   longer loads it, and benchmark replay resets only the boolean.
-- Removed the unused claim `kind` and `salience` fields. `claim_type` remains the semantic classification, and generated
-  pages now use the effective production default importance of `0.5` rather than taking a maximum over never-populated
-  salience values.
+- Removed the unused claim `kind` and `salience` fields. `claim_type` remains the semantic classification. A follow-up
+  removed `importance` from logs and wiki pages entirely because retrieval, context admission, Dream, fact synthesis,
+  and rendering never consumed it. It is no longer written to log Markdown or wiki frontmatter, exposed by APIs/UI,
+  included in benchmark metadata, or compared during page regeneration.
 - Removed claim-wide `inferred`. Explicit-versus-inferred evidence now lives only on each `ClaimProvenance.evidence_type`.
   `evidence_modality` is restricted to observation channels (`speech`, `visual`, `tool`, `mixed`, or `unknown`) and no
   longer doubles as an inference flag. The inspector derives its inferred badge from provenance.
@@ -1930,5 +1931,5 @@ one prose-similarity summary.
   claims and passed 5/7 acceptance dimensions; claim recall, section accuracy, and page projection remain meaningful
   fixture weaknesses, and answer quality was intentionally skipped to isolate memory construction.
 - Added structural contract and pipeline tests preventing the removed fields and inference-as-modality from returning.
-  Final validation: **242 passed, 2 skipped**; Ruff, UI lint, UI build, and `git diff --check` passed. The existing
-  828.90 kB UI chunk-size warning remains.
+  Persistence tests also require importance-free log and wiki files. Final validation: **242 passed, 2 skipped**;
+  Ruff, UI lint, UI build, and `git diff --check` passed. The existing 828.90 kB UI chunk-size warning remains.

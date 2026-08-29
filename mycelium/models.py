@@ -134,7 +134,6 @@ class WikiPage:
     last_updated: datetime
     version: int
     confidence: float                    # 0.0–1.0
-    importance: float                    # 0.0–1.0
     page_type: PageType | None = None    # explicit null means classification is pending
     tags: list[str] = field(default_factory=list)
     related: list[Edge] = field(default_factory=list)
@@ -152,7 +151,6 @@ class LogEntry:
     session_id: str
     timestamp: datetime
     content: str
-    importance: float
     durability: Literal['ephemeral', 'session', 'durable'] = 'durable'
     consolidated: bool = False
 

@@ -25,7 +25,6 @@ def artifact_memory(tmp_path, monkeypatch):
         session_id="session-1",
         timestamp=datetime(2026, 7, 22, 12, 0),
         content="USER: I prefer tea.",
-        importance=0.8,
     )
     mem.log_store.append(entry)
     source = SourceDocument(
@@ -107,7 +106,6 @@ def artifact_memory(tmp_path, monkeypatch):
         last_updated=datetime.now(),
         version=1,
         confidence=0.8,
-        importance=0.5,
         page_type="topic",
         entity_id="topic-archived-page",
     ))

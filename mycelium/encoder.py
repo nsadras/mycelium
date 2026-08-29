@@ -61,7 +61,6 @@ class Encoder:
                 "consolidation and retrieval.\n\n"
                 f"{content}"
             ),
-            importance=0.8,
             durability="durable",
             consolidated=False,
         )

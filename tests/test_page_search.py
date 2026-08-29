@@ -14,7 +14,6 @@ def _page(slug: str, content: str, *, version: int = 1) -> WikiPage:
         last_updated=now,
         version=version,
         confidence=0.9,
-        importance=0.5,
         page_type="person",
     )
 
@@ -53,4 +52,3 @@ def test_page_search_boosts_page_titles():
     hits = index.search([body_only, titled], "dance studio", limit=2)
 
     assert hits[0].slug == "dance-studio"
-

@@ -368,7 +368,6 @@ def add_source(
         session_id=f"session-{suffix}",
         timestamp=datetime(2026, 8, 4, 10, 0),
         content="Raw canonical transcript",
-        importance=0.8,
         durability="durable",
         consolidated=False,
     )

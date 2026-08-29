@@ -239,7 +239,6 @@ async def test_engram_service_processes_then_finalizes_meeting_with_speaker_name
                 session_id=session_id,
                 timestamp=datetime.now(),
                 content=transcript,
-                importance=0.8,
             )
             log_store.append(entry)
             return [entry]

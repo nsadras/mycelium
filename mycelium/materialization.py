@@ -409,7 +409,6 @@ class PageMaterializer:
             last_updated=now,
             version=existing.version if existing else 1,
             confidence=sum(confidences) / len(confidences) if confidences else 1.0,
-            importance=0.5,
             page_type=cast(PageType, entity.entity_type),
             tags=[],
             related=[
@@ -668,7 +667,6 @@ class PageMaterializer:
             and left.related == right.related
             and left.source_log_entries == right.source_log_entries
             and abs(left.confidence - right.confidence) < 1e-9
-            and abs(left.importance - right.importance) < 1e-9
         )
 
     @staticmethod

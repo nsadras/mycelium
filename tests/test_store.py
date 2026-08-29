@@ -15,7 +15,6 @@ def test_wiki_store_save_and_get(tmp_path):
         last_updated=datetime(2026, 5, 10, 10, 0, 0),
         version=1,
         confidence=0.9,
-        importance=0.8,
         tags=["test"],
         related=[Edge(target="other-page", relation="causes", weight=0.5)],
         page_type="topic",
@@ -34,7 +33,8 @@ def test_wiki_store_save_and_get(tmp_path):
     )
     
     store.save(page)
-    
+
+    assert "importance:" not in (store.wiki_dir / "test-page.md").read_text()
     loaded = store.get("test-page")
     assert loaded.slug == "test-page"
     assert loaded.title == "Test Page"
@@ -62,8 +62,8 @@ def test_wiki_store_rejects_pre_taxonomy_page_schema(tmp_path):
 def test_wiki_store_list_all(tmp_path):
     store = WikiStore(tmp_path / "wiki")
     
-    store.save(WikiPage(slug="page1", title="1", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0, page_type="topic", entity_id="topic-page1"))
-    store.save(WikiPage(slug="page2", title="2", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0, page_type="topic", entity_id="topic-page2"))
+    store.save(WikiPage(slug="page1", title="1", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, page_type="topic", entity_id="topic-page1"))
+    store.save(WikiPage(slug="page2", title="2", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, page_type="topic", entity_id="topic-page2"))
     store.save_index("# Index")
     
     pages = store.list_all()
@@ -74,7 +74,7 @@ def test_wiki_store_list_all(tmp_path):
 
 def test_wiki_store_archive(tmp_path):
     store = WikiStore(tmp_path / "wiki")
-    store.save(WikiPage(slug="archive-me", title="A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0, page_type="topic", entity_id="topic-archive-me"))
+    store.save(WikiPage(slug="archive-me", title="A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, page_type="topic", entity_id="topic-archive-me"))
     assert store.exists("archive-me")
     store.archive("archive-me")
     assert not store.exists("archive-me")
@@ -82,7 +82,7 @@ def test_wiki_store_archive(tmp_path):
 
 def test_wiki_store_delete(tmp_path):
     store = WikiStore(tmp_path / "wiki")
-    store.save(WikiPage(slug="delete-page", title="L", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0, page_type="topic", entity_id="topic-delete-page"))
+    store.save(WikiPage(slug="delete-page", title="L", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, page_type="topic", entity_id="topic-delete-page"))
 
     store.delete("delete-page")
 
@@ -96,13 +96,13 @@ def test_log_store_append_and_get(tmp_path):
         session_id="ses-123",
         timestamp=datetime(2026, 5, 10, 10, 0, 0),
         content="User said hello.",
-        importance=0.5,
         durability="durable",
         consolidated=False,
     )
     
     store.append(entry)
-    
+
+    assert "**importance:**" not in (tmp_path / "logs" / "2026-05-10.md").read_text()
     unconsolidated = store.get_unconsolidated()
     assert len(unconsolidated) == 1
     assert unconsolidated[0].content == "User said hello."
@@ -118,7 +118,6 @@ def test_log_store_mark_consolidated(tmp_path):
         session_id="ses-123",
         timestamp=datetime(2026, 5, 10, 10, 0, 0),
         content="User said hello.",
-        importance=0.5,
         consolidated=False,
     )
     
@@ -143,7 +142,6 @@ def test_log_store_get_many_preserves_requested_order(tmp_path):
         session_id="ses-123",
         timestamp=datetime(2026, 5, 10, 10, 0, 0),
         content="First source.",
-        importance=0.5,
         consolidated=False,
     )
     second = LogEntry(
@@ -151,7 +149,6 @@ def test_log_store_get_many_preserves_requested_order(tmp_path):
         session_id="ses-123",
         timestamp=datetime(2026, 5, 10, 10, 5, 0),
         content="Second source.",
-        importance=0.5,
         consolidated=False,
     )
 
@@ -178,7 +175,6 @@ def test_log_store_markdown_headings_inside_body_are_not_entries(tmp_path):
             "## Access Paper:\n\n"
             "This is also body content, not a new log entry."
         ),
-        importance=0.5,
         durability="durable",
         consolidated=False,
     )
@@ -219,7 +215,6 @@ def test_log_store_mark_unconsolidated(tmp_path):
         session_id="ses-123",
         timestamp=datetime(2026, 5, 10, 10, 0, 0),
         content="User said hello.",
-        importance=0.5,
         consolidated=False,
     )
     
@@ -252,15 +247,14 @@ def test_clear_wiki_store(tmp_path, monkeypatch):
         session_id="ses-123",
         timestamp=datetime(2026, 5, 10, 10, 0, 0),
         content="User said hello.",
-        importance=0.5,
         consolidated=True,
     )
     myc.log_store.append(entry)
     assert len(myc.log_store.get_unconsolidated()) == 0
     
     from mycelium.models import WikiPage
-    myc.wiki.save(WikiPage(slug="page-a", title="Page A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0, page_type="topic", entity_id="topic-page-a"))
-    myc.wiki.save(WikiPage(slug="page-b", title="Page B", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, importance=1.0, page_type="topic", entity_id="topic-page-b"))
+    myc.wiki.save(WikiPage(slug="page-a", title="Page A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, page_type="topic", entity_id="topic-page-a"))
+    myc.wiki.save(WikiPage(slug="page-b", title="Page B", content="", created=datetime.now(), last_updated=datetime.now(), version=1, confidence=1.0, page_type="topic", entity_id="topic-page-b"))
     myc.wiki.save_index("# Wiki Index\n\n## Pages\n- [[you]]\n- [[page-a]]\n- [[page-b]]")
     
     assert myc.wiki.exists("page-a")

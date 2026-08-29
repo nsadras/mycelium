@@ -6,7 +6,6 @@ def test_display_claim_text_removes_conflicting_model_added_date():
     claim = MemoryClaim(
         claim_id="event",
         text="Ava visited Kyoto yesterday, on January 9, 2023.",
-        kind="fact",
         about=[{"entity": "Ava"}],
         provenance=[ClaimProvenance("source-1", ["source-1#seg-0001"])],
         recorded_at="2024-01-10T12:00:00",

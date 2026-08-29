@@ -32,6 +32,19 @@ def test_extraction_schema_requires_batch_constrained_claim_evidence():
     }
 
     assert output_model.model_validate(valid).claims[0].segment_ids == [first]
+    schema = output_model.model_json_schema()
+    claim_schema = next(
+        definition
+        for definition in schema["$defs"].values()
+        if "claim_type" in definition.get("properties", {})
+    )
+    properties = claim_schema["properties"]
+    assert "kind" not in properties
+    assert "inference" not in properties["evidence_modality"]["enum"]
+    assert properties["evidence_type"]["enum"] == ["explicit", "inferred"]
+    assert {"kind", "inferred", "salience"}.isdisjoint(
+        MemoryClaim.__dataclass_fields__
+    )
     for invalid in (
         {"claims": [{"text": "Ava prefers tea."}], "ignored_segment_ids": []},
         {"claims": [{"text": "Ava prefers tea.", "segment_ids": []}], "ignored_segment_ids": []},
@@ -51,7 +64,7 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
     llm.call_structured.return_value = {
         "claims": [
             {
-                "text": "Ava prefers tea.", "kind": "preference",
+                "text": "Ava prefers tea.",
                 "claim_type": "preference", "predicate": "prefers",
                 "evidence_modality": "speech", "temporal_status": "atemporal",
                 "about": [{"entity": "Ava", "role": "person"}],
@@ -159,7 +172,6 @@ async def test_encoder_persists_general_semantics_across_source_types(
         return {
             "claims": [{
                 "text": text,
-                "kind": "open subtype",
                 "claim_type": claim_type,
                 "predicate": predicate,
                 "evidence_modality": "speech",
@@ -346,7 +358,6 @@ async def test_encoder_fills_missing_about_and_requires_inference_basis(tmp_path
         return {
             "claims": [{
                 "text": "Ava enjoys teaching dance.",
-                "kind": "preference",
                 "about": [],
                 "segment_ids": segment_ids,
                 "evidence_type": "inferred",
@@ -366,8 +377,45 @@ async def test_encoder_fills_missing_about_and_requires_inference_basis(tmp_path
 
     stored = artifacts.list_claims()[0]
     assert stored.about == [{"entity": "Ava", "role": "speaker"}]
-    assert stored.inferred is False
     assert stored.provenance[0].evidence_type == "explicit"
+
+
+@pytest.mark.asyncio
+async def test_encoder_records_inference_only_on_provenance(tmp_path):
+    llm = AsyncMock()
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    encoder = Encoder(
+        llm,
+        LogStore(tmp_path / "logs"),
+        Config.defaults(),
+        artifacts,
+    )
+
+    async def response(system, user, output_type, **kwargs):
+        segment_id = user.split("[", 1)[1].split("]", 1)[0]
+        return {
+            "claims": [{
+                "text": "Ava is Clara's grandmother.",
+                "about": [{"entity": "Ava", "role": "subject"}],
+                "segment_ids": [segment_id],
+                "evidence_type": "inferred",
+                "evidence_modality": "speech",
+                "confidence": 0.7,
+                "facets": {"inference_basis": "Ava's son Ben has a daughter named Clara."},
+            }],
+            "ignored_segment_ids": [],
+        }
+
+    llm.call_structured.side_effect = response
+    await encoder.encode_session(
+        "Ava: My son Ben has a daughter named Clara.",
+        "session-1",
+        source_type="agent_conversation",
+    )
+
+    stored = artifacts.list_claims()[0]
+    assert stored.provenance[0].evidence_type == "inferred"
+    assert stored.evidence_modality == "speech"
 
 
 @pytest.mark.asyncio
@@ -386,7 +434,6 @@ async def test_encoder_records_uncovered_segments_without_repair(tmp_path):
         return {
             "claims": [{
                 "text": "Ava likes tea.",
-                "kind": "preference",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": [segment_ids[0]],
                 "facets": {"object": "tea"},
@@ -527,7 +574,6 @@ async def test_encoder_does_not_retry_dialogue_shaped_claim(tmp_path):
         return {
             "claims": [{
                 "text": "I prefer tea.",
-                "kind": "preference",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": [segment_id],
                 "facets": {"object": "tea"},
@@ -564,7 +610,6 @@ async def test_encoder_never_runs_final_normalization_pass(tmp_path):
         return {
             "claims": [{
                 "text": "My store is doing great!",
-                "kind": "state",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": [segment_id],
                 "facets": {},
@@ -639,7 +684,6 @@ async def test_encoder_programmatically_ignores_image_urls(tmp_path):
         return {
             "claims": [{
                 "text": "Ava shared a painting.",
-                "kind": "event",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": target_ids,
                 "facets": {},

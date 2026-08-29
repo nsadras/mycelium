@@ -218,18 +218,15 @@ export interface ClaimProvenanceArtifact {
 export interface MemoryClaimArtifact {
   claim_id: string;
   text: string;
-  kind: string;
   about: Record<string, string>[];
   provenance: ClaimProvenanceArtifact[];
   recorded_at: string;
   status: string;
   confidence: number;
-  inferred: boolean;
   slot?: string | null;
   facets: Record<string, unknown>;
   links: Record<string, string>[];
   placement?: ClaimPlacementArtifact | null;
-  salience: number;
   claim_type: string;
   predicate?: string | null;
   evidence_modality: string;

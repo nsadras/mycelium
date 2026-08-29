@@ -39,7 +39,7 @@ NUMBER_WORDS = {
     "eleven": 11,
     "twelve": 12,
 }
-EVIDENCE_MODALITIES = {"speech", "visual", "tool", "inference", "mixed", "unknown"}
+EVIDENCE_MODALITIES = {"speech", "visual", "tool", "mixed", "unknown"}
 TEMPORAL_STATUSES = {"past", "current", "future", "recurring", "atemporal", "unknown"}
 DREAM_DISPOSITIONS = {
     "pending",
@@ -101,17 +101,14 @@ class ClaimProvenance:
 class MemoryClaim:
     claim_id: str
     text: str
-    kind: str
     about: list[dict[str, str]]
     provenance: list[ClaimProvenance]
     recorded_at: str
     status: str = "active"
     confidence: float = 0.8
-    inferred: bool = False
     slot: str | None = None
     facets: dict[str, Any] = field(default_factory=dict)
     links: list[dict[str, str]] = field(default_factory=list)
-    salience: float = 0.5
     claim_type: str = "unknown"
     predicate: str | None = None
     evidence_modality: str = "unknown"
@@ -129,9 +126,7 @@ class MemoryClaim:
         self.claim_type = normalized_type
 
         modality = _normalized_label(self.evidence_modality)
-        if self.inferred:
-            modality = "inference"
-        elif modality not in EVIDENCE_MODALITIES:
+        if modality not in EVIDENCE_MODALITIES:
             modality = "unknown"
         self.evidence_modality = modality
 

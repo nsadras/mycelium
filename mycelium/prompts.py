@@ -218,13 +218,19 @@ person as subject. Do not classify a one-off action item, attendance, or inciden
 
 Populate claim_type (identity/state/event/preference/plan/belief/relationship/decision/commitment/
 interaction/observation/unknown), an open predicate, evidence_modality, temporal_status, about,
-speaker, confidence, optional replaceable-state slot, and open facets. Put exact time wording in
+speaker, confidence, optional replaceable-state slot, and open facets. Evidence modality describes
+the observation channel, never whether a claim is inferred: use speech for spoken or written
+conversation, visual for visible evidence, tool for tool observations, and mixed only when multiple
+channels directly support one claim. Put exact time wording in
 facets.when for event times and facets.deadline for due dates. Never convert relative time yourself;
 preserve phrases such as “by Friday” or “in three days” exactly so the deterministic resolver can anchor
 them to their evidence time. When timestamped segments are supplied, a claim with relative time must copy the
 one cited segment ID containing that time expression into temporal_anchor_segment_id. Otherwise leave
-temporal_anchor_segment_id empty and the date will remain unresolved. Use inferred only for a strong
-implication with facets.inference_basis and confidence at most 0.7.
+temporal_anchor_segment_id empty and the date will remain unresolved. Set evidence_type=explicit for
+every directly stated claim. Set evidence_type=inferred for a claim that is not directly stated but
+follows with high certainty from the cited evidence; every such claim must include
+facets.inference_basis and confidence at most 0.7. Do not label a derived conclusion explicit merely
+because its premises are explicit.
 
 The about list is semantic routing data, not a keyword list. Include the primary subject whose state,
 belief, preference, plan, relationship, or action the claim predicates, with role=subject. Include a

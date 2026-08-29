@@ -22,14 +22,12 @@ def claim(claim_id: str, text: str, claim_type: str = "state", modality: str = "
     return MemoryClaim(
         claim_id=claim_id,
         text=text,
-        kind="fact",
         about=[{"entity": "Mycelium"}],
         provenance=[ClaimProvenance("source-1", [f"source-1#{claim_id}"])],
         recorded_at="2026-08-12T10:00:00-07:00",
         claim_type=claim_type,
         evidence_modality=modality,
         confidence=0.9,
-        salience=0.8,
     )
 
 

@@ -20,7 +20,6 @@ def test_source_contexts_for_pages_deduplicates_logs_and_preserves_conversation_
             "[D1:2] Jon: I lost my banker job yesterday."
         ),
         importance=0.8,
-        status="raw",
         consolidated=False,
     )
     logs.append(entry)
@@ -52,17 +51,17 @@ def test_source_ranking_uses_rare_terms_without_losing_named_entity_weight():
         LogEntry(
             entry_id="common", session_id="one", timestamp=datetime.now(),
             content="Gina discussed her store.\nGina discussed her weekly plans.",
-            importance=0.8, status="raw",
+            importance=0.8,
         ),
         LogEntry(
             entry_id="specific", session_id="two", timestamp=datetime.now(),
             content="Gina mentioned Shia Labeouf during the interview.",
-            importance=0.8, status="raw",
+            importance=0.8,
         ),
         LogEntry(
             entry_id="wrong-person", session_id="three", timestamp=datetime.now(),
             content="Jon mentioned Shia Labeouf during the interview.",
-            importance=0.8, status="raw",
+            importance=0.8,
         ),
     ]
 
@@ -82,7 +81,7 @@ def test_source_snippets_respect_narrow_evidence_window():
             "Gina mentioned Shia Labeouf during the interview.",
             "Jon discussed unrelated plans." * 10,
         ]),
-        importance=0.8, status="raw",
+        importance=0.8,
     )
 
     snippet = select_source_snippets(
@@ -99,12 +98,12 @@ def test_structured_temporal_match_prioritizes_its_source_log():
         LogEntry(
             entry_id="lexical", session_id="one", timestamp=datetime.now(),
             content="The report is due and the deadline is under discussion.",
-            importance=0.8, status="raw",
+            importance=0.8,
         ),
         LogEntry(
             entry_id="matched-claim", session_id="two", timestamp=datetime.now(),
             content="Ava committed to sending it by Friday.",
-            importance=0.8, status="raw",
+            importance=0.8,
         ),
     ]
 

@@ -310,7 +310,6 @@ def test_extraction_replay_resets_downstream_claim_state(tmp_path):
         MemoryClaim(
             claim_id="claim-1",
             text="A durable statement.",
-            kind="fact",
             about=[],
             provenance=[
                 ClaimProvenance(source_id="source-1", segment_ids=[segment.segment_id])

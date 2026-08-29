@@ -369,7 +369,6 @@ def add_source(
         timestamp=datetime(2026, 8, 4, 10, 0),
         content="Raw canonical transcript",
         importance=0.8,
-        status="raw",
         durability="durable",
         consolidated=False,
     )
@@ -417,7 +416,6 @@ def add_claim(
     claim = MemoryClaim(
         claim_id=claim_id,
         text=text,
-        kind="fact",
         about=[{"entity": about or (source.participants[0] if source.participants else "The user")}],
         provenance=[ClaimProvenance(
             source_id=source.source_id,
@@ -429,7 +427,6 @@ def add_claim(
         claim_type=claim_type,
         predicate="prefers",
         confidence=0.9,
-        salience=0.8,
     )
     artifacts.save_claim(claim)
     episode = next(ep for ep in artifacts.list_episodes() if ep.source_id == source.source_id)

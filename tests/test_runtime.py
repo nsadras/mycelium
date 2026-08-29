@@ -47,7 +47,6 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
     llm.call_structured.return_value = {
         "claims": [{
             "text": "Ollama version 1.2 supports asynchronous web search.",
-            "kind": "tool fact",
             "claim_type": "observation",
             "predicate": "supports",
             "evidence_modality": "tool",

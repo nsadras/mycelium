@@ -97,7 +97,6 @@ def test_log_store_append_and_get(tmp_path):
         timestamp=datetime(2026, 5, 10, 10, 0, 0),
         content="User said hello.",
         importance=0.5,
-        status="raw",
         durability="durable",
         consolidated=False,
     )
@@ -120,11 +119,12 @@ def test_log_store_mark_consolidated(tmp_path):
         timestamp=datetime(2026, 5, 10, 10, 0, 0),
         content="User said hello.",
         importance=0.5,
-        status="raw",
         consolidated=False,
     )
     
     store.append(entry)
+
+    assert "**status:**" not in (tmp_path / "logs" / "2026-05-10.md").read_text()
     store.mark_consolidated(["2026-05-10#Entry 1"])
     
     unconsolidated = store.get_unconsolidated()
@@ -144,7 +144,6 @@ def test_log_store_get_many_preserves_requested_order(tmp_path):
         timestamp=datetime(2026, 5, 10, 10, 0, 0),
         content="First source.",
         importance=0.5,
-        status="raw",
         consolidated=False,
     )
     second = LogEntry(
@@ -153,7 +152,6 @@ def test_log_store_get_many_preserves_requested_order(tmp_path):
         timestamp=datetime(2026, 5, 10, 10, 5, 0),
         content="Second source.",
         importance=0.5,
-        status="raw",
         consolidated=False,
     )
 
@@ -181,7 +179,6 @@ def test_log_store_markdown_headings_inside_body_are_not_entries(tmp_path):
             "This is also body content, not a new log entry."
         ),
         importance=0.5,
-        status="raw",
         durability="durable",
         consolidated=False,
     )
@@ -223,7 +220,6 @@ def test_log_store_mark_unconsolidated(tmp_path):
         timestamp=datetime(2026, 5, 10, 10, 0, 0),
         content="User said hello.",
         importance=0.5,
-        status="raw",
         consolidated=False,
     )
     
@@ -257,7 +253,6 @@ def test_clear_wiki_store(tmp_path, monkeypatch):
         timestamp=datetime(2026, 5, 10, 10, 0, 0),
         content="User said hello.",
         importance=0.5,
-        status="raw",
         consolidated=True,
     )
     myc.log_store.append(entry)

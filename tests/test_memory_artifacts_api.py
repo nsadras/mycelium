@@ -26,7 +26,6 @@ def artifact_memory(tmp_path, monkeypatch):
         timestamp=datetime(2026, 7, 22, 12, 0),
         content="USER: I prefer tea.",
         importance=0.8,
-        status="raw",
     )
     mem.log_store.append(entry)
     source = SourceDocument(
@@ -58,7 +57,6 @@ def artifact_memory(tmp_path, monkeypatch):
     claim = MemoryClaim(
         claim_id="claim-test",
         text="The user prefers tea.",
-        kind="preference",
         about=[{"entity": "user"}],
         provenance=[ClaimProvenance(
             source_id=source.source_id,
@@ -74,7 +72,6 @@ def artifact_memory(tmp_path, monkeypatch):
     old_claim = MemoryClaim(
         claim_id="claim-old",
         text="The user previously preferred coffee.",
-        kind="preference",
         about=[{"entity": "user"}],
         provenance=[ClaimProvenance(
             source_id=source.source_id,

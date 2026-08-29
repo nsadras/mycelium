@@ -408,7 +408,6 @@ async def test_mycelium_benchmark_replays_frozen_extraction_artifacts(tmp_path):
     claim = MemoryClaim(
         claim_id="claim-one",
         text="Jon likes dancing.",
-        kind="fact",
         about=[{"entity": "Jon"}],
         provenance=[ClaimProvenance(
             source_id=source.source_id,
@@ -439,7 +438,6 @@ async def test_mycelium_benchmark_replays_frozen_extraction_artifacts(tmp_path):
         timestamp=datetime(2026, 8, 5, 10, 0),
         content="Frozen transcript",
         importance=0.8,
-        status="consolidated",
         consolidated=True,
     ))
 
@@ -489,7 +487,6 @@ async def test_assignment_replay_preserves_routes_and_rebuilds_pages(tmp_path):
     claim = MemoryClaim(
         claim_id="claim-one",
         text="Jon likes dancing.",
-        kind="fact",
         about=[{"entity": "Jon"}],
         provenance=[ClaimProvenance(
             source_id=source.source_id,
@@ -529,7 +526,6 @@ async def test_assignment_replay_preserves_routes_and_rebuilds_pages(tmp_path):
         timestamp=datetime(2026, 8, 5, 10, 0),
         content="Frozen transcript",
         importance=0.8,
-        status="consolidated",
         consolidated=True,
     ))
 

@@ -409,7 +409,7 @@ class PageMaterializer:
             last_updated=now,
             version=existing.version if existing else 1,
             confidence=sum(confidences) / len(confidences) if confidences else 1.0,
-            importance=max((claim.salience for claim in claims), default=1.0 if entity.entity_type == "you" else 0.5),
+            importance=0.5,
             page_type=cast(PageType, entity.entity_type),
             tags=[],
             related=[

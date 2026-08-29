@@ -28,7 +28,6 @@ def _claim(
     return MemoryClaim(
         claim_id=claim_id,
         text=text,
-        kind="fact",
         about=[{"entity": entity, "role": "subject"}],
         provenance=[ClaimProvenance(
             source_id="source-1",

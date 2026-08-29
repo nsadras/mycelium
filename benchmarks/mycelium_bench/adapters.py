@@ -488,7 +488,6 @@ class MyceliumMemorySystem:
             if not source.raw_log_entry_id:
                 raise ValueError(f"Replay source {source.source_id} has no raw log entry")
             entry = copy.deepcopy(fixture_logs.get(source.raw_log_entry_id))
-            entry.status = "raw"
             entry.consolidated = False
             mem.log_store.append(entry)
         return replayed_claims

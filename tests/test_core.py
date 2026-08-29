@@ -79,7 +79,6 @@ async def test_temporal_claim_routes_generic_deadline_query(temp_mycelium):
     deadline = MemoryClaim(
         claim_id="deadline",
         text="Ava will send the report.",
-        kind="commitment",
         about=[{"entity": "Ava"}],
         provenance=[ClaimProvenance("source-1", ["segment-1"])],
         recorded_at=now.isoformat(),
@@ -116,7 +115,6 @@ async def test_load_context_exposes_relevant_short_term_memory_without_wiki_writ
     claim = MemoryClaim(
         claim_id="recent-claim",
         text="Gina plans to take a ceramics class.",
-        kind="plan",
         about=[{"entity": "Gina", "role": "subject"}],
         provenance=[ClaimProvenance("source-recent", ["segment-recent"])],
         recorded_at=datetime.now().astimezone().isoformat(),

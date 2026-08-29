@@ -62,7 +62,6 @@ class Encoder:
                 f"{content}"
             ),
             importance=0.8,
-            status="raw",
             durability="durable",
             consolidated=False,
         )
@@ -337,15 +336,10 @@ class Encoder:
             facets = dict(raw.get("facets", {}) or {})
             if claim_text != str(raw["text"]).strip():
                 facets["attribution_normalized"] = True
-            inferred = (
+            is_inferred = (
                 raw.get("evidence_type") == "inferred"
                 and bool(str(facets.get("inference_basis") or "").strip())
             )
-            evidence_modality = raw_modality
-            if inferred:
-                evidence_modality = "inference"
-            elif evidence_modality == "inference":
-                evidence_modality = "speech"
             cited_segments = [
                 segment for segment in source.segments
                 if segment.segment_id in segment_ids
@@ -371,25 +365,23 @@ class Encoder:
             claim = MemoryClaim(
                 claim_id=f"claim-{uuid.uuid4().hex[:12]}",
                 text=claim_text,
-                kind=str(raw.get("kind") or "fact").strip().lower(),
                 about=about,
                 provenance=[ClaimProvenance(
                     source_id=source.source_id,
                     segment_ids=segment_ids,
                     raw_log_entry_id=source.raw_log_entry_id,
                     speaker=source_speakers[0] if len(source_speakers) == 1 else raw.get("speaker"),
-                    evidence_type="inferred" if inferred else "explicit",
+                    evidence_type="inferred" if is_inferred else "explicit",
                 )],
                 recorded_at=source.recorded_at,
                 confidence=max(0.0, min(1.0, float(raw.get("confidence", 0.8)))),
-                inferred=inferred,
                 slot=str(raw["slot"]).strip() if raw.get("slot") else None,
                 facets=normalize_temporal_facets(
                     facets, temporal_anchor, claim_text
                 ),
                 claim_type=str(raw.get("claim_type") or "unknown"),
                 predicate=str(raw["predicate"]) if raw.get("predicate") else None,
-                evidence_modality=evidence_modality,
+                evidence_modality=raw_modality,
                 temporal_status=str(raw.get("temporal_status") or "unknown"),
             )
             self.artifacts.save_claim(claim)

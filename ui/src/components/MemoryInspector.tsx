@@ -186,7 +186,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
       .some((value) => value.toLowerCase().includes(query))
   );
   const filteredClaims = claims.filter((claim) =>
-    [claim.claim_id, claim.text, claim.kind, claim.claim_type, claim.dream_disposition, claim.predicate ?? '', claim.placement?.owner_entity_id ?? '']
+    [claim.claim_id, claim.text, claim.claim_type, claim.dream_disposition, claim.predicate ?? '', claim.placement?.owner_entity_id ?? '']
       .some((value) => value.toLowerCase().includes(query))
   );
   const filteredDreamRuns = dreamRuns.filter((run) =>
@@ -544,10 +544,9 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
 
             {activeTab === 'claims' && (selectedClaim ? (
               <div className="mx-auto max-w-4xl space-y-6 p-5 md:p-8">
-                <div><div className="flex flex-wrap gap-2"><Badge tone={selectedClaim.status === 'active' ? 'green' : 'slate'}>{selectedClaim.status}</Badge><Badge tone={selectedClaim.dream_disposition === 'routed' ? 'green' : selectedClaim.dream_disposition === 'routing_failed' ? 'red' : selectedClaim.dream_disposition === 'pending' || selectedClaim.dream_disposition === 'deferred' ? 'amber' : 'slate'}>{humanize(selectedClaim.dream_disposition)}</Badge><Badge tone="indigo">{selectedClaim.claim_type}</Badge><Badge>{selectedClaim.kind}</Badge>{selectedClaim.inferred && <Badge tone="amber">inferred</Badge>}</div><h2 className="mt-4 text-xl font-bold leading-relaxed">{selectedClaim.text}</h2><div className="mt-2 break-all font-mono text-xs text-slate-400">{selectedClaim.claim_id}</div></div>
-                <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+                <div><div className="flex flex-wrap gap-2"><Badge tone={selectedClaim.status === 'active' ? 'green' : 'slate'}>{selectedClaim.status}</Badge><Badge tone={selectedClaim.dream_disposition === 'routed' ? 'green' : selectedClaim.dream_disposition === 'routing_failed' ? 'red' : selectedClaim.dream_disposition === 'pending' || selectedClaim.dream_disposition === 'deferred' ? 'amber' : 'slate'}>{humanize(selectedClaim.dream_disposition)}</Badge><Badge tone="indigo">{selectedClaim.claim_type}</Badge>{selectedClaim.provenance.some((item) => item.evidence_type === 'inferred') && <Badge tone="amber">inferred</Badge>}</div><h2 className="mt-4 text-xl font-bold leading-relaxed">{selectedClaim.text}</h2><div className="mt-2 break-all font-mono text-xs text-slate-400">{selectedClaim.claim_id}</div></div>
+                <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-3">
                   <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Confidence</div><strong>{percentage(selectedClaim.confidence)}</strong></div>
-                  <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Salience</div><strong>{percentage(selectedClaim.salience)}</strong></div>
                   <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Temporal</div><strong>{selectedClaim.temporal_status}</strong></div>
                   <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Modality</div><strong>{selectedClaim.evidence_modality}</strong></div>
                 </div>

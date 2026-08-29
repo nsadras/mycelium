@@ -1906,3 +1906,29 @@ one prose-similarity summary.
 - No prompt, ontology, or model division-of-labor contract changed, so no Ollama semantic probe was needed. Validation:
   **241 passed, 2 skipped**; Ruff, UI lint, UI build, and `git diff --check` passed. The existing 829.09 kB UI
   chunk-size warning remains.
+
+## 2026-08-28 — Redundant log and claim fields removed
+
+- Made `LogEntry.consolidated` the sole log-consolidation state. New Markdown no longer writes `status`, the parser no
+  longer loads it, and benchmark replay resets only the boolean.
+- Removed the unused claim `kind` and `salience` fields. `claim_type` remains the semantic classification, and generated
+  pages now use the effective production default importance of `0.5` rather than taking a maximum over never-populated
+  salience values.
+- Removed claim-wide `inferred`. Explicit-versus-inferred evidence now lives only on each `ClaimProvenance.evidence_type`.
+  `evidence_modality` is restricted to observation channels (`speech`, `visual`, `tool`, `mixed`, or `unknown`) and no
+  longer doubles as an inference flag. The inspector derives its inferred badge from provenance.
+- Direct `gemma4:12b` probes used the production extraction prompt and proposed constrained schema. Initial probes kept
+  explicit speech grounded and rejected a negated moving-plan inference, but an ordinary family example exposed an
+  unmarked derived grandparent claim. Tightening the contract to distinguish observation channel from inference caused
+  the final family probe to retain only directly supported relationships with explicit speech provenance; the negated
+  plan counterexample also remained explicit and did not invent a moving plan. Earlier fever and logical-entailment
+  probes were conservatively represented as their directly stated premises rather than inferred conclusions.
+- Fresh in-situ validation is at
+  `benchmark_runs/daily-driver-unrelated-v1-schema-cleanup-20260828`. It covered all 6/6 claim-bearing segments, leaked
+  0/2 source-only segments, persisted ten claims with correct speech/tool modalities and explicit provenance, placed
+  every claim, and recorded no Dream failures or routing failures. Both hard gates passed. It matched 6/8 expected
+  claims and passed 5/7 acceptance dimensions; claim recall, section accuracy, and page projection remain meaningful
+  fixture weaknesses, and answer quality was intentionally skipped to isolate memory construction.
+- Added structural contract and pipeline tests preventing the removed fields and inference-as-modality from returning.
+  Final validation: **242 passed, 2 skipped**; Ruff, UI lint, UI build, and `git diff --check` passed. The existing
+  828.90 kB UI chunk-size warning remains.

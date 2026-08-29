@@ -153,7 +153,6 @@ class LogEntry:
     timestamp: datetime
     content: str
     importance: float
-    status: Literal['raw', 'consolidated', 'archived']
     durability: Literal['ephemeral', 'session', 'durable'] = 'durable'
     consolidated: bool = False
 

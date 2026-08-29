@@ -13,7 +13,6 @@ class ExtractedEntityOutput(BaseModel):
 
 class ExtractedClaimOutput(BaseModel):
     text: str
-    kind: str = "fact"
     claim_type: Literal[
         "identity", "state", "event", "preference", "plan", "belief",
         "relationship", "decision", "commitment", "interaction", "observation",
@@ -21,7 +20,7 @@ class ExtractedClaimOutput(BaseModel):
     ] = "unknown"
     predicate: str | None = None
     evidence_modality: Literal[
-        "speech", "visual", "tool", "inference", "mixed", "unknown"
+        "speech", "visual", "tool", "mixed", "unknown"
     ] = "speech"
     temporal_status: Literal[
         "past", "current", "future", "recurring", "atemporal", "unknown"

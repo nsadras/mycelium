@@ -202,7 +202,6 @@ class LogStore:
             f.write(f"**session_id:** {entry.session_id}  \n")
             f.write(f"**importance:** {entry.importance}  \n")
             f.write(f"**durability:** {entry.durability}  \n")
-            f.write(f"**status:** {entry.status}  \n")
             f.write(f"**consolidated:** {str(entry.consolidated).lower()}  \n")
             f.write("\n")
             f.write(entry.content.strip() + "\n\n---\n\n")
@@ -267,7 +266,6 @@ class LogStore:
                     timestamp = datetime.now()
                     
                 importance = float(metadata.get("importance", "0.0"))
-                status = typing.cast(Literal['raw', 'consolidated', 'archived'], metadata.get("status", "raw"))
                 durability = typing.cast(
                     Literal['ephemeral', 'session', 'durable'],
                     metadata.get("durability", "durable"),
@@ -279,7 +277,6 @@ class LogStore:
                     timestamp=timestamp,
                     content="\n".join(body_lines).strip(),
                     importance=importance,
-                    status=status,
                     durability=durability,
                     consolidated=is_consolidated,
                 )

@@ -9,7 +9,6 @@ def _claim(claim_id: str, recorded_at: datetime, *, disposition: str = "pending"
     return MemoryClaim(
         claim_id=claim_id,
         text=f"A durable memory named {claim_id}.",
-        kind="fact",
         about=[{"entity": "Ava", "role": "subject"}],
         provenance=[ClaimProvenance("source-1", ["segment-1"])],
         recorded_at=recorded_at.isoformat(),

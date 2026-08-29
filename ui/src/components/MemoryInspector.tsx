@@ -69,8 +69,8 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
     selectedOrganizationProposal,
     selectedDreamRun,
     selectedProposal,
-    proposalIncomingClaim,
-    proposalTargetClaim,
+    proposalIncomingClaims,
+    proposalTargetClaims,
     search,
     loading,
     detailLoading,
@@ -305,13 +305,11 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                 <div className="grid gap-4 lg:grid-cols-2">
                   <section className="rounded-xl border border-indigo-200 p-4">
                     <div className="mb-2 text-xs font-bold uppercase tracking-wide text-indigo-600">New source-grounded claim</div>
-                    <p className="text-sm leading-relaxed">{proposalIncomingClaim?.text ?? 'Claim artifact missing'}</p>
-                    <button onClick={() => selectClaim(selectedProposal.incoming_claim_id)} className="mt-3 font-mono text-xs text-indigo-700 hover:underline">{selectedProposal.incoming_claim_id}</button>
+                    <div className="space-y-3">{selectedProposal.incoming_claim_ids.map((claimId) => <div key={claimId}><p className="text-sm leading-relaxed">{proposalIncomingClaims.find((claim) => claim.claim_id === claimId)?.text ?? 'Claim artifact missing'}</p><button onClick={() => selectClaim(claimId)} className="mt-1 font-mono text-xs text-indigo-700 hover:underline">{claimId}</button></div>)}</div>
                   </section>
                   <section className="rounded-xl border border-slate-200 p-4">
                     <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Existing canonical claim</div>
-                    <p className="text-sm leading-relaxed">{proposalTargetClaim?.text ?? 'Claim artifact missing'}</p>
-                    <button onClick={() => selectClaim(selectedProposal.target_claim_id)} className="mt-3 font-mono text-xs text-indigo-700 hover:underline">{selectedProposal.target_claim_id}</button>
+                    <div className="space-y-3">{selectedProposal.target_claim_ids.map((claimId) => <div key={claimId}><p className="text-sm leading-relaxed">{proposalTargetClaims.find((claim) => claim.claim_id === claimId)?.text ?? 'Claim artifact missing'}</p><button onClick={() => selectClaim(claimId)} className="mt-1 font-mono text-xs text-indigo-700 hover:underline">{claimId}</button></div>)}</div>
                   </section>
                 </div>
                 <section className="rounded-xl border border-slate-200 p-4 text-sm">

@@ -224,7 +224,7 @@ export function useMemoryInspector(refreshKey: number) {
   useEffect(() => {
     if (!selectedProposal) return;
     let cancelled = false;
-    Promise.all([selectedProposal.incoming_claim_id, selectedProposal.target_claim_id].map(async (claimId) => {
+    Promise.all([...selectedProposal.incoming_claim_ids, ...selectedProposal.target_claim_ids].map(async (claimId) => {
       const response = await api.get<MemoryClaimArtifact>(`/memory/artifacts/claims/${encodeURIComponent(claimId)}`);
       return [claimId, response.data] as const;
     })).then((values) => { if (!cancelled) setProposalClaims(Object.fromEntries(values)); });
@@ -260,7 +260,7 @@ export function useMemoryInspector(refreshKey: number) {
   const filteredEntities = entities.filter((item) => includes([item.entity_id, item.title, item.slug, item.entity_type, item.status, ...item.aliases]));
   const filteredOrganizationProposals = organizationProposals.filter((item) => includes([item.proposal_id, item.proposal_type, item.status, item.explanation, item.claim_id, item.source_entity_id, item.target_entity_id, item.proposed_owner_entity_id, item.proposed_new_entity_title]));
   const filteredDreamRuns = dreamRuns.filter((item) => includes([item.run_id, item.status]));
-  const filteredProposals = proposals.filter((item) => includes([item.proposal_id, item.incoming_claim_id, item.target_claim_id, item.proposed_relation, item.status, item.explanation]));
+  const filteredProposals = proposals.filter((item) => includes([item.proposal_id, ...item.incoming_claim_ids, ...item.target_claim_ids, item.proposed_relation, item.status, item.explanation]));
   const allFiles = useMemo<SelectedFile[]>(() => files ? [
     ...(files.wiki_index ? [{ ...files.wiki_index, group: 'index' as const }] : []),
     ...files.archived_pages.map((file) => ({ ...file, group: 'archive' as const })),
@@ -308,8 +308,9 @@ export function useMemoryInspector(refreshKey: number) {
     selectedSourceId, selectedChatId, selectedEpisodeId, selectedClaimId, selectedFactId,
     selectedEntityId, selectedOrganizationProposalId, selectedDreamRunId, selectedProposalId, selectedFile,
     selectedSource, selectedEpisode, selectedClaim, selectedFact, selectedEntity, selectedDreamRun,
-    selectedProposal, proposalIncomingClaim: selectedProposal ? proposalClaims[selectedProposal.incoming_claim_id] : null,
-    proposalTargetClaim: selectedProposal ? proposalClaims[selectedProposal.target_claim_id] : null,
+    selectedProposal,
+    proposalIncomingClaims: selectedProposal ? selectedProposal.incoming_claim_ids.map((id) => proposalClaims[id]).filter(Boolean) : [],
+    proposalTargetClaims: selectedProposal ? selectedProposal.target_claim_ids.map((id) => proposalClaims[id]).filter(Boolean) : [],
     selectedOrganizationProposal: organizationProposals.find((item) => item.proposal_id === selectedOrganizationProposalId) ?? null,
     search, loading, detailLoading, error, reviewNote, reviewing,
     setSelectedSourceId, setSelectedChatId, setSelectedEpisodeId, setSelectedClaimId, setSelectedFactId,

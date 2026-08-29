@@ -100,6 +100,7 @@ export interface WikiFactItem {
   projection: 'canonical' | 'shared_endpoint';
   relationship_kind: 'project_role' | null;
   synthesis_origin: 'claim' | 'model' | 'manual';
+  memory_state: 'current' | 'history';
   synthesis_confidence: number;
   synthesis_reason: string;
   manual_text: boolean;
@@ -322,6 +323,7 @@ export interface ConsolidatedFactArtifact {
   member_claim_ids: string[];
   owner_entity_id: string;
   section_key: string;
+  state: 'current' | 'history';
   linked_entity_ids: string[];
   synthesis_origin: 'claim' | 'model' | 'manual';
   confidence: number;
@@ -336,6 +338,7 @@ export interface ConsolidatedFactArtifactSummary {
   text: string;
   owner_entity_id: string;
   section_key: string;
+  state: 'current' | 'history';
   synthesis_origin: 'claim' | 'model' | 'manual';
   confidence: number;
   manual_text: boolean;
@@ -396,8 +399,8 @@ export interface DreamRunArtifactSummary {
 
 export interface ReconsolidationProposalArtifact {
   proposal_id: string;
-  incoming_claim_id: string;
-  target_claim_id: string;
+  incoming_claim_ids: string[];
+  target_claim_ids: string[];
   proposed_relation: 'contradicts' | 'supersedes';
   explanation: string;
   confidence: number;

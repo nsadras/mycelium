@@ -348,6 +348,7 @@ class ConsolidatedFact:
     member_claim_ids: list[str]
     owner_entity_id: str
     section_key: str
+    state: str
     linked_entity_ids: list[str]
     synthesis_origin: str
     confidence: float
@@ -357,6 +358,8 @@ class ConsolidatedFact:
     manual_text: bool = False
 
     def __post_init__(self) -> None:
+        if self.state not in {"current", "history"}:
+            raise ValueError(f"Unsupported consolidated-fact state: {self.state}")
         if self.synthesis_origin not in {"claim", "model", "manual"}:
             raise ValueError(
                 f"Unsupported consolidated-fact origin: {self.synthesis_origin}"
@@ -433,8 +436,8 @@ class DreamRunAudit:
 @dataclass
 class ReconsolidationProposal:
     proposal_id: str
-    incoming_claim_id: str
-    target_claim_id: str
+    incoming_claim_ids: list[str]
+    target_claim_ids: list[str]
     proposed_relation: str
     explanation: str
     confidence: float
@@ -448,8 +451,12 @@ class ReconsolidationProposal:
     application_error: str | None = None
 
     def __post_init__(self) -> None:
-        if self.incoming_claim_id == self.target_claim_id:
-            raise ValueError("A reconsolidation proposal must reference two distinct claims")
+        self.incoming_claim_ids = sorted(set(self.incoming_claim_ids))
+        self.target_claim_ids = sorted(set(self.target_claim_ids))
+        if not self.incoming_claim_ids or not self.target_claim_ids:
+            raise ValueError("A reconsolidation proposal requires both claim sides")
+        if set(self.incoming_claim_ids) & set(self.target_claim_ids):
+            raise ValueError("A reconsolidation proposal requires distinct claim sides")
         relation = str(self.proposed_relation).strip().lower()
         if relation not in RECONSOLIDATION_RELATIONS:
             raise ValueError(f"Unsupported reconsolidation relation: {relation}")

@@ -73,7 +73,7 @@ interface FactDetailProps {
 export function FactDetail({ fact, selectClaim, selectEntity }: FactDetailProps) {
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-5 md:p-8">
-      <div><div className="flex flex-wrap gap-2"><Badge tone="indigo">{fact.synthesis_origin}</Badge>{fact.manual_text && <Badge tone="amber">manually edited</Badge>}<Badge>{percentage(fact.confidence)}</Badge></div><h2 className="mt-4 text-xl font-bold leading-relaxed">{fact.text}</h2><div className="mt-2 break-all font-mono text-xs text-slate-400">{fact.fact_id}</div></div>
+      <div><div className="flex flex-wrap gap-2"><Badge tone="indigo">{fact.synthesis_origin}</Badge><Badge>{fact.state}</Badge>{fact.manual_text && <Badge tone="amber">manually edited</Badge>}<Badge>{percentage(fact.confidence)}</Badge></div><h2 className="mt-4 text-xl font-bold leading-relaxed">{fact.text}</h2><div className="mt-2 break-all font-mono text-xs text-slate-400">{fact.fact_id}</div></div>
       <section className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
         <h3 className="mb-3 text-sm font-bold">Wiki projection</h3>
         <button onClick={() => selectEntity(fact.owner_entity_id)} className="flex w-full items-center justify-between rounded-lg bg-white p-3 text-left ring-1 ring-indigo-100"><span><strong>{fact.owner.title}</strong><br /><span className="text-xs text-slate-500">{fact.owner_entity_id} · {fact.section_key}</span></span><ChevronRight size={15} /></button>

@@ -129,7 +129,7 @@ def artifact_integrity(mem) -> dict:
         "proposals_missing_claims": sorted(
             f"{proposal.proposal_id}:{claim_id}"
             for proposal in proposals
-            for claim_id in (proposal.incoming_claim_id, proposal.target_claim_id)
+            for claim_id in (*proposal.incoming_claim_ids, *proposal.target_claim_ids)
             if claim_id not in claim_by_id
         ),
         "pages_unclassified": sorted(

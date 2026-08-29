@@ -90,12 +90,16 @@ class PageMaterializer:
         new_entities: list[EntityRecord] | None = None,
         facts: list[ConsolidatedFact] | None = None,
         deleted_fact_ids: set[str] | None = None,
+        placement_overrides: list[ClaimPlacement] | None = None,
     ) -> MaterializationResult:
         result = MaterializationResult()
         result.entities = {entity.entity_id: entity for entity in new_entities or []}
         now = datetime.now().astimezone().isoformat()
         for route in routes:
             result.placements[route.claim_id] = placement_from_route(route, now=now)
+        result.placements.update({
+            placement.claim_id: placement for placement in placement_overrides or []
+        })
         result.facts = {fact.fact_id: fact for fact in facts or []}
         result.deleted_fact_ids = set(deleted_fact_ids or ())
         affected = {
@@ -104,6 +108,12 @@ class PageMaterializer:
             for entity_id in [placement.owner_entity_id, *placement.linked_entity_ids]
             if entity_id
         }
+        affected.update(fact.owner_entity_id for fact in result.facts.values())
+        deleted_facts = {
+            fact.fact_id: fact for fact in self.artifacts.list_consolidated_facts()
+            if fact.fact_id in result.deleted_fact_ids
+        }
+        affected.update(fact.owner_entity_id for fact in deleted_facts.values())
         existing_entities = {
             entity.entity_id: entity for entity in self.artifacts.list_entities()
         }
@@ -545,6 +555,7 @@ class PageMaterializer:
                 "text": fact.text,
                 "claim_ids": member_ids,
                 "synthesis_origin": fact.synthesis_origin,
+                "memory_state": fact.state,
                 "synthesis_confidence": fact.confidence,
                 "synthesis_reason": fact.reason,
                 "manual_text": fact.manual_text,

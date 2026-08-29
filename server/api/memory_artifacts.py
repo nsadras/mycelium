@@ -212,7 +212,7 @@ async def get_artifact_claim(claim_id: str):
             "reconsolidation_proposals": [
                 asdict(item)
                 for item in artifacts.list_reconsolidation_proposals()
-                if claim_id in {item.incoming_claim_id, item.target_claim_id}
+                if claim_id in {*item.incoming_claim_ids, *item.target_claim_ids}
             ],
         }
     except FileNotFoundError as exc:
@@ -335,6 +335,7 @@ async def list_consolidated_facts(
             "text": item.text,
             "owner_entity_id": item.owner_entity_id,
             "section_key": item.section_key,
+            "state": item.state,
             "synthesis_origin": item.synthesis_origin,
             "confidence": item.confidence,
             "manual_text": item.manual_text,

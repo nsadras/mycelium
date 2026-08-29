@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import datetime
 
 from mycelium.artifacts import (
@@ -14,9 +15,8 @@ from mycelium.config import Config
 from mycelium.dream_policy import DreamPolicy
 from mycelium.consolidation import ClaimRouter
 from mycelium.consolidation import placement_from_route
-from mycelium.facts import FactConsolidator
+from mycelium.facts import FactResolver
 from mycelium.materialization import PageMaterializer
-from mycelium.reconsolidation import ClaimReconsolidator, add_claim_link
 from mycelium.short_term import ShortTermMemoryQueue
 from mycelium.models import DreamReport
 from mycelium.ollama import OllamaClient
@@ -40,8 +40,7 @@ class DreamProcess:
         self.policy = DreamPolicy(artifacts)
         self.router = ClaimRouter(llm, artifacts)
         self.materializer = PageMaterializer(wiki, artifacts, config)
-        self.reconsolidator = ClaimReconsolidator(llm, artifacts)
-        self.fact_consolidator = FactConsolidator(llm, artifacts)
+        self.fact_resolver = FactResolver(llm, artifacts)
         self.short_term = ShortTermMemoryQueue(artifacts, config.dream)
 
     async def run(
@@ -193,54 +192,6 @@ class DreamProcess:
         else:
             successful_routes = []
 
-        reconciliation = await self.reconsolidator.analyze(
-            [route for route in successful_routes if route.placed],
-            current_claim_ids=incoming_claim_ids,
-            dream_run_id=run_id,
-        ) if successful_routes else None
-        if reconciliation is not None:
-            recon_failed_claim_ids: set[str] = set()
-            for recon_failure in reconciliation.failures:
-                recon_failed_claim_ids.add(recon_failure.claim_id)
-                failures.append({
-                    "stage": "reconsolidation",
-                    "source_id": recon_failure.raw_log_entry_id,
-                    "reason": recon_failure.reason,
-                })
-                self.policy.set_decision(
-                    decisions,
-                    recon_failure.claim_id,
-                    "routing_failed",
-                    recon_failure.reason,
-                )
-            successful_routes = [
-                route for route in successful_routes
-                if route.claim_id not in recon_failed_claim_ids
-            ]
-            successful_claim_ids = {route.claim_id for route in successful_routes}
-            supporting_relations = [
-                relation for relation in reconciliation.supporting_relations
-                if relation.incoming_claim_id in successful_claim_ids
-            ]
-            proposals = [
-                proposal for proposal in reconciliation.proposals
-                if proposal.incoming_claim_id in successful_claim_ids
-            ]
-        else:
-            supporting_relations = []
-            proposals = []
-
-        if not dry_run:
-            for relation in supporting_relations:
-                incoming = self.artifacts.get_claim(relation.incoming_claim_id)
-                target = self.artifacts.get_claim(relation.target_claim_id)
-                add_claim_link(incoming, "supports", target.claim_id)
-                add_claim_link(target, "supported_by", incoming.claim_id)
-                self.artifacts.save_claim(incoming)
-                self.artifacts.save_claim(target)
-            for proposal in proposals:
-                self.artifacts.save_reconsolidation_proposal(proposal)
-
         retained_new_entities = list(
             routing.new_entities if routing is not None else []
         )
@@ -264,26 +215,75 @@ class DreamProcess:
         placed_routes = [route for route in successful_routes if route.placed]
         affected_fact_entities = {
             route.owner_entity_id for route in placed_routes if route.owner_entity_id
+        } | {
+            placement.owner_entity_id
+            for route in placed_routes
+            for placement in [self.artifacts.placement_for_claim(route.claim_id)]
+            if placement is not None and placement.owner_entity_id
         }
-        pending_fact_claim_ids = (
-            self.artifacts.pending_reconsolidation_claim_ids()
-            | {
-                claim_id for proposal in proposals
-                for claim_id in (proposal.incoming_claim_id, proposal.target_claim_id)
-            }
-        )
-        fact_result = await self.fact_consolidator.consolidate(
+        fact_result = await self.fact_resolver.resolve(
             [placement_from_route(route) for route in placed_routes],
             affected_entity_ids={
                 value for value in affected_fact_entities if value is not None
             },
-            pending_claim_ids=pending_fact_claim_ids,
+            incoming_claim_ids=incoming_claim_ids,
+            dream_run_id=run_id,
+            seed_entities=retained_new_entities,
         )
+        for failure in fact_result.failures:
+            failures.append({
+                "stage": "fact_resolution",
+                "source_id": failure.owner_entity_id,
+                "reason": failure.reason,
+            })
+            failed_source_ids.update(failure.raw_log_entry_ids)
+            for route in successful_routes:
+                prior = self.artifacts.placement_for_claim(route.claim_id)
+                if (
+                    (
+                        route.owner_entity_id == failure.owner_entity_id
+                        or (
+                            prior is not None
+                            and prior.owner_entity_id == failure.owner_entity_id
+                        )
+                    )
+                    and route.claim_id in incoming_claim_ids
+                ):
+                    failed_source_ids.add(route.raw_log_entry_id)
+                    self.policy.set_decision(
+                        decisions, route.claim_id, "routing_failed", failure.reason
+                    )
+        successful_routes = [
+            route for route in successful_routes
+            if route.owner_entity_id not in fact_result.failed_owner_ids
+            and (
+                (prior := self.artifacts.placement_for_claim(route.claim_id)) is None
+                or prior.owner_entity_id not in fact_result.failed_owner_ids
+            )
+        ]
+        placement_updates = {
+            placement.claim_id: placement for placement in fact_result.placements
+        }
+        successful_routes = [
+            replace(
+                route,
+                section_key=placement_updates[route.claim_id].section_key,
+                linked_entity_ids=tuple(
+                    placement_updates[route.claim_id].linked_entity_ids
+                ),
+            ) if route.claim_id in placement_updates else route
+            for route in successful_routes
+        ]
+        proposals = fact_result.proposals
+        if not dry_run:
+            for proposal in proposals:
+                self.artifacts.save_reconsolidation_proposal(proposal)
         materialized = self.materializer.stage(
             successful_routes,
             retained_new_entities,
             facts=fact_result.facts,
             deleted_fact_ids=fact_result.deleted_fact_ids,
+            placement_overrides=fact_result.placements,
         )
         routed_entities = {
             entity.entity_id: entity

@@ -28,7 +28,11 @@ router = APIRouter()
 
 def _review_service():
     mem = get_mem()
-    return ReconsolidationReviewService(mem.artifacts, mem.dream_process.materializer)
+    return ReconsolidationReviewService(
+        mem.artifacts,
+        mem.dream_process.materializer,
+        mem.dream_process.fact_resolver,
+    )
 
 
 def _curation_service():
@@ -241,9 +245,9 @@ async def approve_reconsolidation_proposal(
     proposal_id: str, req: ProposalReviewRequest
 ):
     try:
-        return _review_response(
-            _review_service().approve(proposal_id, reviewer_note=req.reviewer_note)
-        )
+        return _review_response(await _review_service().approve(
+            proposal_id, reviewer_note=req.reviewer_note
+        ))
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404, detail="Reconsolidation proposal not found"
@@ -255,9 +259,9 @@ async def approve_reconsolidation_proposal(
 @router.post("/reconsolidation/proposals/{proposal_id}/reject")
 async def reject_reconsolidation_proposal(proposal_id: str, req: ProposalReviewRequest):
     try:
-        return _review_response(
-            _review_service().reject(proposal_id, reviewer_note=req.reviewer_note)
-        )
+        return _review_response(await _review_service().reject(
+            proposal_id, reviewer_note=req.reviewer_note
+        ))
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404, detail="Reconsolidation proposal not found"

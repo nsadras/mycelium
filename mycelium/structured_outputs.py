@@ -134,19 +134,104 @@ class PersonParticipantResolutionOutput(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
-class ConsolidatedFactGroupOutput(BaseModel):
-    """A presentation-level grouping of compatible claims in one fixed scope."""
+class FactClaimAssignmentOutput(BaseModel):
+    """Assign one exact claim alias to one output fact key."""
 
     model_config = ConfigDict(extra="forbid")
-    claim_aliases: list[str] = Field(min_length=1, max_length=48)
-    text: str = Field(min_length=1, max_length=600)
+    fact_key: str = Field(min_length=1, max_length=80)
+
+
+class FactResolutionGroupOutput(BaseModel):
+    """One presentation fact referenced by exact claim assignments."""
+
+    model_config = ConfigDict(extra="forbid")
+    fact_key: str = Field(min_length=1, max_length=80)
+    state: Literal["current", "history"]
+    section_key: str = Field(min_length=1, max_length=80)
+    text: str = Field(min_length=1, max_length=800)
+    linked_entity_aliases: list[str] = Field(default_factory=list, max_length=48)
     confidence: float = Field(ge=0.0, le=1.0)
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str = Field(min_length=1, max_length=800)
 
 
-class ConsolidatedFactPlanOutput(BaseModel):
+class FactTruthChangeOutput(BaseModel):
+    """An unsafe truth change that must be reviewed before claim mutation."""
+
     model_config = ConfigDict(extra="forbid")
-    facts: list[ConsolidatedFactGroupOutput] = Field(min_length=1, max_length=96)
+    relation: Literal["contradicts", "supersedes"]
+    incoming_claim_aliases: list[str] = Field(min_length=1, max_length=48)
+    target_claim_aliases: list[str] = Field(min_length=1, max_length=48)
+    explanation: str = Field(min_length=1, max_length=800)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class FactResolutionPlanOutput(BaseModel):
+    """Complete owner-scoped truth and presentation decision."""
+
+    model_config = ConfigDict(extra="forbid")
+    assignments: dict[str, FactClaimAssignmentOutput]
+    facts: list[FactResolutionGroupOutput] = Field(min_length=1, max_length=128)
+    truth_changes: list[FactTruthChangeOutput] = Field(default_factory=list, max_length=48)
+
+
+def fact_resolution_output_model(
+    claim_aliases: Collection[str],
+    allowed_sections: Collection[str],
+    linked_entity_aliases: Collection[str],
+) -> type[BaseModel]:
+    """Build an owner-scoped plan that structurally accounts for every claim."""
+    claims = tuple(dict.fromkeys(str(value) for value in claim_aliases if value))
+    sections = tuple(dict.fromkeys(str(value) for value in allowed_sections if value))
+    entities = tuple(dict.fromkeys(
+        str(value) for value in linked_entity_aliases if value
+    ))
+    if not claims or not sections:
+        raise ValueError("Fact resolution requires claim aliases and allowed sections")
+    assignments_model = create_model(
+        "ExactFactClaimAssignments",
+        __config__=ConfigDict(extra="forbid"),
+        **{alias: (FactClaimAssignmentOutput, ...) for alias in claims},
+    )
+    section_type = Literal.__getitem__(sections)
+    exact_fact_fields: dict[str, Any] = {
+        "section_key": (section_type, ...),  # type: ignore[valid-type]
+    }
+    if entities:
+        entity_type = Literal.__getitem__(entities)
+        exact_fact_fields["linked_entity_aliases"] = (
+            list[entity_type],  # type: ignore[valid-type]
+            Field(default_factory=list, max_length=48),
+        )
+    else:
+        exact_fact_fields["linked_entity_aliases"] = (
+            list[Literal[""]],
+            Field(default_factory=list, max_length=0),
+        )
+    exact_fact = create_model(
+        "ExactFactResolutionGroup",
+        __base__=FactResolutionGroupOutput,
+        **exact_fact_fields,
+    )
+    claim_type = Literal.__getitem__(claims)
+    exact_change = create_model(
+        "ExactFactTruthChange",
+        __base__=FactTruthChangeOutput,
+        incoming_claim_aliases=(
+            list[claim_type],  # type: ignore[valid-type]
+            Field(min_length=1, max_length=48),
+        ),
+        target_claim_aliases=(
+            list[claim_type],  # type: ignore[valid-type]
+            Field(min_length=1, max_length=48),
+        ),
+    )
+    return create_model(
+        "ExactFactResolutionPlan",
+        __config__=ConfigDict(extra="forbid"),
+        assignments=(assignments_model, ...),
+        facts=(list[exact_fact], Field(min_length=1, max_length=128)),
+        truth_changes=(list[exact_change], Field(default_factory=list, max_length=48)),
+    )
 
 
 def subject_node_output_model(
@@ -285,15 +370,3 @@ def claim_routing_output_model(
         __config__=ConfigDict(extra="forbid"),
         decisions=(decisions_model, ...),
     )
-
-
-class ReconsolidationDecisionOutput(BaseModel):
-    incoming_alias: str
-    relation: Literal["additive", "supports", "contradicts", "supersedes"]
-    target_alias: str = ""
-    explanation: str
-    confidence: float = 0.8
-
-
-class ReconsolidationDecisionsOutput(BaseModel):
-    decisions: list[ReconsolidationDecisionOutput] = Field(default_factory=list, max_length=32)

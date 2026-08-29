@@ -61,6 +61,7 @@ def place(artifacts, item, owner, section, *, links=None):
         member_claim_ids=[item.claim_id],
         owner_entity_id=owner.entity_id,
         section_key=section,
+        state="current",
         linked_entity_ids=list(links or []),
         synthesis_origin="claim",
         confidence=item.confidence,
@@ -232,8 +233,8 @@ def test_pending_conflict_is_withheld_from_authoritative_section(tmp_path):
     place(artifacts, new, project, "current_status")
     artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
         proposal_id="recon-1",
-        incoming_claim_id=new.claim_id,
-        target_claim_id=old.claim_id,
+        incoming_claim_ids=[new.claim_id],
+        target_claim_ids=[old.claim_id],
         proposed_relation="contradicts",
         explanation="Conflicting current state",
         confidence=0.9,

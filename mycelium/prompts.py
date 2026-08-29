@@ -46,21 +46,21 @@ def claim_routing_prompt(
     )
 
 
-def consolidated_fact_prompt(evidence: str) -> tuple[str, str]:
-    """Plan concise wiki statements without changing canonical source claims."""
-    return render_prompt_pair("memory/fact_synthesis", evidence=evidence)
-
-
-def claim_reconsolidation_prompt(
-    incoming_alias: str,
-    incoming_claim: str,
-    candidates: str,
+def fact_resolution_prompt(
+    owner: str,
+    sections: str,
+    claims: str,
+    existing_facts: str,
+    reviewed_relations: str,
 ) -> tuple[str, str]:
+    """Resolve one owner's claims into a complete source-grounded fact plan."""
     return render_prompt_pair(
-        "memory/reconsolidation",
-        incoming_alias=incoming_alias,
-        incoming_claim=incoming_claim,
-        candidates=candidates,
+        "memory/fact_resolution",
+        owner=owner,
+        sections=sections,
+        claims=claims,
+        existing_facts=existing_facts,
+        reviewed_relations=reviewed_relations,
     )
 
 

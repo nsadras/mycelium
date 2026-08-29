@@ -191,6 +191,7 @@ class EntityCurationService:
                         member_claim_ids=[remaining_id],
                         owner_entity_id=cast(str, remaining_placement.owner_entity_id),
                         section_key=cast(str, remaining_placement.section_key),
+                        state="current",
                         linked_entity_ids=list(remaining_placement.linked_entity_ids),
                         synthesis_origin="claim",
                         confidence=remaining.confidence,
@@ -209,6 +210,7 @@ class EntityCurationService:
                 member_claim_ids=[claim_id],
                 owner_entity_id=owner_entity_id,
                 section_key=cast(str, section_key),
+                state="current",
                 linked_entity_ids=list(placement.linked_entity_ids),
                 synthesis_origin="claim",
                 confidence=claim.confidence,
@@ -419,6 +421,10 @@ class FactCurationService:
             }),
             owner_entity_id=owner,
             section_key=section,
+            state=(
+                "current" if any(fact.state == "current" for fact in facts)
+                else "history"
+            ),
             linked_entity_ids=sorted({
                 entity_id for fact in facts for entity_id in fact.linked_entity_ids
             }),
@@ -470,6 +476,7 @@ class FactCurationService:
                 member_claim_ids=claim_ids,
                 owner_entity_id=source.owner_entity_id,
                 section_key=source.section_key,
+                state=source.state,
                 linked_entity_ids=list(source.linked_entity_ids),
                 synthesis_origin="manual",
                 confidence=1.0,

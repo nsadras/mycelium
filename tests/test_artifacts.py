@@ -987,8 +987,8 @@ def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
     ))
     store.save_reconsolidation_proposal(ReconsolidationProposal(
         proposal_id="recon-1",
-        incoming_claim_id="claim-1",
-        target_claim_id="claim-2",
+        incoming_claim_ids=["claim-1"],
+        target_claim_ids=["claim-2"],
         proposed_relation="contradicts",
         explanation="Test proposal",
         confidence=0.8,

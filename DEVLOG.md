@@ -2009,3 +2009,44 @@ one prose-similarity summary.
 - Validation: **247 passed, 2 skipped** in the full suite before the final description refinement; the final focused
   ontology, routing, Dream, encoder, wiki, and API suite passed **59 tests**. Ruff, UI lint, UI build, and
   `git diff --check` passed. The existing 827.70 kB UI chunk-size warning remains.
+
+## 2026-08-29 — Unified owner-scoped claim-to-fact resolution
+
+- Replaced pairwise `ClaimReconsolidator` plus section-bucket `FactConsolidator` with one owner-scoped
+  `FactResolver`. Its production schema requires one keyed assignment for every supplied claim, exact fact-key
+  coverage, ontology-constrained sections, declared linked-entity aliases, and exact claim aliases on both sides of
+  any contradiction or supersession proposal. The prompt receives all active claims for the owner, exact source and
+  segment evidence, normalized temporal data, existing presentation facts, and prior review decisions.
+- Removed the old reconsolidation and fact-synthesis prompts/contracts, free-text `about` candidate filtering, the
+  date/number regex grounding rule, and the singleton-on-error fallback. A rejected owner plan now preserves the last
+  valid facts/page, reports `fact_resolution` in the Dream audit, leaves its incoming source unconsolidated, and keeps
+  its claims retryable. A genuinely single claim with no prior fact uses direct deterministic projection because no
+  equivalence or truth decision exists.
+- Truth changes are group-capable review proposals with exact incoming and target claim-ID lists. Deterministic code
+  withholds proposed incoming facts, preserves accepted target facts, and moves incoming placements to
+  `needs_review`. Approval mutates canonical claim links/status and reruns the same resolver; rejection likewise reruns
+  it with the reviewed decision. Display facts now record derived `current` or `history` state. Manual display text is
+  retained only when the resolver returns the exact same membership and scope, rather than shielding member claims
+  from later resolution.
+- Direct `gemma4:12b` probes used the production Jinja prompt and structured schema. The initial list-based contract
+  omitted claims and confused pending sides, so it was replaced with exact keyed assignments. Subsequent neutral
+  probes grouped repeated support, kept adjacent facts separate, treated equal-date repetition as support rather than
+  replacement, proposed an explicit deadline replacement, and returned no new truth change for approved or rejected
+  reviews. A follow-up tightened approved contradiction semantics after the model initially demoted one side; the
+  final probe kept both sides current and emitted no repeated proposal.
+- Persisted in-situ real-model runs are at `benchmark_runs/fact-resolution-neutral-support-20260829` and
+  `benchmark_runs/fact-resolution-neutral-20260829`. The support run produced one current fact backed by both exact
+  claim IDs and no proposal. The correction run produced one `supersedes` proposal from `new` to `old`, preserved only
+  `fact-old`, moved `new` to `needs_review`, and recorded no failures.
+- The frozen downstream transfer run at
+  `benchmark_runs/daily-driver-unrelated-v1-fact-resolution-20260829` passed both release gates, placed and rendered all
+  10 active claims, retained exact provenance, produced no routing or fact-resolution failures, and passed five of
+  seven acceptance dimensions. Its remaining claim, section, and projection misses are unchanged broader capability
+  gaps rather than resolver failures.
+- The attempted primary frozen replay was invalid because the selected pre-cleanup extraction store still contained
+  the intentionally removed `derivation_operation` field; no compatibility path was added. The fresh primary run at
+  `benchmark_runs/daily-driver-v1-fact-resolution-fresh-20260829` was dominated by upstream identity/routing contract
+  failures before the correction reached fact resolution, so it is recorded as upstream failure evidence rather than
+  resolver acceptance evidence. No `fact_resolution` failures occurred in that run.
+- Structural and pipeline validation: **249 passed, 2 skipped**; Ruff, UI lint, UI build, and `git diff --check`
+  passed. The existing 847.49 kB UI chunk-size warning remains.

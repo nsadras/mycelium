@@ -518,12 +518,14 @@ class ArtifactStore:
         ]
 
     def find_reconsolidation_proposal(
-        self, incoming_claim_id: str, target_claim_id: str, relation: str
+        self, incoming_claim_ids: Iterable[str], target_claim_ids: Iterable[str], relation: str
     ) -> ReconsolidationProposal | None:
+        incoming = sorted(set(incoming_claim_ids))
+        targets = sorted(set(target_claim_ids))
         return next((
             proposal for proposal in self.list_reconsolidation_proposals()
-            if proposal.incoming_claim_id == incoming_claim_id
-            and proposal.target_claim_id == target_claim_id
+            if proposal.incoming_claim_ids == incoming
+            and proposal.target_claim_ids == targets
             and proposal.proposed_relation == relation
         ), None)
 
@@ -531,7 +533,7 @@ class ArtifactStore:
         return {
             claim_id
             for proposal in self.list_reconsolidation_proposals(status="pending")
-            for claim_id in (proposal.incoming_claim_id, proposal.target_claim_id)
+            for claim_id in (*proposal.incoming_claim_ids, *proposal.target_claim_ids)
         }
 
     def persist_dream_audit(self, run: DreamRunAudit) -> None:

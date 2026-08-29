@@ -1,4 +1,5 @@
 from datetime import datetime
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
@@ -15,6 +16,7 @@ from mycelium.artifacts import (
     SourceSegment,
 )
 from mycelium.core import Mycelium
+from mycelium.facts import FactResolutionResult
 from mycelium.models import LogEntry, WikiPage
 from server.api import memory_artifacts, memory_curation
 from server.api.memory_contracts import ProposalReviewRequest
@@ -101,19 +103,24 @@ def artifact_memory(tmp_path, monkeypatch):
             created_at="2026-07-22T12:00:00",
             updated_at="2026-07-22T12:00:00",
         ))
-    mem.artifacts.save_consolidated_fact(ConsolidatedFact(
+    stored_fact = ConsolidatedFact(
         fact_id="fact-tea-preference",
         text="The user prefers tea.",
         member_claim_ids=[claim.claim_id],
         owner_entity_id="you",
         section_key="preferences_working_style",
+        state="current",
         linked_entity_ids=[],
         synthesis_origin="claim",
         confidence=1.0,
         reason="Direct display of one canonical claim.",
         created_at="2026-07-22T12:00:00",
         updated_at="2026-07-22T12:00:00",
-    ))
+    )
+    mem.artifacts.save_consolidated_fact(stored_fact)
+    mem.dream_process.fact_resolver.resolve = AsyncMock(
+        return_value=FactResolutionResult(facts=[stored_fact])
+    )
     mem.wiki.save(WikiPage(
         slug="archived-page",
         title="Archived",
@@ -128,8 +135,8 @@ def artifact_memory(tmp_path, monkeypatch):
     mem.wiki.archive("archived-page")
     mem.artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
         proposal_id="recon-test",
-        incoming_claim_id="claim-test",
-        target_claim_id="claim-old",
+        incoming_claim_ids=["claim-test"],
+        target_claim_ids=["claim-old"],
         proposed_relation="contradicts",
         explanation="Fixture proposal",
         confidence=0.5,

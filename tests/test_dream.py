@@ -184,6 +184,33 @@ def set_scope_response(llm, plan: dict) -> None:
     llm.call_structured.return_value = None
 
 
+def fact_resolution_plan(
+    facts: dict[str, tuple[list[str], str, str]],
+    *,
+    truth_changes: list[dict] | None = None,
+) -> dict:
+    return {
+        "assignments": {
+            alias: {"fact_key": fact_key}
+            for fact_key, (aliases, _, _) in facts.items()
+            for alias in aliases
+        },
+        "facts": [
+            {
+                "fact_key": fact_key,
+                "state": "current",
+                "section_key": section,
+                "text": text,
+                "linked_entity_aliases": [],
+                "confidence": 0.9,
+                "reason": "Source-grounded test resolution.",
+            }
+            for fact_key, (_, text, section) in facts.items()
+        ],
+        "truth_changes": list(truth_changes or []),
+    }
+
+
 def participant(entity: str) -> dict:
     return {
         "entity_type": "you" if entity == "you" else "person",
@@ -747,6 +774,11 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
             alias: assignment("project-atlas", supporting=revision_support)
             for alias in revision_support
         })),
+        fact_resolution_plan({
+            "early": (["C001"], early.text, "next_steps_deadlines"),
+            "identity": (["C002"], identity.text, "overview"),
+            "state": (["C003"], state.text, "current_status"),
+        }),
     ]
 
     await dream.run()
@@ -755,6 +787,7 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
     assert artifacts.get_placement(identity.claim_id).owner_entity_id == "project-atlas"
     assert artifacts.get_placement(state.claim_id).owner_entity_id == "project-atlas"
     assert wiki.exists("atlas")
+    assert early.text not in wiki.get("you").content
     assert len(artifacts.list_scope_decisions(claim_id=early.claim_id)) == 2
     scope_calls = [
         call for call in dream.llm.call_structured.await_args_list
@@ -794,13 +827,19 @@ async def test_later_dream_discovers_page_from_claims_across_episodes(tmp_path):
         about="Ava's adoption effort",
     )
     support = ["C001", "C002"]
-    set_scope_response(llm, scope_plan(
-        {
-            "C001": assignment("N001", supporting=support),
-            "C002": assignment("N001", supporting=support),
-        },
-        [scope_candidate("N001", "Ava's Adoption", "project", support)],
-    ))
+    llm.call_structured.side_effect = [
+        *split_scope_plan(scope_plan(
+            {
+                "C001": assignment("N001", supporting=support),
+                "C002": assignment("N001", supporting=support),
+            },
+            [scope_candidate("N001", "Ava's Adoption", "project", support)],
+        )),
+        fact_resolution_plan({
+            "research": (["C001"], first.text, "timeline"),
+            "interview": (["C002"], second.text, "next_steps_deadlines"),
+        }),
+    ]
 
     report = await dream.run()
 
@@ -1261,17 +1300,10 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
         *split_scope_plan(scope_plan({
             "C001": assignment("topic-stable-page", supporting=["C001"])
         })),
-        {"decisions": [{
-            "incoming_alias": "N001",
-            "relation": "additive",
-            "target_alias": "",
-            "explanation": "A separate preference.",
-            "confidence": 0.9,
-        }]},
-        {"facts": [
-            {"claim_aliases": ["F001"], "text": "Stable Page records a tea preference.", "confidence": 0.9, "reason": "Separate preference."},
-            {"claim_aliases": ["F002"], "text": "Stable Page records a coffee preference.", "confidence": 0.9, "reason": "Separate preference."},
-        ]},
+        fact_resolution_plan({
+            "tea": (["C001"], "Stable Page records a tea preference.", "why_it_matters"),
+            "coffee": (["C002"], "Stable Page records a coffee preference.", "why_it_matters"),
+        }),
     ]
     report = await dream.run()
 
@@ -1324,7 +1356,7 @@ async def test_you_entity_is_typed_without_a_taxonomy_call(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dream_persists_contradiction_proposal_and_marks_both_claims_pending(tmp_path):
+async def test_dream_preserves_accepted_fact_while_contradiction_is_pending(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
         tmp_path, llm_response=you_scope()
     )
@@ -1346,13 +1378,19 @@ async def test_dream_persists_contradiction_proposal_and_marks_both_claims_pendi
     )
     llm.call_structured.side_effect = [
         *split_scope_plan(you_scope()),
-        {"decisions": [{
-            "incoming_alias": "N001",
-            "relation": "contradicts",
-            "target_alias": "E001",
-            "explanation": "The new preference conflicts with the existing preference.",
-            "confidence": 0.94,
-        }]},
+        fact_resolution_plan(
+            {
+                "new": (["C001"], "The user dislikes tea.", "preferences_working_style"),
+                "old": (["C002"], "The user prefers tea.", "preferences_working_style"),
+            },
+            truth_changes=[{
+                "relation": "contradicts",
+                "incoming_claim_aliases": ["C001"],
+                "target_claim_aliases": ["C002"],
+                "explanation": "The new preference conflicts with the existing preference.",
+                "confidence": 0.94,
+            }],
+        ),
     ]
 
     report = await dream.run()
@@ -1363,20 +1401,20 @@ async def test_dream_persists_contradiction_proposal_and_marks_both_claims_pendi
         report.reconsolidation_proposal_ids[0]
     )
     assert proposal.status == "pending"
-    assert proposal.incoming_claim_id == "claim-new"
-    assert proposal.target_claim_id == "claim-old"
+    assert proposal.incoming_claim_ids == ["claim-new"]
+    assert proposal.target_claim_ids == ["claim-old"]
     assert proposal.proposed_relation == "contradicts"
     assert proposal.affected_entity_ids == ["you"]
     assert artifacts.get_claim("claim-old").status == "active"
     assert artifacts.get_claim("claim-new").status == "active"
     page = wiki.get("you")
     assert "prefers tea" in page.content
-    assert "dislikes tea" in page.content
-    assert page.content.count("pending reconciliation") == 2
+    assert "dislikes tea" not in page.content
+    assert page.content.count("pending reconciliation") == 1
 
 
 @pytest.mark.asyncio
-async def test_invalid_reconsolidation_is_claim_local_and_source_history_completes(tmp_path):
+async def test_invalid_fact_resolution_keeps_source_pending_and_page_unchanged(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
         tmp_path, llm_response=you_scope()
     )
@@ -1393,15 +1431,15 @@ async def test_invalid_reconsolidation_is_claim_local_and_source_history_complet
     )
     llm.call_structured.side_effect = [
         *split_scope_plan(you_scope()),
-        {"decisions": []},
+        {"assignments": {}, "facts": [], "truth_changes": []},
     ]
 
     report = await dream.run()
 
-    assert report.completed_source_ids == [second_entry.entry_id]
-    assert report.pending_source_ids == []
-    assert report.failures[0]["stage"] == "reconsolidation"
-    assert logs.get(second_entry.entry_id).consolidated is True
+    assert report.completed_source_ids == []
+    assert report.pending_source_ids == [second_entry.entry_id]
+    assert report.failures[0]["stage"] == "fact_resolution"
+    assert logs.get(second_entry.entry_id).consolidated is False
     assert artifacts.get_claim("claim-new").dream_disposition == "routing_failed"
     assert "no longer" not in wiki.get("you").content
     assert artifacts.list_reconsolidation_proposals() == []

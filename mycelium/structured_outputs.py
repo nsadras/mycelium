@@ -171,8 +171,6 @@ class IdentityTypeVerdictOutput(BaseModel):
 
     @model_validator(mode="after")
     def validate_alternatives(self):
-        if self.verdict == "supported" and self.alternative_types:
-            raise ValueError("Supported type verdicts cannot list alternatives")
         if self.verdict != "supported" and not self.alternative_types:
             raise ValueError("Ambiguous and unsupported verdicts require alternatives")
         return self

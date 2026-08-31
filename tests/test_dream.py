@@ -473,6 +473,16 @@ def test_identity_type_verifier_preserves_ambiguity_for_review():
     })
     assert parsed.decisions.I001.verdict == "ambiguous"
 
+    supported = output_model.model_validate({
+        "decisions": {"I001": {
+            "verdict": "supported",
+            "alternative_types": ["series"],
+            "reason": "Project is clearly best; Series was considered but is weaker.",
+            "supporting_evidence": ["C001"],
+        }},
+    })
+    assert supported.decisions.I001.alternative_types == ["series"]
+
 
 def test_claim_routing_contract_requires_exact_claims_and_registry_values():
     output_model = claim_routing_output_model(

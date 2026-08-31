@@ -2291,3 +2291,16 @@ one prose-similarity summary.
   repaired text on a second independent verification call.
 - Validation: focused fact/Dream/prompt tests passed **57/57**, including a complete reject-repair-reverify pipeline;
   Ruff and `git diff --check` passed.
+
+## 2026-08-31 — Type-verifier considered alternatives
+
+- The first integrated frozen-extraction replay at
+  `benchmark_runs/daily-driver-unrelated-v1-bounded-replay-20260831` reached the second Dream with exact source
+  accounting, then failed one bounded identity unit at type verification. All three raw responses coherently chose
+  `supported: project` for the renovation while listing `series` as a weaker considered alternative; the schema
+  rejected supported verdicts whenever the alternatives list was non-empty.
+- The alternatives list is now audit information under a supported verdict as well as required evidence of the
+  unresolved boundary under ambiguous/unsupported verdicts. The verdict remains authoritative downstream, and the
+  prompt explicitly distinguishes a weaker considered type from a materially plausible ambiguous alternative.
+- A direct `gemma4:12b` production-prompt/schema probe accepted `project` for a bounded accessibility upgrade while
+  recording `artifact` as considered but weaker. No parser repair or semantic fallback was added.

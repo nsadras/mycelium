@@ -25,6 +25,7 @@ from mycelium.artifact_models import (
     EntityRecord,
     EntityResolutionDecision,
     EpisodeManifest,
+    ExtractionSegmentDisposition,
     MemoryClaim,
     NonWikiRetentionRecord,
     OrganizationProposal,
@@ -105,7 +106,12 @@ class ArtifactStore:
         _atomic_json(self.episodes_dir / f"{_safe_id(episode.episode_id)}.json", asdict(episode))
 
     def get_episode(self, episode_id: str) -> EpisodeManifest:
-        return EpisodeManifest(**self._read(self.episodes_dir / f"{_safe_id(episode_id)}.json"))
+        data = self._read(self.episodes_dir / f"{_safe_id(episode_id)}.json")
+        data["segment_dispositions"] = [
+            ExtractionSegmentDisposition(**item)
+            for item in data.get("segment_dispositions", [])
+        ]
+        return EpisodeManifest(**data)
 
     def list_episodes(self) -> list[EpisodeManifest]:
         return [self.get_episode(path.stem) for path in sorted(self.episodes_dir.glob("*.json"))]

@@ -491,6 +491,25 @@ class ReconsolidationProposal:
 
 
 @dataclass
+class ExtractionSegmentDisposition:
+    segment_id: str
+    disposition: str
+    claim_ids: list[str] = field(default_factory=list)
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.disposition not in {"claimed", "source_only"}:
+            raise ValueError(f"Unsupported extraction disposition: {self.disposition}")
+        self.claim_ids = list(dict.fromkeys(self.claim_ids))
+        if self.disposition == "claimed" and not self.claim_ids:
+            raise ValueError("Claimed segments require at least one claim")
+        if self.disposition == "source_only" and self.claim_ids:
+            raise ValueError("Source-only segments cannot reference claims")
+        if self.disposition == "source_only" and not str(self.reason or "").strip():
+            raise ValueError("Source-only segments require a reason")
+
+
+@dataclass
 class EpisodeManifest:
     episode_id: str
     source_id: str
@@ -499,7 +518,7 @@ class EpisodeManifest:
     participants: list[str]
     segment_ids: list[str]
     claim_ids: list[str] = field(default_factory=list)
-    ignored_segment_ids: list[str] = field(default_factory=list)
+    segment_dispositions: list[ExtractionSegmentDisposition] = field(default_factory=list)
     extraction_status: str = "pending"
     extraction_error: str | None = None
 

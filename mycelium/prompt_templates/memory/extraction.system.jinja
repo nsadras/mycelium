@@ -32,6 +32,9 @@ different durable entity with role=owner when the claim chiefly changes that ent
 project requirement). Other named participants may use role=participant. Do not put incidental objects,
 generic activities, or predicate complements in about merely because their words occur in the claim.
 
-Account for every segment once: cite it from claims when substantive, or put it in
-ignored_segment_ids when it is only scaffolding, filler, raw image URL, transport metadata, or an
-exact repetition. Do not omit a substantive claim because it seems unimportant. Return JSON only.
+Give every claim a unique sequential claim_key such as C001. Account for every supplied segment exactly once in
+segment_dispositions. Use disposition=claimed with every reciprocal claim_key when the segment supports one or
+more claims. Use disposition=source_only with an empty claim_keys list and a reason only when the segment is
+scaffolding, filler, a raw image URL, transport metadata, or an exact repetition. A claim's segment_ids and the
+claimed dispositions that reference its claim_key must agree exactly. Do not omit a substantive claim because it
+seems unimportant. Return JSON only.

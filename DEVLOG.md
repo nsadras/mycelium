@@ -2099,3 +2099,22 @@ one prose-similarity summary.
   remains a recorded cross-vocabulary model-quality failure rather than being patched with lexical rules.
 - Final validation: **253 passed, 2 skipped**; Ruff, UI lint, UI build, and `git diff --check` passed. The existing
   853.51 kB UI chunk-size warning remains.
+
+## 2026-08-31 — Contractual extraction coverage
+
+- Replaced best-effort `ignored_segment_ids` extraction output with an exact per-segment disposition contract. Every
+  supplied batch segment must appear exactly once as `claimed` or `source_only`; claimed dispositions and claim
+  evidence have reciprocal claim-key links, unknown/duplicate/missing segments fail validation, and a source-only
+  decision preserves its model-provided reason. Episodes persist these dispositions with real claim IDs, and the
+  artifact API and Memory Inspector expose the same accounting.
+- Extraction now validates and builds a complete batch before saving it. Removed lexical claim rejection, subject
+  detection, and subject-repair code from the persistence boundary; standalone attribution is the structured model's
+  responsibility, while deterministic code validates only IDs and declared schema structure. An invalid or incomplete
+  batch persists no claims from that batch and leaves the episode partial and retryable.
+- Two direct `gemma4:12b` probes used the production extraction prompt plus the proposed schema before integration.
+  Both extracted the lease-signing assertion from the substantive segment, classified a gratitude-only segment as
+  source-only, returned exact reciprocal links, and passed the complete-coverage validator.
+- Validation: **249 passed, 2 skipped** under `pytest tests`; focused extraction/runtime/API/Dream tests passed
+  **100/100**; Ruff, UI lint, and UI build passed. A bare repository-wide pytest invocation still discovers the
+  intentionally stale `benchmark_runs/mab-loader-check/test_routing_q49.py` artifact, which imports the previously
+  removed routing recall index; the maintained `tests/` suite is clean.

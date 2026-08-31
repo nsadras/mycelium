@@ -117,15 +117,19 @@ async def get_artifact_source(source_id: str):
             (item for item in artifacts.list_episodes() if item.source_id == source_id),
             None,
         )
-        ignored = set(episode.ignored_segment_ids if episode else [])
+        source_only = {
+            item.segment_id
+            for item in episode.segment_dispositions
+            if item.disposition == "source_only"
+        } if episode else set()
         return {
             **asdict(source),
             "segment_accounting": {
                 segment.segment_id: (
                     "claimed"
                     if segment.segment_id in claimed
-                    else "ignored"
-                    if segment.segment_id in ignored
+                    else "source_only"
+                    if segment.segment_id in source_only
                     else "unaccounted"
                 )
                 for segment in source.segments
@@ -151,7 +155,10 @@ async def list_artifact_episodes():
             "extraction_error": episode.extraction_error,
             "segment_count": len(episode.segment_ids),
             "claim_count": len(episode.claim_ids),
-            "ignored_segment_count": len(episode.ignored_segment_ids),
+            "source_only_segment_count": sum(
+                item.disposition == "source_only"
+                for item in episode.segment_dispositions
+            ),
         }
         for episode in episodes
     ]

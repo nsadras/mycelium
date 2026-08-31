@@ -39,7 +39,7 @@ export function OverviewPanel({ overview }: { overview: ArtifactOverview }) {
                 <div className="space-y-4">
                   {[
                     ['Claimed segments', overview.coverage.claimed_segments, overview.coverage.segment_coverage],
-                    ['Ignored segments', overview.coverage.ignored_segments, overview.coverage.segments ? overview.coverage.ignored_segments / overview.coverage.segments : 0],
+                    ['Source-only segments', overview.coverage.source_only_segments, overview.coverage.segments ? overview.coverage.source_only_segments / overview.coverage.segments : 0],
                     ['All accounted segments', overview.coverage.accounted_segments, overview.coverage.accounted_coverage],
                   ].map(([label, count, ratio]) => (
                     <div key={label as string}>

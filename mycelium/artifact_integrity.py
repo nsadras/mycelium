@@ -11,11 +11,14 @@ def coverage_report(store) -> dict[str, Any]:
         segment_id for claim in claims for provenance in claim.provenance
         for segment_id in provenance.segment_ids
     }
-    ignored_segments = {
-        segment_id for episode in episodes for segment_id in episode.ignored_segment_ids
+    source_only_segments = {
+        disposition.segment_id
+        for episode in episodes
+        for disposition in episode.segment_dispositions
+        if disposition.disposition == "source_only"
     }
     unresolved = claimed_segments - all_segments
-    accounted_segments = (claimed_segments | ignored_segments) & all_segments
+    accounted_segments = (claimed_segments | source_only_segments) & all_segments
     return {
         "sources": len(sources),
         "episodes": len(episodes),
@@ -24,11 +27,13 @@ def coverage_report(store) -> dict[str, Any]:
         "segments": len(all_segments),
         "claimed_segments": len(all_segments & claimed_segments),
         "segment_coverage": (len(all_segments & claimed_segments) / len(all_segments)) if all_segments else 1.0,
-        "ignored_segments": len(all_segments & ignored_segments),
+        "source_only_segments": len(all_segments & source_only_segments),
         "accounted_segments": len(accounted_segments),
         "accounted_coverage": (len(accounted_segments) / len(all_segments)) if all_segments else 1.0,
         "unassigned_segment_ids": sorted(all_segments - claimed_segments),
-        "unaccounted_segment_ids": sorted(all_segments - claimed_segments - ignored_segments),
+        "unaccounted_segment_ids": sorted(
+            all_segments - claimed_segments - source_only_segments
+        ),
         "unplaced_claim_ids": sorted(
             claim.claim_id for claim in claims
             if not (

@@ -226,7 +226,7 @@ export interface EpisodeArtifactSummary {
   extraction_error?: string | null;
   segment_count: number;
   claim_count: number;
-  ignored_segment_count: number;
+  source_only_segment_count: number;
 }
 
 export interface EpisodeArtifact {
@@ -237,7 +237,12 @@ export interface EpisodeArtifact {
   participants: string[];
   segment_ids: string[];
   claim_ids: string[];
-  ignored_segment_ids: string[];
+  segment_dispositions: Array<{
+    segment_id: string;
+    disposition: 'claimed' | 'source_only';
+    claim_ids: string[];
+    reason?: string | null;
+  }>;
   extraction_status: string;
   extraction_error?: string | null;
 }
@@ -446,7 +451,7 @@ export interface ArtifactCoverage {
   segments: number;
   claimed_segments: number;
   segment_coverage: number;
-  ignored_segments: number;
+  source_only_segments: number;
   accounted_segments: number;
   accounted_coverage: number;
   unassigned_segment_ids: string[];

@@ -133,7 +133,10 @@ class DreamPolicy:
             if episode is None:
                 continue
             segments = {segment.segment_id: segment for segment in source.segments}
-            for segment_id in episode.ignored_segment_ids:
+            for disposition in episode.segment_dispositions:
+                if disposition.disposition != "source_only":
+                    continue
+                segment_id = disposition.segment_id
                 segment = segments.get(segment_id)
                 role = (
                     str((segment.role or segment.speaker) if segment else "")
@@ -163,14 +166,15 @@ class DreamPolicy:
         for claim in self.artifacts.list_claims(status="active"):
             if claim.claim_id not in claim_ids:
                 continue
-            ignored_segment_ids = {
-                segment_id
+            source_only_segment_ids = {
+                disposition.segment_id
                 for provenance in claim.provenance
-                for segment_id in (
-                    episodes_by_source.get(provenance.source_id).ignored_segment_ids
+                for disposition in (
+                    episodes_by_source.get(provenance.source_id).segment_dispositions
                     if episodes_by_source.get(provenance.source_id) is not None
                     else []
                 )
+                if disposition.disposition == "source_only"
             }
             claim_segment_ids = {
                 segment_id
@@ -178,7 +182,7 @@ class DreamPolicy:
                 for segment_id in provenance.segment_ids
             }
             excluded_by_extraction = bool(
-                claim_segment_ids and claim_segment_ids <= ignored_segment_ids
+                claim_segment_ids and claim_segment_ids <= source_only_segment_ids
             )
             admitted = self.claim_is_admitted(claim, source_by_id)
             if admitted and not excluded_by_extraction:
@@ -238,14 +242,15 @@ class DreamPolicy:
             if matching_source is None:
                 continue
             raw_log_id = matching_source.raw_log_entry_id
-            ignored_segment_ids = {
-                segment_id
+            source_only_segment_ids = {
+                disposition.segment_id
                 for provenance in claim.provenance
-                for segment_id in (
-                    episodes_by_source.get(provenance.source_id).ignored_segment_ids
+                for disposition in (
+                    episodes_by_source.get(provenance.source_id).segment_dispositions
                     if episodes_by_source.get(provenance.source_id) is not None
                     else []
                 )
+                if disposition.disposition == "source_only"
             }
             claim_segment_ids = {
                 segment_id
@@ -253,7 +258,7 @@ class DreamPolicy:
                 for segment_id in provenance.segment_ids
             }
             excluded_by_extraction = bool(
-                claim_segment_ids and claim_segment_ids <= ignored_segment_ids
+                claim_segment_ids and claim_segment_ids <= source_only_segment_ids
             )
             admitted = (
                 self.claim_is_admitted(claim, source_by_id)

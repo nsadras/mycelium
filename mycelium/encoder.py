@@ -13,6 +13,7 @@ from mycelium.artifacts import (
     ArtifactStore,
     ClaimProvenance,
     EpisodeManifest,
+    ExtractionSegmentDisposition,
     MemoryClaim,
     SourceDocument,
     SourceSegment,
@@ -169,8 +170,14 @@ class Encoder:
         try:
             allowed_ids = {segment.segment_id for segment in source.segments}
             claim_ids: list[str] = []
-            covered_ids: set[str] = set()
-            ignored_ids = set(programmatic_ignored_ids)
+            dispositions: dict[str, ExtractionSegmentDisposition] = {
+                segment_id: ExtractionSegmentDisposition(
+                    segment_id=segment_id,
+                    disposition="source_only",
+                    reason="Raw source transport metadata.",
+                )
+                for segment_id in programmatic_ignored_ids
+            }
             extraction_errors: list[str] = []
 
             for batch_index, batch in enumerate(
@@ -199,21 +206,37 @@ class Encoder:
                     response = output_model.model_validate(response).model_dump(
                         exclude_none=True
                     )
-                    self._validate_batch_accounting(response, batch_ids)
-                    covered_ids.update(self._persist_extracted_claims(
-                        source, response, batch_ids, claim_ids
-                    ))
-                    ignored_ids.update(
-                        value for value in response.get("ignored_segment_ids", [])
-                        if value in batch_ids
-                    )
+                    staged_claims = self._build_extracted_claims(source, response)
+                    claims_by_key = {
+                        raw["claim_key"]: claim
+                        for raw, claim in zip(response["claims"], staged_claims, strict=True)
+                    }
+                    staged_dispositions = [
+                        ExtractionSegmentDisposition(
+                            segment_id=item["segment_id"],
+                            disposition=item["disposition"],
+                            claim_ids=[
+                                claims_by_key[key].claim_id for key in item["claim_keys"]
+                            ],
+                            reason=item.get("reason"),
+                        )
+                        for item in response["segment_dispositions"]
+                    ]
+                    for claim in staged_claims:
+                        self.artifacts.save_claim(claim)
+                        claim_ids.append(claim.claim_id)
+                    dispositions.update({
+                        item.segment_id: item for item in staged_dispositions
+                    })
                 except Exception as exc:
                     extraction_errors.append(f"batch {batch_index}: {exc}")
 
             episode.claim_ids = claim_ids
-            remaining_ids = allowed_ids - covered_ids
-            substantive_remaining = remaining_ids - ignored_ids
-            episode.ignored_segment_ids = sorted((ignored_ids & allowed_ids) - covered_ids)
+            accounted_ids = set(dispositions)
+            substantive_remaining = allowed_ids - accounted_ids
+            episode.segment_dispositions = [
+                dispositions[segment_id] for segment_id in sorted(dispositions)
+            ]
             episode.extraction_status = "partial" if substantive_remaining else "complete"
             if substantive_remaining:
                 episode.extraction_error = "; ".join(extraction_errors) or (
@@ -247,94 +270,23 @@ class Encoder:
             for index in range(0, len(segments), batch_size)
         ]
 
-    @staticmethod
-    def _validate_batch_accounting(
-        response: dict[str, Any], allowed_ids: set[str]
-    ) -> None:
-        claimed_ids = {
-            segment_id
-            for claim in response.get("claims", [])
-            for segment_id in claim.get("segment_ids", [])
-        }
-        ignored_ids = set(response.get("ignored_segment_ids", []))
-        invalid_ids = (claimed_ids | ignored_ids) - allowed_ids
-        if invalid_ids:
-            raise ValueError(
-                "Extraction referenced unknown segment IDs: "
-                + ", ".join(sorted(invalid_ids))
-            )
-        overlap = claimed_ids & ignored_ids
-        if overlap:
-            raise ValueError(
-                "Extraction marked segments as both claimed and ignored: "
-                + ", ".join(sorted(overlap))
-            )
-
-    @staticmethod
-    def _is_direct_atomic_claim(text: str) -> bool:
-        """Reject dialogue-shaped output instead of storing conversational debris."""
-        normalized = " ".join(text.split()).strip()
-        if not normalized:
-            return False
-        dialogue_pronoun = re.compile(
-            r"(?:^|\W)(?:i|i'm|i've|i'd|my|mine|we|we're|we've|we'll|our|ours|"
-            r"you|you're|you've|you'll|your|yours|let's)(?:\W|$)",
-            re.IGNORECASE,
-        )
-        reporting_wrapper = re.compile(
-            r"^[A-Z][\w'-]+\s+(?:stated|said|mentioned|reported|informed|"
-            r"acknowledged|expressed|confirmed|affirmed)\s+that\b",
-            re.IGNORECASE,
-        )
-        deictic_fragment = re.compile(
-            r"^(?:it is|it's|that is|that's|this is)\b",
-            re.IGNORECASE,
-        )
-        return (
-            not dialogue_pronoun.search(normalized)
-            and not reporting_wrapper.search(normalized)
-            and not deictic_fragment.search(normalized)
-        )
-
-    def _persist_extracted_claims(
+    def _build_extracted_claims(
         self,
         source: SourceDocument,
         response: dict[str, Any],
-        allowed_ids: set[str],
-        claim_ids: list[str],
-    ) -> set[str]:
-        covered_ids: set[str] = set()
-        for raw in response.get("claims", []):
-            if not isinstance(raw, dict) or not str(raw.get("text", "")).strip():
-                continue
+    ) -> list[MemoryClaim]:
+        """Build a validated batch before any claim in it is persisted."""
+        claims: list[MemoryClaim] = []
+        for raw in response["claims"]:
             claim_text = str(raw["text"]).strip()
-            if not self._is_direct_atomic_claim(claim_text):
-                continue
-            segment_ids = list(dict.fromkeys(
-                segment_id for segment_id in raw.get("segment_ids", [])
-                if segment_id in allowed_ids
-            ))
-            if not segment_ids:
-                continue
+            segment_ids = list(dict.fromkeys(raw["segment_ids"]))
             source_speakers = list(dict.fromkeys(
                 segment.speaker for segment in source.segments
                 if segment.segment_id in segment_ids and segment.speaker
             ))
-            about = [item for item in raw.get("about", []) if isinstance(item, dict)]
-            if not any(item.get("entity") for item in about) and len(source_speakers) == 1:
-                about = [{"entity": source_speakers[0], "role": "speaker"}]
+            about = list(raw["about"])
             raw_modality = str(raw.get("evidence_modality") or "unknown").strip().lower()
-            if not self._has_explicit_subject(claim_text, about):
-                attributed = self._attribute_subjectless_claim(
-                    claim_text, source_speakers, about, raw_modality
-                )
-                if attributed is None:
-                    continue
-                claim_text, about = attributed
-            covered_ids.update(segment_ids)
             facets = dict(raw.get("facets", {}) or {})
-            if claim_text != str(raw["text"]).strip():
-                facets["attribution_normalized"] = True
             is_inferred = (
                 raw.get("evidence_type") == "inferred"
                 and bool(str(facets.get("inference_basis") or "").strip())
@@ -361,7 +313,7 @@ class Encoder:
                 if anchor_segment is not None
                 else None if timestamped_segments else source.occurred_at
             )
-            claim = MemoryClaim(
+            claims.append(MemoryClaim(
                 claim_id=f"claim-{uuid.uuid4().hex[:12]}",
                 text=claim_text,
                 about=about,
@@ -382,84 +334,5 @@ class Encoder:
                 predicate=str(raw["predicate"]) if raw.get("predicate") else None,
                 evidence_modality=raw_modality,
                 temporal_status=str(raw.get("temporal_status") or "unknown"),
-            )
-            self.artifacts.save_claim(claim)
-            claim_ids.append(claim.claim_id)
-        return covered_ids
-
-    @staticmethod
-    def _has_explicit_subject(text: str, about: list[dict[str, Any]]) -> bool:
-        """Require standalone claims to name at least one entity they are about."""
-        normalized = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
-        entities = [
-            re.sub(r"[^a-z0-9]+", " ", str(item.get("entity", "")).lower()).strip()
-            for item in about
-            if item.get("entity")
-        ]
-        return bool(entities) and any(
-            re.search(rf"(?:^|\s){re.escape(entity)}(?:\s|$)", normalized)
-            for entity in entities if entity
-        )
-
-    @classmethod
-    def _attribute_subjectless_claim(
-        cls,
-        text: str,
-        source_speakers: list[str],
-        about: list[dict[str, Any]],
-        evidence_modality: str = "unknown",
-    ) -> tuple[str, list[dict[str, Any]]] | None:
-        """Make an otherwise useful model paraphrase standalone without guessing its subject."""
-        if len(source_speakers) != 1:
-            return None
-        speaker = source_speakers[0].strip()
-        if not speaker:
-            return None
-        normalized_about = list(about)
-        if not any(
-            str(item.get("entity", "")).strip().lower() == speaker.lower()
-            for item in normalized_about
-        ):
-            normalized_about.append({"entity": speaker, "role": "speaker"})
-        stripped = " ".join(text.split()).strip()
-        stripped = re.sub(
-            r",?\s+according to (?:the )?image caption(?:\s+for\s+source-[a-z0-9]+#seg-\d+)?\.?$",
-            ".",
-            stripped,
-            flags=re.I,
-        )
-        stripped = re.sub(
-            r"\s+for\s+source-[a-z0-9]+#seg-\d+\b", "", stripped, flags=re.I
-        )
-        if evidence_modality == "visual":
-            visual = re.match(
-                r"^(?:a|the)\s+(photo|image|image caption)\s+(shows|describes)\s+(.+)$",
-                stripped,
-                re.I,
-            )
-            visual_of = re.match(
-                r"^(?:a|the)\s+(photo|image)\s+of\s+(.+?)(?:\s+is present)?\.?$",
-                stripped,
-                re.I,
-            )
-            if visual:
-                medium = visual.group(1).lower()
-                article = "an" if medium.startswith("image") else "a"
-                verb = "showing" if visual.group(2).lower() == "shows" else "describing"
-                attributed = f"{speaker} shared {article} {medium} {verb} {visual.group(3)}"
-            elif visual_of:
-                medium = visual_of.group(1).lower()
-                article = "an" if medium == "image" else "a"
-                subject = re.sub(
-                    r"\s+contains\s+", " containing ", visual_of.group(2), flags=re.I
-                )
-                attributed = f"{speaker} shared {article} {medium} of {subject}"
-            else:
-                attributed = f"{speaker} shared visual evidence describing {stripped[0].lower()}{stripped[1:]}"
-        else:
-            attributed = f"{speaker} reported that {stripped[0].lower()}{stripped[1:]}"
-        if text.rstrip().endswith((".", "!", "?")) and not attributed.endswith((".", "!", "?")):
-            attributed += text.rstrip()[-1]
-        if not cls._has_explicit_subject(attributed, normalized_about):
-            return None
-        return attributed, normalized_about
+            ))
+        return claims

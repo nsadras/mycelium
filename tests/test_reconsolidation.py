@@ -121,6 +121,13 @@ def staged_fact_responses(
             }
             for item in plan["facts"]
         }},
+        {"decisions": {
+            item["fact_key"]: {
+                "verdict": "supported",
+                "reason": "The presentation is self-contained and source-grounded.",
+            }
+            for item in plan["facts"]
+        }},
     ]
     if candidate_fact_aliases is not None:
         candidate_incoming_aliases = [
@@ -347,6 +354,13 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path
                 "reason": "Independent incoming preference.",
             },
         }},
+        {"decisions": {
+            key: {
+                "verdict": "supported",
+                "reason": "The presentation is self-contained and source-grounded.",
+            }
+            for key in ("F001", "F002")
+        }},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -431,6 +445,15 @@ async def test_fact_presentations_are_rendered_in_bounded_batches(tmp_path):
             for index in range(start, end)
         }}
 
+    def quality(start: int, end: int) -> dict:
+        return {"decisions": {
+            f"F{index:03d}": {
+                "verdict": "supported",
+                "reason": "The presentation is self-contained and source-grounded.",
+            }
+            for index in range(start, end)
+        }}
+
     llm = AsyncMock()
     llm.call_structured.side_effect = [
         {"decisions": {
@@ -443,7 +466,9 @@ async def test_fact_presentations_are_rendered_in_bounded_batches(tmp_path):
         }},
         {"assignments": assignments},
         rendered(1, 13),
+        quality(1, 13),
         rendered(13, 14),
+        quality(13, 14),
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -455,7 +480,47 @@ async def test_fact_presentations_are_rendered_in_bounded_batches(tmp_path):
 
     assert result.failures == []
     assert len(result.facts) == 13
-    assert llm.call_structured.await_count == 4
+    assert llm.call_structured.await_count == 6
+
+
+@pytest.mark.asyncio
+async def test_unsupported_fact_is_repaired_and_verified_once(tmp_path):
+    llm = AsyncMock()
+    llm.call_structured.side_effect = [
+        {"decisions": {"F001": {
+            "verdict": "unsupported",
+            "reason": "The object of the conversational reference is unresolved.",
+        }}},
+        {"facts": {"F001": {
+            "state": "current",
+            "section_key": "goals_plans",
+            "text": "Jolene wants to try surfing and is looking for a lesson.",
+            "confidence": 0.95,
+            "reason": "The member claim supplies the explicit activity.",
+        }}},
+        {"decisions": {"F001": {
+            "verdict": "supported",
+            "reason": "The repaired fact is self-contained and fully entailed.",
+        }}},
+    ]
+    resolver = FactResolver(llm, ArtifactStore(tmp_path / "artifacts"))
+
+    result = await resolver._verify_and_repair_facts(
+        "id=person-jolene; type=person; title=Jolene",
+        "[F001] members=[\"C001\"]\n[C001] Jolene wants to try surfing and is looking for a lesson.",
+        {"F001": {
+            "state": "current",
+            "section_key": "goals_plans",
+            "text": "Jolene wants to try it.",
+            "confidence": 0.8,
+            "reason": "Initial rendering.",
+        }},
+    )
+
+    assert result["F001"]["text"] == (
+        "Jolene wants to try surfing and is looking for a lesson."
+    )
+    assert llm.call_structured.await_count == 3
 
 
 @pytest.mark.asyncio

@@ -383,6 +383,13 @@ def fact_resolution_plan(
             for alias in aliases
         }},
         {"facts": presentations},
+        {"decisions": {
+            key: {
+                "verdict": "supported",
+                "reason": "The presentation is self-contained and source-grounded.",
+            }
+            for key in presentations
+        }},
     ]
 
 

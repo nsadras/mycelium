@@ -23,6 +23,8 @@ from mycelium.projection import display_claim_text
 from mycelium.structured_outputs import (
     fact_candidate_selection_output_model,
     fact_grouping_output_model,
+    fact_quality_output_model,
+    fact_repair_output_model,
     fact_rendering_output_model,
     fact_truth_output_model,
 )
@@ -302,20 +304,21 @@ class FactResolver:
                 fact for fact in existing
                 if set(fact.member_claim_ids) & batch_claim_ids
             ]
+            groups_text = self._fact_groups_text(
+                batch_keys,
+                members_by_key,
+                batch_aliases,
+                placements,
+                alias_for_entity,
+                entities,
+            )
             system, user = prompts.fact_rendering_prompt(
                 owner_text,
                 "\n".join(
                     f"{section.key}: {section.description}"
                     for section in definition.sections
                 ),
-                self._fact_groups_text(
-                    batch_keys,
-                    members_by_key,
-                    batch_aliases,
-                    placements,
-                    alias_for_entity,
-                    entities,
-                ),
+                groups_text,
                 self._existing_facts_text(batch_existing, alias_for_claim),
             )
             rendering_schema = fact_rendering_output_model(
@@ -328,9 +331,15 @@ class FactResolver:
                 num_predict=4096,
                 debug_label=f"dream-fact-rendering-{batch_index}",
             )
-            rendered_facts.update(
-                rendering_schema.model_validate(response).model_dump()["facts"]
+            batch_rendered = rendering_schema.model_validate(response).model_dump()[
+                "facts"
+            ]
+            batch_rendered = await self._verify_and_repair_facts(
+                owner_text,
+                groups_text,
+                batch_rendered,
             )
+            rendered_facts.update(batch_rendered)
         plan = {
             "assignments": assignments,
             "facts": [
@@ -513,6 +522,78 @@ class FactResolver:
                 for alias in decision["candidate_fact_ids"]
             )
         return selected
+
+    async def _verify_and_repair_facts(
+        self,
+        owner_text: str,
+        groups_text: str,
+        rendered: dict[str, dict],
+    ) -> dict[str, dict]:
+        verdicts = await self._fact_quality_verdicts(
+            owner_text, groups_text, rendered
+        )
+        rejected = {
+            key: rendered[key] for key, verdict in verdicts.items()
+            if verdict["verdict"] == "unsupported"
+        }
+        if not rejected:
+            return rendered
+        feedback = "\n".join(
+            f"[{key}] fixed_state={rendered[key]['state']}; "
+            f"fixed_section={rendered[key]['section_key']}; "
+            f"rejected_text={rendered[key]['text']}; "
+            f"verifier={verdicts[key]['reason']}"
+            for key in rejected
+        )
+        repair_model = fact_repair_output_model(rejected)
+        system, user = prompts.fact_repair_prompt(
+            owner_text, feedback, groups_text
+        )
+        response = await self.llm.call_structured(
+            system,
+            user,
+            repair_model,
+            num_predict=4096,
+            debug_label="dream-fact-repair",
+        )
+        repairs = repair_model.model_validate(response).model_dump()["facts"]
+        repaired_verdicts = await self._fact_quality_verdicts(
+            owner_text, groups_text, repairs
+        )
+        still_rejected = [
+            key for key, verdict in repaired_verdicts.items()
+            if verdict["verdict"] == "unsupported"
+        ]
+        if still_rejected:
+            raise ValueError(
+                "Presentation facts remained unsupported after repair: "
+                + ", ".join(still_rejected)
+            )
+        return {**rendered, **repairs}
+
+    async def _fact_quality_verdicts(
+        self,
+        owner_text: str,
+        groups_text: str,
+        rendered: dict[str, dict],
+    ) -> dict[str, dict]:
+        output_model = fact_quality_output_model(rendered)
+        rendered_text = "\n".join(
+            f"[{key}] state={fact['state']}; section={fact['section_key']}; "
+            f"text={fact['text']}"
+            for key, fact in rendered.items()
+        )
+        system, user = prompts.fact_quality_prompt(
+            owner_text, rendered_text, groups_text
+        )
+        response = await self.llm.call_structured(
+            system,
+            user,
+            output_model,
+            num_predict=2048,
+            debug_label="dream-fact-quality",
+        )
+        return output_model.model_validate(response).model_dump()["decisions"]
 
     @staticmethod
     def _owned_by(placement: ClaimPlacement | None, owner_id: str) -> bool:

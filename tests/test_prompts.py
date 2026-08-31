@@ -43,6 +43,8 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
             "existing_facts": "existing facts",
             "reviewed_relations": "reviewed relations",
             "prior_facts": "prior facts",
+            "rendered_facts": "rendered facts",
+            "rejected_facts": "rejected facts",
         "source_type": "agent_conversation",
         "source_policy": "policy",
         "claim_types": CLAIM_TYPES,

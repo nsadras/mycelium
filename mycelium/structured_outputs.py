@@ -256,6 +256,12 @@ class FactPresentationOutput(BaseModel):
     reason: str = Field(min_length=1, max_length=800)
 
 
+class FactQualityVerdictOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    verdict: Literal["supported", "unsupported"]
+    reason: str = Field(min_length=1, max_length=800)
+
+
 class FactTruthNoChangeOutput(BaseModel):
     """An incoming claim that does not change an accepted truth."""
 
@@ -441,6 +447,48 @@ def fact_rendering_output_model(
         "ExactFactRenderingPlan",
         __config__=ConfigDict(extra="forbid"),
         facts=(facts_model, ...),
+    )
+
+
+def fact_quality_output_model(fact_keys: Collection[str]) -> type[BaseModel]:
+    keys = tuple(dict.fromkeys(str(value) for value in fact_keys if value))
+    if not keys:
+        raise ValueError("Fact quality verification requires fact keys")
+    decisions = create_model(
+        "ExactFactQualityDecisions",
+        __config__=ConfigDict(extra="forbid"),
+        **{key: (FactQualityVerdictOutput, ...) for key in keys},
+    )
+    return create_model(
+        "ExactFactQualityPlan",
+        __config__=ConfigDict(extra="forbid"),
+        decisions=(decisions, ...),
+    )
+
+
+def fact_repair_output_model(
+    rendered_facts: Mapping[str, Mapping[str, Any]],
+) -> type[BaseModel]:
+    if not rendered_facts:
+        raise ValueError("Fact repair requires rejected facts")
+    fields: dict[str, Any] = {}
+    for key, fact in rendered_facts.items():
+        presentation = create_model(
+            f"{key}ExactFactRepair",
+            __base__=FactPresentationOutput,
+            state=(Literal.__getitem__((str(fact["state"]),)), ...),
+            section_key=(Literal.__getitem__((str(fact["section_key"]),)), ...),
+        )
+        fields[str(key)] = (presentation, ...)
+    facts = create_model(
+        "ExactFactRepairs",
+        __config__=ConfigDict(extra="forbid"),
+        **fields,
+    )
+    return create_model(
+        "ExactFactRepairPlan",
+        __config__=ConfigDict(extra="forbid"),
+        facts=(facts, ...),
     )
 
 

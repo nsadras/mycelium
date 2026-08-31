@@ -2276,3 +2276,18 @@ one prose-similarity summary.
 - Validation: focused fact/Dream/prompt tests passed **56/56**; the incremental preservation test proves that an
   unselected existing fact is excluded from the grouping prompt and returned byte-for-byte unchanged. Ruff and
   `git diff --check` passed.
+
+## 2026-08-31 — Verified self-contained presentation facts
+
+- Every newly rendered fact batch now receives an independent structured quality verdict. Supported text must be
+  understandable under its owner and section without conversational context, identify the relevant subject and
+  object or activity, preserve qualifiers and constraints, and remain entailed by every fixed member claim.
+- Unsupported facts receive one bounded repair call that is schema-forced to preserve the exact fact key, state, and
+  section. The repaired subset is independently verified again. If it remains unsupported, owner resolution fails
+  closed and preserves the prior projection. No pronoun list, keyword rule, regex, or other deterministic semantic
+  fallback was added.
+- Direct `gemma4:12b` probes rejected the context-dependent text “Jolene wants to try it,” repaired it to the
+  source-grounded standalone fact “Jolene wants to try surfing and is looking for a lesson,” and then accepted the
+  repaired text on a second independent verification call.
+- Validation: focused fact/Dream/prompt tests passed **57/57**, including a complete reject-repair-reverify pipeline;
+  Ruff and `git diff --check` passed.

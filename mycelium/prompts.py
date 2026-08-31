@@ -175,6 +175,32 @@ def fact_rendering_prompt(
     )
 
 
+def fact_quality_prompt(
+    owner: str,
+    rendered_facts: str,
+    groups: str,
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/fact_quality",
+        owner=owner,
+        rendered_facts=rendered_facts,
+        groups=groups,
+    )
+
+
+def fact_repair_prompt(
+    owner: str,
+    rejected_facts: str,
+    groups: str,
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/fact_repair",
+        owner=owner,
+        rejected_facts=rejected_facts,
+        groups=groups,
+    )
+
+
 def claim_extraction_prompt(
     source_type: str,
     source_id: str,

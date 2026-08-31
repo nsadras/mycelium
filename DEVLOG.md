@@ -2169,3 +2169,25 @@ one prose-similarity summary.
   fallback parser.
 - Validation: **252 passed, 2 skipped**; focused fact/Dream/prompt tests passed **49/49** before the batching regression
   was added; Ruff and `git diff --check` passed.
+
+## 2026-08-31 — Bounded contractual extraction stages
+
+- The first fresh unrelated transfer run at
+  `benchmark_runs/daily-driver-unrelated-v1-contracts-fresh-20260831` exposed a structural failure in the initial
+  all-in-one extraction contract: `gemma4:12b` generated all three correct meeting claims and dispositions, then
+  duplicated the claim array. Three retries repeated the malformed shape, leaving the meeting episode partial. The
+  same run also showed that the prior source-only policy admitted an unsolicited catalog result because it did not
+  distinguish adopted external evidence from unselected suggestions.
+- Replaced that monolithic output with two bounded, fail-closed contracts. The first makes one exact `claim_bearing`
+  or `source_only` decision for every supplied segment and preserves its reason. The second receives only admitted
+  segments and must cover all of them through exact claim evidence IDs. Temporary claim keys and reciprocal
+  cross-references are gone; persisted `claimed` dispositions are assembled from validated canonical claim IDs.
+- Removed the deterministic image-URL/source-furniture admission rule. Transport content, rejected or unadopted
+  suggestions, and unsolicited external content are now source-only only through the structured coverage decision;
+  durable selected external evidence remains claim-bearing. A coverage-stage or claim-stage failure leaves affected
+  segments unaccounted and saves no claims from that batch.
+- Before integration, a direct `gemma4:12b` coverage probe admitted three meeting assertions and a selected product
+  observation while classifying an unsolicited result source-only. A production-derived bounded claim probe then
+  extracted the three meeting claims once with exact evidence coverage and no malformed duplication.
+- Validation: **252 passed, 2 skipped**; focused extraction/runtime/ontology tests passed **63/63**; Ruff and
+  `git diff --check` passed.

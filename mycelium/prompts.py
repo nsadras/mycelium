@@ -171,3 +171,24 @@ def claim_extraction_prompt(
         unknown_time="unknown",
         segments=segments,
     )
+
+
+def extraction_coverage_prompt(
+    source_type: str,
+    source_id: str,
+    occurred_at: str | None,
+    segments: str,
+) -> tuple[str, str]:
+    policy_template = _EXTRACTION_POLICY_TEMPLATES.get(
+        source_type,
+        _EXTRACTION_POLICY_TEMPLATES["agent_conversation"],
+    )
+    return render_prompt_pair(
+        "memory/extraction_coverage",
+        source_type=source_type,
+        source_policy=render_prompt(policy_template),
+        source_id=source_id,
+        occurred_at=occurred_at,
+        unknown_time="unknown",
+        segments=segments,
+    )

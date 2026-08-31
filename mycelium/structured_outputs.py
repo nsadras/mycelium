@@ -15,7 +15,6 @@ class ExtractedEntityOutput(BaseModel):
 
 class ExtractedClaimOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    claim_key: str = Field(pattern=r"^C[0-9]{3}$")
     text: str = Field(min_length=1, max_length=1000)
     claim_type: ClaimType = "unknown"
     predicate: str | None = None
@@ -35,28 +34,58 @@ class ExtractedClaimOutput(BaseModel):
     facets: dict = Field(default_factory=dict)
 
 
-class ExtractedClaimedSegmentOutput(BaseModel):
+class ExtractionCoverageDispositionOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     segment_id: str
-    disposition: Literal["claimed"]
-    claim_keys: list[str] = Field(min_length=1, max_length=128)
-
-
-class ExtractedSourceOnlySegmentOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    segment_id: str
-    disposition: Literal["source_only"]
-    claim_keys: list[str] = Field(max_length=0)
+    disposition: Literal["claim_bearing", "source_only"]
     reason: str = Field(min_length=1, max_length=500)
 
 
-def extraction_output_model(
+def extraction_coverage_output_model(
     allowed_segment_ids: Collection[str],
 ) -> type[BaseModel]:
-    """Build a retryable structured contract scoped to one extraction batch."""
+    """Require one semantic admission decision for every source segment."""
     segment_ids = tuple(sorted({str(value) for value in allowed_segment_ids if value}))
     if not segment_ids:
-        raise ValueError("Extraction output requires at least one allowed segment ID")
+        raise ValueError("Extraction coverage requires at least one allowed segment ID")
+    segment_id_type = Literal.__getitem__(segment_ids)
+    disposition_model = create_model(
+        "BatchExtractionCoverageDispositionOutput",
+        __base__=ExtractionCoverageDispositionOutput,
+        segment_id=(segment_id_type, ...),  # type: ignore[valid-type]
+    )
+    base_model = create_model(
+        "BatchExtractionCoverageOutput",
+        __config__=ConfigDict(extra="forbid"),
+        segment_dispositions=(
+            list[disposition_model],  # type: ignore[valid-type]
+            Field(min_length=len(segment_ids), max_length=len(segment_ids)),
+        ),
+    )
+
+    class ExactBatchExtractionCoverageOutput(base_model):  # type: ignore[valid-type, misc]
+        @model_validator(mode="after")
+        def validate_complete_segment_accounting(self):
+            dispositions = self.segment_dispositions
+            disposition_ids = [item.segment_id for item in dispositions]
+            if len(disposition_ids) != len(set(disposition_ids)):
+                raise ValueError("Each supplied segment requires exactly one disposition")
+            if set(disposition_ids) != set(segment_ids):
+                raise ValueError("Every supplied segment requires a disposition")
+            return self
+
+    return ExactBatchExtractionCoverageOutput
+
+
+def claim_extraction_output_model(
+    claim_bearing_segment_ids: Collection[str],
+) -> type[BaseModel]:
+    """Require extracted claims to cover every admitted segment with exact evidence IDs."""
+    segment_ids = tuple(sorted({
+        str(value) for value in claim_bearing_segment_ids if value
+    }))
+    if not segment_ids:
+        raise ValueError("Claim extraction requires at least one claim-bearing segment ID")
     segment_id_type = Literal.__getitem__(segment_ids)
     claim_model = create_model(
         "BatchExtractedClaimOutput",
@@ -70,69 +99,30 @@ def extraction_output_model(
             None,
         ),
     )
-    claimed_disposition = create_model(
-        "BatchExtractedClaimedSegmentOutput",
-        __base__=ExtractedClaimedSegmentOutput,
-        segment_id=(segment_id_type, ...),  # type: ignore[valid-type]
-    )
-    source_only_disposition = create_model(
-        "BatchExtractedSourceOnlySegmentOutput",
-        __base__=ExtractedSourceOnlySegmentOutput,
-        segment_id=(segment_id_type, ...),  # type: ignore[valid-type]
-    )
-    disposition_union = Annotated[
-        Union[claimed_disposition, source_only_disposition],
-        Field(discriminator="disposition"),
-    ]
     base_model = create_model(
-        "BatchExtractedEpisodeOutput",
+        "BatchClaimExtractionOutput",
         __config__=ConfigDict(extra="forbid"),
         claims=(
             list[claim_model],  # type: ignore[valid-type]
-            Field(max_length=128),
-        ),
-        segment_dispositions=(
-            list[disposition_union],  # type: ignore[valid-type]
-            Field(min_length=len(segment_ids), max_length=len(segment_ids)),
+            Field(min_length=1, max_length=128),
         ),
     )
 
-    class ExactBatchExtractedEpisodeOutput(base_model):  # type: ignore[valid-type, misc]
+    class ExactBatchClaimExtractionOutput(base_model):  # type: ignore[valid-type, misc]
         @model_validator(mode="after")
-        def validate_complete_segment_accounting(self):
-            dispositions = self.segment_dispositions
-            disposition_ids = [item.segment_id for item in dispositions]
-            if len(disposition_ids) != len(set(disposition_ids)):
-                raise ValueError("Each supplied segment requires exactly one disposition")
-            if set(disposition_ids) != set(segment_ids):
-                raise ValueError("Every supplied segment requires a disposition")
-
-            claims_by_key = {claim.claim_key: claim for claim in self.claims}
-            if len(claims_by_key) != len(self.claims):
-                raise ValueError("Extraction claim keys must be unique")
-            linked_claim_keys: set[str] = set()
-            evidence_links: dict[str, set[str]] = {
-                key: set() for key in claims_by_key
+        def validate_claim_bearing_segment_coverage(self):
+            covered_ids = {
+                segment_id
+                for claim in self.claims
+                for segment_id in claim.segment_ids
             }
-            for disposition in dispositions:
-                for claim_key in disposition.claim_keys:
-                    claim = claims_by_key.get(claim_key)
-                    if claim is None:
-                        raise ValueError(
-                            f"Segment disposition references unknown claim key {claim_key}"
-                        )
-                    linked_claim_keys.add(claim_key)
-                    evidence_links[claim_key].add(disposition.segment_id)
-            if linked_claim_keys != set(claims_by_key):
-                raise ValueError("Every extracted claim requires a segment disposition link")
-            for claim_key, claim in claims_by_key.items():
-                if evidence_links[claim_key] != set(claim.segment_ids):
-                    raise ValueError(
-                        f"Claim {claim_key} evidence and segment dispositions disagree"
-                    )
+            if covered_ids != set(segment_ids):
+                raise ValueError(
+                    "Every claim-bearing segment must support at least one extracted claim"
+                )
             return self
 
-    return ExactBatchExtractedEpisodeOutput
+    return ExactBatchClaimExtractionOutput
 
 
 class GroundedAnswerOutput(BaseModel):

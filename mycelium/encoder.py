@@ -8,7 +8,10 @@ from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.config import Config
 from mycelium import prompts
-from mycelium.structured_outputs import extraction_output_model
+from mycelium.structured_outputs import (
+    claim_extraction_output_model,
+    extraction_coverage_output_model,
+)
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimProvenance,
@@ -159,75 +162,101 @@ class Encoder:
         return parts or [content.strip()]
 
     async def _extract_claims(self, source: SourceDocument, episode: EpisodeManifest) -> None:
-        programmatic_ignored_ids = {
-            segment.segment_id for segment in source.segments
-            if self._is_source_furniture(segment.content)
-        }
-        extractable_segments = [
-            segment for segment in source.segments
-            if segment.segment_id not in programmatic_ignored_ids
-        ]
         try:
             allowed_ids = {segment.segment_id for segment in source.segments}
             claim_ids: list[str] = []
-            dispositions: dict[str, ExtractionSegmentDisposition] = {
-                segment_id: ExtractionSegmentDisposition(
-                    segment_id=segment_id,
-                    disposition="source_only",
-                    reason="Raw source transport metadata.",
-                )
-                for segment_id in programmatic_ignored_ids
-            }
+            dispositions: dict[str, ExtractionSegmentDisposition] = {}
             extraction_errors: list[str] = []
 
             for batch_index, batch in enumerate(
-                self._segment_batches(extractable_segments), start=1
+                self._segment_batches(source.segments), start=1
             ):
                 batch_ids = {segment.segment_id for segment in batch}
-                output_model = extraction_output_model(batch_ids)
-                system, user = prompts.claim_extraction_prompt(
+                coverage_model = extraction_coverage_output_model(batch_ids)
+                system, user = prompts.extraction_coverage_prompt(
                     source.source_type,
                     source.source_id,
                     source.occurred_at,
                     self._render_segments(batch),
                 )
                 try:
+                    coverage = await self.llm.call_structured(
+                        system,
+                        user,
+                        coverage_model,
+                        num_predict=4096,
+                        debug_label=(
+                            f"extraction-coverage-{source.source_id}-batch-{batch_index}"
+                        ),
+                    )
+                    if not isinstance(coverage, dict):
+                        raise ValueError("extraction coverage did not return an object")
+                    coverage = coverage_model.model_validate(coverage).model_dump(
+                        exclude_none=True
+                    )
+                    coverage_by_id = {
+                        item["segment_id"]: item
+                        for item in coverage["segment_dispositions"]
+                    }
+                    claim_bearing = [
+                        segment for segment in batch
+                        if coverage_by_id[segment.segment_id]["disposition"]
+                        == "claim_bearing"
+                    ]
+                    for item in coverage["segment_dispositions"]:
+                        if item["disposition"] == "source_only":
+                            dispositions[item["segment_id"]] = (
+                                ExtractionSegmentDisposition(
+                                    segment_id=item["segment_id"],
+                                    disposition="source_only",
+                                    reason=item["reason"],
+                                )
+                            )
+                    if not claim_bearing:
+                        continue
+
+                    admitted_ids = {
+                        segment.segment_id for segment in claim_bearing
+                    }
+                    claim_model = claim_extraction_output_model(admitted_ids)
+                    system, user = prompts.claim_extraction_prompt(
+                        source.source_type,
+                        source.source_id,
+                        source.occurred_at,
+                        self._render_segments(claim_bearing),
+                    )
                     response = await self.llm.call_structured(
                         system,
                         user,
-                        output_model,
+                        claim_model,
                         num_predict=8192,
                         debug_label=(
                             f"claim-extraction-{source.source_id}-batch-{batch_index}"
-                        ),
+                        )
                     )
                     if not isinstance(response, dict):
                         raise ValueError("claim extraction did not return an object")
-                    response = output_model.model_validate(response).model_dump(
+                    response = claim_model.model_validate(response).model_dump(
                         exclude_none=True
                     )
                     staged_claims = self._build_extracted_claims(source, response)
-                    claims_by_key = {
-                        raw["claim_key"]: claim
-                        for raw, claim in zip(response["claims"], staged_claims, strict=True)
-                    }
-                    staged_dispositions = [
-                        ExtractionSegmentDisposition(
-                            segment_id=item["segment_id"],
-                            disposition=item["disposition"],
-                            claim_ids=[
-                                claims_by_key[key].claim_id for key in item["claim_keys"]
-                            ],
-                            reason=item.get("reason"),
-                        )
-                        for item in response["segment_dispositions"]
-                    ]
                     for claim in staged_claims:
                         self.artifacts.save_claim(claim)
                         claim_ids.append(claim.claim_id)
-                    dispositions.update({
-                        item.segment_id: item for item in staged_dispositions
-                    })
+                    claims_by_segment = {
+                        segment_id: [
+                            claim.claim_id for claim in staged_claims
+                            if segment_id in claim.provenance[0].segment_ids
+                        ]
+                        for segment_id in admitted_ids
+                    }
+                    for segment_id, linked_claim_ids in claims_by_segment.items():
+                        dispositions[segment_id] = ExtractionSegmentDisposition(
+                            segment_id=segment_id,
+                            disposition="claimed",
+                            claim_ids=linked_claim_ids,
+                            reason=coverage_by_id[segment_id]["reason"],
+                        )
                 except Exception as exc:
                     extraction_errors.append(f"batch {batch_index}: {exc}")
 
@@ -256,10 +285,6 @@ class Encoder:
             f"time={segment.timestamp or 'unknown'}\n{segment.content}"
             for segment in segments
         )
-
-    @staticmethod
-    def _is_source_furniture(content: str) -> bool:
-        return bool(re.match(r"^image url:\s*", content.strip(), re.IGNORECASE))
 
     @staticmethod
     def _segment_batches(

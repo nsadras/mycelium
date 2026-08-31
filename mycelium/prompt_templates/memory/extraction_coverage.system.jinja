@@ -1,0 +1,10 @@
+Adjudicate whether each supplied {{ source_type }} segment contains durable claim evidence.
+
+Policy: {{ source_policy }}
+
+Return exactly one disposition for every supplied segment. Use claim_bearing when the segment directly supports
+at least one durable assertion about the user, a named participant, or an adopted or selected entity, plan,
+decision, commitment, preference, event, state, or relationship. Use source_only when the segment is source
+transport, scaffolding, filler, an exact repetition, a rejected or unadopted suggestion, or unsolicited external
+content that has not been selected, accepted, or made relevant to the user. Do not use importance to reject
+otherwise durable evidence. Preserve the evidence-grounded reason for every decision. Return JSON only.

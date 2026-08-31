@@ -19,37 +19,34 @@ from mycelium.artifacts import (
 from mycelium.config import Config
 from mycelium.encoder import Encoder
 from mycelium.store import LogStore
-from mycelium.structured_outputs import extraction_output_model
+from mycelium.structured_outputs import (
+    claim_extraction_output_model,
+    extraction_coverage_output_model,
+)
 
 
 def extraction_response(claims, source_only_segment_ids=()):
-    keyed_claims = [
-        {"claim_key": f"C{index:03d}", **claim}
-        for index, claim in enumerate(claims, start=1)
-    ]
-    claimed = {
-        segment_id: [
-            claim["claim_key"]
-            for claim in keyed_claims
-            if segment_id in claim["segment_ids"]
-        ]
-        for claim in keyed_claims
+    return {"claims": claims}
+
+
+def coverage_response(claims, source_only_segment_ids=()):
+    claimed_ids = {
+        segment_id
+        for claim in claims
         for segment_id in claim["segment_ids"]
     }
     return {
-        "claims": keyed_claims,
         "segment_dispositions": [
             {
                 "segment_id": segment_id,
-                "disposition": "claimed",
-                "claim_keys": claim_keys,
+                "disposition": "claim_bearing",
+                "reason": "The segment directly supports a durable claim.",
             }
-            for segment_id, claim_keys in claimed.items()
+            for segment_id in claimed_ids
         ] + [
             {
                 "segment_id": segment_id,
                 "disposition": "source_only",
-                "claim_keys": [],
                 "reason": "The segment contains no durable assertion.",
             }
             for segment_id in source_only_segment_ids
@@ -57,18 +54,29 @@ def extraction_response(claims, source_only_segment_ids=()):
     }
 
 
-def test_extraction_schema_requires_batch_constrained_claim_evidence():
+def staged_response(output_type, claims, source_only_segment_ids=()):
+    if "segment_dispositions" in output_type.model_fields:
+        return coverage_response(claims, source_only_segment_ids)
+    return extraction_response(claims)
+
+
+def test_extraction_schemas_require_admission_and_claim_coverage():
     first = "source-test#seg-0001"
     second = "source-test#seg-0002"
-    output_model = extraction_output_model({first, second})
-    valid = extraction_response(
-        [{"text": "Ava prefers tea.", "about": [{"entity": "Ava"}],
-          "segment_ids": [first]}],
-        [second],
+    coverage_model = extraction_coverage_output_model({first, second})
+    valid_coverage = coverage_response(
+        [{"segment_ids": [first]}], [second]
     )
+    claim_model = claim_extraction_output_model({first})
+    valid_claims = extraction_response([{
+        "text": "Ava prefers tea.",
+        "about": [{"entity": "Ava"}],
+        "segment_ids": [first],
+    }])
 
-    assert output_model.model_validate(valid).claims[0].segment_ids == [first]
-    schema = output_model.model_json_schema()
+    assert coverage_model.model_validate(valid_coverage).segment_dispositions
+    assert claim_model.model_validate(valid_claims).claims[0].segment_ids == [first]
+    schema = claim_model.model_json_schema()
     claim_schema = next(
         definition
         for definition in schema["$defs"].values()
@@ -81,19 +89,22 @@ def test_extraction_schema_requires_batch_constrained_claim_evidence():
     assert {"kind", "inferred", "salience"}.isdisjoint(
         MemoryClaim.__dataclass_fields__
     )
-    incomplete = extraction_response(
-        [{"text": "Ava prefers tea.", "about": [{"entity": "Ava"}],
-          "segment_ids": [first]}]
-    )
-    mismatched = extraction_response(
-        [{"text": "Ava prefers tea.", "about": [{"entity": "Ava"}],
-          "segment_ids": [first]}],
-        [second],
-    )
-    mismatched["segment_dispositions"][0]["claim_keys"] = ["C999"]
-    for invalid in (incomplete, mismatched, {"claims": []}):
+    for invalid in (
+        coverage_response([{"segment_ids": [first]}]),
+        {"segment_dispositions": []},
+    ):
         with pytest.raises(ValidationError):
-            output_model.model_validate(invalid)
+            coverage_model.model_validate(invalid)
+    for invalid in (
+        {"claims": []},
+        extraction_response([{
+            "text": "Ava prefers tea.",
+            "about": [{"entity": "Ava"}],
+            "segment_ids": [first],
+        }]),
+    ):
+        with pytest.raises(ValidationError):
+            claim_extraction_output_model({first, second}).model_validate(invalid)
 
 
 @pytest.mark.asyncio
@@ -117,8 +128,7 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
         claim = dict(llm.call_structured.return_value["claims"][0])
         claim["segment_ids"] = [segment_id]
-        claim.pop("claim_key")
-        return extraction_response([claim])
+        return staged_response(output_type, [claim])
     llm.call_structured.side_effect = response
 
     await encoder.encode_session(
@@ -147,7 +157,7 @@ async def test_encoder_preserves_repeated_claims_as_separate_source_events(tmp_p
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{
+        return staged_response(output_type, [{
                 "text": "Ava prefers tea.",
                 "claim_type": "preference",
                 "predicate": "prefers",
@@ -202,7 +212,7 @@ async def test_encoder_persists_general_semantics_across_source_types(
             for part in user.split("[")[1:]
             if part.startswith("source-")
         )
-        return extraction_response([{
+        return staged_response(output_type, [{
                 "text": text,
                 "claim_type": claim_type,
                 "predicate": predicate,
@@ -240,7 +250,7 @@ async def test_meeting_encoder_anchors_deadline_to_meeting_time(tmp_path):
             for part in user.split("[")[1:]
             if part.startswith("source-")
         )
-        return extraction_response([{
+        return staged_response(output_type, [{
                 "text": "Ava committed to sending the report by Friday.",
                 "claim_type": "commitment",
                 "temporal_status": "future",
@@ -271,21 +281,28 @@ async def test_chat_claim_uses_its_cited_message_as_temporal_anchor(tmp_path):
         llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts,
     )
 
+    original_ids = []
+
     async def response(system, user, output_type, **kwargs):
         segment_ids = [
             part.split("]", 1)[0]
             for part in user.split("[")[1:]
             if part.startswith("source-")
         ]
+        if "segment_dispositions" in output_type.model_fields:
+            original_ids[:] = segment_ids
+            return coverage_response(
+                [{"segment_ids": [segment_ids[1]]}], [segment_ids[0]]
+            )
         return extraction_response([{
                 "text": "Ava will finish the report tomorrow.",
                 "claim_type": "commitment",
                 "temporal_status": "future",
                 "about": [{"entity": "Ava"}],
-                "segment_ids": [segment_ids[1]],
-                "temporal_anchor_segment_id": segment_ids[1],
+                "segment_ids": [original_ids[1]],
+                "temporal_anchor_segment_id": original_ids[1],
                 "facets": {"deadline": "tomorrow"},
-            }], [segment_ids[0]])
+            }])
 
     llm.call_structured.side_effect = response
     await encoder.encode_session(
@@ -319,21 +336,30 @@ async def test_chat_relative_time_stays_unresolved_with_wrong_anchor_segment(tmp
         llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts,
     )
 
+    original_ids = []
+
     async def response(system, user, output_type, **kwargs):
         segment_ids = [
             part.split("]", 1)[0]
             for part in user.split("[")[1:]
             if part.startswith("source-")
         ]
+        if "segment_dispositions" in output_type.model_fields:
+            original_ids[:] = segment_ids
+            return coverage_response([{"segment_ids": segment_ids}])
         return extraction_response([{
+                "text": "The conversation includes earlier context.",
+                "about": [{"entity": "conversation"}],
+                "segment_ids": [original_ids[0]],
+            }, {
                 "text": "Ava will finish the report tomorrow.",
                 "claim_type": "commitment",
                 "temporal_status": "future",
                 "about": [{"entity": "Ava"}],
-                "segment_ids": [segment_ids[1]],
-                "temporal_anchor_segment_id": segment_ids[0],
+                "segment_ids": [original_ids[1]],
+                "temporal_anchor_segment_id": original_ids[0],
                 "facets": {"deadline": "tomorrow"},
-            }], [segment_ids[0]])
+            }])
 
     llm.call_structured.side_effect = response
     await encoder.encode_session(
@@ -354,7 +380,11 @@ async def test_chat_relative_time_stays_unresolved_with_wrong_anchor_segment(tmp
         ],
     )
 
-    temporal = artifacts.list_claims()[0].facets["temporal"]
+    target = next(
+        claim for claim in artifacts.list_claims()
+        if claim.text == "Ava will finish the report tomorrow."
+    )
+    temporal = target.facets["temporal"]
     assert temporal["status"] == "unresolved"
     assert temporal["anchor"] is None
 
@@ -376,7 +406,7 @@ async def test_encoder_rejects_claim_without_explicit_about_entity(tmp_path):
             for part in user.split("[")[1:]
             if not part.startswith(("TARGET ", "CONTEXT "))
         ]
-        return extraction_response([{
+        return staged_response(output_type, [{
                 "text": "Ava enjoys teaching dance.",
                 "about": [],
                 "segment_ids": segment_ids,
@@ -410,7 +440,7 @@ async def test_encoder_records_inference_only_on_provenance(tmp_path):
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{
+        return staged_response(output_type, [{
                 "text": "Ava is Clara's grandmother.",
                 "about": [{"entity": "Ava", "role": "subject"}],
                 "segment_ids": [segment_id],
@@ -445,7 +475,7 @@ async def test_encoder_records_uncovered_segments_without_repair(tmp_path):
 
     async def response(system, user, output_type, **kwargs):
         segment_ids = [part.split("]", 1)[0] for part in user.split("[")[1:]]
-        return extraction_response([{
+        return staged_response(output_type, [{
                 "text": "Ava likes tea.",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": [segment_ids[0]],
@@ -482,11 +512,7 @@ async def test_encoder_rejects_duplicate_segment_dispositions(tmp_path):
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        value = extraction_response([{
-                "text": "Ava prefers tea.",
-                "about": [{"entity": "Ava"}],
-                "segment_ids": [segment_id],
-            }])
+        value = coverage_response([{"segment_ids": [segment_id]}])
         value["segment_dispositions"].append(dict(value["segment_dispositions"][0]))
         return value
 
@@ -543,7 +569,7 @@ async def test_encoder_does_not_lexically_reject_model_valid_claim_text(tmp_path
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{
+        return staged_response(output_type, [{
                 "text": "I prefer tea.",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": [segment_id],
@@ -558,7 +584,7 @@ async def test_encoder_does_not_lexically_reject_model_valid_claim_text(tmp_path
         occurred_at="2024-01-10",
     )
 
-    assert llm.call_structured.call_count == 1
+    assert llm.call_structured.call_count == 2
     assert artifacts.list_claims()[0].text == "I prefer tea."
     assert artifacts.list_episodes()[0].extraction_status == "complete"
 
@@ -576,7 +602,7 @@ async def test_encoder_persists_contract_output_without_final_normalization(tmp_
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{
+        return staged_response(output_type, [{
                 "text": "My store is doing great!",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": [segment_id],
@@ -591,7 +617,7 @@ async def test_encoder_persists_contract_output_without_final_normalization(tmp_
         occurred_at="2024-01-10",
     )
 
-    assert llm.call_structured.call_count == 1
+    assert llm.call_structured.call_count == 2
     assert artifacts.list_claims()[0].text == "My store is doing great!"
     assert artifacts.list_episodes()[0].extraction_status == "complete"
 
@@ -609,7 +635,7 @@ async def test_encoder_honors_explicit_source_only_scaffolding(tmp_path):
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([], [segment_id])
+        return staged_response(output_type, [], [segment_id])
 
     llm.call_structured.side_effect = response
     await encoder.encode_session(
@@ -628,7 +654,7 @@ async def test_encoder_honors_explicit_source_only_scaffolding(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_encoder_programmatically_ignores_image_urls(tmp_path):
+async def test_encoder_routes_image_urls_through_semantic_coverage(tmp_path):
     llm = AsyncMock()
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
@@ -639,18 +665,21 @@ async def test_encoder_programmatically_ignores_image_urls(tmp_path):
     )
 
     async def response(system, user, output_type, **kwargs):
-        assert "Image URL:" not in user
-        target_ids = [
-            part.split("]", 1)[0]
-            for part in user.split("[")[1:]
-            if not part.startswith(("TARGET ", "CONTEXT "))
+        source_ids = [
+            segment.segment_id for segment in artifacts.list_sources()[0].segments
         ]
-        return extraction_response([{
+        target_ids = (
+            source_ids
+            if "segment_dispositions" in output_type.model_fields
+            else source_ids[:1]
+        )
+        claim = {
                 "text": "Ava shared a painting.",
                 "about": [{"entity": "Ava"}],
-                "segment_ids": target_ids,
+                "segment_ids": [target_ids[0]],
                 "facets": {},
-            }])
+            }
+        return staged_response(output_type, [claim], target_ids[1:])
 
     llm.call_structured.side_effect = response
     await encoder.encode_session(
@@ -696,7 +725,7 @@ async def test_encoder_batches_large_initial_extractions(tmp_path):
     async def response(system, user, output_type, **kwargs):
         segment_ids = [part.split("]", 1)[0] for part in user.split("[")[1:]]
         assert len(segment_ids) <= 48
-        return extraction_response([], segment_ids)
+        return staged_response(output_type, [], segment_ids)
 
     llm.call_structured.side_effect = response
     await encoder.encode_session(

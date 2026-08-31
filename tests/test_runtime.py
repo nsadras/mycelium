@@ -46,7 +46,6 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
     llm = AsyncMock()
     llm.call_structured.return_value = {
         "claims": [{
-            "claim_key": "C001",
             "text": "Ollama version 1.2 supports asynchronous web search.",
             "claim_type": "observation",
             "predicate": "supports",
@@ -55,7 +54,6 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
             "segment_ids": ["source-placeholder"],
             "facets": {"version": "1.2"},
         }],
-        "segment_dispositions": [],
     }
     encoder = Encoder(llm, log_store, Config.defaults(), artifacts)
 
@@ -65,11 +63,12 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
         response["claims"][0]["segment_ids"] = [
             user.split("[", 1)[1].split("]", 1)[0]
         ]
-        response["segment_dispositions"] = [{
-            "segment_id": response["claims"][0]["segment_ids"][0],
-            "disposition": "claimed",
-            "claim_keys": ["C001"],
-        }]
+        if "segment_dispositions" in output_type.model_fields:
+            return {"segment_dispositions": [{
+                "segment_id": response["claims"][0]["segment_ids"][0],
+                "disposition": "claim_bearing",
+                "reason": "The tool result contains a durable observation.",
+            }]}
         return response
 
     llm.call_structured.side_effect = source_aware_response

@@ -21,6 +21,7 @@ from mycelium.ollama import OllamaClient
 from mycelium.ontology import default_section, entity_type_definition
 from mycelium.projection import display_claim_text
 from mycelium.structured_outputs import (
+    fact_candidate_selection_output_model,
     fact_grouping_output_model,
     fact_rendering_output_model,
     fact_truth_output_model,
@@ -165,6 +166,44 @@ class FactResolver:
     ) -> FactResolutionResult:
         owner = entities[owner_id]
         definition = entity_type_definition(owner.entity_type)
+        owner_claim_ids = {claim.claim_id for claim in claims}
+        represented_claim_ids = {
+            claim_id for fact in existing for claim_id in fact.member_claim_ids
+        }
+        unrepresented = [
+            claim for claim in claims
+            if claim.claim_id not in represented_claim_ids
+        ]
+        structurally_affected = {
+            fact.fact_id for fact in existing
+            if not set(fact.member_claim_ids) <= owner_claim_ids
+        }
+        selected_fact_ids = set(structurally_affected)
+        if unrepresented and existing:
+            selected_fact_ids.update(await self._select_prior_facts(
+                unrepresented,
+                placements,
+                existing,
+                entities,
+            ))
+        selected_existing = [
+            fact for fact in existing if fact.fact_id in selected_fact_ids
+        ]
+        untouched_existing = [
+            fact for fact in existing if fact.fact_id not in selected_fact_ids
+        ]
+        selected_claim_ids = {
+            claim_id for fact in selected_existing
+            for claim_id in fact.member_claim_ids
+        }
+        claims = [
+            claim for claim in claims
+            if claim.claim_id not in represented_claim_ids
+            or claim.claim_id in selected_claim_ids
+        ]
+        existing = selected_existing
+        if not claims:
+            return FactResolutionResult(facts=untouched_existing)
         aliases = {
             f"C{index:03d}": claim for index, claim in enumerate(claims, start=1)
         }
@@ -191,25 +230,27 @@ class FactResolver:
             alias for alias, claim in aliases.items()
             if claim.claim_id in incoming_claim_ids
         )
-        system, user = prompts.fact_truth_prompt(
-            owner_text,
-            claims_text,
-            existing_text,
-            relations_text,
-            json.dumps(incoming_aliases),
-        )
-        target_aliases = sorted(set(aliases) - set(incoming_aliases))
-        truth_schema = fact_truth_output_model(incoming_aliases, target_aliases)
-        response = await self.llm.call_structured(
-            system,
-            user,
-            truth_schema,
-            num_predict=2048,
-            debug_label="dream-fact-truth",
-        )
-        adjudications = truth_schema.model_validate(response).model_dump()[
-            "decisions"
-        ]
+        adjudications = {}
+        if incoming_aliases:
+            system, user = prompts.fact_truth_prompt(
+                owner_text,
+                claims_text,
+                existing_text,
+                relations_text,
+                json.dumps(incoming_aliases),
+            )
+            target_aliases = sorted(set(aliases) - set(incoming_aliases))
+            truth_schema = fact_truth_output_model(incoming_aliases, target_aliases)
+            response = await self.llm.call_structured(
+                system,
+                user,
+                truth_schema,
+                num_predict=2048,
+                debug_label="dream-fact-truth",
+            )
+            adjudications = truth_schema.model_validate(response).model_dump()[
+                "decisions"
+            ]
         changes = [
             {
                 "relation": decision["relation"],
@@ -302,7 +343,7 @@ class FactResolver:
             plan, aliases, placements, incoming_claim_ids
         )
         now = datetime.now().astimezone().isoformat()
-        output = FactResolutionResult()
+        output = FactResolutionResult(facts=list(untouched_existing))
         pending_incoming = {
             aliases[alias].claim_id
             for change in changes
@@ -409,6 +450,69 @@ class FactResolver:
                     placement, section_key="needs_review", updated_at=now
                 ))
         return output
+
+    async def _select_prior_facts(
+        self,
+        incoming: list[MemoryClaim],
+        placements: dict[str, ClaimPlacement],
+        existing: list[ConsolidatedFact],
+        entities: dict[str, EntityRecord],
+        chunk_size: int = 12,
+    ) -> set[str]:
+        aliases = {
+            f"C{index:03d}": claim
+            for index, claim in enumerate(incoming, start=1)
+        }
+        linked_ids = sorted({
+            linked_id for claim in incoming
+            for linked_id in placements[claim.claim_id].linked_entity_ids
+        })
+        alias_for_entity = {
+            entity_id: f"E{index:03d}"
+            for index, entity_id in enumerate(linked_ids, start=1)
+        }
+        incoming_text = self._claims_text(
+            aliases, placements, alias_for_entity, entities
+        )
+        fact_aliases = {
+            fact.fact_id: f"X{index:03d}"
+            for index, fact in enumerate(existing, start=1)
+        }
+        selected: set[str] = set()
+        for start in range(0, len(existing), chunk_size):
+            chunk = existing[start:start + chunk_size]
+            aliases_for_chunk = {
+                fact_aliases[fact.fact_id]: fact for fact in chunk
+            }
+            output_model = fact_candidate_selection_output_model(
+                aliases,
+                aliases_for_chunk,
+            )
+            prior_text = "\n".join(
+                f"[{alias}] state={fact.state}; section={fact.section_key}; "
+                f"text={fact.text}"
+                for alias, fact in aliases_for_chunk.items()
+            )
+            system, user = prompts.fact_candidate_selection_prompt(
+                incoming_text,
+                prior_text,
+            )
+            response = await self.llm.call_structured(
+                system,
+                user,
+                output_model,
+                num_predict=2048,
+                debug_label="dream-fact-candidate-selection",
+            )
+            decisions = output_model.model_validate(response).model_dump()[
+                "decisions"
+            ]
+            selected.update(
+                aliases_for_chunk[alias].fact_id
+                for decision in decisions.values()
+                for alias in decision["candidate_fact_ids"]
+            )
+        return selected
 
     @staticmethod
     def _owned_by(placement: ClaimPlacement | None, owner_id: str) -> bool:

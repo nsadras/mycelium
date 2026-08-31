@@ -2260,3 +2260,19 @@ one prose-similarity summary.
   `review_required` with both exact candidate IDs.
 - Validation: focused Dream/prompt/artifact/store/reconsolidation tests passed **120/120**; Ruff and
   `git diff --check` passed.
+
+## 2026-08-31 — Incremental owner fact resolution
+
+- Fact resolution no longer sends an owner's complete accumulated claim history through truth and grouping on every
+  update. New-to-owner claims first scan existing presentation facts in bounded partitions of 12. Only selected fact
+  groups and their canonical member claims enter truth adjudication and regrouping; structurally affected groups are
+  always included, and every unselected fact is preserved exactly.
+- Added a strict candidate-selection schema and Jinja prompt. This stage can only select exact supplied fact aliases
+  and explain relevance; it cannot decide truth changes, grouping, sections, or wording. Selection remains semantic
+  and model-driven, with no token, predicate, title, fuzzy, or benchmark-specific shortcut.
+- Before integration, a direct `gemma4:12b` probe selected the prior tea-preference fact for an incoming coffee
+  preference, selected nothing for an unrelated hiking plan, and correctly rejected a tea-colored paint statement as
+  merely sharing vocabulary. This demonstrated the intended high-recall semantic boundary and counterexample.
+- Validation: focused fact/Dream/prompt tests passed **56/56**; the incremental preservation test proves that an
+  unselected existing fact is excluded from the grouping prompt and returned byte-for-byte unchanged. Ruff and
+  `git diff --check` passed.

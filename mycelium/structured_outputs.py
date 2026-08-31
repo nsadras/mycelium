@@ -240,6 +240,12 @@ class FactClaimAssignmentOutput(BaseModel):
     fact_key: str = Field(pattern=r"^F[0-9]{3}$")
 
 
+class FactCandidateSelectionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidate_fact_ids: list[str] = Field(max_length=12)
+    reason: str = Field(min_length=1, max_length=800)
+
+
 class FactPresentationOutput(BaseModel):
     """One presentation fact for a fixed claim group."""
     model_config = ConfigDict(extra="forbid")
@@ -335,6 +341,40 @@ def fact_truth_output_model(
             return self
 
     return ExactFactTruthPlan
+
+
+def fact_candidate_selection_output_model(
+    incoming_claim_aliases: Collection[str],
+    prior_fact_aliases: Collection[str],
+) -> type[BaseModel]:
+    """Select bounded prior fact candidates for every incoming claim."""
+    incoming = tuple(dict.fromkeys(
+        str(value) for value in incoming_claim_aliases if value
+    ))
+    facts = tuple(dict.fromkeys(
+        str(value) for value in prior_fact_aliases if value
+    ))
+    if not incoming or not facts:
+        raise ValueError("Fact candidate selection requires claims and prior facts")
+    fact_type = Literal.__getitem__(facts)
+    decision = create_model(
+        "ExactFactCandidateSelection",
+        __base__=FactCandidateSelectionOutput,
+        candidate_fact_ids=(
+            list[fact_type],  # type: ignore[valid-type]
+            Field(max_length=len(facts)),
+        ),
+    )
+    decisions = create_model(
+        "ExactFactCandidateDecisions",
+        __config__=ConfigDict(extra="forbid"),
+        **{alias: (decision, ...) for alias in incoming},
+    )
+    return create_model(
+        "ExactFactCandidatePlan",
+        __config__=ConfigDict(extra="forbid"),
+        decisions=(decisions, ...),
+    )
 
 
 def fact_grouping_output_model(

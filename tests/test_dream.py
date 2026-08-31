@@ -1762,6 +1762,10 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
         *split_scope_plan(scope_plan({
             "C001": assignment("topic-stable-page", supporting=["C001"])
         })),
+        {"decisions": {"C001": {
+            "candidate_fact_ids": ["X001"],
+            "reason": "The preference facts may express the same durable state.",
+        }}},
         *fact_resolution_plan({
             "tea": (["C001"], "Stable Page records a tea preference.", "why_it_matters"),
             "coffee": (["C002"], "Stable Page records a coffee preference.", "why_it_matters"),
@@ -1840,6 +1844,10 @@ async def test_dream_preserves_accepted_fact_while_contradiction_is_pending(tmp_
     )
     llm.call_structured.side_effect = [
         *split_scope_plan(you_scope()),
+        {"decisions": {"C001": {
+            "candidate_fact_ids": ["X001"],
+            "reason": "The prior preference may express the same durable state.",
+        }}},
         *fact_resolution_plan(
             {
                 "new": (["C001"], "The user dislikes tea.", "preferences_working_style"),

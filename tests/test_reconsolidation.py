@@ -17,7 +17,10 @@ from mycelium.facts import FactResolutionResult, FactResolver
 from mycelium.materialization import PageMaterializer
 from mycelium.reconsolidation import ReconsolidationReviewService
 from mycelium.store import WikiStore
-from mycelium.structured_outputs import fact_truth_output_model
+from mycelium.structured_outputs import (
+    fact_candidate_selection_output_model,
+    fact_truth_output_model,
+)
 
 
 def claim(claim_id: str, text: str, recorded_at: str) -> MemoryClaim:
@@ -77,7 +80,9 @@ def fact(item: MemoryClaim) -> ConsolidatedFact:
     )
 
 
-def staged_fact_responses(plan: dict) -> list[dict]:
+def staged_fact_responses(
+    plan: dict, *, candidate_fact_aliases: list[str] | None = None
+) -> list[dict]:
     changes_by_incoming = {
         alias: change
         for change in plan["truth_changes"]
@@ -88,7 +93,7 @@ def staged_fact_responses(plan: dict) -> list[dict]:
         if changes_by_incoming
         else sorted(plan["assignments"])
     )
-    return [
+    responses = [
         {"decisions": {
             alias: (
                 {
@@ -117,6 +122,19 @@ def staged_fact_responses(plan: dict) -> list[dict]:
             for item in plan["facts"]
         }},
     ]
+    if candidate_fact_aliases is not None:
+        candidate_incoming_aliases = [
+            f"C{index:03d}"
+            for index in range(1, len(incoming_aliases) + 1)
+        ]
+        responses.insert(0, {"decisions": {
+            alias: {
+                "candidate_fact_ids": candidate_fact_aliases,
+                "reason": "The prior fact may express the same durable state.",
+            }
+            for alias in candidate_incoming_aliases
+        }})
+    return responses
 
 
 def test_truth_schema_separates_incoming_from_prior_targets():
@@ -137,6 +155,21 @@ def test_truth_schema_separates_incoming_from_prior_targets():
     }}}
     with pytest.raises(ValidationError):
         schema.model_validate(invalid)
+
+
+def test_fact_candidate_schema_requires_exact_claim_and_fact_aliases():
+    schema = fact_candidate_selection_output_model(["C001"], ["X001"])
+    valid = {"decisions": {"C001": {
+        "candidate_fact_ids": ["X001"],
+        "reason": "The prior fact may express the same durable state.",
+    }}}
+
+    assert schema.model_validate(valid).decisions.C001.candidate_fact_ids == [
+        "X001"
+    ]
+    valid["decisions"]["C001"]["candidate_fact_ids"] = ["X999"]
+    with pytest.raises(ValidationError):
+        schema.model_validate(valid)
 
 
 @pytest.mark.asyncio
@@ -253,7 +286,7 @@ async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_p
             "explanation": "The newer statement explicitly replaces the old preference.",
             "confidence": 0.92,
         }],
-    })
+    }, candidate_fact_aliases=["X001"])
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -271,6 +304,68 @@ async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    old = claim("old", "The user prefers tea.", "2026-08-01T12:00:00")
+    unrelated = claim(
+        "project", "The user maintains Project North.", "2026-08-02T12:00:00"
+    )
+    new = claim("new", "The user prefers coffee.", "2026-08-05T12:00:00")
+    placements = [place(artifacts, item) for item in (old, unrelated, new)]
+    old_fact = fact(old)
+    unrelated_fact = fact(unrelated)
+    artifacts.save_consolidated_fact(old_fact)
+    artifacts.save_consolidated_fact(unrelated_fact)
+    llm = AsyncMock()
+    llm.call_structured.side_effect = [
+        {"decisions": {"C001": {
+            "candidate_fact_ids": ["X001"],
+            "reason": "The prior preference may express the same durable state.",
+        }}},
+        {"decisions": {"C002": {
+            "disposition": "no_change",
+            "reason": "The evidence does not explicitly replace the prior preference.",
+            "confidence": 0.8,
+        }}},
+        {"assignments": {
+            "C001": {"fact_key": "F001"},
+            "C002": {"fact_key": "F002"},
+        }},
+        {"facts": {
+            "F001": {
+                "state": "current",
+                "section_key": "preferences_working_style",
+                "text": old.text,
+                "confidence": 0.9,
+                "reason": "Existing preference.",
+            },
+            "F002": {
+                "state": "current",
+                "section_key": "preferences_working_style",
+                "text": new.text,
+                "confidence": 0.9,
+                "reason": "Independent incoming preference.",
+            },
+        }},
+    ]
+
+    result = await FactResolver(llm, artifacts).resolve(
+        placements,
+        affected_entity_ids={"you"},
+        incoming_claim_ids={"new"},
+        dream_run_id="dream-1",
+    )
+
+    assert result.failures == []
+    preserved = next(
+        item for item in result.facts if item.fact_id == unrelated_fact.fact_id
+    )
+    assert preserved == unrelated_fact
+    grouping_prompt = llm.call_structured.await_args_list[2].args[1]
+    assert unrelated.text not in grouping_prompt
+
+
+@pytest.mark.asyncio
 async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
     artifacts = setup_owner(tmp_path)
     old = claim("old", "The user prefers tea.", "2026-08-01T12:00:00")
@@ -280,6 +375,10 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
     artifacts.save_consolidated_fact(old_fact)
     llm = AsyncMock()
     llm.call_structured.side_effect = [
+        {"decisions": {"C001": {
+            "candidate_fact_ids": ["X001"],
+            "reason": "The prior fact may express the same durable state.",
+        }}},
         {"decisions": {"C002": {
             "disposition": "truth_change",
             "relation": "supersedes",

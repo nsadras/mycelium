@@ -134,6 +134,17 @@ def fact_truth_prompt(
     )
 
 
+def fact_candidate_selection_prompt(
+    incoming_claims: str,
+    prior_facts: str,
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/fact_candidate_selection",
+        incoming_claims=incoming_claims,
+        prior_facts=prior_facts,
+    )
+
+
 def fact_grouping_prompt(
     owner: str,
     claims: str,

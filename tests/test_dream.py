@@ -539,30 +539,84 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
         )
         for index in range(1, 26)
     ]
-    llm.call_structured.side_effect = [
-            {"nodes": []},
-            {"decisions": {}},
-            {"decisions": {}},
-            {"decisions": {}, "participants": {}},
-        {"decisions": {}},
-        {"decisions": {"C025": {
-            "route_kind": "general",
-            "owner_entity": "you",
-            "relationship_kind": "none",
-            "subject_entity": "you",
-            "object_entities": [],
-            "contextual_entities": [],
-            "confidence": 0.9,
-            "reason": "The claim changes the user's durable preferences.",
-        }}},
-    ]
+    routing_calls = 0
+
+    async def response(system, user, output_type, **kwargs):
+        nonlocal routing_calls
+        if "nodes" in output_type.model_fields:
+            return {"nodes": []}
+        if "participants" in output_type.model_fields:
+            return {"decisions": {}, "participants": {}}
+        decision_field = output_type.model_fields.get("decisions")
+        annotation = getattr(decision_field, "annotation", None)
+        fields = getattr(annotation, "model_fields", {})
+        if not fields:
+            return {"decisions": {}}
+        routing_calls += 1
+        if routing_calls == 1:
+            return {"decisions": {}}
+        return {"decisions": {
+            alias: {
+                "route_kind": "general",
+                "owner_entity": "you",
+                "relationship_kind": "none",
+                "subject_entity": "you",
+                "object_entities": [],
+                "contextual_entities": [],
+                "confidence": 0.9,
+                "reason": "The claim changes the user's durable preferences.",
+            }
+            for alias in fields
+        }}
+
+    llm.call_structured.side_effect = response
 
     result = await dream.router.route([
         ClaimEvidence(item, source) for item in claims
     ])
 
-    assert len(result.failures) == 24
-    assert [route.claim_id for route in result.routes] == ["claim-25"]
+    assert len(result.failures) == 16
+    assert [route.claim_id for route in result.routes] == [
+        f"claim-{index:02d}" for index in range(17, 26)
+    ]
+    units = artifacts.list_identity_work_units()
+    assert [unit.status for unit in units] == ["failed", "complete"]
+
+
+@pytest.mark.asyncio
+async def test_identity_retry_resumes_after_persisted_subject_census(tmp_path):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, source = add_source(logs, artifacts)
+    claim = add_claim(
+        artifacts,
+        source,
+        claim_id="claim-one",
+        text="Atlas is a continuing accessibility project.",
+        about="Atlas",
+        claim_type="plan",
+    )
+    responses = split_scope_plan(new_scope("C001", "Atlas"))
+    llm.call_structured.side_effect = [responses[0], {}]
+
+    first = await dream.router.route([ClaimEvidence(claim, source)])
+
+    assert len(first.failures) == 1
+    failed = artifacts.list_identity_work_units()[0]
+    assert failed.status == "failed"
+    assert failed.stage == "identity_matching"
+    assert failed.subject_nodes
+    assert failed.identity_groups == []
+
+    llm.call_structured.side_effect = responses[1:]
+    second = await dream.router.route([ClaimEvidence(claim, source)])
+
+    assert second.failures == []
+    assert [route.claim_id for route in second.routes] == [claim.claim_id]
+    completed = artifacts.list_identity_work_units()[0]
+    assert completed.status == "complete"
+    assert completed.attempt_count == 2
+    assert completed.identity_groups
+    assert llm.call_structured.call_count == 9
 
 
 def test_entity_plan_contract_combines_identity_containment_and_participants():

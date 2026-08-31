@@ -1059,6 +1059,7 @@ def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
         "entity_references": 0,
         "entity_resolution_decisions": 0,
         "identity_maturity_assessments": 0,
+        "identity_work_units": 0,
         "scope_cohorts": 0,
         "encounters": 0,
         "consolidated_facts": 0,

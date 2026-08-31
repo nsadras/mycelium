@@ -28,6 +28,7 @@ from mycelium.artifact_models import (
     ExtractionBatchState,
     ExtractionSegmentDisposition,
     IdentityMaturityAssessment,
+    IdentityWorkUnit,
     MemoryClaim,
     NonWikiRetentionRecord,
     OrganizationProposal,
@@ -71,6 +72,7 @@ class ArtifactStore:
         self.entity_references_dir = root / "entity-references"
         self.entity_resolution_decisions_dir = root / "entity-resolution-decisions"
         self.identity_maturity_assessments_dir = root / "identity-maturity-assessments"
+        self.identity_work_units_dir = root / "identity-work-units"
         self.scope_cohorts_dir = root / "scope-cohorts"
         self.encounters_dir = root / "encounters"
         self.consolidated_facts_dir = root / "consolidated-facts"
@@ -88,6 +90,7 @@ class ArtifactStore:
             self.entity_references_dir,
             self.entity_resolution_decisions_dir,
             self.identity_maturity_assessments_dir,
+            self.identity_work_units_dir,
             self.scope_cohorts_dir,
             self.encounters_dir,
             self.consolidated_facts_dir,
@@ -123,6 +126,23 @@ class ArtifactStore:
 
     def list_episodes(self) -> list[EpisodeManifest]:
         return [self.get_episode(path.stem) for path in sorted(self.episodes_dir.glob("*.json"))]
+
+    def save_identity_work_unit(self, unit: IdentityWorkUnit) -> None:
+        _atomic_json(
+            self.identity_work_units_dir / f"{_safe_id(unit.unit_id)}.json",
+            asdict(unit),
+        )
+
+    def get_identity_work_unit(self, unit_id: str) -> IdentityWorkUnit:
+        return IdentityWorkUnit(**self._read(
+            self.identity_work_units_dir / f"{_safe_id(unit_id)}.json"
+        ))
+
+    def list_identity_work_units(self) -> list[IdentityWorkUnit]:
+        return [
+            self.get_identity_work_unit(path.stem)
+            for path in sorted(self.identity_work_units_dir.glob("*.json"))
+        ]
 
     def save_claim(self, claim: MemoryClaim) -> None:
         _atomic_json(self.claims_dir / f"{_safe_id(claim.claim_id)}.json", asdict(claim))
@@ -612,6 +632,7 @@ class ArtifactStore:
             "entity_references": 0,
             "entity_resolution_decisions": 0,
             "identity_maturity_assessments": 0,
+            "identity_work_units": 0,
             "scope_cohorts": 0,
             "encounters": 0,
             "consolidated_facts": 0,
@@ -630,6 +651,7 @@ class ArtifactStore:
             ("entity_references", self.entity_references_dir),
             ("entity_resolution_decisions", self.entity_resolution_decisions_dir),
             ("identity_maturity_assessments", self.identity_maturity_assessments_dir),
+            ("identity_work_units", self.identity_work_units_dir),
             ("scope_cohorts", self.scope_cohorts_dir),
             ("encounters", self.encounters_dir),
             ("consolidated_facts", self.consolidated_facts_dir),
@@ -650,6 +672,7 @@ class ArtifactStore:
             "entity_references": 0,
             "entity_resolution_decisions": 0,
             "identity_maturity_assessments": 0,
+            "identity_work_units": 0,
             "scope_cohorts": 0,
             "encounters": 0,
             "consolidated_facts": 0,
@@ -664,6 +687,7 @@ class ArtifactStore:
             ("entity_references", self.entity_references_dir),
             ("entity_resolution_decisions", self.entity_resolution_decisions_dir),
             ("identity_maturity_assessments", self.identity_maturity_assessments_dir),
+            ("identity_work_units", self.identity_work_units_dir),
             ("scope_cohorts", self.scope_cohorts_dir),
             ("encounters", self.encounters_dir),
             ("consolidated_facts", self.consolidated_facts_dir),

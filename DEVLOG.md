@@ -2226,3 +2226,19 @@ one prose-similarity summary.
   inspectable identity/review-quality miss rather than overridden with lexical matching.
 - Validation: **253 passed, 2 skipped**; focused FactResolver and Dream tests passed **46/46**; Ruff and
   `git diff --check` passed.
+
+## 2026-08-31 — Bounded, resumable identity work units
+
+- The fresh LoCoMo conversation 48 run showed that retryable claims were repeatedly combined into a growing
+  all-or-nothing identity contract. Identity work is now bounded to 16 claims in stable cohort order. A malformed
+  subject, matching, type, maturity, entity-plan, or routing response fails only that unit; sibling units continue.
+- Added durable identity work-unit artifacts containing exact claim/source membership, attempt history, current
+  stage, failure reason, and validated subject, matching, type, maturity, and entity-plan outputs. A retry resumes
+  after the last persisted successful stage instead of regenerating its subject census or other accepted decisions.
+- Before integration, a direct `gemma4:12b` production-prompt probe produced a valid subject census for a six-claim
+  neutral cohort. A counterexample with two different people named Rowan remained structurally separate, but the
+  matcher incorrectly declared both new while its reasons associated them with existing registry histories. This
+  confirms that bounded execution is structurally viable and that cross-run new-identity verification must remain a
+  separate next step; no title or lexical fallback was added.
+- Validation: focused Dream/artifact/store/reconsolidation tests passed **113/113**; Ruff and `git diff --check`
+  passed.

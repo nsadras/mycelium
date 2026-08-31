@@ -319,6 +319,36 @@ class IdentityMaturityAssessment:
 
 
 @dataclass
+class IdentityWorkUnit:
+    """Durable bounded unit for resumable identity adjudication."""
+
+    unit_id: str
+    claim_ids: list[str]
+    source_ids: list[str]
+    status: str = "pending"
+    stage: str = "subject_nodes"
+    attempt_count: int = 0
+    subject_nodes: list[dict[str, Any]] = field(default_factory=list)
+    identity_groups: list[dict[str, Any]] = field(default_factory=list)
+    type_proposals: dict[str, dict[str, Any]] = field(default_factory=dict)
+    type_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    maturity_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    maturity_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    entity_plan: dict[str, Any] = field(default_factory=dict)
+    last_error: str | None = None
+    dream_run_ids: list[str] = field(default_factory=list)
+    updated_at: str | None = None
+
+    def __post_init__(self) -> None:
+        self.claim_ids = sorted(set(self.claim_ids))
+        self.source_ids = sorted(set(self.source_ids))
+        self.dream_run_ids = list(dict.fromkeys(self.dream_run_ids))
+        if not self.claim_ids or not self.source_ids:
+            raise ValueError("Identity work units require claims and sources")
+        if self.status not in {"pending", "failed", "complete"}:
+            raise ValueError(f"Unsupported identity work status: {self.status}")
+
+@dataclass
 class ScopeCohort:
     """Persisted, non-lexical evidence neighborhood used for scope revision."""
 

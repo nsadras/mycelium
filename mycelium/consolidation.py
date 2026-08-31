@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
 from datetime import datetime
 from typing import Iterable
 
@@ -17,6 +18,7 @@ from mycelium.artifacts import (
     ClaimPlacement,
     EntityRecord,
     EntityResolutionDecision,
+    IdentityWorkUnit,
     IdentityMaturityAssessment,
 )
 from mycelium.ollama import OllamaClient
@@ -49,6 +51,31 @@ class ClaimRouter:
         seed_entities: Iterable[EntityRecord] = (),
         participant_source_ids: set[str] | None = None,
     ) -> RoutingResult:
+        """Route bounded source cohorts so one malformed identity plan stays local."""
+        result = RoutingResult()
+        seeds = list(seed_entities)
+        for unit_evidence in self._identity_units(evidence):
+            unit = self._work_unit(unit_evidence, dream_run_id)
+            partial = await self._route_unit(
+                unit_evidence,
+                dream_run_id=dream_run_id,
+                seed_entities=seeds,
+                participant_source_ids=participant_source_ids,
+                work_unit=unit,
+            )
+            self._merge_result(result, partial)
+            seeds.extend(partial.new_entities)
+        return result
+
+    async def _route_unit(
+        self,
+        evidence: list[ClaimEvidence],
+        *,
+        dream_run_id: str = "unpersisted",
+        seed_entities: Iterable[EntityRecord] = (),
+        participant_source_ids: set[str] | None = None,
+        work_unit: IdentityWorkUnit,
+    ) -> RoutingResult:
         result = RoutingResult()
         planned = {entity.entity_id: entity for entity in self.artifacts.list_entities()}
         planned.update({entity.entity_id: entity for entity in seed_entities})
@@ -59,6 +86,11 @@ class ClaimRouter:
         }
         if not evidence:
             return result
+        work_unit.attempt_count += 1
+        work_unit.status = "pending"
+        work_unit.last_error = None
+        work_unit.updated_at = datetime.now().astimezone().isoformat()
+        self.artifacts.save_identity_work_unit(work_unit)
         aliases = {f"C{index:03d}": item for index, item in enumerate(evidence, start=1)}
         participants = self.resolution.participant_occurrences(
             evidence, source_ids=participant_source_ids
@@ -69,20 +101,25 @@ class ClaimRouter:
             for entity in planned.values()
             if entity.status == "active"
         }
-        node_model = subject_node_output_model(allowed_evidence, participants)
-        system, user = prompts.subject_node_prompt(
-            self.formatter.entity_catalog(planned.values(), include_sections=False),
-            self.formatter.format_evidence(aliases, participants),
-        )
         try:
-            response = await self.llm.call_structured(
-                system,
-                user,
-                node_model,
-                num_predict=8192,
-                debug_label="dream-subject-nodes",
-            )
-            node_plan = node_model.model_validate(response).model_dump()
+            if work_unit.subject_nodes:
+                node_plan = {"nodes": work_unit.subject_nodes}
+            else:
+                node_model = subject_node_output_model(allowed_evidence, participants)
+                system, user = prompts.subject_node_prompt(
+                    self.formatter.entity_catalog(
+                        planned.values(), include_sections=False
+                    ),
+                    self.formatter.format_evidence(aliases, participants),
+                )
+                response = await self.llm.call_structured(
+                    system,
+                    user,
+                    node_model,
+                    num_predict=8192,
+                    debug_label="dream-subject-nodes",
+                )
+                node_plan = node_model.model_validate(response).model_dump()
             if any(
                 set(node["supporting_evidence"]) - allowed_evidence
                 for node in node_plan["nodes"]
@@ -93,9 +130,14 @@ class ClaimRouter:
             }
             if len(graph_nodes) != len(node_plan["nodes"]):
                 raise ValueError("Subject node census repeated a node ID")
+            work_unit.subject_nodes = node_plan["nodes"]
+            work_unit.stage = "identity_matching"
+            self.artifacts.save_identity_work_unit(work_unit)
         except Exception as exc:
-            return self._fail_batch(
+            return self._fail_work_unit(
+                work_unit,
                 evidence,
+                "subject_nodes",
                 "Subject node response did not satisfy the contract: "
                 f"{type(exc).__name__}: {exc}",
             )
@@ -115,8 +157,10 @@ class ClaimRouter:
                 and reference.entity_id
             }
             if len(reviewed) > 1:
-                return self._fail_batch(
+                return self._fail_work_unit(
+                    work_unit,
                     evidence,
+                    "identity_matching",
                     "Reviewed claim identities conflict within one subject node",
                 )
             if reviewed:
@@ -124,27 +168,33 @@ class ClaimRouter:
 
         match_groups: list[dict] = []
         if census_nodes:
-            match_model = identity_matching_output_model(
-                census_nodes,
-                [entity_id for entity_id in registry_types if entity_id != "you"],
-            )
-            system, user = prompts.identity_matching_prompt(
-                self.formatter.entity_planning_catalog(planned.values()),
-                self.formatter.format_subject_graph(census_nodes, []),
-                self.formatter.format_evidence(aliases, participants),
-                self.formatter.identity_review_catalog(aliases),
-            )
             try:
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    match_model,
-                    num_predict=4096,
-                    debug_label="dream-identity-matching",
-                )
-                match_groups = match_model.model_validate(response).model_dump()[
-                    "identities"
-                ]
+                if work_unit.identity_groups:
+                    match_groups = work_unit.identity_groups
+                else:
+                    match_model = identity_matching_output_model(
+                        census_nodes,
+                        [
+                            entity_id for entity_id in registry_types
+                            if entity_id != "you"
+                        ],
+                    )
+                    system, user = prompts.identity_matching_prompt(
+                        self.formatter.entity_planning_catalog(planned.values()),
+                        self.formatter.format_subject_graph(census_nodes, []),
+                        self.formatter.format_evidence(aliases, participants),
+                        self.formatter.identity_review_catalog(aliases),
+                    )
+                    response = await self.llm.call_structured(
+                        system,
+                        user,
+                        match_model,
+                        num_predict=4096,
+                        debug_label="dream-identity-matching",
+                    )
+                    match_groups = match_model.model_validate(response).model_dump()[
+                        "identities"
+                    ]
                 for group in match_groups:
                     reviewed = {
                         reviewed_node_entities[node_id]
@@ -162,9 +212,14 @@ class ClaimRouter:
                         raise ValueError(
                             "Identity matching conflicts with a reviewed identity"
                         )
+                work_unit.identity_groups = match_groups
+                work_unit.stage = "identity_types"
+                self.artifacts.save_identity_work_unit(work_unit)
             except Exception as exc:
-                return self._fail_batch(
+                return self._fail_work_unit(
+                    work_unit,
                     evidence,
+                    "identity_matching",
                     "Identity matching response did not satisfy the contract: "
                     f"{type(exc).__name__}: {exc}",
                 )
@@ -201,25 +256,33 @@ class ClaimRouter:
         type_proposals: dict[str, dict] = {}
         type_verdicts: dict[str, dict] = {}
         if unresolved_type_evidence:
-            type_model = identity_type_output_model(unresolved_type_evidence)
-            system, user = prompts.identity_types_prompt(
-                self.formatter.format_identity_groups(graph_nodes),
-                self.formatter.format_evidence(aliases, participants),
-            )
             try:
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    type_model,
-                    num_predict=4096,
-                    debug_label="dream-identity-types",
-                )
-                type_proposals = type_model.model_validate(response).model_dump()[
-                    "decisions"
-                ]
+                if work_unit.type_proposals:
+                    type_proposals = work_unit.type_proposals
+                else:
+                    type_model = identity_type_output_model(unresolved_type_evidence)
+                    system, user = prompts.identity_types_prompt(
+                        self.formatter.format_identity_groups(graph_nodes),
+                        self.formatter.format_evidence(aliases, participants),
+                    )
+                    response = await self.llm.call_structured(
+                        system,
+                        user,
+                        type_model,
+                        num_predict=4096,
+                        debug_label="dream-identity-types",
+                    )
+                    type_proposals = type_model.model_validate(response).model_dump()[
+                        "decisions"
+                    ]
+                work_unit.type_proposals = type_proposals
+                work_unit.stage = "identity_type_verification"
+                self.artifacts.save_identity_work_unit(work_unit)
             except Exception as exc:
-                return self._fail_batch(
+                return self._fail_work_unit(
+                    work_unit,
                     evidence,
+                    "identity_types",
                     "Identity type response did not satisfy the contract: "
                     f"{type(exc).__name__}: {exc}",
                 )
@@ -236,19 +299,27 @@ class ClaimRouter:
                 self.formatter.format_evidence(aliases, participants),
             )
             try:
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    type_verification_model,
-                    num_predict=4096,
-                    debug_label="dream-identity-type-verification",
-                )
-                type_verdicts = type_verification_model.model_validate(
-                    response
-                ).model_dump()["decisions"]
+                if work_unit.type_verdicts:
+                    type_verdicts = work_unit.type_verdicts
+                else:
+                    response = await self.llm.call_structured(
+                        system,
+                        user,
+                        type_verification_model,
+                        num_predict=4096,
+                        debug_label="dream-identity-type-verification",
+                    )
+                    type_verdicts = type_verification_model.model_validate(
+                        response
+                    ).model_dump()["decisions"]
+                work_unit.type_verdicts = type_verdicts
+                work_unit.stage = "identity_maturity"
+                self.artifacts.save_identity_work_unit(work_unit)
             except Exception as exc:
-                return self._fail_batch(
+                return self._fail_work_unit(
+                    work_unit,
                     evidence,
+                    "identity_type_verification",
                     "Identity type verification did not satisfy the contract: "
                     f"{type(exc).__name__}: {exc}",
                 )
@@ -308,19 +379,27 @@ class ClaimRouter:
             self.formatter.format_evidence(aliases, participants),
         )
         try:
-            response = await self.llm.call_structured(
-                system,
-                user,
-                maturity_model,
-                num_predict=4096,
-                debug_label="dream-identity-maturity",
-            )
-            maturity_decisions = maturity_model.model_validate(
-                response
-            ).model_dump()["decisions"]
+            if work_unit.maturity_decisions:
+                maturity_decisions = work_unit.maturity_decisions
+            else:
+                response = await self.llm.call_structured(
+                    system,
+                    user,
+                    maturity_model,
+                    num_predict=4096,
+                    debug_label="dream-identity-maturity",
+                )
+                maturity_decisions = maturity_model.model_validate(
+                    response
+                ).model_dump()["decisions"]
+            work_unit.maturity_decisions = maturity_decisions
+            work_unit.stage = "identity_maturity_verification"
+            self.artifacts.save_identity_work_unit(work_unit)
         except Exception as exc:
-            return self._fail_batch(
+            return self._fail_work_unit(
+                work_unit,
                 evidence,
+                "identity_maturity",
                 "Identity maturity response did not satisfy the contract: "
                 f"{type(exc).__name__}: {exc}",
             )
@@ -339,19 +418,27 @@ class ClaimRouter:
             self.formatter.format_evidence(aliases, participants),
         )
         try:
-            response = await self.llm.call_structured(
-                system,
-                user,
-                verification_model,
-                num_predict=4096,
-                debug_label="dream-identity-maturity-verification",
-            )
-            maturity_verdicts = verification_model.model_validate(
-                response
-            ).model_dump()["decisions"]
+            if work_unit.maturity_verdicts:
+                maturity_verdicts = work_unit.maturity_verdicts
+            else:
+                response = await self.llm.call_structured(
+                    system,
+                    user,
+                    verification_model,
+                    num_predict=4096,
+                    debug_label="dream-identity-maturity-verification",
+                )
+                maturity_verdicts = verification_model.model_validate(
+                    response
+                ).model_dump()["decisions"]
+            work_unit.maturity_verdicts = maturity_verdicts
+            work_unit.stage = "entity_plan"
+            self.artifacts.save_identity_work_unit(work_unit)
         except Exception as exc:
-            return self._fail_batch(
+            return self._fail_work_unit(
+                work_unit,
                 evidence,
+                "identity_maturity_verification",
                 "Identity maturity verification did not satisfy the contract: "
                 f"{type(exc).__name__}: {exc}",
             )
@@ -393,20 +480,25 @@ class ClaimRouter:
                     if node["type_adjudication"] == "review_required"
                 } | maturity_review_required_nodes,
             )
-            system, user = prompts.entity_plan_prompt(
-                self.formatter.entity_planning_catalog(planned.values()),
-                self.formatter.format_subject_graph(graph_nodes, []),
-                self.formatter.format_evidence(aliases, participants),
-                self.formatter.identity_review_catalog(aliases),
-            )
-            response = await self.llm.call_structured(
-                system,
-                user,
-                entity_model,
-                num_predict=8192,
-                debug_label="dream-entity-plan",
-            )
-            entity_plan = entity_model.model_validate(response).model_dump()
+            if work_unit.entity_plan:
+                entity_plan = entity_model.model_validate(
+                    work_unit.entity_plan
+                ).model_dump()
+            else:
+                system, user = prompts.entity_plan_prompt(
+                    self.formatter.entity_planning_catalog(planned.values()),
+                    self.formatter.format_subject_graph(graph_nodes, []),
+                    self.formatter.format_evidence(aliases, participants),
+                    self.formatter.identity_review_catalog(aliases),
+                )
+                response = await self.llm.call_structured(
+                    system,
+                    user,
+                    entity_model,
+                    num_predict=8192,
+                    debug_label="dream-entity-plan",
+                )
+                entity_plan = entity_model.model_validate(response).model_dump()
             entity_decisions = entity_plan["decisions"]
             if set(entity_decisions) != set(graph_nodes):
                 raise ValueError("Entity plan did not cover exact census nodes")
@@ -436,9 +528,14 @@ class ClaimRouter:
                     or graph_nodes[entity_ref]["entity_type"] != "person"
                 ):
                     raise ValueError("Participant did not resolve to a Person node")
+            work_unit.entity_plan = entity_plan
+            work_unit.stage = "claim_routing"
+            self.artifacts.save_identity_work_unit(work_unit)
         except Exception as exc:
-            return self._fail_batch(
+            return self._fail_work_unit(
+                work_unit,
                 evidence,
+                "entity_plan",
                 "Entity plan response did not satisfy the contract: "
                 f"{type(exc).__name__}: {exc}",
             )
@@ -800,7 +897,66 @@ class ClaimRouter:
             dream_run_id,
             now,
         )
+        work_unit.status = "failed" if result.failures else "complete"
+        work_unit.stage = "claim_routing" if result.failures else "complete"
+        work_unit.last_error = (
+            result.failures[0].reason if result.failures else None
+        )
+        work_unit.updated_at = datetime.now().astimezone().isoformat()
+        self.artifacts.save_identity_work_unit(work_unit)
         return result
+
+    @staticmethod
+    def _identity_units(
+        evidence: list[ClaimEvidence], size: int = 16
+    ) -> list[list[ClaimEvidence]]:
+        """Bound identity contracts while preserving the cohort's stable order."""
+        return [
+            evidence[start:start + size]
+            for start in range(0, len(evidence), size)
+        ]
+
+    def _work_unit(
+        self, evidence: list[ClaimEvidence], dream_run_id: str
+    ) -> IdentityWorkUnit:
+        claim_ids = sorted(item.claim.claim_id for item in evidence)
+        digest = hashlib.sha256("\n".join(claim_ids).encode()).hexdigest()[:16]
+        unit_id = f"identity-work-{digest}"
+        try:
+            unit = self.artifacts.get_identity_work_unit(unit_id)
+        except FileNotFoundError:
+            unit = IdentityWorkUnit(
+                unit_id=unit_id,
+                claim_ids=claim_ids,
+                source_ids=sorted({item.source.source_id for item in evidence}),
+            )
+        unit.dream_run_ids.append(dream_run_id)
+        unit.dream_run_ids = list(dict.fromkeys(unit.dream_run_ids))
+        return unit
+
+    @staticmethod
+    def _merge_result(target: RoutingResult, source: RoutingResult) -> None:
+        target.routes.extend(source.routes)
+        target.new_entities.extend(source.new_entities)
+        target.failures.extend(source.failures)
+        target.encounters.extend(source.encounters)
+        target.entity_decisions.extend(source.entity_decisions)
+        target.maturity_assessments.extend(source.maturity_assessments)
+        target.entity_references.extend(source.entity_references)
+
+    def _fail_work_unit(
+        self,
+        work_unit: IdentityWorkUnit,
+        evidence: Iterable[ClaimEvidence],
+        stage: str,
+        reason: str,
+    ) -> RoutingResult:
+        work_unit.status = "failed"
+        work_unit.stage = stage
+        work_unit.last_error = reason
+        work_unit.updated_at = datetime.now().astimezone().isoformat()
+        self.artifacts.save_identity_work_unit(work_unit)
+        return self._fail_batch(evidence, reason)
 
     def _route_decision(
         self,

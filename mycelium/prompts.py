@@ -104,21 +104,50 @@ def claim_routing_prompt(
     )
 
 
-def fact_resolution_prompt(
+def fact_truth_prompt(
     owner: str,
-    sections: str,
     claims: str,
     existing_facts: str,
     reviewed_relations: str,
+    incoming_claims: str,
 ) -> tuple[str, str]:
-    """Resolve one owner's claims into a complete source-grounded fact plan."""
     return render_prompt_pair(
-        "memory/fact_resolution",
+        "memory/fact_truth",
         owner=owner,
-        sections=sections,
         claims=claims,
         existing_facts=existing_facts,
         reviewed_relations=reviewed_relations,
+        incoming_claims=incoming_claims,
+    )
+
+
+def fact_grouping_prompt(
+    owner: str,
+    claims: str,
+    existing_facts: str,
+    truth_changes: str,
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/fact_grouping",
+        owner=owner,
+        claims=claims,
+        existing_facts=existing_facts,
+        truth_changes=truth_changes,
+    )
+
+
+def fact_rendering_prompt(
+    owner: str,
+    sections: str,
+    groups: str,
+    existing_facts: str,
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/fact_rendering",
+        owner=owner,
+        sections=sections,
+        groups=groups,
+        existing_facts=existing_facts,
     )
 
 

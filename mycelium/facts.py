@@ -20,7 +20,11 @@ from mycelium.artifacts import (
 from mycelium.ollama import OllamaClient
 from mycelium.ontology import default_section, entity_type_definition
 from mycelium.projection import display_claim_text
-from mycelium.structured_outputs import fact_resolution_output_model
+from mycelium.structured_outputs import (
+    fact_grouping_output_model,
+    fact_rendering_output_model,
+    fact_truth_output_model,
+)
 
 
 @dataclass(frozen=True)
@@ -177,26 +181,109 @@ class FactResolver:
         alias_for_entity = {
             entity_id: alias for alias, entity_id in linked_aliases.items()
         }
-        system, user = prompts.fact_resolution_prompt(
-            self._owner_text(owner),
-            "\n".join(
-                f"{section.key}: {section.description}" for section in definition.sections
-            ),
-            self._claims_text(aliases, placements, alias_for_entity, entities),
-            self._existing_facts_text(existing, alias_for_claim),
-            self._relations_text(owner_id, alias_for_claim),
+        owner_text = self._owner_text(owner)
+        claims_text = self._claims_text(
+            aliases, placements, alias_for_entity, entities
         )
-        schema = fact_resolution_output_model(
-            aliases, definition.section_keys()
+        existing_text = self._existing_facts_text(existing, alias_for_claim)
+        relations_text = self._relations_text(owner_id, alias_for_claim)
+        incoming_aliases = sorted(
+            alias for alias, claim in aliases.items()
+            if claim.claim_id in incoming_claim_ids
         )
+        system, user = prompts.fact_truth_prompt(
+            owner_text,
+            claims_text,
+            existing_text,
+            relations_text,
+            json.dumps(incoming_aliases),
+        )
+        truth_schema = fact_truth_output_model(aliases)
         response = await self.llm.call_structured(
             system,
             user,
-            schema,
-            num_predict=4096,
-            debug_label="dream-fact-resolution",
+            truth_schema,
+            num_predict=2048,
+            debug_label="dream-fact-truth",
         )
-        plan = schema.model_validate(response).model_dump()
+        changes = truth_schema.model_validate(response).model_dump()["truth_changes"]
+        self._validate_truth_changes(changes, aliases, incoming_claim_ids)
+
+        system, user = prompts.fact_grouping_prompt(
+            owner_text,
+            claims_text,
+            existing_text,
+            json.dumps(changes, ensure_ascii=False, sort_keys=True),
+        )
+        grouping_schema = fact_grouping_output_model(aliases, changes)
+        response = await self.llm.call_structured(
+            system,
+            user,
+            grouping_schema,
+            num_predict=4096,
+            debug_label="dream-fact-grouping",
+        )
+        assignments = grouping_schema.model_validate(response).model_dump()[
+            "assignments"
+        ]
+        members_by_key: dict[str, list[str]] = {}
+        for alias, assignment in assignments.items():
+            members_by_key.setdefault(assignment["fact_key"], []).append(alias)
+
+        rendered_facts: dict[str, dict] = {}
+        fact_keys = sorted(members_by_key)
+        for batch_index, batch_keys in enumerate(
+            self._fact_key_batches(fact_keys), start=1
+        ):
+            batch_aliases = {
+                alias: aliases[alias]
+                for key in batch_keys
+                for alias in members_by_key[key]
+            }
+            batch_claim_ids = {
+                claim.claim_id for claim in batch_aliases.values()
+            }
+            batch_existing = [
+                fact for fact in existing
+                if set(fact.member_claim_ids) & batch_claim_ids
+            ]
+            system, user = prompts.fact_rendering_prompt(
+                owner_text,
+                "\n".join(
+                    f"{section.key}: {section.description}"
+                    for section in definition.sections
+                ),
+                self._fact_groups_text(
+                    batch_keys,
+                    members_by_key,
+                    batch_aliases,
+                    placements,
+                    alias_for_entity,
+                    entities,
+                ),
+                self._existing_facts_text(batch_existing, alias_for_claim),
+            )
+            rendering_schema = fact_rendering_output_model(
+                batch_keys, definition.section_keys()
+            )
+            response = await self.llm.call_structured(
+                system,
+                user,
+                rendering_schema,
+                num_predict=4096,
+                debug_label=f"dream-fact-rendering-{batch_index}",
+            )
+            rendered_facts.update(
+                rendering_schema.model_validate(response).model_dump()["facts"]
+            )
+        plan = {
+            "assignments": assignments,
+            "facts": [
+                {"fact_key": fact_key, **rendered_facts[fact_key]}
+                for fact_key in fact_keys
+            ],
+            "truth_changes": changes,
+        }
         groups, changes = self._validate_plan(
             plan, aliases, placements, incoming_claim_ids
         )
@@ -383,6 +470,32 @@ class FactResolver:
             for index, fact in enumerate(facts, start=1)
         )
 
+    def _fact_groups_text(
+        self,
+        fact_keys: list[str],
+        members_by_key: dict[str, list[str]],
+        aliases: dict[str, MemoryClaim],
+        placements: dict[str, ClaimPlacement],
+        alias_for_entity: dict[str, str],
+        entities: dict[str, EntityRecord],
+    ) -> str:
+        membership = "\n".join(
+            f"[{fact_key}] members={json.dumps(members_by_key[fact_key])}"
+            for fact_key in fact_keys
+        )
+        return membership + "\n\n" + self._claims_text(
+            aliases, placements, alias_for_entity, entities
+        )
+
+    @staticmethod
+    def _fact_key_batches(
+        fact_keys: list[str], batch_size: int = 12
+    ) -> list[list[str]]:
+        return [
+            fact_keys[index:index + batch_size]
+            for index in range(0, len(fact_keys), batch_size)
+        ]
+
     def _relations_text(
         self, owner_id: str, alias_for_claim: dict[str, str]
     ) -> str:
@@ -429,19 +542,43 @@ class FactResolver:
         for key, members in members_by_key.items():
             fact = fact_by_key[key]
             groups.append((fact, members))
-        changed_aliases: set[str] = set()
+        FactResolver._validate_truth_changes(
+            plan["truth_changes"], aliases, incoming_claim_ids
+        )
         for change in plan["truth_changes"]:
             incoming = set(change["incoming_claim_aliases"])
             targets = set(change["target_claim_aliases"])
-            if incoming & targets or changed_aliases & (incoming | targets):
-                raise ValueError("Truth-change claim sides must be distinct and non-overlapping")
-            if any(aliases[alias].claim_id not in incoming_claim_ids for alias in incoming):
-                raise ValueError("Truth-change incoming claims must come from this Dream cohort")
-            if any(aliases[alias].claim_id in incoming_claim_ids for alias in targets):
-                raise ValueError("Truth-change targets must be previously accepted claims")
             incoming_keys = {assignments[alias]["fact_key"] for alias in incoming}
             target_keys = {assignments[alias]["fact_key"] for alias in targets}
             if incoming_keys & target_keys:
                 raise ValueError("Truth-change sides cannot share a fact")
-            changed_aliases.update(incoming | targets)
         return groups, plan["truth_changes"]
+
+    @staticmethod
+    def _validate_truth_changes(
+        changes: list[dict],
+        aliases: dict[str, MemoryClaim],
+        incoming_claim_ids: set[str],
+    ) -> None:
+        changed_aliases: set[str] = set()
+        for change in changes:
+            incoming = set(change["incoming_claim_aliases"])
+            targets = set(change["target_claim_aliases"])
+            if incoming & targets or changed_aliases & (incoming | targets):
+                raise ValueError(
+                    "Truth-change claim sides must be distinct and non-overlapping"
+                )
+            if any(
+                aliases[alias].claim_id not in incoming_claim_ids
+                for alias in incoming
+            ):
+                raise ValueError(
+                    "Truth-change incoming claims must come from this Dream cohort"
+                )
+            if any(
+                aliases[alias].claim_id in incoming_claim_ids for alias in targets
+            ):
+                raise ValueError(
+                    "Truth-change targets must be previously accepted claims"
+                )
+            changed_aliases.update(incoming | targets)

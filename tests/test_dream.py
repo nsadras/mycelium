@@ -329,26 +329,30 @@ def fact_resolution_plan(
     facts: dict[str, tuple[list[str], str, str]],
     *,
     truth_changes: list[dict] | None = None,
-) -> dict:
-    return {
-        "assignments": {
-            alias: {"fact_key": fact_key}
+) -> list[dict]:
+    keyed = {
+        fact_key: f"F{index:03d}"
+        for index, fact_key in enumerate(facts, start=1)
+    }
+    presentations = {
+        keyed[fact_key]: {
+            "state": "current",
+            "section_key": section,
+            "text": text,
+            "confidence": 0.9,
+            "reason": "Source-grounded test resolution.",
+        }
+        for fact_key, (_, text, section) in facts.items()
+    }
+    return [
+        {"truth_changes": list(truth_changes or [])},
+        {"assignments": {
+            alias: {"fact_key": keyed[fact_key]}
             for fact_key, (aliases, _, _) in facts.items()
             for alias in aliases
-        },
-        "facts": [
-            {
-                "fact_key": fact_key,
-                "state": "current",
-                "section_key": section,
-                "text": text,
-                "confidence": 0.9,
-                "reason": "Source-grounded test resolution.",
-            }
-            for fact_key, (_, text, section) in facts.items()
-        ],
-        "truth_changes": list(truth_changes or []),
-    }
+        }},
+        {"facts": presentations},
+    ]
 
 
 def participant(entity: str) -> dict:
@@ -1078,7 +1082,7 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
     dream.llm.call_structured.side_effect = [
         *discovery_responses,
         *revision_responses,
-        fact_resolution_plan({
+        *fact_resolution_plan({
             "early": (["C001"], early.text, "next_steps_deadlines"),
             "identity": (["C002"], identity.text, "overview"),
             "state": (["C003"], state.text, "current_status"),
@@ -1142,7 +1146,7 @@ async def test_later_dream_discovers_page_from_claims_across_episodes(tmp_path):
     use_multiple_episode_maturity(discovery_responses, "N001")
     llm.call_structured.side_effect = [
         *discovery_responses,
-        fact_resolution_plan({
+        *fact_resolution_plan({
             "research": (["C001"], first.text, "timeline"),
             "interview": (["C002"], second.text, "next_steps_deadlines"),
         }),
@@ -1613,7 +1617,7 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
         *split_scope_plan(scope_plan({
             "C001": assignment("topic-stable-page", supporting=["C001"])
         })),
-        fact_resolution_plan({
+        *fact_resolution_plan({
             "tea": (["C001"], "Stable Page records a tea preference.", "why_it_matters"),
             "coffee": (["C002"], "Stable Page records a coffee preference.", "why_it_matters"),
         }),
@@ -1691,7 +1695,7 @@ async def test_dream_preserves_accepted_fact_while_contradiction_is_pending(tmp_
     )
     llm.call_structured.side_effect = [
         *split_scope_plan(you_scope()),
-        fact_resolution_plan(
+        *fact_resolution_plan(
             {
                 "new": (["C001"], "The user dislikes tea.", "preferences_working_style"),
                 "old": (["C002"], "The user prefers tea.", "preferences_working_style"),
@@ -1744,7 +1748,8 @@ async def test_invalid_fact_resolution_keeps_source_pending_and_page_unchanged(t
     )
     llm.call_structured.side_effect = [
         *split_scope_plan(you_scope()),
-        {"assignments": {}, "facts": [], "truth_changes": []},
+        {"truth_changes": []},
+        {"assignments": {}},
     ]
 
     report = await dream.run()

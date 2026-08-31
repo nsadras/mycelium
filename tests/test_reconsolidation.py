@@ -75,6 +75,19 @@ def fact(item: MemoryClaim) -> ConsolidatedFact:
     )
 
 
+def staged_fact_responses(plan: dict) -> list[dict]:
+    return [
+        {"truth_changes": plan["truth_changes"]},
+        {"assignments": plan["assignments"]},
+        {"facts": {
+            item["fact_key"]: {
+                key: value for key, value in item.items() if key != "fact_key"
+            }
+            for item in plan["facts"]
+        }},
+    ]
+
+
 @pytest.mark.asyncio
 async def test_owner_plan_groups_independent_support(tmp_path):
     artifacts = setup_owner(tmp_path)
@@ -82,10 +95,10 @@ async def test_owner_plan_groups_independent_support(tmp_path):
     second = claim("second", "Written updates are preferred.", "2026-08-02T12:00:00")
     placements = [place(artifacts, first), place(artifacts, second)]
     llm = AsyncMock()
-    llm.call_structured.return_value = {
-        "assignments": {"C001": {"fact_key": "updates"}, "C002": {"fact_key": "updates"}},
+    llm.call_structured.side_effect = staged_fact_responses({
+        "assignments": {"C001": {"fact_key": "F001"}, "C002": {"fact_key": "F001"}},
         "facts": [{
-            "fact_key": "updates",
+            "fact_key": "F001",
             "state": "current",
             "section_key": "preferences_working_style",
             "text": "The user prefers written updates.",
@@ -93,7 +106,7 @@ async def test_owner_plan_groups_independent_support(tmp_path):
             "reason": "Independent support.",
         }],
         "truth_changes": [],
-    }
+    })
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -133,13 +146,13 @@ async def test_grouped_project_roles_preserve_each_claims_exact_project_link(tmp
         artifacts.save_placement(placement)
         placements.append(placement)
     llm = AsyncMock()
-    llm.call_structured.return_value = {
+    llm.call_structured.side_effect = staged_fact_responses({
         "assignments": {
-            "C001": {"fact_key": "coordination"},
-            "C002": {"fact_key": "coordination"},
+            "C001": {"fact_key": "F001"},
+            "C002": {"fact_key": "F001"},
         },
         "facts": [{
-            "fact_key": "coordination",
+            "fact_key": "F001",
             "state": "current",
             "section_key": "shared_projects",
             "text": "Rosa coordinates permits for two projects.",
@@ -147,7 +160,7 @@ async def test_grouped_project_roles_preserve_each_claims_exact_project_link(tmp
             "reason": "Related responsibilities.",
         }],
         "truth_changes": [],
-    }
+    })
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -176,11 +189,11 @@ async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_p
     old_fact = fact(old)
     artifacts.save_consolidated_fact(old_fact)
     llm = AsyncMock()
-    llm.call_structured.return_value = {
-        "assignments": {"C001": {"fact_key": "old"}, "C002": {"fact_key": "new"}},
+    llm.call_structured.side_effect = staged_fact_responses({
+        "assignments": {"C001": {"fact_key": "F001"}, "C002": {"fact_key": "F002"}},
         "facts": [
-            {"fact_key": "old", "state": "current", "section_key": "preferences_working_style", "text": old.text, "confidence": 0.9, "reason": "Accepted state."},
-            {"fact_key": "new", "state": "current", "section_key": "preferences_working_style", "text": new.text, "confidence": 0.9, "reason": "Proposed replacement."},
+            {"fact_key": "F001", "state": "current", "section_key": "preferences_working_style", "text": old.text, "confidence": 0.9, "reason": "Accepted state."},
+            {"fact_key": "F002", "state": "current", "section_key": "preferences_working_style", "text": new.text, "confidence": 0.9, "reason": "Proposed replacement."},
         ],
         "truth_changes": [{
             "relation": "supersedes",
@@ -189,7 +202,7 @@ async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_p
             "explanation": "The newer statement explicitly replaces the old preference.",
             "confidence": 0.92,
         }],
-    }
+    })
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -215,11 +228,10 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
     old_fact = fact(old)
     artifacts.save_consolidated_fact(old_fact)
     llm = AsyncMock()
-    llm.call_structured.return_value = {
-        "assignments": {"C001": {"fact_key": "same"}, "C002": {"fact_key": "same"}},
-        "facts": [{"fact_key": "same", "state": "current", "section_key": "preferences_working_style", "text": "The user has conflicting drink preferences.", "confidence": 0.5, "reason": "Invalid grouping."}],
-        "truth_changes": [{"relation": "supersedes", "incoming_claim_aliases": ["C002"], "target_claim_aliases": ["C001"], "explanation": "Replacement.", "confidence": 0.9}],
-    }
+    llm.call_structured.side_effect = [
+        {"truth_changes": [{"relation": "supersedes", "incoming_claim_aliases": ["C002"], "target_claim_aliases": ["C001"], "explanation": "Replacement.", "confidence": 0.9}]},
+        {"assignments": {"C001": {"fact_key": "F001"}, "C002": {"fact_key": "F001"}}},
+    ]
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -232,6 +244,55 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
     assert result.facts == [old_fact]
     assert result.deleted_fact_ids == set()
     assert result.proposals == []
+
+
+@pytest.mark.asyncio
+async def test_fact_presentations_are_rendered_in_bounded_batches(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    claims = [
+        claim(
+            f"claim-{index:02d}",
+            f"The user records distinct preference {index}.",
+            f"2026-08-{index:02d}T12:00:00",
+        )
+        for index in range(1, 14)
+    ]
+    placements = [place(artifacts, item) for item in claims]
+    assignments = {
+        f"C{index:03d}": {"fact_key": f"F{index:03d}"}
+        for index in range(1, 14)
+    }
+
+    def rendered(start: int, end: int) -> dict:
+        return {"facts": {
+            f"F{index:03d}": {
+                "state": "current",
+                "section_key": "preferences_working_style",
+                "text": claims[index - 1].text,
+                "confidence": 0.9,
+                "reason": "One fixed source-grounded claim group.",
+            }
+            for index in range(start, end)
+        }}
+
+    llm = AsyncMock()
+    llm.call_structured.side_effect = [
+        {"truth_changes": []},
+        {"assignments": assignments},
+        rendered(1, 13),
+        rendered(13, 14),
+    ]
+
+    result = await FactResolver(llm, artifacts).resolve(
+        placements,
+        affected_entity_ids={"you"},
+        incoming_claim_ids={item.claim_id for item in claims},
+        dream_run_id="dream-1",
+    )
+
+    assert result.failures == []
+    assert len(result.facts) == 13
+    assert llm.call_structured.await_count == 4
 
 
 @pytest.mark.asyncio

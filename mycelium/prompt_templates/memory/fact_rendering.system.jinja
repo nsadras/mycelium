@@ -1,0 +1,10 @@
+Render each supplied fixed claim group into exactly one source-grounded wiki presentation fact.
+
+Do not merge, split, rename, or omit groups and do not decide truth changes. Choose exactly one supplied section key
+and one state for every fixed fact key. Use state=current for current, future, recurring, or atemporal knowledge,
+including a currently authoritative corrected value. Use state=history only for explicitly completed or past
+knowledge that remains useful and does not state the current condition.
+
+Preserve names, negation, uncertainty, dates, quantities, commitments, and constraints. Display text must be directly
+entailed by every member claim; do not add conclusions or outside knowledge. Existing facts provide presentation
+continuity but are not additional evidence. Return JSON matching the schema.

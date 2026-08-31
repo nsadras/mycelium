@@ -241,14 +241,12 @@ class FactClaimAssignmentOutput(BaseModel):
     """Assign one exact claim alias to one output fact key."""
 
     model_config = ConfigDict(extra="forbid")
-    fact_key: str = Field(min_length=1, max_length=80)
+    fact_key: str = Field(pattern=r"^F[0-9]{3}$")
 
 
-class FactResolutionGroupOutput(BaseModel):
-    """One presentation fact referenced by exact claim assignments."""
-
+class FactPresentationOutput(BaseModel):
+    """One presentation fact for a fixed claim group."""
     model_config = ConfigDict(extra="forbid")
-    fact_key: str = Field(min_length=1, max_length=80)
     state: Literal["current", "history"]
     section_key: str = Field(min_length=1, max_length=80)
     text: str = Field(min_length=1, max_length=800)
@@ -267,67 +265,11 @@ class FactTruthChangeOutput(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-class FactResolutionPlanOutput(BaseModel):
-    """Complete owner-scoped truth and presentation decision."""
-
-    model_config = ConfigDict(extra="forbid")
-    assignments: dict[str, FactClaimAssignmentOutput]
-    facts: list[FactResolutionGroupOutput] = Field(min_length=1, max_length=128)
-    truth_changes: list[FactTruthChangeOutput] = Field(default_factory=list, max_length=48)
-
-    @model_validator(mode="after")
-    def validate_complete_fact_graph(self):
-        fact_keys = [fact.fact_key for fact in self.facts]
-        if len(fact_keys) != len(set(fact_keys)):
-            raise ValueError("Fact keys must be unique")
-        assignments = (
-            self.assignments.model_dump()
-            if isinstance(self.assignments, BaseModel)
-            else self.assignments
-        )
-        assigned_keys = {
-            str(assignment["fact_key"]) for assignment in assignments.values()
-        }
-        if assigned_keys != set(fact_keys):
-            raise ValueError(
-                "Every assigned fact key must have exactly one used definition"
-            )
-        changed: set[str] = set()
-        for change in self.truth_changes:
-            incoming = set(change.incoming_claim_aliases)
-            targets = set(change.target_claim_aliases)
-            if incoming & targets or changed & (incoming | targets):
-                raise ValueError(
-                    "Truth-change claim sides must be distinct and non-overlapping"
-                )
-            incoming_keys = {assignments[alias]["fact_key"] for alias in incoming}
-            target_keys = {assignments[alias]["fact_key"] for alias in targets}
-            if incoming_keys & target_keys:
-                raise ValueError("Truth-change sides cannot share a fact")
-            changed.update(incoming | targets)
-        return self
-
-
-def fact_resolution_output_model(
-    claim_aliases: Collection[str],
-    allowed_sections: Collection[str],
-) -> type[BaseModel]:
-    """Build an owner-scoped plan that structurally accounts for every claim."""
+def fact_truth_output_model(claim_aliases: Collection[str]) -> type[BaseModel]:
+    """Build a compact owner-wide truth-change decision."""
     claims = tuple(dict.fromkeys(str(value) for value in claim_aliases if value))
-    sections = tuple(dict.fromkeys(str(value) for value in allowed_sections if value))
-    if not claims or not sections:
-        raise ValueError("Fact resolution requires claim aliases and allowed sections")
-    assignments_model = create_model(
-        "ExactFactClaimAssignments",
-        __config__=ConfigDict(extra="forbid"),
-        **{alias: (FactClaimAssignmentOutput, ...) for alias in claims},
-    )
-    section_type = Literal.__getitem__(sections)
-    exact_fact = create_model(
-        "ExactFactResolutionGroup",
-        __base__=FactResolutionGroupOutput,
-        section_key=(section_type, ...),  # type: ignore[valid-type]
-    )
+    if not claims:
+        raise ValueError("Fact truth resolution requires claim aliases")
     claim_type = Literal.__getitem__(claims)
     exact_change = create_model(
         "ExactFactTruthChange",
@@ -341,12 +283,93 @@ def fact_resolution_output_model(
             Field(min_length=1, max_length=48),
         ),
     )
-    return create_model(
-        "ExactFactResolutionPlan",
-        __base__=FactResolutionPlanOutput,
-        assignments=(assignments_model, ...),
-        facts=(list[exact_fact], Field(min_length=1, max_length=128)),
+    base_model = create_model(
+        "ExactFactTruthPlan",
+        __config__=ConfigDict(extra="forbid"),
         truth_changes=(list[exact_change], Field(default_factory=list, max_length=48)),
+    )
+
+    class ExactFactTruthPlan(base_model):  # type: ignore[valid-type, misc]
+        @model_validator(mode="after")
+        def validate_disjoint_changes(self):
+            changed: set[str] = set()
+            for change in self.truth_changes:
+                incoming = set(change.incoming_claim_aliases)
+                targets = set(change.target_claim_aliases)
+                if incoming & targets or changed & (incoming | targets):
+                    raise ValueError(
+                        "Truth-change claim sides must be distinct and non-overlapping"
+                    )
+                changed.update(incoming | targets)
+            return self
+
+    return ExactFactTruthPlan
+
+
+def fact_grouping_output_model(
+    claim_aliases: Collection[str],
+    truth_changes: Collection[Mapping[str, Any]],
+) -> type[BaseModel]:
+    """Build exact compact claim-to-fact assignments after truth adjudication."""
+    claims = tuple(dict.fromkeys(str(value) for value in claim_aliases if value))
+    if not claims:
+        raise ValueError("Fact grouping requires claim aliases")
+    assignments_model = create_model(
+        "ExactFactClaimAssignments",
+        __config__=ConfigDict(extra="forbid"),
+        **{alias: (FactClaimAssignmentOutput, ...) for alias in claims},
+    )
+    base_model = create_model(
+        "ExactFactGroupingPlan",
+        __config__=ConfigDict(extra="forbid"),
+        assignments=(assignments_model, ...),
+    )
+    change_sides = [
+        (
+            tuple(str(value) for value in change["incoming_claim_aliases"]),
+            tuple(str(value) for value in change["target_claim_aliases"]),
+        )
+        for change in truth_changes
+    ]
+
+    class ExactFactGroupingPlan(base_model):  # type: ignore[valid-type, misc]
+        @model_validator(mode="after")
+        def validate_truth_change_separation(self):
+            assignments = self.assignments.model_dump()
+            for incoming, targets in change_sides:
+                incoming_keys = {assignments[alias]["fact_key"] for alias in incoming}
+                target_keys = {assignments[alias]["fact_key"] for alias in targets}
+                if incoming_keys & target_keys:
+                    raise ValueError("Truth-change sides cannot share a fact")
+            return self
+
+    return ExactFactGroupingPlan
+
+
+def fact_rendering_output_model(
+    fact_keys: Collection[str],
+    allowed_sections: Collection[str],
+) -> type[BaseModel]:
+    """Build exact presentation definitions for one bounded group batch."""
+    keys = tuple(dict.fromkeys(str(value) for value in fact_keys if value))
+    sections = tuple(dict.fromkeys(str(value) for value in allowed_sections if value))
+    if not keys or not sections:
+        raise ValueError("Fact rendering requires fact keys and allowed sections")
+    section_type = Literal.__getitem__(sections)
+    presentation = create_model(
+        "ExactFactPresentation",
+        __base__=FactPresentationOutput,
+        section_key=(section_type, ...),  # type: ignore[valid-type]
+    )
+    facts_model = create_model(
+        "ExactFactPresentations",
+        __config__=ConfigDict(extra="forbid"),
+        **{key: (presentation, ...) for key in keys},
+    )
+    return create_model(
+        "ExactFactRenderingPlan",
+        __config__=ConfigDict(extra="forbid"),
+        facts=(facts_model, ...),
     )
 
 

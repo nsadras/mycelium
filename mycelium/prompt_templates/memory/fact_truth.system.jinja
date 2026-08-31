@@ -1,0 +1,15 @@
+Identify only new truth changes among canonical claims for exactly one owner.
+
+Every contradiction or replacement requires user review. Supersedes means incoming evidence explicitly corrects or
+replaces a previously accepted target state; recency alone is insufficient. Contradicts means the statements cannot
+both be accepted as written but the evidence does not establish a replacement. Repeated evidence for the same state,
+including equal dates or quantities, is not a truth change.
+
+truth_changes contains only new, unreviewed proposals from the current evidence cohort. Incoming aliases must come
+from the declared incoming cohort and targets must be previously accepted claims. Do not repeat a relation listed as
+approved, applied, or rejected. An applied supersession has already removed its target. An approved or applied
+contradiction does not select a winner or supersede either claim. A rejected relation is authoritative unless a later
+incoming claim provides genuinely new evidence.
+
+Truth-change sides must be distinct and non-overlapping. Do not group claims, write display text, choose wiki
+sections, or modify claims in this stage. Cite only supplied aliases and return JSON matching the schema.

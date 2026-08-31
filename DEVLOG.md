@@ -2150,3 +2150,22 @@ one prose-similarity summary.
   verifier audit together.
 - Validation: **251 passed, 2 skipped**; focused persistence/API/Dream tests passed **96/96**; Ruff, UI lint, and UI
   build passed. The existing 854.25 kB UI chunk-size warning remains.
+
+## 2026-08-31 — Bounded fact resolution stages
+
+- Replaced the single large owner-wide fact response with three fail-closed contracts. A compact truth stage proposes
+  only new contradictions/supersessions; a compact grouping stage assigns every exact claim alias to an F001-style
+  fact key while structurally separating truth-change sides; bounded rendering calls then write text, state, section,
+  confidence, and rationale for at most 12 fixed groups at a time. Deterministic code assembles the complete plan and
+  retains the existing review, manual-text, placement, and fact-ID behavior.
+- The stages have separate Jinja prompts and exact Pydantic schemas. Truth decisions retain owner-wide context and
+  reviewed relations, grouping cannot write presentation text, and rendering cannot merge, split, omit, or redefine
+  groups. A 13-group pipeline test verifies two presentation calls and 13 deterministically assembled facts.
+- Direct `gemma4:12b` probes preceded integration. The initial combined compact grouping/truth response detected the
+  correction but repeatedly violated its own grouping constraint, so the division of labor was tightened further.
+  The final three-stage probe explicitly proposed `C003 supersedes C001,C002`, grouped repeated old support together
+  while separating the correction and unrelated commitment, and rendered three exact facts with the corrected value
+  current and the prior value historical. This resolved the malformed combined-contract failure rather than adding a
+  fallback parser.
+- Validation: **252 passed, 2 skipped**; focused fact/Dream/prompt tests passed **49/49** before the batching regression
+  was added; Ruff and `git diff --check` passed.

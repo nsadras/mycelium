@@ -2304,3 +2304,35 @@ one prose-similarity summary.
   prompt explicitly distinguishes a weaker considered type from a materially plausible ambiguous alternative.
 - A direct `gemma4:12b` production-prompt/schema probe accepted `project` for a bounded accessibility upgrade while
   recording `artifact` as considered but weaker. No parser repair or semantic fallback was added.
+
+## 2026-08-31 — Authoritative review boundaries and existing-match verification
+
+- The first corrected bounded replay,
+  `benchmark_runs/daily-driver-unrelated-v1-bounded-replay-v2-20260831`, completed both Dreams after the type-verifier
+  schema fix but exposed an identity authority defect. Automatically accepted entity decisions were included under
+  `PRIOR REVIEWED IDENTITY DECISIONS` in later work units. The matcher consequently treated its own earlier output as
+  user authority, matched a thirty-inch induction range to Rosa Alvarez and oak cabinets to the renovation Project,
+  and then overwrote both canonical titles with those evidence phrases.
+- The reviewed-decision catalog now requires a real `reviewed_at` timestamp in addition to an accepted or rejected
+  state. Automatic decisions remain inspectable but cannot recursively become authoritative. A focused persistence
+  test proves that only the human-adjudicated record enters the prompt catalog.
+- Every identity initially matched to an existing canonical ID now receives an independent identity-only verification
+  call before it can inherit that entity's fixed type and continue to maturity or routing. The verdict is persisted in
+  its bounded identity work unit for resumable execution. A rejected exact ID returns to normal type resolution and is
+  excluded from the subsequent same-type new-identity scan; ambiguous matches fail closed to review. No title,
+  vocabulary, fuzzy, or other deterministic semantic comparison was added.
+- Before integration, direct production-prompt/schema probes against `gemma4:12b` rejected a thirty-inch induction
+  range proposed against canonical Rosa Alvarez as `distinct`, while accepting Rosa Alvarez against the same
+  canonical person when the supplied evidence and registry facts shared the specific renovation history.
+- The post-integration frozen replay is
+  `benchmark_runs/daily-driver-unrelated-v1-bounded-replay-v3-20260831`. Both Dreams completed with zero failures; it
+  preserved exact 6/6 claim-bearing and 2/2 source-only accounting, routed and rendered all 10 active claims, passed
+  both lifecycle gates, and retained correct canonical titles for Rosa Alvarez, the 1920s kitchen Project, and You.
+  All three identity work units completed with persisted verifier results and no malformed-output debug dumps.
+- The replay remains intentionally not release-ready. The model left the kitchen-renovation identity ambiguous with
+  the provisional 1920s-kitchen Project, then routed three appliance/inspection claims to Rosa even though its own
+  route reasons said that the Project was the intended owner. This is recorded as a separate routing-consistency and
+  project-co-resolution quality miss; it was not hidden with a lexical owner override or benchmark-specific rule.
+- Validation: focused identity, prompt, artifact, and reconsolidation tests passed **112/112**; the complete maintained
+  suite passed **262/262 with 2 skipped** using host access for Ollama-dependent tests. Ruff and `git diff --check`
+  passed.

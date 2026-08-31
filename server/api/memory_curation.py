@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from mycelium.organization import (
     EntityCurationService,
     FactCurationService,
+    IdentityReviewService,
     OrganizationReviewService,
 )
 from mycelium.reconsolidation import ReconsolidationReviewService, ReviewConflictError
@@ -18,10 +19,11 @@ from server.api.memory_contracts import (
     FactGroupRequest,
     FactMoveRequest,
     FactSplitRequest,
+    IdentityReviewRequest,
     PlacementUpdateRequest,
     ProposalReviewRequest,
 )
-from server.runtime import get_mem
+from server.runtime import get_mem, run_dream as run_dream_process
 
 router = APIRouter()
 
@@ -228,6 +230,31 @@ async def review_organization_proposal(
         raise HTTPException(
             status_code=404, detail="Organization proposal not found"
         ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/identity-decisions/{decision_id}/{action}")
+async def review_identity_decision(
+    decision_id: str, action: str, req: IdentityReviewRequest
+):
+    mem = get_mem()
+    try:
+        record = IdentityReviewService(mem.artifacts).review(
+            decision_id,
+            action,
+            reviewer_note=req.reviewer_note,
+            entity_id=req.entity_id,
+            entity_type=req.entity_type,
+            title=req.title,
+            scope=req.scope,
+            page_state=req.page_state,
+            parent_entity_id=req.parent_entity_id,
+        )
+        reroute = await run_dream_process()
+        return {"decision": asdict(record), "reroute": reroute}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Identity decision not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

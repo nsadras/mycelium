@@ -18,7 +18,7 @@ from mycelium.artifacts import (
     temporal_record,
 )
 from mycelium.ollama import OllamaClient
-from mycelium.ontology import entity_type_definition
+from mycelium.ontology import default_section, entity_type_definition
 from mycelium.projection import display_claim_text
 from mycelium.structured_outputs import fact_resolution_output_model
 
@@ -92,22 +92,28 @@ class FactResolver:
             if len(owner_claims) == 1 and not owner_existing:
                 claim = owner_claims[0]
                 placement = placement_by_claim[claim.claim_id]
+                owner = entities[owner_id]
+                section = default_section(
+                    owner.entity_type, claim.claim_type, claim.predicate
+                )
                 now = datetime.now().astimezone().isoformat()
                 result.facts.append(ConsolidatedFact(
                     fact_id=f"fact-{uuid.uuid4().hex[:12]}",
                     text=display_claim_text(claim),
                     member_claim_ids=[claim.claim_id],
                     owner_entity_id=owner_id,
-                    section_key=placement.section_key or "needs_review",
+                    section_key=section,
                     state="history" if claim.temporal_status == "past" else "current",
                     linked_entity_ids=list(placement.linked_entity_ids),
                     synthesis_origin="claim",
                     confidence=claim.confidence,
-                    reason="Direct projection of one canonical owner-scoped claim.",
+                    reason="Direct projection of one owner-scoped canonical claim.",
                     created_at=now,
                     updated_at=now,
                 ))
-                result.placements.append(placement)
+                result.placements.append(replace(
+                    placement, section_key=section, updated_at=now
+                ))
                 continue
             try:
                 resolved = await self._resolve_owner(
@@ -181,7 +187,7 @@ class FactResolver:
             self._relations_text(owner_id, alias_for_claim),
         )
         schema = fact_resolution_output_model(
-            aliases, definition.section_keys(), linked_aliases
+            aliases, definition.section_keys()
         )
         response = await self.llm.call_structured(
             system,
@@ -192,7 +198,7 @@ class FactResolver:
         )
         plan = schema.model_validate(response).model_dump()
         groups, changes = self._validate_plan(
-            plan, aliases, placements, linked_aliases, incoming_claim_ids
+            plan, aliases, placements, incoming_claim_ids
         )
         now = datetime.now().astimezone().isoformat()
         output = FactResolutionResult()
@@ -261,7 +267,11 @@ class FactResolver:
             if member_ids & preserved_member_ids:
                 continue
             section = group["section_key"]
-            linked = [linked_aliases[alias] for alias in group["linked_entity_aliases"]]
+            linked = sorted({
+                linked_id
+                for member in members
+                for linked_id in placements[member.claim_id].linked_entity_ids
+            })
             prior = next((
                 fact for fact in existing
                 if fact.owner_entity_id == owner_id
@@ -289,7 +299,6 @@ class FactResolver:
                 output.placements.append(replace(
                     placement,
                     section_key=section,
-                    linked_entity_ids=linked,
                     updated_at=now,
                 ))
         for claim_id in pending_incoming:
@@ -347,7 +356,7 @@ class FactResolver:
                 f"[{alias}] id={claim.claim_id}; type={claim.claim_type}; "
                 f"predicate={claim.predicate or 'unknown'}; temporal_status={claim.temporal_status}; "
                 f"temporal={json.dumps(temporal_record(claim.facets), sort_keys=True)}; "
-                f"recorded_at={claim.recorded_at}; suggested_section={placement.section_key}; "
+                f"recorded_at={claim.recorded_at}; "
                 f"linked_entities={json.dumps(linked)}\nclaim={claim.text}\n"
                 f"evidence={json.dumps(evidence, ensure_ascii=False, sort_keys=True)}"
             )
@@ -403,7 +412,6 @@ class FactResolver:
         plan: dict,
         aliases: dict[str, MemoryClaim],
         placements: dict[str, ClaimPlacement],
-        linked_aliases: dict[str, str],
         incoming_claim_ids: set[str],
     ) -> tuple[list[tuple[dict, list[str]]], list[dict]]:
         assignments = plan["assignments"]
@@ -420,16 +428,6 @@ class FactResolver:
         groups = []
         for key, members in members_by_key.items():
             fact = fact_by_key[key]
-            allowed_links = {
-                linked_id
-                for alias in members
-                for linked_id in placements[aliases[alias].claim_id].linked_entity_ids
-            }
-            selected_links = {
-                linked_aliases[alias] for alias in fact["linked_entity_aliases"]
-            }
-            if not selected_links <= allowed_links:
-                raise ValueError("A fact introduced an undeclared linked entity")
             groups.append((fact, members))
         changed_aliases: set[str] = set()
         for change in plan["truth_changes"]:

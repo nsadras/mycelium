@@ -24,8 +24,10 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
     shared_context = {
         "registry": "registry",
         "evidence": "evidence",
-        "nodes": "nodes",
+            "nodes": "nodes",
+            "proposals": "proposals",
         "entity_plan": "entity plan",
+        "reviewed_adjudications": "none",
         "incoming_alias": "N001",
         "incoming_claim": "incoming claim",
             "candidates": "candidates",

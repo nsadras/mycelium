@@ -9,6 +9,7 @@ from mycelium.artifacts import (
     ClaimPlacement,
     ConsolidatedFact,
     EpisodeManifest,
+    EntityResolutionDecision,
     MemoryClaim,
     OrganizationProposal,
     ReconsolidationProposal,
@@ -19,7 +20,7 @@ from mycelium.core import Mycelium
 from mycelium.facts import FactResolutionResult
 from mycelium.models import LogEntry, WikiPage
 from server.api import memory_artifacts, memory_curation
-from server.api.memory_contracts import ProposalReviewRequest
+from server.api.memory_contracts import IdentityReviewRequest, ProposalReviewRequest
 
 
 @pytest.fixture
@@ -154,6 +155,23 @@ def artifact_memory(tmp_path, monkeypatch):
         proposed_owner_entity_id="you",
         proposed_section_key="preferences_working_style",
     ))
+    mem.artifacts.save_entity_resolution_decision(EntityResolutionDecision(
+        decision_id="identity-review-test",
+        decision_type="entity_creation",
+        entity_id=None,
+        proposed_entity_type="project",
+        proposed_title="Tea Journal",
+        source_ids=["source-test"],
+        supporting_claim_ids=["claim-test"],
+        supporting_segment_ids=["source-test#seg-0001"],
+        confidence=0.6,
+        reason="A continuing Project and incidental context are both plausible.",
+        review_state="review_required",
+        dream_run_id="dream-test",
+        created_at="2026-07-22T12:00:00",
+        proposed_scope="independent",
+        proposed_page_state="provisional",
+    ))
     monkeypatch.setattr(memory_artifacts, "get_mem", lambda: mem)
     monkeypatch.setattr(memory_curation, "get_mem", lambda: mem)
     monkeypatch.setattr(memory_artifacts, "load_meta", lambda: {
@@ -184,10 +202,12 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
     entity = await memory_artifacts.get_artifact_entity("you")
     proposals = await memory_artifacts.list_reconsolidation_proposals()
     organization_proposals = await memory_artifacts.list_organization_proposals()
+    identity_decisions = await memory_artifacts.list_entity_resolution_decisions()
     files = await memory_artifacts.list_stored_memory_files()
     wiki_index = await memory_artifacts.get_stored_memory_file("index", "_index.md")
 
     assert overview["coverage"]["accounted_coverage"] == 1.0
+    assert identity_decisions[0]["decision_id"] == "identity-review-test"
     assert overview["lifecycle"] == {
         "consolidated_facts": 1,
         "entities": 1,
@@ -307,3 +327,34 @@ async def test_review_proposal_endpoint_returns_404(artifact_memory):
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_identity_review_approves_reopens_and_reroutes(
+    artifact_memory, monkeypatch
+):
+    reroute = AsyncMock(return_value={"failures": [], "pages_created": 0})
+    monkeypatch.setattr(memory_curation, "run_dream_process", reroute)
+
+    response = await memory_curation.review_identity_decision(
+        "identity-review-test",
+        "approve",
+        IdentityReviewRequest(reviewer_note="This is a continuing project."),
+    )
+
+    decision = response["decision"]
+    assert decision["review_state"] == "accepted"
+    assert decision["entity_id"] == "project-tea-journal"
+    assert artifact_memory.artifacts.get_claim(
+        "claim-test"
+    ).dream_disposition == "pending"
+    references = artifact_memory.artifacts.list_entity_references(
+        claim_id="claim-test", status="active"
+    )
+    assert any(
+        item.role == "identity_subject"
+        and item.entity_id == "project-tea-journal"
+        and item.origin == "manual"
+        for item in references
+    )
+    reroute.assert_awaited_once()

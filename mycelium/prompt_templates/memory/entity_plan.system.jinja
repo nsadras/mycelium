@@ -1,7 +1,7 @@
 Resolve a fixed subject census into one coherent memory-entity plan.
 
-For every supplied node, decide identity, optional containment, and page state together. This call cannot create,
-remove, or retype nodes. Cite the supplied evidence in your reasoning and use only exact node or registry IDs.
+For every supplied node, decide identity and exactly one scope variant together. This call cannot create, remove, or
+retype nodes. Cite the supplied evidence in your reasoning and use only exact node or registry IDs.
 
 Identity:
 - Copy an existing same-type ID only when the evidence affirmatively shows the same continuing subject through a
@@ -11,25 +11,39 @@ Identity:
   A different named person never resolves to `you`.
 - Otherwise leave entity_id empty. preferred_title and aliases must remain source-grounded.
 
-Containment:
-- Use `component_of` for a dependent part of a Project or Series and `occurrence_of` for one bounded Event within a
-  Project or Series. Set parent_entity to the exact parent. Each node has at most one parent.
+Scope variants:
+- `materialized` is an independent subject with useful memory continuity. It has no parent. Use it only when the
+  supplied evidence spans multiple source episodes or explicitly describes prior history plus present or future
+  continuation, or when the schema permits `direct_encounter` for a Person structurally identified as a named source
+  participant. State the allowed continuity_basis. The age, era, or background history of an object is not history of
+  an effort concerning it. Multiple details, requirements, decisions, or work items inside one episode do not
+  establish memory continuity.
+- `provisional` is a plausible independent subject whose continuity is not established yet. It has no parent.
+- `component` is a dependent non-Event part of exactly one Project or Series. It has an exact parent and always uses
+  no page.
+- `occurrence` is one bounded Event within exactly one Project or Series. It has an exact parent and always uses
+  no page.
+- `standalone_event` is a bounded Event with no supported Project or Series parent. It has no page and no parent.
+- `context` is an incidental non-event subject, attribute, or object with no independent page and no parent.
 - Require affirmative parent evidence. Related domain, organization, people, timing, or an available registry option
   is not containment. A separately named effort remains separate unless evidence places it inside a parent.
-- With no supported parent, use containment=`none` and an empty parent_entity.
 
 Page state:
-- `materialized` means this independent subject already has useful personal state, decisions, plans, relationships,
-  or history that should accumulate on its own page, and the evidence establishes continuation through distinct
-  episodes or explicit prior history plus current or future continuation.
-- `provisional` means a plausible independent subject is known but current evidence is thin, emerging, or only a
-  stated wish or proposal. Detailed desired requirements do not prove that work has begun.
-- `no_page` means memory belongs to a parent or the node is only context, an attribute, an incidental object, or one
-  bounded occurrence without independent history. Components always use no_page.
+- Scope directly determines page state: materialized creates a page, provisional preserves an identity without a
+  page, and component, occurrence, standalone_event, and context have no page.
 - A Series is independent only when evidence treats recurrence as a shared frame with its own evolving state, plans,
   decisions, or history. A person's occupation, habit, hobby, or repeated background activity is not itself a Series.
-- Existing materialized identities remain usable even when this cohort is thin; do not treat page_state as a request
+- Existing materialized identities remain usable even when this cohort is thin; do not treat scope as a request
   to erase prior memory.
+
+Adjudication:
+- A node whose census type_adjudication is `review_required` must remain review_required. Decide its best proposed
+  identity and scope, but do not silently accept an unresolved entity-type boundary.
+- Use adjudication=`accepted` when the evidence supports one identity and scope decision.
+- Use adjudication=`review_required` when multiple materially different identity or scope interpretations remain
+  plausible. Preserve the best source-grounded proposal, but do not resolve ambiguity by confidence alone.
+- Prior user-reviewed adjudications are authoritative for the exact cited claims. Preserve accepted identity and
+  scope decisions. Do not repeat a rejected proposal unless genuinely new evidence changes the decision.
 
 Resolve every supplied participant exactly once to `you`, an existing Person ID, or a declared Person node. Return
 JSON matching the schema.

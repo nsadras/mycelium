@@ -18,13 +18,12 @@ from mycelium.artifacts import (
     EntityRecord,
     EntityResolutionDecision,
 )
-from mycelium.ontology import (
-    section_keys,
-)
 from mycelium.ollama import OllamaClient
 from mycelium.structured_outputs import (
     claim_routing_output_model,
     entity_plan_output_model,
+    identity_maturity_output_model,
+    identity_maturity_verification_output_model,
     subject_node_output_model,
 )
 
@@ -54,11 +53,6 @@ class ClaimRouter:
             for entity in planned.values()
             if entity.materialization_state == "materialized"
         }
-        initially_provisional = {
-            entity.entity_id
-            for entity in planned.values()
-            if entity.materialization_state == "provisional"
-        }
         if not evidence:
             return result
         aliases = {f"C{index:03d}": item for index, item in enumerate(evidence, start=1)}
@@ -71,7 +65,7 @@ class ClaimRouter:
             for entity in planned.values()
             if entity.status == "active"
         }
-        node_model = subject_node_output_model(allowed_evidence)
+        node_model = subject_node_output_model(allowed_evidence, participants)
         system, user = prompts.subject_node_prompt(
             self.formatter.entity_catalog(planned.values(), include_sections=False),
             self.formatter.format_evidence(aliases, participants),
@@ -106,16 +100,155 @@ class ClaimRouter:
             node_id: str(node["entity_type"])
             for node_id, node in graph_nodes.items()
         }
+        multi_episode_nodes = {
+            node_id
+            for node_id, node in graph_nodes.items()
+            if len({
+                aliases[alias].source.source_id
+                for alias in node["supporting_evidence"]
+                if alias in aliases
+            }) > 1
+        }
+        direct_encounter_nodes = {
+            node_id
+            for node_id, node in graph_nodes.items()
+            if node["entity_type"] == "person" and node["participant_evidence"]
+        }
+        allowed_maturity_bases = {
+            node_id: (
+                ("multiple_episodes",)
+                if node_id in multi_episode_nodes
+                else (
+                    ("direct_encounter",)
+                    if node_id in direct_encounter_nodes
+                    else ("explicit_prior_history",)
+                )
+            )
+            for node_id in graph_nodes
+        }
+        maturity_model = identity_maturity_output_model(
+            allowed_maturity_bases, aliases
+        )
+        system, user = prompts.identity_maturity_prompt(
+            self.formatter.format_subject_graph(graph_nodes, []),
+            self.formatter.format_evidence(aliases, participants),
+        )
         try:
+            response = await self.llm.call_structured(
+                system,
+                user,
+                maturity_model,
+                num_predict=4096,
+                debug_label="dream-identity-maturity",
+            )
+            maturity_decisions = maturity_model.model_validate(
+                response
+            ).model_dump()["decisions"]
+        except Exception as exc:
+            return self._fail_batch(
+                evidence,
+                "Identity maturity response did not satisfy the contract: "
+                f"{type(exc).__name__}: {exc}",
+            )
+        explicit_nodes = {
+            node_id
+            for node_id, decision in maturity_decisions.items()
+            if decision["admission"] == "materialized"
+            and decision["basis"]["continuity_basis"]
+            == "explicit_prior_history"
+        }
+        verification_model = identity_maturity_verification_output_model(
+            explicit_nodes, graph_nodes
+        )
+        system, user = prompts.identity_maturity_verification_prompt(
+            self.formatter.format_maturity_decisions(maturity_decisions),
+            self.formatter.format_evidence(aliases, participants),
+        )
+        try:
+            response = await self.llm.call_structured(
+                system,
+                user,
+                verification_model,
+                num_predict=4096,
+                debug_label="dream-identity-maturity-verification",
+            )
+            maturity_verdicts = verification_model.model_validate(
+                response
+            ).model_dump()["decisions"]
+        except Exception as exc:
+            return self._fail_batch(
+                evidence,
+                "Identity maturity verification did not satisfy the contract: "
+                f"{type(exc).__name__}: {exc}",
+            )
+        materialization_bases = {
+            node_id: (str(decision["basis"]["continuity_basis"]),)
+            for node_id, decision in maturity_decisions.items()
+            if decision["admission"] == "materialized"
+            and (
+                node_id not in explicit_nodes
+                or maturity_verdicts[node_id]["verdict"] == "supported"
+            )
+        }
+        maturity_review_required_nodes = {
+            node_id
+            for node_id in explicit_nodes
+            if node_types[node_id] in {"project", "series"}
+            and maturity_verdicts[node_id]["verdict"] == "supported"
+            and not any(
+                entity.entity_type == node_types[node_id]
+                and entity.materialization_state == "materialized"
+                for entity in planned.values()
+            )
+        }
+        try:
+            reviewed_entity_ids: dict[str, str] = {}
+            for node_id, node in graph_nodes.items():
+                reviewed = {
+                    reference.entity_id
+                    for alias in node["supporting_evidence"]
+                    if alias in aliases
+                    for reference in self.artifacts.list_entity_references(
+                        claim_id=aliases[alias].claim.claim_id, status="active"
+                    )
+                    if reference.role == "identity_subject"
+                    and reference.origin == "manual"
+                    and reference.entity_id
+                }
+                if len(reviewed) > 1:
+                    raise ValueError(
+                        "Reviewed claim identities conflict within one subject node"
+                    )
+                if reviewed:
+                    reviewed_id = next(iter(reviewed))
+                    reviewed_type = registry_types.get(reviewed_id)
+                    node_type = node_types[node_id]
+                    if not (
+                        reviewed_type == node_type
+                        or (node_type == "person" and reviewed_type == "you")
+                    ):
+                        raise ValueError(
+                            "Subject census type conflicts with a reviewed identity"
+                        )
+                    reviewed_entity_ids[node_id] = reviewed_id
             entity_model = entity_plan_output_model(
                 node_types,
                 {alias: role for alias, (_, _, role) in participants.items()},
                 registry_types,
+                reviewed_entity_ids,
+                materialization_bases,
+                {
+                    node_id
+                    for node_id, node in graph_nodes.items()
+                    if node["type_adjudication"] == "review_required"
+                    and node_id not in reviewed_entity_ids
+                } | maturity_review_required_nodes,
             )
             system, user = prompts.entity_plan_prompt(
                 self.formatter.entity_planning_catalog(planned.values()),
                 self.formatter.format_subject_graph(graph_nodes, []),
                 self.formatter.format_evidence(aliases, participants),
+                self.formatter.identity_review_catalog(aliases),
             )
             response = await self.llm.call_structured(
                 system,
@@ -132,28 +265,16 @@ class ClaimRouter:
                 raise ValueError("Entity plan did not resolve exact participants")
             for node_id, decision in entity_decisions.items():
                 parent = str(decision["parent_entity"])
-                containment = str(decision["containment"])
-                if parent:
-                    if parent == node_id:
-                        raise ValueError("An entity cannot contain itself")
-                    expected = (
-                        "occurrence_of"
-                        if graph_nodes[node_id]["entity_type"] == "event"
-                        else "component_of"
-                    )
-                    if containment != expected or decision["page_state"] != "no_page":
-                        raise ValueError("Contained entity plan is internally inconsistent")
-                    if parent in graph_nodes:
-                        parent_decision = entity_decisions[parent]
-                        if (
-                            not parent_decision["entity_id"]
-                            and parent_decision["page_state"] == "no_page"
-                        ):
-                            raise ValueError(
-                                "Entity plan parent did not resolve to a reusable identity"
-                            )
-                elif containment != "none":
-                    raise ValueError("Containment requires an exact parent entity")
+                if parent in graph_nodes:
+                    parent_decision = entity_decisions[parent]
+                    if (
+                        parent_decision["adjudication"] != "accepted"
+                        or parent_decision["scope"]
+                        not in {"materialized", "provisional"}
+                    ):
+                        raise ValueError(
+                            "A contained entity requires an accepted independent parent"
+                        )
             for resolution in entity_plan["participants"].values():
                 entity_ref = str(resolution["entity"])
                 if entity_ref == "you":
@@ -177,11 +298,15 @@ class ClaimRouter:
             {
                 "source_node": node_id,
                 "target_node": decision["parent_entity"],
-                "relation": decision["containment"],
+                "relation": (
+                    "occurrence_of"
+                    if decision["scope"] == "occurrence"
+                    else "component_of"
+                ),
                 "supporting_evidence": graph_nodes[node_id]["supporting_evidence"],
             }
             for node_id, decision in entity_decisions.items()
-            if decision["parent_entity"]
+            if decision["scope"] in {"component", "occurrence"}
         ]
         graph_plan = {
             "nodes": node_plan["nodes"],
@@ -208,10 +333,13 @@ class ClaimRouter:
                 for value in participant_alias_support
             ]
             confidence = float(decision["confidence"])
-            accepted = confidence >= 0.7
-            page_state = str(decision["page_state"])
+            accepted = decision["adjudication"] == "accepted"
+            scope = str(decision["scope"])
+            page_state = (
+                scope if scope in {"materialized", "provisional"} else "no_page"
+            )
             entity: EntityRecord | None = None
-            if decision["entity_id"]:
+            if accepted and decision["entity_id"]:
                 entity = planned[str(decision["entity_id"])]
                 before = (
                     entity.title,
@@ -237,7 +365,7 @@ class ClaimRouter:
                     )
                     if after != before:
                         result.new_entities.append(entity)
-            elif page_state != "no_page":
+            elif accepted and scope in {"materialized", "provisional"}:
                 entity = self._planned_entity(
                     node["entity_type"],
                     decision["preferred_title"],
@@ -252,6 +380,8 @@ class ClaimRouter:
                 candidate_entities[node_id] = entity
                 candidate_support[entity.entity_id] = support
             supporting_claim_ids = [item.claim.claim_id for item in supporting]
+            parent_ref = str(decision["parent_entity"])
+            parent_entity = candidate_entities.get(parent_ref) or planned.get(parent_ref)
             result.entity_decisions.append(EntityResolutionDecision(
                 decision_id=f"identity-{uuid.uuid4().hex[:12]}",
                 decision_type="entity_creation",
@@ -279,15 +409,46 @@ class ClaimRouter:
                 ],
                 confidence=confidence,
                 reason=str(decision["reason"]),
-                review_state="accepted" if accepted else "review_required",
+                review_state=str(decision["adjudication"]),
                 dream_run_id=dream_run_id,
                 created_at=now,
+                proposed_scope=(
+                    "independent"
+                    if scope in {"materialized", "provisional"}
+                    else scope
+                ),
+                proposed_parent_entity_id=(
+                    parent_entity.entity_id if parent_entity else None
+                ),
+                proposed_page_state=page_state,
+                proposed_aliases=[str(value) for value in decision["aliases"]],
+                proposed_type_reason=str(node["type_reason"]),
             ))
 
-        entity_sections = {
-            entity.entity_id: section_keys(entity.entity_type)
+        result.encounters = self.resolution.participant_encounters(
+            participants,
+            graph_plan["participants"],
+            planned,
+            candidate_entities,
+        )
+        for encounter in result.encounters:
+            encountered = planned.get(encounter.entity_id)
+            if encountered is not None:
+                encountered.materialization_state = "materialized"
+        result.entity_decisions.extend(self.resolution.participant_decisions(
+            participants,
+            graph_plan["participants"],
+            planned,
+            candidate_entities,
+            dream_run_id,
+            now,
+        ))
+
+        routable_entity_types = {
+            entity.entity_id: entity.entity_type
             for entity in planned.values()
             if entity.status == "active"
+            and entity.materialization_state == "materialized"
         }
         resolved_plan = self.formatter.format_resolved_entity_plan(
             graph_nodes,
@@ -296,17 +457,54 @@ class ClaimRouter:
             planned,
             entity_plan["participants"],
         )
-        routing_decisions: dict[str, dict] = {}
-        for batch_aliases in self._alias_batches(aliases):
+        review_required_aliases = {
+            alias
+            for node_id, decision in entity_decisions.items()
+            if decision["adjudication"] == "review_required"
+            for alias in graph_nodes[node_id]["supporting_evidence"]
+            if alias in aliases
+        }
+        provisional_aliases = {
+            alias
+            for node_id, decision in entity_decisions.items()
+            if decision["adjudication"] == "accepted"
+            and decision["scope"] == "provisional"
+            for alias in graph_nodes[node_id]["supporting_evidence"]
+            if alias in aliases
+        }
+        deferred_identity_aliases = review_required_aliases | provisional_aliases
+        routing_decisions: dict[str, dict] = {
+            alias: {
+                "route_kind": "deferred",
+                "confidence": 1.0,
+                "reason": (
+                    "A supporting identity decision requires user review."
+                    if alias in review_required_aliases
+                    else "The supporting independent identity is still provisional."
+                ),
+            }
+            for alias in deferred_identity_aliases
+        }
+        routable_aliases = {
+            alias: item for alias, item in aliases.items()
+            if alias not in deferred_identity_aliases
+        }
+        for batch_aliases in self._alias_batches(routable_aliases):
             batch_participants = self.resolution.participants_for_evidence(
                 batch_aliases, participants
             )
             routing_model = claim_routing_output_model(
                 batch_aliases,
-                entity_sections,
+                routable_entity_types,
             )
             system, user = prompts.claim_routing_prompt(
-                self.formatter.entity_catalog(planned.values(), include_sections=True),
+                self.formatter.entity_catalog(
+                    (
+                        entity for entity in planned.values()
+                        if entity.entity_id in routable_entity_types
+                    ),
+                    include_sections=False,
+                ),
                 resolved_plan,
                 self.formatter.format_evidence(batch_aliases, batch_participants),
             )
@@ -321,81 +519,66 @@ class ClaimRouter:
                 batch_decisions = routing_model.model_validate(
                     response
                 ).model_dump()["decisions"]
-                for alias, decision in batch_decisions.items():
-                    owner_id = str(decision["owner_entity"])
-                    section = str(decision["section"])
-                    if not owner_id:
-                        if section:
-                            raise ValueError("Deferred claim selected a page section")
-                        continue
-                    if section and section not in entity_sections[owner_id]:
-                        raise ValueError("Claim selected a section invalid for its owner")
                 routing_decisions.update(batch_decisions)
             except Exception as exc:
-                return self._fail_batch(
-                    evidence,
-                    "Claim routing response did not satisfy the contract: "
-                    f"{type(exc).__name__}: {exc}",
+                result.failures.extend(
+                    self._failure(
+                        item,
+                        "Claim routing response did not satisfy the contract: "
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                    for item in batch_aliases.values()
                 )
-
-        for alias, decision in routing_decisions.items():
-            owner_id = str(decision["owner_entity"] or "")
-            if owner_id not in initially_provisional:
                 continue
-            prior_source_ids = {
-                source_id
-                for record in self.artifacts.list_entity_resolution_decisions(
-                    entity_id=owner_id
-                )
-                for source_id in record.source_ids
-            }
-            if aliases[alias].source.source_id in prior_source_ids:
-                continue
-            entity = planned[owner_id]
-            entity.materialization_state = "materialized"
-            entity.updated_at = datetime.now().astimezone().isoformat()
-            if all(
-                changed.entity_id != entity.entity_id
-                for changed in result.new_entities
-            ):
-                result.new_entities.append(entity)
-
-        result.encounters = self.resolution.participant_encounters(
-            participants,
-            graph_plan["participants"],
-            planned,
-            candidate_entities,
-        )
-        result.entity_decisions.extend(self.resolution.participant_decisions(
-            participants,
-            graph_plan["participants"],
-            planned,
-            candidate_entities,
-            dream_run_id,
-            now,
-        ))
 
         for alias, item in aliases.items():
+            if alias not in routing_decisions:
+                continue
             routing = routing_decisions[alias]
-            decision = {
-                "disposition": (
-                    "canonical" if routing["owner_entity"] else "deferred"
-                ),
-                "owner_entity": routing["owner_entity"],
-                "section": routing["section"],
-                "linked_entities": [],
-                "subject_entity": routing["subject_entity"],
-                "object_entities": routing["object_entities"],
-                "contextual_entities": routing["contextual_entities"],
-                "relationship_kind": routing["relationship_kind"],
-                "supporting_claims": [],
-                "confidence": routing["confidence"],
-                "reason": routing["reason"],
-            }
+            route_kind = str(routing["route_kind"])
+            if route_kind == "deferred":
+                normalized = {
+                    "disposition": "deferred",
+                    "owner_entity": "",
+                    "linked_entities": [],
+                    "subject_entity": "",
+                    "object_entities": [],
+                    "contextual_entities": [],
+                    "relationship_kind": "none",
+                    "supporting_claims": [],
+                    "confidence": routing["confidence"],
+                    "reason": routing["reason"],
+                }
+            elif route_kind == "project_role":
+                normalized = {
+                    "disposition": "canonical",
+                    "owner_entity": routing["owner_entity"],
+                    "linked_entities": [routing["project_entity"]],
+                    "subject_entity": routing["owner_entity"],
+                    "object_entities": [routing["project_entity"]],
+                    "contextual_entities": [],
+                    "relationship_kind": "project_role",
+                    "supporting_claims": [],
+                    "confidence": routing["confidence"],
+                    "reason": routing["reason"],
+                }
+            else:
+                normalized = {
+                    "disposition": "canonical",
+                    "owner_entity": routing["owner_entity"],
+                    "linked_entities": [],
+                    "subject_entity": routing["subject_entity"],
+                    "object_entities": routing["object_entities"],
+                    "contextual_entities": routing["contextual_entities"],
+                    "relationship_kind": routing["relationship_kind"],
+                    "supporting_claims": [],
+                    "confidence": routing["confidence"],
+                    "reason": routing["reason"],
+                }
             result.routes.append(self._route_decision(
                 alias,
                 item,
-                decision,
+                normalized,
                 aliases,
                 planned,
                 candidate_entities,
@@ -504,7 +687,6 @@ class ClaimRouter:
                 "Project-role placement requires a Person or You owner and exactly one linked Project.",
                 "deferred", supporting_ids, float(decision["confidence"]),
             )
-        section = str(decision["section"])
         if item.claim.evidence_modality == "tool":
             if owner.entity_type == "you":
                 return ClaimRoute(
@@ -513,7 +695,7 @@ class ClaimRouter:
                     "deferred", supporting_ids, float(decision["confidence"]),
                 )
         return ClaimRoute(
-            item.claim.claim_id, owner.entity_id, section, tuple(sorted(linked)),
+            item.claim.claim_id, owner.entity_id, None, tuple(sorted(linked)),
             item.raw_log_entry_id, str(decision["reason"]), "canonical",
             supporting_ids, float(decision["confidence"]),
             resolved_references.get(subject_ref) if subject_ref else None,
@@ -616,7 +798,7 @@ def placement_from_route(route: ClaimRoute, *, now: str | None = None) -> ClaimP
     return ClaimPlacement(
         claim_id=route.claim_id,
         owner_entity_id=route.owner_entity_id,
-        section_key=route.section_key,
+        section_key=(route.section_key or "needs_review") if route.placed else None,
         linked_entity_ids=list(route.linked_entity_ids),
         status="placed" if route.placed else "deferred",
         reason=route.reason,

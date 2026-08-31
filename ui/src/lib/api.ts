@@ -317,6 +317,29 @@ export interface ClaimEntityReferenceArtifact {
   created_at: string;
 }
 
+export interface EntityResolutionDecisionArtifact {
+  decision_id: string;
+  decision_type: 'entity_creation' | 'participant_resolution';
+  entity_id?: string | null;
+  proposed_entity_type: PageType;
+  proposed_title: string;
+  source_ids: string[];
+  supporting_claim_ids: string[];
+  supporting_segment_ids: string[];
+  confidence: number;
+  reason: string;
+  review_state: 'accepted' | 'review_required' | 'rejected';
+  dream_run_id: string;
+  created_at: string;
+  proposed_scope?: 'independent' | 'component' | 'occurrence' | 'standalone_event' | 'context' | null;
+  proposed_parent_entity_id?: string | null;
+  proposed_page_state?: 'materialized' | 'provisional' | 'no_page' | null;
+  proposed_aliases: string[];
+  proposed_type_reason?: string | null;
+  reviewer_note?: string | null;
+  reviewed_at?: string | null;
+}
+
 export interface ConsolidatedFactArtifact {
   fact_id: string;
   text: string;
@@ -356,7 +379,7 @@ export interface EntityArtifactDetail extends EntityRecord {
   placements: ClaimPlacementArtifact[];
   facts: ConsolidatedFactArtifact[];
   encounters: Record<string, unknown>[];
-  resolution_decisions: Record<string, unknown>[];
+  resolution_decisions: EntityResolutionDecisionArtifact[];
   page?: { slug: string; exists: boolean } | null;
 }
 

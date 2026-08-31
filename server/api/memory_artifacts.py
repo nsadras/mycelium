@@ -273,6 +273,16 @@ async def list_artifact_entities(status: str | None = None):
     ]
 
 
+@router.get("/artifacts/entity-resolution-decisions")
+async def list_entity_resolution_decisions(review_state: str | None = None):
+    return [
+        asdict(item)
+        for item in get_mem().artifacts.list_entity_resolution_decisions(
+            review_state=review_state
+        )
+    ]
+
+
 @router.get("/artifacts/entities/{entity_id}")
 async def get_artifact_entity(entity_id: str):
     try:

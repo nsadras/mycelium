@@ -18,7 +18,7 @@ import {
 import type { InspectorTab } from './memory-inspector/types';
 import { Badge, EmptyState, JsonBlock } from './memory-inspector/presentation';
 import { OverviewPanel } from './memory-inspector/OverviewPanel';
-import { ClaimDetail, EntityDetail, FactDetail, OrganizationDetail } from './memory-inspector/LifecycleDetails';
+import { ClaimDetail, EntityDetail, FactDetail, IdentityDetail, OrganizationDetail } from './memory-inspector/LifecycleDetails';
 import { useMemoryInspector } from './memory-inspector/useMemoryInspector';
 import { formatDate, humanize, percentage } from './memory-inspector/utils';
 
@@ -30,6 +30,7 @@ const tabs: { id: InspectorTab; label: string; icon: typeof Database }[] = [
   { id: 'claims', label: 'Claims', icon: FileJson },
   { id: 'facts', label: 'Facts', icon: Rows3 },
   { id: 'entities', label: 'Entities', icon: Network },
+  { id: 'identity', label: 'Identity review', icon: GitCompareArrows },
   { id: 'organization', label: 'Organization', icon: Network },
   { id: 'reconsolidation', label: 'Reconciliation', icon: GitCompareArrows },
   { id: 'dream-runs', label: 'Dream runs', icon: FileJson },
@@ -46,6 +47,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
     filteredClaims,
     filteredFacts,
     filteredEntities,
+    filteredIdentityDecisions,
     filteredOrganizationProposals,
     filteredDreamRuns,
     filteredProposals,
@@ -57,6 +59,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
     selectedClaimId,
     selectedFactId,
     selectedEntityId,
+    selectedIdentityDecisionId,
     selectedOrganizationProposalId,
     selectedDreamRunId,
     selectedProposalId,
@@ -66,6 +69,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
     selectedClaim,
     selectedFact,
     selectedEntity,
+    selectedIdentityDecision,
     selectedOrganizationProposal,
     selectedDreamRun,
     selectedProposal,
@@ -83,6 +87,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
     setSelectedClaimId,
     setSelectedFactId,
     setSelectedEntityId,
+    setSelectedIdentityDecisionId,
     setSelectedOrganizationProposalId,
     setSelectedDreamRunId,
     setSelectedProposalId,
@@ -98,6 +103,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
     selectTab,
     reviewProposal,
     reviewOrganizationProposal,
+    reviewIdentityDecision,
   } = useMemoryInspector(refreshKey);
 
   if (loading) {
@@ -189,6 +195,12 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                   <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span>{entity.entity_type}</span><span>{entity.status}</span></div>
                 </button>
               ))}
+              {activeTab === 'identity' && filteredIdentityDecisions.map((decision) => (
+                <button key={decision.decision_id} onClick={() => { setSelectedIdentityDecisionId(decision.decision_id); setReviewNote(''); }} className={`w-full rounded-lg p-3 text-left ${selectedIdentityDecisionId === decision.decision_id ? 'bg-indigo-100 text-indigo-900' : 'hover:bg-white'}`}>
+                  <div className="truncate text-sm font-semibold">{decision.proposed_title}</div>
+                  <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span>{humanize(decision.review_state)}</span><span>{decision.proposed_entity_type}</span></div>
+                </button>
+              ))}
               {activeTab === 'organization' && filteredOrganizationProposals.map((proposal) => (
                 <button key={proposal.proposal_id} onClick={() => { setSelectedOrganizationProposalId(proposal.proposal_id); setReviewNote(''); }} className={`w-full rounded-lg p-3 text-left ${selectedOrganizationProposalId === proposal.proposal_id ? 'bg-indigo-100 text-indigo-900' : 'hover:bg-white'}`}>
                   <div className="truncate text-sm font-semibold">{humanize(proposal.proposal_type)}</div>
@@ -213,7 +225,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                   <div className="mt-1 text-[11px] capitalize text-slate-500">{file.group}</div>
                 </button>
               ))}
-              {((activeTab === 'chat' && !filteredChatEpisodes.length) || (activeTab === 'sources' && !filteredSources.length) || (activeTab === 'episodes' && !filteredEpisodes.length) || (activeTab === 'claims' && !filteredClaims.length) || (activeTab === 'facts' && !filteredFacts.length) || (activeTab === 'entities' && !filteredEntities.length) || (activeTab === 'organization' && !filteredOrganizationProposals.length) || (activeTab === 'reconsolidation' && !filteredProposals.length) || (activeTab === 'dream-runs' && !filteredDreamRuns.length) || (activeTab === 'files' && !filteredFiles.length)) && <EmptyState>No matching artifacts.</EmptyState>}
+              {((activeTab === 'chat' && !filteredChatEpisodes.length) || (activeTab === 'sources' && !filteredSources.length) || (activeTab === 'episodes' && !filteredEpisodes.length) || (activeTab === 'claims' && !filteredClaims.length) || (activeTab === 'facts' && !filteredFacts.length) || (activeTab === 'entities' && !filteredEntities.length) || (activeTab === 'identity' && !filteredIdentityDecisions.length) || (activeTab === 'organization' && !filteredOrganizationProposals.length) || (activeTab === 'reconsolidation' && !filteredProposals.length) || (activeTab === 'dream-runs' && !filteredDreamRuns.length) || (activeTab === 'files' && !filteredFiles.length)) && <EmptyState>No matching artifacts.</EmptyState>}
             </div>
           </aside>
 
@@ -292,6 +304,8 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
             {activeTab === 'facts' && (selectedFact ? <FactDetail fact={selectedFact} selectClaim={selectClaim} selectEntity={selectEntity} /> : <EmptyState>Select a consolidated fact.</EmptyState>)}
 
             {activeTab === 'entities' && (selectedEntity ? <EntityDetail entity={selectedEntity} selectFact={selectFact} selectClaim={selectClaim} /> : <EmptyState>Select an entity.</EmptyState>)}
+
+            {activeTab === 'identity' && (selectedIdentityDecision ? <IdentityDetail decision={selectedIdentityDecision} reviewNote={reviewNote} reviewing={reviewing} setReviewNote={setReviewNote} selectClaim={selectClaim} selectEntity={selectEntity} review={reviewIdentityDecision} /> : <EmptyState>Select an identity decision.</EmptyState>)}
 
             {activeTab === 'organization' && (selectedOrganizationProposal ? <OrganizationDetail proposal={selectedOrganizationProposal} reviewNote={reviewNote} reviewing={reviewing} setReviewNote={setReviewNote} selectClaim={selectClaim} selectEntity={selectEntity} review={reviewOrganizationProposal} /> : <EmptyState>Select an organization proposal.</EmptyState>)}
 

@@ -20,16 +20,36 @@ def subject_node_prompt(index_content: str, evidence: str) -> tuple[str, str]:
     )
 
 
+def identity_maturity_prompt(nodes: str, evidence: str) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/identity_maturity",
+        nodes=nodes,
+        evidence=evidence,
+    )
+
+
+def identity_maturity_verification_prompt(
+    proposals: str, evidence: str
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/identity_maturity_verification",
+        proposals=proposals,
+        evidence=evidence,
+    )
+
+
 def entity_plan_prompt(
     registry: str,
     nodes: str,
     evidence: str,
+    reviewed_adjudications: str = "none",
 ) -> tuple[str, str]:
     return render_prompt_pair(
         "memory/entity_plan",
         registry=registry,
         nodes=nodes,
         evidence=evidence,
+        reviewed_adjudications=reviewed_adjudications,
     )
 
 

@@ -60,7 +60,10 @@ def scope_candidate(
     value = {
         "title": title,
         "entity_type": entity_type,
+        "type_adjudication": "accepted",
+        "type_reason": "The supplied evidence supports this entity type.",
         "supporting_evidence": [*supporting, *(supporting_participants or [])],
+        "participant_evidence": list(supporting_participants or []),
         "confidence": 0.9,
         "reason": "The cited cohort establishes an independently useful page.",
     }
@@ -92,30 +95,11 @@ def split_scope_plan(plan: dict) -> list[dict]:
     def stable(value: str) -> str:
         return candidate_entities.get(value, value)
 
-    materialized_candidates = {
+    provisional_candidates = {
         stable(candidate["candidate_id"])
         for candidate in plan.get("candidates", [])
-        if candidate["confidence"] >= 0.7
+        if candidate["confidence"] < 0.7
     }
-
-    def test_section(owner: str) -> str:
-        if not owner:
-            return ""
-        if owner in candidate_entities.values() and owner not in materialized_candidates:
-            return ""
-        defaults = {
-            "you": "preferences_working_style",
-            "person": "current_context",
-            "project": "overview",
-            "series": "overview",
-            "event": "summary",
-            "artifact": "overview",
-            "topic": "why_it_matters",
-            "organization": "overview",
-            "place": "overview",
-        }
-        entity_type = "you" if owner == "you" else owner.split("-", 1)[0]
-        return defaults[entity_type]
 
     return [
         {
@@ -124,24 +108,82 @@ def split_scope_plan(plan: dict) -> list[dict]:
                     "node_id": candidate["candidate_id"],
                     "title": candidate["title"],
                     "entity_type": candidate["entity_type"],
+                    "type_adjudication": candidate["type_adjudication"],
+                    "type_reason": candidate["type_reason"],
                     "supporting_evidence": candidate["supporting_evidence"],
+                    "participant_evidence": candidate["participant_evidence"],
                 }
                 for candidate in plan.get("candidates", [])
             ],
         },
+        {"decisions": {
+            candidate["candidate_id"]: (
+                {
+                    "admission": "materialized",
+                    "basis": (
+                        {"continuity_basis": "direct_encounter"}
+                        if candidate["participant_evidence"]
+                        and candidate["entity_type"] == "person"
+                        else {
+                            "continuity_basis": "explicit_prior_history",
+                            "prior_state": "The prior state is explicitly stated.",
+                            "prior_evidence": candidate["supporting_evidence"],
+                            "continuation_state": (
+                                "Present or future continuation is explicitly stated."
+                            ),
+                            "continuation_evidence": candidate["supporting_evidence"],
+                        }
+                    ),
+                    "confidence": candidate["confidence"],
+                    "reason": "The supplied evidence establishes page maturity.",
+                }
+                if candidate["confidence"] >= 0.7
+                else {
+                    "admission": "provisional",
+                    "confidence": candidate["confidence"],
+                    "reason": "The supplied evidence does not establish continuity.",
+                }
+            )
+            for candidate in plan.get("candidates", [])
+        }},
+        {"decisions": {
+            candidate["candidate_id"]: {
+                "verdict": (
+                    "supported"
+                    if candidate["confidence"] >= 0.7
+                    and not (
+                        candidate["participant_evidence"]
+                        and candidate["entity_type"] == "person"
+                    )
+                    else "not_required"
+                ),
+                "reason": "The maturity basis was independently checked.",
+            }
+            for candidate in plan.get("candidates", [])
+        }},
         {
             "decisions": {
                 candidate["candidate_id"]: {
                     "entity_id": "",
                     "preferred_title": candidate["title"],
                     "aliases": [],
-                    "parent_entity": "",
-                    "containment": "none",
-                    "page_state": (
+                    "scope": (
                         "materialized"
                         if candidate["confidence"] >= 0.7
                         else "provisional"
                     ),
+                    "parent_entity": "",
+                    **(
+                        {"continuity_basis": (
+                            "direct_encounter"
+                            if candidate["participant_evidence"]
+                            and candidate["entity_type"] == "person"
+                            else "explicit_prior_history"
+                        )}
+                        if candidate["confidence"] >= 0.7
+                        else {}
+                    ),
+                    "adjudication": "accepted",
                     "confidence": candidate["confidence"],
                     "reason": candidate["reason"],
                 }
@@ -150,33 +192,59 @@ def split_scope_plan(plan: dict) -> list[dict]:
             "participants": dict(plan.get("participants", {})),
         },
         {"decisions": {
-            alias: {
-                "owner_entity": (
-                    stable(decision.get("owner_entity", ""))
-                    if decision.get("disposition") == "canonical"
-                    else ""
-                ),
-                "section": test_section(
-                    stable(decision.get("owner_entity", ""))
-                    if decision.get("disposition") == "canonical"
-                    else ""
-                ),
-                "relationship_kind": decision.get("relationship_kind", "none"),
-                "subject_entity": stable(decision.get("subject_entity", "")),
-                "object_entities": [
-                    stable(value) for value in decision.get("object_entities", [])
-                ],
-                "contextual_entities": [
-                    stable(value) for value in decision.get(
-                        "contextual_entities", decision.get("linked_entities", [])
-                    )
-                ],
-                "confidence": decision["confidence"],
-                "reason": decision["reason"],
-            }
+            alias: (
+                {
+                    "route_kind": "deferred",
+                    "confidence": decision["confidence"],
+                    "reason": decision["reason"],
+                }
+                if (
+                    decision.get("disposition") != "canonical"
+                    or stable(decision.get("owner_entity", ""))
+                    in provisional_candidates
+                )
+                else {
+                    "route_kind": "project_role",
+                    "owner_entity": stable(decision["owner_entity"]),
+                    "project_entity": stable(decision["linked_entities"][0]),
+                    "confidence": decision["confidence"],
+                    "reason": decision["reason"],
+                }
+                if decision.get("relationship_kind") == "project_role"
+                else {
+                    "route_kind": "general",
+                    "owner_entity": stable(decision["owner_entity"]),
+                    "relationship_kind": decision.get("relationship_kind", "none"),
+                    "subject_entity": stable(decision.get("subject_entity", "")),
+                    "object_entities": [
+                        stable(value) for value in decision.get("object_entities", [])
+                    ],
+                    "contextual_entities": [
+                        stable(value) for value in decision.get(
+                            "contextual_entities", decision.get("linked_entities", [])
+                        )
+                    ],
+                    "confidence": decision["confidence"],
+                    "reason": decision["reason"],
+                }
+            )
             for alias, decision in assignments.items()
         }},
     ]
+
+
+def use_multiple_episode_maturity(responses: list[dict], node_id: str) -> None:
+    responses[1]["decisions"][node_id] = {
+        "admission": "materialized",
+        "basis": {"continuity_basis": "multiple_episodes"},
+        "confidence": 0.9,
+        "reason": "The identity is supported across source episodes.",
+    }
+    responses[2]["decisions"][node_id] = {
+        "verdict": "not_required",
+        "reason": "The structural basis does not require verification.",
+    }
+    responses[3]["decisions"][node_id]["continuity_basis"] = "multiple_episodes"
 
 
 def set_scope_response(llm, plan: dict) -> None:
@@ -201,7 +269,6 @@ def fact_resolution_plan(
                 "state": "current",
                 "section_key": section,
                 "text": text,
-                "linked_entity_aliases": [],
                 "confidence": 0.9,
                 "reason": "Source-grounded test resolution.",
             }
@@ -245,11 +312,11 @@ def test_subject_node_contract_rejects_extra_fields():
 def test_claim_routing_contract_requires_exact_claims_and_registry_values():
     output_model = claim_routing_output_model(
         ["C001", "C002"],
-        {"you": ["profile"], "project-cedar": ["overview", "current_status"]},
+        {"you": "you", "project-cedar": "project"},
     )
     decision = {
+        "route_kind": "general",
         "owner_entity": "you",
-        "section": "profile",
         "relationship_kind": "none",
         "subject_entity": "you",
         "object_entities": [],
@@ -260,7 +327,6 @@ def test_claim_routing_contract_requires_exact_claims_and_registry_values():
     valid = {"decisions": {"C001": decision, "C002": {
         **decision,
         "owner_entity": "project-cedar",
-        "section": "current_status",
         "subject_entity": "project-cedar",
     }}}
 
@@ -274,6 +340,24 @@ def test_claim_routing_contract_requires_exact_claims_and_registry_values():
             **valid["decisions"],
             "C001": {**decision, "owner_entity": "source_only"},
         }})
+    project_role = {
+        "route_kind": "project_role",
+        "owner_entity": "you",
+        "project_entity": "project-cedar",
+        "confidence": 0.9,
+        "reason": "The user has an accountable role in the project.",
+    }
+    parsed = output_model.model_validate({
+        "decisions": {"C001": project_role, "C002": valid["decisions"]["C002"]}
+    })
+    assert parsed.decisions.C001.route_kind == "project_role"
+    with pytest.raises(ValidationError):
+        output_model.model_validate({
+            "decisions": {
+                "C001": {**project_role, "owner_entity": "project-cedar"},
+                "C002": valid["decisions"]["C002"],
+            }
+        })
 
 
 def test_claim_decision_batches_preserve_every_alias_once():
@@ -285,20 +369,60 @@ def test_claim_decision_batches_preserve_every_alias_once():
     assert [alias for batch in batches for alias in batch] == list(aliases)
 
 
+@pytest.mark.asyncio
+async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, source = add_source(logs, artifacts)
+    claims = [
+        add_claim(
+            artifacts,
+            source,
+            claim_id=f"claim-{index:02d}",
+            text=f"The user recorded preference {index}.",
+        )
+        for index in range(1, 26)
+    ]
+    llm.call_structured.side_effect = [
+            {"nodes": []},
+            {"decisions": {}},
+            {"decisions": {}},
+            {"decisions": {}, "participants": {}},
+        {"decisions": {}},
+        {"decisions": {"C025": {
+            "route_kind": "general",
+            "owner_entity": "you",
+            "relationship_kind": "none",
+            "subject_entity": "you",
+            "object_entities": [],
+            "contextual_entities": [],
+            "confidence": 0.9,
+            "reason": "The claim changes the user's durable preferences.",
+        }}},
+    ]
+
+    result = await dream.router.route([
+        ClaimEvidence(item, source) for item in claims
+    ])
+
+    assert len(result.failures) == 24
+    assert [route.claim_id for route in result.routes] == ["claim-25"]
+
+
 def test_entity_plan_contract_combines_identity_containment_and_participants():
     output_model = entity_plan_output_model(
         {"N001": "event", "N002": "person"},
         {"P001": "user"},
         {"you": "you", "project-cedar": "project", "person-rosa": "person"},
+        materialization_bases={"N002": ("direct_encounter",)},
     )
     valid = {"decisions": {
         "N001": {
             "entity_id": "",
             "preferred_title": "Cedar review",
             "aliases": [],
+            "scope": "occurrence",
             "parent_entity": "project-cedar",
-            "containment": "occurrence_of",
-            "page_state": "no_page",
+            "adjudication": "accepted",
             "confidence": 0.9,
             "reason": "This is one review within the project.",
         },
@@ -306,9 +430,10 @@ def test_entity_plan_contract_combines_identity_containment_and_participants():
             "entity_id": "person-rosa",
             "preferred_title": "Rosa Vale",
             "aliases": ["Rosa"],
+            "scope": "materialized",
             "parent_entity": "",
-            "containment": "none",
-            "page_state": "materialized",
+            "continuity_basis": "direct_encounter",
+            "adjudication": "accepted",
             "confidence": 0.9,
             "reason": "The evidence continues this person.",
         },
@@ -323,6 +448,25 @@ def test_entity_plan_contract_combines_identity_containment_and_participants():
         output_model.model_validate({"decisions": {
             **valid["decisions"],
             "N002": {**valid["decisions"]["N002"], "entity_id": "project-cedar"},
+        }, "participants": valid["participants"]})
+    with pytest.raises(ValidationError):
+        output_model.model_validate({"decisions": {
+            **valid["decisions"],
+            "N001": {
+                **valid["decisions"]["N001"],
+                "scope": "materialized",
+                "parent_entity": "",
+                "continuity_basis": "direct_encounter",
+            },
+        }, "participants": valid["participants"]})
+    with pytest.raises(ValidationError):
+        output_model.model_validate({"decisions": {
+            **valid["decisions"],
+            "N001": {
+                **valid["decisions"]["N001"],
+                "scope": "materialized",
+                "parent_entity": "",
+            },
         }, "participants": valid["participants"]})
 
 
@@ -606,8 +750,19 @@ async def test_evidence_maturity_is_separate_from_identity_confidence(tmp_path):
     responses = split_scope_plan(new_scope(
         "C001", "Archive Effort", "project"
     ))
-    responses[1]["decisions"]["N001"]["page_state"] = "provisional"
-    responses[2]["decisions"]["C001"]["section"] = ""
+    responses[1]["decisions"]["N001"] = {
+        "admission": "provisional",
+        "confidence": 0.9,
+        "reason": "Continuity is not established yet.",
+    }
+    responses[2]["decisions"]["N001"]["verdict"] = "not_required"
+    responses[3]["decisions"]["N001"]["scope"] = "provisional"
+    responses[3]["decisions"]["N001"].pop("continuity_basis", None)
+    responses[4]["decisions"]["C001"] = {
+        "route_kind": "deferred",
+        "confidence": 0.9,
+        "reason": "The proposed owner is not materialized yet.",
+    }
     llm.call_structured.side_effect = responses
 
     await dream.run()
@@ -655,8 +810,14 @@ async def test_later_distinct_source_can_promote_its_provisional_owner(tmp_path)
     first_responses = split_scope_plan(new_scope(
         "C001", "Archive Effort", "project"
     ))
-    first_responses[1]["decisions"]["N001"]["page_state"] = "provisional"
-    first_responses[2]["decisions"]["C001"]["section"] = ""
+    first_responses[1]["decisions"]["N001"] = {
+        "admission": "provisional",
+        "confidence": 0.9,
+        "reason": "Continuity is not established yet.",
+    }
+    first_responses[2]["decisions"]["N001"]["verdict"] = "not_required"
+    first_responses[3]["decisions"]["N001"]["scope"] = "provisional"
+    first_responses[3]["decisions"]["N001"].pop("continuity_basis", None)
     llm.call_structured.side_effect = first_responses
     await dream.run()
     assert artifacts.get_entity(
@@ -672,16 +833,23 @@ async def test_later_distinct_source_can_promote_its_provisional_owner(tmp_path)
         claim_type="state",
         about="Archive Effort",
     )
-    llm.call_structured.side_effect = split_scope_plan(scope_plan({
-        "C001": assignment(
-            disposition="deferred",
-            supporting=["C001"],
+    second_responses = split_scope_plan(scope_plan({
+            "C001": assignment(
+                disposition="deferred",
+                supporting=["C001"],
             reason="The earlier claim remains deferred.",
         ),
         "C002": assignment(
-            "project-archive-effort", supporting=["C002"]
-        ),
-    }))
+                "project-archive-effort", supporting=["C002"]
+            ),
+        }, [scope_candidate(
+            "N001", "Archive Effort", "project", ["C001", "C002"]
+        )]))
+    use_multiple_episode_maturity(second_responses, "N001")
+    second_responses[3]["decisions"]["N001"]["entity_id"] = (
+        "project-archive-effort"
+    )
+    llm.call_structured.side_effect = second_responses
 
     await dream.run()
 
@@ -712,7 +880,6 @@ async def test_model_declared_project_role_projects_to_both_endpoint_pages(tmp_p
             relationship_kind="project_role",
         ),
     }))
-    responses[-1]["decisions"]["C001"]["section"] = "shared_projects"
     llm.call_structured.side_effect = responses
 
     await dream.run()
@@ -749,9 +916,10 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
         claim_type="identity",
         about="Atlas",
     )
+    _, state_source = add_source(logs, artifacts, suffix="state")
     state = add_claim(
         artifacts,
-        named_source,
+        state_source,
         claim_id="claim-state",
         text="Atlas is a local desktop application.",
         claim_type="state",
@@ -759,8 +927,7 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
     )
     initial_support = ["C001", "C002"]
     revision_support = ["C001", "C002", "C003"]
-    dream.llm.call_structured.side_effect = [
-        *split_scope_plan(scope_plan(
+    discovery_responses = split_scope_plan(scope_plan(
             {
                 alias: assignment("N001", supporting=initial_support)
                 for alias in initial_support
@@ -769,11 +936,15 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
                     scope_candidate("N001", "Atlas", "project", initial_support),
                     scope_candidate("N002", "Supporting Concept", "topic", ["C002"]),
             ],
-        )),
-        *split_scope_plan(scope_plan({
-            alias: assignment("project-atlas", supporting=revision_support)
-            for alias in revision_support
-        })),
+        ))
+    use_multiple_episode_maturity(discovery_responses, "N001")
+    revision_responses = split_scope_plan(scope_plan({
+        alias: assignment("project-atlas", supporting=revision_support)
+        for alias in revision_support
+    }))
+    dream.llm.call_structured.side_effect = [
+        *discovery_responses,
+        *revision_responses,
         fact_resolution_plan({
             "early": (["C001"], early.text, "next_steps_deadlines"),
             "identity": (["C002"], identity.text, "overview"),
@@ -781,8 +952,9 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
         }),
     ]
 
-    await dream.run()
+    report = await dream.run()
 
+    assert report.failures == []
     assert artifacts.get_placement(early.claim_id).owner_entity_id == "project-atlas"
     assert artifacts.get_placement(identity.claim_id).owner_entity_id == "project-atlas"
     assert artifacts.get_placement(state.claim_id).owner_entity_id == "project-atlas"
@@ -794,7 +966,7 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
         if call.kwargs.get("debug_label") == "dream-claim-routing"
     ]
     revision_prompt = scope_calls[-1].args[1]
-    assert "topic-supporting-concept" in revision_prompt
+    assert "topic-supporting-concept" not in revision_prompt
 
 
 @pytest.mark.asyncio
@@ -827,14 +999,16 @@ async def test_later_dream_discovers_page_from_claims_across_episodes(tmp_path):
         about="Ava's adoption effort",
     )
     support = ["C001", "C002"]
-    llm.call_structured.side_effect = [
-        *split_scope_plan(scope_plan(
+    discovery_responses = split_scope_plan(scope_plan(
             {
                 "C001": assignment("N001", supporting=support),
                 "C002": assignment("N001", supporting=support),
             },
             [scope_candidate("N001", "Ava's Adoption", "project", support)],
-        )),
+        ))
+    use_multiple_episode_maturity(discovery_responses, "N001")
+    llm.call_structured.side_effect = [
+        *discovery_responses,
         fact_resolution_plan({
             "research": (["C001"], first.text, "timeline"),
             "interview": (["C002"], second.text, "next_steps_deadlines"),
@@ -912,7 +1086,7 @@ async def test_deferred_owner_does_not_block_placed_sibling(tmp_path):
     assert logs.get(second_entry.entry_id).consolidated is True
     assert wiki.exists("coffee")
     assert artifacts.get_claim("claim-first").dream_disposition == "deferred"
-    assert llm.call_structured.await_count == 3
+    assert llm.call_structured.await_count == 5
 
 
 @pytest.mark.asyncio
@@ -930,7 +1104,7 @@ async def test_partial_extraction_routes_available_claims_without_repair(tmp_pat
 
     assert report.completed_source_ids == [entry.entry_id]
     assert wiki.exists("partial-memory")
-    assert llm.call_structured.await_count == 3
+    assert llm.call_structured.await_count == 5
 
 
 @pytest.mark.asyncio
@@ -1063,8 +1237,9 @@ async def test_project_components_have_no_identity_creation_path(tmp_path):
         artifacts, source, claim_id="claim-project",
         text="The archive is an ongoing effort.", claim_type="plan", about="Archive",
     )
+    _, occurrence_source = add_source(logs, artifacts, suffix="occurrence")
     second = add_claim(
-        artifacts, source, claim_id="claim-session",
+        artifacts, occurrence_source, claim_id="claim-session",
         text="Tuesday's recording was part of the archive.",
         claim_type="event", about="Tuesday Recording",
     )
@@ -1074,22 +1249,24 @@ async def test_project_components_have_no_identity_creation_path(tmp_path):
             "C002": assignment("N001", supporting=["C002"]),
         },
         [
-            scope_candidate("N001", "Archive", "project", ["C001"]),
+            scope_candidate("N001", "Archive", "project", ["C001", "C002"]),
             scope_candidate("N002", "Tuesday Recording", "event", ["C002"]),
         ],
     ))
-    responses[1]["decisions"]["N002"].update({
+    use_multiple_episode_maturity(responses, "N001")
+    responses[3]["decisions"]["N002"].update({
+        "scope": "occurrence",
         "parent_entity": "N001",
-        "containment": "occurrence_of",
-        "page_state": "no_page",
         "reason": "Its memory value belongs to the Archive Project.",
     })
+    responses[3]["decisions"]["N002"].pop("continuity_basis", None)
     llm.call_structured.side_effect = responses
 
     result = await dream.router.route([
-        ClaimEvidence(first, source), ClaimEvidence(second, source),
+        ClaimEvidence(first, source), ClaimEvidence(second, occurrence_source),
     ])
 
+    assert result.failures == []
     assert [entity.title for entity in result.new_entities] == ["Archive"]
     component = next(
         decision for decision in result.entity_decisions
@@ -1107,11 +1284,47 @@ def test_subject_node_contract_accepts_typed_nodes():
             "node_id": "N001",
             "title": "Archive",
             "entity_type": "project",
+            "type_adjudication": "accepted",
+            "type_reason": "The evidence describes an effort toward an outcome.",
             "supporting_evidence": ["C001"],
+            "participant_evidence": [],
         }],
     })
 
     assert parsed.nodes[0].title == "Archive"
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_subject_type_is_deferred_for_identity_review(tmp_path):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, source = add_source(logs, artifacts)
+    claim = add_claim(
+        artifacts,
+        source,
+        text="The salon has recurring sessions and is also producing a guide.",
+        about="Neighborhood Salon",
+        claim_type="plan",
+    )
+    responses = split_scope_plan(new_scope(
+        "C001", "Neighborhood Salon", "project"
+    ))
+    responses[0]["nodes"][0].update({
+        "type_adjudication": "review_required",
+        "type_reason": "Project and Series are both materially plausible.",
+    })
+    responses[3]["decisions"]["N001"]["adjudication"] = "review_required"
+    llm.call_structured.side_effect = responses[:4]
+
+    result = await dream.router.route([ClaimEvidence(claim, source)])
+
+    assert result.routes[0].disposition == "deferred"
+    assert result.new_entities == []
+    decision = result.entity_decisions[0]
+    assert decision.review_state == "review_required"
+    assert decision.proposed_type_reason == (
+        "Project and Series are both materially plausible."
+    )
+    assert llm.call_structured.await_count == 4
 
 
 @pytest.mark.asyncio
@@ -1124,21 +1337,41 @@ async def test_redundant_user_person_node_resolves_to_singleton_you(tmp_path):
             "node_id": "N001",
             "title": "You",
             "entity_type": "person",
+            "type_adjudication": "accepted",
+            "type_reason": "The source structure identifies this person.",
             "supporting_evidence": ["C001"],
+            "participant_evidence": [],
         }]},
+            {"decisions": {"N001": {
+                "admission": "materialized",
+                "basis": {
+                    "continuity_basis": "explicit_prior_history",
+                    "prior_state": "The user identity already existed.",
+                    "prior_evidence": ["C001"],
+                    "continuation_state": "The preference remains current.",
+                    "continuation_evidence": ["C001"],
+                },
+                "confidence": 1.0,
+                "reason": "The configured user is already a stable identity.",
+            }}},
+        {"decisions": {"N001": {
+            "verdict": "supported",
+            "reason": "The maturity proposal is supported.",
+        }}},
         {"decisions": {"N001": {
             "entity_id": "you",
             "preferred_title": "You",
             "aliases": [],
+            "scope": "materialized",
             "parent_entity": "",
-            "containment": "none",
-            "page_state": "materialized",
+            "continuity_basis": "explicit_prior_history",
+            "adjudication": "accepted",
             "confidence": 1.0,
             "reason": "This node is the configured user.",
         }}, "participants": {}},
         {"decisions": {"C001": {
+            "route_kind": "general",
                 "owner_entity": "you",
-                "section": "preferences_working_style",
             "relationship_kind": "none",
             "subject_entity": "you",
             "object_entities": [],
@@ -1153,7 +1386,7 @@ async def test_redundant_user_person_node_resolves_to_singleton_you(tmp_path):
     assert result.failures == []
     assert result.routes[0].owner_entity_id == "you"
     assert all(entity.entity_id != "person-you" for entity in result.new_entities)
-    assert llm.call_structured.await_count == 3
+    assert llm.call_structured.await_count == 5
 
 
 @pytest.mark.asyncio
@@ -1173,7 +1406,7 @@ async def test_shorter_person_name_resolves_to_existing_identity(tmp_path):
         {"C001": assignment(person.entity_id, supporting=["C001"])},
         [candidate],
     ))
-    responses[1]["decisions"]["N001"].update({
+    responses[3]["decisions"]["N001"].update({
         "entity_id": person.entity_id,
         "preferred_title": "Priya Raman",
         "aliases": ["Priya"],
@@ -1236,7 +1469,7 @@ async def test_later_project_name_updates_stable_identity_without_duplicate(tmp_
         {"C001": assignment(project.entity_id, supporting=["C001"])},
         [candidate],
     ))
-    responses[1]["decisions"]["N001"].update({
+    responses[3]["decisions"]["N001"].update({
         "entity_id": project.entity_id,
         "preferred_title": "Lantern",
         "aliases": ["Meeting Memory Assistant"],

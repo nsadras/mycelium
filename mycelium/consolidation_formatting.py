@@ -74,13 +74,17 @@ class RoutingFormatter:
             entity = candidates.get(node_id) or entities.get(str(decision["entity_id"]))
             parent_ref = str(decision["parent_entity"])
             parent = candidates.get(parent_ref) or entities.get(parent_ref)
+            scope = str(decision["scope"])
+            page_state = (
+                scope if scope in {"materialized", "provisional"} else "no_page"
+            )
             lines.append(
                 f"- {node_id}: type={node['entity_type']}; "
                 f"evidence_title={node['title']!r}; "
                 f"stable_id={entity.entity_id if entity else 'no_page'}; "
                 f"stable_title={entity.title if entity else 'none'}; "
-                f"page_state={decision['page_state']}; "
-                f"containment={decision['containment']}; "
+                f"page_state={page_state}; "
+                f"scope={scope}; "
                 f"parent={parent.entity_id if parent else parent_ref or 'none'}; "
                 f"evidence={','.join(node['supporting_evidence'])}"
             )
@@ -93,6 +97,31 @@ class RoutingFormatter:
             lines.append("- none")
         return "\n".join(lines)
 
+    def identity_review_catalog(
+        self, aliases: dict[str, ClaimEvidence]
+    ) -> str:
+        """Expose prior user adjudications that overlap the exact claim cohort."""
+        claim_ids = {item.claim.claim_id for item in aliases.values()}
+        lines = []
+        for decision in self.artifacts.list_entity_resolution_decisions():
+            if decision.review_state not in {"accepted", "rejected"}:
+                continue
+            overlap = claim_ids.intersection(decision.supporting_claim_ids)
+            if not overlap:
+                continue
+            lines.append(
+                f"- review_state={decision.review_state}; "
+                f"entity={decision.entity_id or 'none'}; "
+                f"type={decision.proposed_entity_type}; "
+                f"title={decision.proposed_title!r}; "
+                f"scope={decision.proposed_scope or 'unspecified'}; "
+                f"parent={decision.proposed_parent_entity_id or 'none'}; "
+                f"page_state={decision.proposed_page_state or 'unspecified'}; "
+                f"claim_ids={','.join(sorted(overlap))}; "
+                f"reviewer_note={decision.reviewer_note or 'none'}"
+            )
+        return "\n".join(lines) or "none"
+
     @staticmethod
     def format_subject_graph(
         nodes: dict[str, dict],
@@ -103,8 +132,11 @@ class RoutingFormatter:
         for node_id, node in nodes.items():
             details = [
                 f"type={node['entity_type']}",
+                f"type_adjudication={node['type_adjudication']}",
+                f"type_reason={node['type_reason']!r}",
                 f"title={node['title']!r}",
                 f"evidence={','.join(node['supporting_evidence'])}",
+                f"participant_evidence={','.join(node['participant_evidence']) or 'none'}",
             ]
             lines.append(f"- {node_id}: {'; '.join(details)}")
         lines.append("Edges:")
@@ -117,6 +149,22 @@ class RoutingFormatter:
         if not edges:
             lines.append("- none")
         return "\n".join(lines)
+
+    @staticmethod
+    def format_maturity_decisions(decisions: dict[str, dict]) -> str:
+        lines = []
+        for node_id, decision in decisions.items():
+            basis = decision.get("basis") or {}
+            details = [
+                f"admission={decision['admission']}",
+                f"reason={decision['reason']!r}",
+            ]
+            if basis:
+                details.extend(
+                    f"{key}={value!r}" for key, value in basis.items()
+                )
+            lines.append(f"- {node_id}: {'; '.join(details)}")
+        return "\n".join(lines) or "none"
 
     def format_evidence(
         self,

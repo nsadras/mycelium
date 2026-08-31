@@ -13,6 +13,13 @@ known provisionally.
 
 Use the typed entity ontology supplied in the registry exactly.
 
+For every node, adjudicate its entity type. Use type_adjudication=`accepted` only when the evidence makes one
+ontology type clearly better than the alternatives. Use `review_required` when two or more types remain materially
+plausible; choose the best proposed entity_type, explain the unresolved boundary in type_reason, and preserve it for
+user review. Do not use confidence or wording strength to force acceptance.
+For a Person who is a named source participant, put the exact `P...` alias in participant_evidence. Use an empty
+participant_evidence list for every other node. Keep all cited claim and participant aliases in supporting_evidence.
+
 A workstream, feature, milestone, issue, tool, or deliverable inside a larger effort may need a node so its
 relationship can be stated later, but local goals, deadlines, participants, or complexity do not by themselves make
 it an independent Project. Represent both a continuing effort and its bounded occurrences when the evidence supports

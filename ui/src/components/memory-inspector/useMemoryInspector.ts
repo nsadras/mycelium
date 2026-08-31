@@ -11,6 +11,7 @@ import api, {
   type DreamRunArtifactSummary,
   type EntityArtifactDetail,
   type EntityRecord,
+  type EntityResolutionDecisionArtifact,
   type EpisodeArtifact,
   type EpisodeArtifactSummary,
   type MemoryClaimArtifact,
@@ -35,6 +36,7 @@ export function useMemoryInspector(refreshKey: number) {
   const [claims, setClaims] = useState<MemoryClaimArtifactSummary[]>([]);
   const [facts, setFacts] = useState<ConsolidatedFactArtifactSummary[]>([]);
   const [entities, setEntities] = useState<EntityRecord[]>([]);
+  const [identityDecisions, setIdentityDecisions] = useState<EntityResolutionDecisionArtifact[]>([]);
   const [organizationProposals, setOrganizationProposals] = useState<OrganizationProposalArtifact[]>([]);
   const [proposals, setProposals] = useState<ReconsolidationProposalArtifact[]>([]);
   const [dreamRuns, setDreamRuns] = useState<DreamRunArtifactSummary[]>([]);
@@ -46,6 +48,7 @@ export function useMemoryInspector(refreshKey: number) {
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [selectedFactId, setSelectedFactId] = useState<string | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [selectedIdentityDecisionId, setSelectedIdentityDecisionId] = useState<string | null>(null);
   const [selectedOrganizationProposalId, setSelectedOrganizationProposalId] = useState<string | null>(null);
   const [selectedDreamRunId, setSelectedDreamRunId] = useState<string | null>(null);
   const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null);
@@ -113,6 +116,17 @@ export function useMemoryInspector(refreshKey: number) {
           if (!cancelled) {
             setEntities(response.data);
             setSelectedEntityId((value) => availableId(value, response.data, (item) => item.entity_id));
+          }
+        } else if (activeTab === 'identity') {
+          const response = await api.get<EntityResolutionDecisionArtifact[]>('/memory/artifacts/entity-resolution-decisions');
+          const ordered = [...response.data].sort((a, b) => {
+            if (a.review_state === 'review_required' && b.review_state !== 'review_required') return -1;
+            if (b.review_state === 'review_required' && a.review_state !== 'review_required') return 1;
+            return b.created_at.localeCompare(a.created_at);
+          });
+          if (!cancelled) {
+            setIdentityDecisions(ordered);
+            setSelectedIdentityDecisionId((value) => availableId(value, ordered, (item) => item.decision_id));
           }
         } else if (activeTab === 'organization') {
           const response = await api.get<OrganizationProposalArtifact[]>('/memory/artifacts/organization-proposals');
@@ -258,6 +272,7 @@ export function useMemoryInspector(refreshKey: number) {
   const filteredClaims = claims.filter((item) => includes([item.claim_id, item.text, item.claim_type, item.dream_disposition, item.placement?.owner_entity_id]));
   const filteredFacts = facts.filter((item) => includes([item.fact_id, item.text, item.owner_entity_id, item.section_key]));
   const filteredEntities = entities.filter((item) => includes([item.entity_id, item.title, item.slug, item.entity_type, item.status, ...item.aliases]));
+  const filteredIdentityDecisions = identityDecisions.filter((item) => includes([item.decision_id, item.review_state, item.proposed_entity_type, item.proposed_title, item.proposed_scope, item.entity_id, item.reason]));
   const filteredOrganizationProposals = organizationProposals.filter((item) => includes([item.proposal_id, item.proposal_type, item.status, item.explanation, item.claim_id, item.source_entity_id, item.target_entity_id, item.proposed_owner_entity_id, item.proposed_new_entity_title]));
   const filteredDreamRuns = dreamRuns.filter((item) => includes([item.run_id, item.status]));
   const filteredProposals = proposals.filter((item) => includes([item.proposal_id, ...item.incoming_claim_ids, ...item.target_claim_ids, item.proposed_relation, item.status, item.explanation]));
@@ -301,21 +316,36 @@ export function useMemoryInspector(refreshKey: number) {
       setReviewing(null);
     }
   };
+  const reviewIdentityDecision = async (decision: 'approve' | 'reject') => {
+    if (!selectedIdentityDecisionId) return;
+    setReviewing(decision);
+    try {
+      await api.post(`/memory/identity-decisions/${encodeURIComponent(selectedIdentityDecisionId)}/${decision}`, { reviewer_note: reviewNote.trim() || null });
+      setReviewNote('');
+      setReloadKey((value) => value + 1);
+    } catch (reviewError) {
+      console.error('Failed to review identity decision', reviewError);
+      setError('The identity decision could not be applied and rerouted.');
+    } finally {
+      setReviewing(null);
+    }
+  };
 
   return {
     activeTab, overview, filteredSources, filteredChatEpisodes, filteredEpisodes, filteredClaims,
-    filteredFacts, filteredEntities, filteredOrganizationProposals, filteredDreamRuns, filteredProposals, filteredFiles,
+    filteredFacts, filteredEntities, filteredIdentityDecisions, filteredOrganizationProposals, filteredDreamRuns, filteredProposals, filteredFiles,
     selectedSourceId, selectedChatId, selectedEpisodeId, selectedClaimId, selectedFactId,
-    selectedEntityId, selectedOrganizationProposalId, selectedDreamRunId, selectedProposalId, selectedFile,
+    selectedEntityId, selectedIdentityDecisionId, selectedOrganizationProposalId, selectedDreamRunId, selectedProposalId, selectedFile,
     selectedSource, selectedEpisode, selectedClaim, selectedFact, selectedEntity, selectedDreamRun,
     selectedProposal,
     proposalIncomingClaims: selectedProposal ? selectedProposal.incoming_claim_ids.map((id) => proposalClaims[id]).filter(Boolean) : [],
     proposalTargetClaims: selectedProposal ? selectedProposal.target_claim_ids.map((id) => proposalClaims[id]).filter(Boolean) : [],
     selectedOrganizationProposal: organizationProposals.find((item) => item.proposal_id === selectedOrganizationProposalId) ?? null,
+    selectedIdentityDecision: identityDecisions.find((item) => item.decision_id === selectedIdentityDecisionId) ?? null,
     search, loading, detailLoading, error, reviewNote, reviewing,
     setSelectedSourceId, setSelectedChatId, setSelectedEpisodeId, setSelectedClaimId, setSelectedFactId,
-    setSelectedEntityId, setSelectedOrganizationProposalId, setSelectedDreamRunId, setSelectedProposalId, setSelectedFile, setSearch,
-    setReloadKey, setReviewNote, selectSource, selectClaim, selectFact, selectEntity, selectReconciliation, selectTab, reviewProposal, reviewOrganizationProposal,
+    setSelectedEntityId, setSelectedIdentityDecisionId, setSelectedOrganizationProposalId, setSelectedDreamRunId, setSelectedProposalId, setSelectedFile, setSearch,
+    setReloadKey, setReviewNote, selectSource, selectClaim, selectFact, selectEntity, selectReconciliation, selectTab, reviewProposal, reviewOrganizationProposal, reviewIdentityDecision,
     selectedChatEpisode: chatEpisodes.find((item) => item.session_id === selectedChatId) ?? null,
   };
 }

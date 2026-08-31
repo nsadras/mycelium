@@ -10,10 +10,12 @@ from typing import cast
 
 from mycelium.artifacts import (
     ArtifactStore,
+    ClaimEntityReference,
     ClaimPlacement,
     ClaimScopeDecision,
     ConsolidatedFact,
     EntityRecord,
+    EntityResolutionDecision,
     OrganizationProposal,
 )
 from mycelium.materialization import MaterializationResult, PageMaterializer
@@ -539,3 +541,174 @@ class OrganizationReviewService:
             raise ValueError("Decision must be approve or reject")
         self.artifacts.save_organization_proposal(proposal)
         return proposal
+
+
+class IdentityReviewService:
+    """Apply an explicit user identity decision and reopen its evidence for routing."""
+
+    def __init__(self, artifacts: ArtifactStore):
+        self.artifacts = artifacts
+
+    def review(
+        self,
+        decision_id: str,
+        action: str,
+        *,
+        reviewer_note: str | None = None,
+        entity_id: str | None = None,
+        entity_type: str | None = None,
+        title: str | None = None,
+        scope: str | None = None,
+        page_state: str | None = None,
+        parent_entity_id: str | None = None,
+    ) -> EntityResolutionDecision:
+        record = self.artifacts.get_entity_resolution_decision(decision_id)
+        if record.review_state != "review_required":
+            raise ValueError("Only identity decisions requiring review may be adjudicated")
+        now = _now()
+        record.reviewer_note = reviewer_note
+        record.reviewed_at = now
+        if action == "reject":
+            record.review_state = "rejected"
+        elif action == "approve":
+            selected_type = entity_type or record.proposed_entity_type
+            selected_title = " ".join((title or record.proposed_title).split()).strip()
+            selected_scope = scope or record.proposed_scope
+            selected_page_state = page_state or record.proposed_page_state
+            selected_parent = parent_entity_id or record.proposed_parent_entity_id
+            self._validate_selection(
+                selected_type, selected_scope, selected_page_state, selected_parent
+            )
+            entity = self._resolve_entity(
+                entity_id if entity_id is not None else record.entity_id,
+                selected_type,
+                selected_title,
+                record.proposed_aliases,
+                selected_scope,
+                selected_page_state,
+                now,
+            )
+            record.entity_id = entity.entity_id if entity else None
+            record.proposed_entity_type = selected_type
+            record.proposed_title = selected_title
+            record.proposed_scope = selected_scope
+            record.proposed_page_state = selected_page_state
+            record.proposed_parent_entity_id = selected_parent
+            record.review_state = "accepted"
+            if entity is not None:
+                self._save_identity_references(record, entity.entity_id, now)
+        else:
+            raise ValueError("Identity review action must be approve or reject")
+        self.artifacts.save_entity_resolution_decision(record)
+        self._reopen_claims(record.supporting_claim_ids, decision_id, now)
+        return record
+
+    def _resolve_entity(
+        self,
+        entity_id: str | None,
+        entity_type: str,
+        title: str,
+        aliases: list[str],
+        scope: str | None,
+        page_state: str | None,
+        now: str,
+    ) -> EntityRecord | None:
+        if entity_id:
+            entity = self.artifacts.get_entity(entity_id)
+            if entity.entity_type != entity_type:
+                raise ValueError("Reviewed entity ID must match the selected entity type")
+            entity.title = title
+            entity.aliases = sorted({*entity.aliases, *aliases})
+            if scope == "independent" and page_state == "materialized":
+                entity.materialization_state = "materialized"
+            entity.updated_at = now
+            entity.__post_init__()
+            self.artifacts.save_entity(entity)
+            return entity
+        if scope != "independent":
+            return None
+        return self.artifacts.create_entity(
+            entity_type,
+            title,
+            aliases=aliases,
+            materialization_state=page_state or "provisional",
+        )
+
+    def _validate_selection(
+        self,
+        entity_type: str,
+        scope: str | None,
+        page_state: str | None,
+        parent_entity_id: str | None,
+    ) -> None:
+        if entity_type not in set(ENTITY_TYPES) - {"you"}:
+            raise ValueError("Identity review requires a discoverable entity type")
+        if scope == "independent":
+            if page_state not in {"materialized", "provisional"} or parent_entity_id:
+                raise ValueError("Independent identities require a page state and no parent")
+            return
+        if scope == "context":
+            if page_state != "no_page" or parent_entity_id:
+                raise ValueError("Context identities require no page and no parent")
+            return
+        if scope == "standalone_event":
+            if entity_type != "event" or page_state != "no_page" or parent_entity_id:
+                raise ValueError(
+                    "Standalone events require Event type, no page, and no parent"
+                )
+            return
+        if scope == "occurrence":
+            if entity_type != "event":
+                raise ValueError("Only Events may be reviewed as bounded occurrences")
+        elif scope == "component":
+            if entity_type == "event":
+                raise ValueError("Events use occurrence rather than component scope")
+        else:
+            raise ValueError("Identity review requires an explicit scope")
+        if page_state != "no_page" or not parent_entity_id:
+            raise ValueError("Contained identities require an exact parent and no page")
+        parent = self.artifacts.get_entity(parent_entity_id)
+        if parent.status != "active" or parent.entity_type not in {"project", "series"}:
+            raise ValueError("Contained identities require an active Project or Series parent")
+
+    def _save_identity_references(
+        self, record: EntityResolutionDecision, entity_id: str, now: str
+    ) -> None:
+        for claim_id in record.supporting_claim_ids:
+            reference_id = f"ref-{uuid.uuid4().hex[:12]}"
+            for prior in self.artifacts.list_entity_references(
+                claim_id=claim_id, status="active"
+            ):
+                if prior.role != "identity_subject" or prior.origin != "manual":
+                    continue
+                prior.status = "superseded"
+                prior.superseded_by_reference_id = reference_id
+                self.artifacts.save_entity_reference(prior)
+            self.artifacts.save_entity_reference(ClaimEntityReference(
+                reference_id=reference_id,
+                claim_id=claim_id,
+                role="identity_subject",
+                surface=record.proposed_title,
+                entity_id=entity_id,
+                confidence=1.0,
+                reason=f"Approved identity adjudication {record.decision_id}",
+                origin="manual",
+                dream_run_id=record.dream_run_id,
+                status="active",
+                created_at=now,
+            ))
+
+    def _reopen_claims(
+        self, claim_ids: list[str], decision_id: str, now: str
+    ) -> None:
+        for claim_id in claim_ids:
+            claim = self.artifacts.get_claim(claim_id)
+            if claim.status != "active":
+                continue
+            claim.dream_disposition = "pending"
+            claim.dream_disposition_reason = (
+                f"Identity adjudication {decision_id} requires rerouting."
+            )
+            claim.dream_run_id = None
+            claim.dream_disposition_at = now
+            self.artifacts.save_claim(claim)

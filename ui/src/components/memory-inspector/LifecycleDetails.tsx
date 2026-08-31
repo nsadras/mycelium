@@ -3,6 +3,7 @@ import { ChevronRight, ThumbsDown, ThumbsUp } from 'lucide-react';
 import type {
   ConsolidatedFactDetail,
   EntityArtifactDetail,
+  EntityResolutionDecisionArtifact,
   MemoryClaimArtifact,
   OrganizationProposalArtifact,
 } from '../../lib/api';
@@ -106,6 +107,38 @@ export function EntityDetail({ entity, selectFact, selectClaim }: EntityDetailPr
       <section><h3 className="mb-3 text-sm font-bold">Canonical claim assignments</h3><div className="flex flex-wrap gap-2">{entity.placements.map((placement) => <button key={placement.claim_id} onClick={() => selectClaim(placement.claim_id)} className="rounded-md bg-indigo-50 px-3 py-2 font-mono text-xs text-indigo-700">{placement.claim_id}</button>)}{!entity.placements.length && <span className="text-sm text-slate-500">No claims are assigned to this entity.</span>}</div></section>
       <section><h3 className="mb-2 text-sm font-bold">Identity resolution audit</h3><JsonBlock value={entity.resolution_decisions} /></section>
       <section><h3 className="mb-2 text-sm font-bold">Encounter history</h3><JsonBlock value={entity.encounters} /></section>
+    </div>
+  );
+}
+
+interface IdentityDetailProps {
+  decision: EntityResolutionDecisionArtifact;
+  reviewNote: string;
+  reviewing: 'approve' | 'reject' | null;
+  setReviewNote: (value: string) => void;
+  selectClaim: (id: string) => void;
+  selectEntity: (id: string) => void;
+  review: (decision: 'approve' | 'reject') => Promise<void>;
+}
+
+export function IdentityDetail({ decision, reviewNote, reviewing, setReviewNote, selectClaim, selectEntity, review }: IdentityDetailProps) {
+  return (
+    <div className="mx-auto max-w-4xl space-y-6 p-5 md:p-8">
+      <div>
+        <div className="flex flex-wrap gap-2"><Badge tone="indigo">{decision.proposed_entity_type}</Badge><Badge tone={decision.review_state === 'accepted' ? 'green' : decision.review_state === 'review_required' ? 'amber' : 'slate'}>{decision.review_state.replaceAll('_', ' ')}</Badge><Badge>{percentage(decision.confidence)}</Badge></div>
+        <h2 className="mt-4 text-xl font-bold">{decision.proposed_title}</h2>
+        <div className="mt-2 break-all font-mono text-xs text-slate-400">{decision.decision_id} · {formatDate(decision.created_at)}</div>
+      </div>
+      <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-4 text-sm leading-relaxed text-indigo-950">{decision.reason}</div>
+      {decision.proposed_type_reason && <div className="rounded-xl border border-amber-100 bg-amber-50/50 p-4 text-sm leading-relaxed text-amber-950"><strong>Type assessment:</strong> {decision.proposed_type_reason}</div>}
+      <section className="grid gap-3 text-sm md:grid-cols-2">
+        <div className="rounded-lg bg-slate-50 p-3"><strong>Scope:</strong> {decision.proposed_scope ?? 'Not recorded'}<br /><strong>Page state:</strong> {decision.proposed_page_state ?? 'Not recorded'}</div>
+        <div className="rounded-lg bg-slate-50 p-3"><strong>Parent:</strong> {decision.proposed_parent_entity_id ?? 'None'}<br /><strong>Aliases:</strong> {decision.proposed_aliases.join(', ') || 'None'}</div>
+      </section>
+      {decision.entity_id && <button onClick={() => selectEntity(decision.entity_id!)} className="flex w-full items-center justify-between rounded-lg border border-slate-200 p-3 text-left"><span><strong>Proposed canonical identity</strong><br /><span className="font-mono text-xs text-slate-500">{decision.entity_id}</span></span><ChevronRight size={15} /></button>}
+      <section><h3 className="mb-2 text-sm font-bold">Supporting canonical claims</h3><div className="flex flex-wrap gap-2">{decision.supporting_claim_ids.map((id) => <button key={id} onClick={() => selectClaim(id)} className="rounded-md bg-indigo-50 px-3 py-2 font-mono text-xs text-indigo-700">{id}</button>)}</div></section>
+      {decision.reviewer_note && <section className="rounded-lg bg-slate-50 p-4 text-sm"><strong>Reviewer note:</strong> {decision.reviewer_note}</section>}
+      {decision.review_state === 'review_required' && <section className="rounded-xl border border-slate-200 p-4"><p className="text-sm text-slate-600">Approval makes this proposed identity decision authoritative, reopens its claims, and immediately reruns routing. Use the API when you need to override the proposed type, scope, parent, or page state.</p><label className="mt-4 block text-sm font-bold" htmlFor="identity-review-note">Reviewer note</label><textarea id="identity-review-note" value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="Optional rationale for the audit record" className="mt-2 min-h-24 w-full rounded-lg border border-slate-200 p-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500" /><div className="mt-3 flex flex-wrap gap-2"><button disabled={reviewing !== null} onClick={() => void review('approve')} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"><ThumbsUp size={16} />{reviewing === 'approve' ? 'Applying and rerouting…' : 'Approve and reroute'}</button><button disabled={reviewing !== null} onClick={() => void review('reject')} className="flex items-center gap-2 rounded-lg border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-700 disabled:opacity-50"><ThumbsDown size={16} />{reviewing === 'reject' ? 'Rejecting and rerouting…' : 'Reject and reroute'}</button></div></section>}
     </div>
   );
 }

@@ -196,7 +196,9 @@ class ResolutionArtifacts:
                         created_at=created_at,
                     )
                 )
-            route = routes_by_claim[claim.claim_id]
+            route = routes_by_claim.get(claim.claim_id)
+            if route is None:
+                continue
             if route.owner_entity_id:
                 references.append(
                     ClaimEntityReference(

@@ -19,6 +19,16 @@ class ProposalReviewRequest(BaseModel):
     reviewer_note: str | None = None
 
 
+class IdentityReviewRequest(BaseModel):
+    reviewer_note: str | None = None
+    entity_id: str | None = None
+    entity_type: str | None = None
+    title: str | None = None
+    scope: str | None = None
+    page_state: str | None = None
+    parent_entity_id: str | None = None
+
+
 class EntityUpdateRequest(BaseModel):
     title: str | None = None
     slug: str | None = None

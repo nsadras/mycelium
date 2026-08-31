@@ -2050,3 +2050,52 @@ one prose-similarity summary.
   resolver acceptance evidence. No `fact_resolution` failures occurred in that run.
 - Structural and pipeline validation: **249 passed, 2 skipped**; Ruff, UI lint, UI build, and `git diff --check`
   passed. The existing 847.49 kB UI chunk-size warning remains.
+
+## 2026-08-29 — Fail-closed identity adjudication and upstream routing contracts
+
+- Split page maturity out of the combined identity/scope decision. The subject census now emits explicit entity-type
+  adjudication and participant evidence; a separate exact keyed maturity plan can propose only schema-allowed
+  continuity bases, and an independent verifier checks any single-episode `explicit_prior_history` proposal. Project
+  and Series proposals supported only by one episode cannot be silently auto-admitted: they remain provisional or
+  enter the identity-review queue. Cross-episode nodes receive only `multiple_episodes`, and named source participants
+  are materialized from the structured participant resolution before claim routing.
+- Tightened all upstream/downstream boundaries. Entity planning uses discriminated scope variants (`materialized`,
+  `provisional`, `component`, `occurrence`, `standalone_event`, and `context`), page state is derived from that scope,
+  invalid parent/type combinations cannot be generated, and only materialized identities enter the owner-routing
+  schema. Claims supporting provisional or review-required independent identities are deferred rather than assigned
+  to an unrelated page, preserving them for later cross-episode promotion. Routing no longer chooses wiki sections;
+  the owner-scoped fact plan remains the authoritative section decision.
+- Added a complete identity-review workflow. Review-required decisions persist the proposed type, scope, parent,
+  page state, aliases, exact supporting claims/segments, and type rationale. The API accepts approve/reject plus exact
+  overrides, approval writes authoritative manual identity references and reopens affected claims, and both actions
+  immediately rerun Dream. The React Memory Inspector exposes the review queue and approve/reject controls.
+- Direct `gemma4:12b` probes preceded each semantic contract change. Neutral probes distinguished a one-episode
+  antique-restoration effort from explicitly stated prior work plus future continuation; accepted a named meeting
+  participant as a direct encounter; accepted an unambiguous renovation Project while marking a genuine
+  Project-versus-Series boundary for review; and independently rejected invented prior history based on an object's
+  age, assumed condition, present-progressive work, or a current-episode decision. The verifier accepted the
+  counterexample with work begun last month, a plan approved last week, and continuation next week. Production-schema
+  pair probes also rejected the same-episode false basis repeatedly.
+- The final unrelated frozen-extraction replay is
+  `benchmark_runs/daily-driver-unrelated-v1-identity-adjudication-v7-20260829`. It passed both release gates, found all
+  3/3 expected entities with no extras, placed and rendered all 10 active claims, preserved the first-episode Project
+  claims as deferred, then materialized the Project and Person after later evidence. Three independent final-code
+  trials at `benchmark_runs/daily-driver-unrelated-v1-identity-adjudication-trials-20260829` passed
+  `no_premature_project` and `correct_role_owner` in **3/3 trials each**; entity-type, ownership, and provenance
+  accuracy were 1.0 in every trial.
+- The primary frozen replay is at `benchmark_runs/daily-driver-v1-identity-adjudication-20260829`. It passed the
+  no-premature-Lantern gate and demonstrated an inspectable review-required decision, but is not release-ready: the
+  model still chose Series for the family oral-history effort, created an extra Pilot Evaluation Project, and later
+  fact calls hit malformed-output limits. It also exposed grouped project-role placements receiving a fact group's
+  union of links. That deterministic downstream bug was fixed after the run: facts may aggregate linked endpoints,
+  while every canonical placement now retains its own exact project endpoint. A regression test covers two Person
+  role claims grouped across two different Projects.
+- The old paraphrased replay store was correctly rejected because it contains the removed `derivation_operation`
+  field; no compatibility reader was added. Fresh runs are at
+  `benchmark_runs/daily-driver-paraphrased-v1-identity-adjudication-fresh-20260829` and
+  `benchmark_runs/daily-driver-paraphrased-v1-identity-adjudication-fresh-v2-20260829`. The retry achieved complete
+  claim-bearing source coverage and passed the no-premature-project gate, but the model split the continuing Hearth
+  effort into a provisional Project plus Artifact/component and unsupported Series nodes, so the distinct-entity gate
+  remains a recorded cross-vocabulary model-quality failure rather than being patched with lexical rules.
+- Final validation: **253 passed, 2 skipped**; Ruff, UI lint, UI build, and `git diff --check` passed. The existing
+  853.51 kB UI chunk-size warning remains.

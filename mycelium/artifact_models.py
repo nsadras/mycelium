@@ -23,7 +23,9 @@ NON_WIKI_RETENTION_REASONS = {
     "system_control",
     "extractor_rejected",
 }
-ENTITY_REFERENCE_ROLES = {"subject", "object", "context", "canonical_owner"}
+ENTITY_REFERENCE_ROLES = {
+    "subject", "object", "context", "canonical_owner", "identity_subject",
+}
 RECONSOLIDATION_RELATIONS = {"contradicts", "supersedes"}
 RECONSOLIDATION_STATUSES = {"pending", "approved", "rejected", "applied", "stale"}
 
@@ -238,15 +240,34 @@ class EntityResolutionDecision:
     dream_run_id: str
     created_at: str
     participant_surface: str | None = None
+    proposed_scope: str | None = None
+    proposed_parent_entity_id: str | None = None
+    proposed_page_state: str | None = None
+    proposed_aliases: list[str] = field(default_factory=list)
+    proposed_type_reason: str | None = None
+    reviewer_note: str | None = None
+    reviewed_at: str | None = None
 
     def __post_init__(self) -> None:
         if self.decision_type not in {"entity_creation", "participant_resolution"}:
             raise ValueError(f"Unsupported entity-resolution decision: {self.decision_type}")
         if self.review_state not in {"accepted", "review_required", "rejected"}:
             raise ValueError(f"Unsupported identity review state: {self.review_state}")
+        if self.proposed_scope not in {
+            None, "independent", "component", "occurrence", "standalone_event",
+            "context",
+        }:
+            raise ValueError(f"Unsupported proposed identity scope: {self.proposed_scope}")
+        if self.proposed_page_state not in {
+            None, "materialized", "provisional", "no_page",
+        }:
+            raise ValueError(
+                f"Unsupported proposed identity page state: {self.proposed_page_state}"
+            )
         self.source_ids = sorted(set(self.source_ids))
         self.supporting_claim_ids = sorted(set(self.supporting_claim_ids))
         self.supporting_segment_ids = sorted(set(self.supporting_segment_ids))
+        self.proposed_aliases = sorted(set(self.proposed_aliases))
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
 
 

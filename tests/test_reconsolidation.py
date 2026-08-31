@@ -89,7 +89,6 @@ async def test_owner_plan_groups_independent_support(tmp_path):
             "state": "current",
             "section_key": "preferences_working_style",
             "text": "The user prefers written updates.",
-            "linked_entity_aliases": [],
             "confidence": 0.95,
             "reason": "Independent support.",
         }],
@@ -110,6 +109,65 @@ async def test_owner_plan_groups_independent_support(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_grouped_project_roles_preserve_each_claims_exact_project_link(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    person = artifacts.create_entity("person", "Rosa")
+    first_project = artifacts.create_entity("project", "Kitchen")
+    second_project = artifacts.create_entity("project", "Garden")
+    first = claim("first", "Rosa coordinates permits for Kitchen.", "2026-08-01T12:00:00")
+    second = claim("second", "Rosa coordinates permits for Garden.", "2026-08-02T12:00:00")
+    placements = []
+    for item, project in ((first, first_project), (second, second_project)):
+        artifacts.save_claim(item)
+        placement = ClaimPlacement(
+            item.claim_id,
+            person.entity_id,
+            "shared_projects",
+            [project.entity_id],
+            "placed",
+            "test",
+            item.recorded_at,
+            item.recorded_at,
+            relationship_kind="project_role",
+        )
+        artifacts.save_placement(placement)
+        placements.append(placement)
+    llm = AsyncMock()
+    llm.call_structured.return_value = {
+        "assignments": {
+            "C001": {"fact_key": "coordination"},
+            "C002": {"fact_key": "coordination"},
+        },
+        "facts": [{
+            "fact_key": "coordination",
+            "state": "current",
+            "section_key": "shared_projects",
+            "text": "Rosa coordinates permits for two projects.",
+            "confidence": 0.9,
+            "reason": "Related responsibilities.",
+        }],
+        "truth_changes": [],
+    }
+
+    result = await FactResolver(llm, artifacts).resolve(
+        placements,
+        affected_entity_ids={person.entity_id},
+        incoming_claim_ids={first.claim_id, second.claim_id},
+        dream_run_id="dream-1",
+    )
+
+    assert result.failures == []
+    links = {
+        placement.claim_id: placement.linked_entity_ids
+        for placement in result.placements
+    }
+    assert links == {
+        "first": [first_project.entity_id],
+        "second": [second_project.entity_id],
+    }
+
+
+@pytest.mark.asyncio
 async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_path):
     artifacts = setup_owner(tmp_path)
     old = claim("old", "The user prefers tea.", "2026-08-01T12:00:00")
@@ -121,8 +179,8 @@ async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_p
     llm.call_structured.return_value = {
         "assignments": {"C001": {"fact_key": "old"}, "C002": {"fact_key": "new"}},
         "facts": [
-            {"fact_key": "old", "state": "current", "section_key": "preferences_working_style", "text": old.text, "linked_entity_aliases": [], "confidence": 0.9, "reason": "Accepted state."},
-            {"fact_key": "new", "state": "current", "section_key": "preferences_working_style", "text": new.text, "linked_entity_aliases": [], "confidence": 0.9, "reason": "Proposed replacement."},
+            {"fact_key": "old", "state": "current", "section_key": "preferences_working_style", "text": old.text, "confidence": 0.9, "reason": "Accepted state."},
+            {"fact_key": "new", "state": "current", "section_key": "preferences_working_style", "text": new.text, "confidence": 0.9, "reason": "Proposed replacement."},
         ],
         "truth_changes": [{
             "relation": "supersedes",
@@ -159,7 +217,7 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
     llm = AsyncMock()
     llm.call_structured.return_value = {
         "assignments": {"C001": {"fact_key": "same"}, "C002": {"fact_key": "same"}},
-        "facts": [{"fact_key": "same", "state": "current", "section_key": "preferences_working_style", "text": "The user has conflicting drink preferences.", "linked_entity_aliases": [], "confidence": 0.5, "reason": "Invalid grouping."}],
+        "facts": [{"fact_key": "same", "state": "current", "section_key": "preferences_working_style", "text": "The user has conflicting drink preferences.", "confidence": 0.5, "reason": "Invalid grouping."}],
         "truth_changes": [{"relation": "supersedes", "incoming_claim_aliases": ["C002"], "target_claim_aliases": ["C001"], "explanation": "Replacement.", "confidence": 0.9}],
     }
 

@@ -48,7 +48,7 @@ class ClaimRoute:
     @property
     def placed(self) -> bool:
         return self.disposition == "canonical" and bool(
-            self.owner_entity_id and self.section_key
+            self.owner_entity_id
         )
 
 

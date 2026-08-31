@@ -8,6 +8,7 @@ from mycelium.artifacts import (
     ArtifactStore,
     ClaimEntityReference,
     ClaimProvenance,
+    EntityResolutionDecision,
     EpisodeManifest,
     MemoryClaim,
     SourceDocument,
@@ -15,6 +16,7 @@ from mycelium.artifacts import (
 )
 from mycelium.config import Config
 from mycelium.consolidation import ClaimEvidence, ClaimRouter, slugify
+from mycelium.consolidation_formatting import RoutingFormatter
 from mycelium.dream import DreamProcess
 from mycelium.models import LogEntry
 from mycelium.store import LogStore, WikiStore
@@ -324,6 +326,65 @@ def use_existing_identity(
 def set_scope_response(llm, plan: dict) -> None:
     llm.call_structured.side_effect = split_scope_plan(plan)
     llm.call_structured.return_value = None
+
+
+def test_identity_review_catalog_only_exposes_human_adjudications(tmp_path):
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    source = SourceDocument(
+        source_id="source-test",
+        source_type="chat",
+        session_id="session-test",
+        recorded_at="2026-08-31T12:00:00-07:00",
+        occurred_at=None,
+        participants=[],
+        segments=[],
+    )
+    claim = MemoryClaim(
+        claim_id="claim-test",
+        text="A claim.",
+        about=[],
+        provenance=[ClaimProvenance(
+            source_id=source.source_id,
+            segment_ids=["source-test#seg-0001"],
+        )],
+        recorded_at=source.recorded_at,
+        claim_type="event",
+        confidence=0.9,
+    )
+    evidence = {"C001": ClaimEvidence(claim, source)}
+    artifacts.save_source(source)
+    artifacts.save_claim(claim)
+    common = {
+        "decision_type": "entity_creation",
+        "entity_id": None,
+        "proposed_entity_type": "project",
+        "proposed_title": "Test Project",
+        "source_ids": [source.source_id],
+        "supporting_claim_ids": [claim.claim_id],
+        "supporting_segment_ids": ["source-test#seg-0001"],
+        "confidence": 0.9,
+        "reason": "Test decision.",
+        "review_state": "accepted",
+        "dream_run_id": "dream-test",
+        "created_at": "2026-08-31T12:00:00-07:00",
+    }
+    artifacts.save_entity_resolution_decision(EntityResolutionDecision(
+        decision_id="identity-automatic",
+        **common,
+    ))
+
+    assert RoutingFormatter(artifacts).identity_review_catalog(evidence) == "none"
+
+    artifacts.save_entity_resolution_decision(EntityResolutionDecision(
+        decision_id="identity-reviewed",
+        reviewed_at="2026-08-31T12:05:00-07:00",
+        reviewer_note="Confirmed by the user.",
+        **common,
+    ))
+
+    catalog = RoutingFormatter(artifacts).identity_review_catalog(evidence)
+    assert "Confirmed by the user." in catalog
+    assert catalog.count("review_state=accepted") == 1
 
 
 def fact_resolution_plan(

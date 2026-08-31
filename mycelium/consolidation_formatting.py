@@ -106,6 +106,8 @@ class RoutingFormatter:
         for decision in self.artifacts.list_entity_resolution_decisions():
             if decision.review_state not in {"accepted", "rejected"}:
                 continue
+            if decision.reviewed_at is None:
+                continue
             overlap = claim_ids.intersection(decision.supporting_claim_ids)
             if not overlap:
                 continue

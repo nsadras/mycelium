@@ -2209,5 +2209,9 @@ one prose-similarity summary.
 - Direct `gemma4:12b` probes of the final contract returned `no_change` for three compatible or independent incoming
   facts from the transfer run, and returned `supersedes` with the exact prior alias for a neutral explicit date
   correction counterexample. No lexical or benchmark-specific rule was added.
+- Frozen replay validation also exposed a harness sequencing defect: it copied every future log into the destination
+  before replaying the corresponding source artifacts, causing an artificial first-checkpoint preparation failure.
+  Replay now appends each frozen raw log as unconsolidated alongside its source, episode, and claims, matching the
+  production ingestion sequence and preventing future evidence from leaking into earlier checkpoints.
 - Validation: **253 passed, 2 skipped**; focused FactResolver and Dream tests passed **46/46**; Ruff and
   `git diff --check` passed.

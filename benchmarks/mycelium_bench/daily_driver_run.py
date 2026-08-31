@@ -25,6 +25,7 @@ from mycelium.artifacts import ArtifactStore, MemoryClaim, SourceSegment
 from mycelium.core import Mycelium
 from mycelium.reconsolidation import ReconsolidationReviewService
 from mycelium.session import Session
+from mycelium.store import LogStore
 
 
 def _jsonable(value: Any) -> Any:
@@ -167,7 +168,10 @@ async def _ingest_episode(
 
 
 def _replay_extracted_episode(
-    memory: Mycelium, replay: ArtifactStore, episode: dict[str, Any]
+    memory: Mycelium,
+    replay: ArtifactStore,
+    replay_logs: LogStore,
+    episode: dict[str, Any],
 ) -> None:
     """Replay only canonical extraction artifacts for one fixture episode."""
     fixture_episode_id = str(episode["id"])
@@ -200,6 +204,13 @@ def _replay_extracted_episode(
         )
     manifest = copy.deepcopy(manifests[0])
     memory.artifacts.save_source(source)
+    if not source.raw_log_entry_id:
+        raise RuntimeError(
+            f"Replay source for {fixture_episode_id} has no raw log entry"
+        )
+    log_entry = copy.deepcopy(replay_logs.get(source.raw_log_entry_id))
+    log_entry.consolidated = False
+    memory.log_store.append(log_entry)
     for claim_id in manifest.claim_ids:
         claim = copy.deepcopy(replay.get_claim(claim_id))
         claim.status = "active"
@@ -209,15 +220,6 @@ def _replay_extracted_episode(
         claim.dream_disposition_at = None
         memory.artifacts.save_claim(claim)
     memory.artifacts.save_episode(manifest)
-
-
-def _copy_replay_logs(replay_store: Path, destination: Path) -> None:
-    logs = replay_store / "logs"
-    if not logs.is_dir():
-        raise ValueError(
-            f"Replay extraction store has no logs directory: {replay_store}"
-        )
-    shutil.copytree(logs, destination, dirs_exist_ok=True)
 
 
 def _gold_claim(fixture: dict[str, Any], claim_id: str) -> dict[str, Any]:
@@ -808,13 +810,14 @@ async def run_daily_driver(
         memory_profile="user",
     )
     replay = None
+    replay_logs = None
     if replay_extraction_store is not None:
         if not replay_extraction_store.is_dir():
             raise ValueError(
                 f"Replay extraction store does not exist: {replay_extraction_store}"
             )
         replay = ArtifactStore(replay_extraction_store / "artifacts")
-        _copy_replay_logs(replay_extraction_store, memory.store_path / "logs")
+        replay_logs = LogStore(replay_extraction_store / "logs")
     _configure_user(memory, str(fixture["scenario"]["user"]["name"]))
     actions: list[dict[str, Any]] = []
     checkpoint_ids: list[str] = []
@@ -828,7 +831,9 @@ async def run_daily_driver(
                 user_speaker_label=str(fixture["scenario"]["user"]["speaker_label"]),
             )
         else:
-            _replay_extracted_episode(memory, replay, episode)
+            if replay_logs is None:
+                raise RuntimeError("Replay log store was not initialized")
+            _replay_extracted_episode(memory, replay, replay_logs, episode)
         for action in episode.get("actions_after") or []:
             kind, _, value = str(action).partition(":")
             event: dict[str, Any] = {"episode": episode["id"], "action": action}

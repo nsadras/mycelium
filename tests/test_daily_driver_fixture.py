@@ -1,4 +1,5 @@
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,8 @@ from mycelium.artifacts import (
     SourceSegment,
 )
 from mycelium.core import Mycelium
+from mycelium.models import LogEntry
+from mycelium.store import LogStore
 
 
 FIXTURE_DIR = Path("benchmarks/fixtures/daily_driver_v1")
@@ -287,7 +290,9 @@ def test_page_entity_score_defers_entities_supported_only_by_retracted_evidence(
 
 
 def test_extraction_replay_resets_downstream_claim_state(tmp_path):
-    replay = ArtifactStore(tmp_path / "baseline" / "artifacts")
+    replay_root = tmp_path / "baseline"
+    replay = ArtifactStore(replay_root / "artifacts")
+    replay_logs = LogStore(replay_root / "logs")
     segment = SourceSegment(
         segment_id="source-1#seg-0001",
         index=0,
@@ -303,9 +308,17 @@ def test_extraction_replay_resets_downstream_claim_state(tmp_path):
             occurred_at="2026-01-01T00:00:00+00:00",
             participants=["User"],
             segments=[segment],
+            raw_log_entry_id="2026-01-01#session-source-1",
             metadata={"fixture_episode_id": "chat-01"},
         )
     )
+    replay_logs.append(LogEntry(
+        entry_id="2026-01-01#session-source-1",
+        session_id="chat-01",
+        timestamp=datetime.fromisoformat("2026-01-01T00:00:00+00:00"),
+        content="A durable statement.",
+        consolidated=True,
+    ))
     replay.save_claim(
         MemoryClaim(
             claim_id="claim-1",
@@ -337,6 +350,7 @@ def test_extraction_replay_resets_downstream_claim_state(tmp_path):
     _replay_extracted_episode(
         memory,
         replay,
+        replay_logs,
         {"id": "chat-01", "segments": [{"id": "chat-01-s01"}]},
     )
 
@@ -345,3 +359,4 @@ def test_extraction_replay_resets_downstream_claim_state(tmp_path):
     assert claim.dream_disposition == "pending"
     assert claim.dream_run_id is None
     assert memory.artifacts.get_episode("episode-1").claim_ids == ["claim-1"]
+    assert memory.log_store.get("2026-01-01#session-source-1").consolidated is False

@@ -2213,5 +2213,16 @@ one prose-similarity summary.
   before replaying the corresponding source artifacts, causing an artificial first-checkpoint preparation failure.
   Replay now appends each frozen raw log as unconsolidated alongside its source, episode, and claims, matching the
   production ingestion sequence and preventing future evidence from leaking into earlier checkpoints.
+- The final frozen downstream runs are
+  `benchmark_runs/daily-driver-unrelated-v1-contracts-final-replay-20260831` and
+  `benchmark_runs/daily-driver-unrelated-v1-contracts-final-replay-v2-20260831`. Both final Dreams completed without
+  identity, routing, maturity, or fact-resolution failures; the second run, after the replay sequencing fix, completed
+  both Dream checkpoints with zero failures and no structured debug dumps. It preserved exact 6/6 claim-bearing and
+  2/2 source-only accounting, passed both hard lifecycle gates, persisted 13 maturity proposal/verifier assessments,
+  and rendered 7 consolidated facts. It passed four of seven acceptance dimensions.
+- The transfer fixture remains not release-ready because the model did not co-resolve initial “1920s kitchen”
+  references with the later “kitchen renovation” identity. The independent maturity verifier correctly rejected the
+  resulting single-episode Project's invented prior-history basis, leaving it provisional. This is retained as an
+  inspectable identity/review-quality miss rather than overridden with lexical matching.
 - Validation: **253 passed, 2 skipped**; focused FactResolver and Dream tests passed **46/46**; Ruff and
   `git diff --check` passed.

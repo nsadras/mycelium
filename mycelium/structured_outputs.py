@@ -613,7 +613,7 @@ def identity_matching_output_model(
 def new_identity_verification_output_model(
     existing_entity_ids: Collection[str],
 ) -> type[BaseModel]:
-    """Audit one proposed-new identity against one bounded registry partition."""
+    """Audit one proposed identity against one bounded registry partition."""
     existing = tuple(dict.fromkeys(
         str(value) for value in existing_entity_ids if value
     ))

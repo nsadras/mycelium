@@ -330,6 +330,9 @@ class IdentityWorkUnit:
     attempt_count: int = 0
     subject_nodes: list[dict[str, Any]] = field(default_factory=list)
     identity_groups: list[dict[str, Any]] = field(default_factory=list)
+    existing_identity_verdicts: dict[str, dict[str, Any]] = field(
+        default_factory=dict
+    )
     type_proposals: dict[str, dict[str, Any]] = field(default_factory=dict)
     type_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
     new_identity_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)

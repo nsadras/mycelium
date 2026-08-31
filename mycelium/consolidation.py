@@ -249,6 +249,54 @@ class ClaimRouter:
                 )),
             }
 
+        rejected_existing_ids: dict[str, str] = {}
+        try:
+            for identity_key, node in graph_nodes.items():
+                if node["identity_resolution"] != "existing":
+                    continue
+                proposed_entity_id = str(node["entity_id"])
+                if identity_key in work_unit.existing_identity_verdicts:
+                    identity_verdict = work_unit.existing_identity_verdicts[
+                        identity_key
+                    ]
+                else:
+                    identity_verdict = await self._verify_identity(
+                        node,
+                        [planned[proposed_entity_id]],
+                        aliases,
+                        participants,
+                    )
+                    work_unit.existing_identity_verdicts[
+                        identity_key
+                    ] = identity_verdict
+                    work_unit.stage = "existing_identity_verification"
+                    self.artifacts.save_identity_work_unit(work_unit)
+                if (
+                    identity_verdict["verdict"] == "existing"
+                    and identity_verdict["entity_id"] == proposed_entity_id
+                ):
+                    node["identity_reason"] = identity_verdict["reason"]
+                    continue
+                node["entity_id"] = ""
+                node["identity_reason"] = identity_verdict["reason"]
+                if identity_verdict["verdict"] == "review_required":
+                    node["identity_resolution"] = "review_required"
+                    node["candidate_entity_ids"] = identity_verdict[
+                        "candidate_entity_ids"
+                    ]
+                else:
+                    node["identity_resolution"] = "new"
+                    node["candidate_entity_ids"] = []
+                    rejected_existing_ids[identity_key] = proposed_entity_id
+        except Exception as exc:
+            return self._fail_work_unit(
+                work_unit,
+                evidence,
+                "existing_identity_verification",
+                "Existing identity verification did not satisfy the contract: "
+                f"{type(exc).__name__}: {exc}",
+            )
+
         unresolved_type_evidence = {
             identity_key: node["supporting_evidence"]
             for identity_key, node in graph_nodes.items()
@@ -357,8 +405,9 @@ class ClaimRouter:
                         if entity.status == "active"
                         and entity.entity_id != "you"
                         and entity.entity_type == node["entity_type"]
+                        and entity.entity_id != rejected_existing_ids.get(identity_key)
                     ]
-                    identity_verdict = await self._verify_new_identity(
+                    identity_verdict = await self._verify_identity(
                         node,
                         candidates,
                         aliases,
@@ -981,7 +1030,7 @@ class ClaimRouter:
         unit.dream_run_ids = list(dict.fromkeys(unit.dream_run_ids))
         return unit
 
-    async def _verify_new_identity(
+    async def _verify_identity(
         self,
         node: dict,
         candidates: list[EntityRecord],

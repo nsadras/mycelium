@@ -320,7 +320,14 @@ def use_existing_identity(
         "reason": "The evidence identifies the existing canonical entity.",
     })
     responses[6]["decisions"]["I001"]["entity_id"] = entity_id
-    return [responses[0], responses[1], *responses[4:]]
+    verification = {"decision": {
+        "verdict": "existing",
+        "entity_id": entity_id,
+        "candidate_entity_ids": [],
+        "confidence": 0.95,
+        "reason": "Independent evidence confirms the canonical identity.",
+    }}
+    return [responses[0], responses[1], verification, *responses[4:]]
 
 
 def set_scope_response(llm, plan: dict) -> None:
@@ -1147,7 +1154,16 @@ async def test_later_distinct_source_can_promote_its_provisional_owner(tmp_path)
         "project-archive-effort"
     )
     second_responses = [
-        second_responses[0], second_responses[1], *second_responses[4:]
+        second_responses[0],
+        second_responses[1],
+        {"decision": {
+            "verdict": "existing",
+            "entity_id": "project-archive-effort",
+            "candidate_entity_ids": [],
+            "confidence": 0.95,
+            "reason": "The continuing work confirms the same archive effort.",
+        }},
+        *second_responses[4:],
     ]
     llm.call_structured.side_effect = second_responses
 
@@ -1703,6 +1719,50 @@ async def test_rejected_identity_match_cannot_mutate_existing_person(tmp_path):
     ]
     assert artifacts.get_entity(person.entity_id).title == "Priya Raman"
     assert result.routes[0].owner_entity_id == "person-omar-haddad"
+
+
+@pytest.mark.asyncio
+async def test_existing_identity_match_is_verified_before_inheriting_shape(tmp_path):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    person = artifacts.create_entity("person", "Rosa Alvarez")
+    _, source = add_source(logs, artifacts)
+    claim = add_claim(
+        artifacts,
+        source,
+        text="The selected appliance is a thirty-inch induction range.",
+        about="thirty-inch induction range",
+        claim_type="state",
+    )
+    responses = split_scope_plan(scope_plan(
+        {"C001": assignment("N001", supporting=["C001"])},
+        [scope_candidate(
+            "N001", "thirty-inch induction range", "artifact", ["C001"]
+        )],
+    ))
+    responses[1]["identities"][0].update({
+        "resolution": "existing",
+        "entity_id": person.entity_id,
+        "candidate_entity_ids": [],
+        "reason": "The initial matcher proposed the existing person.",
+    })
+    responses.insert(2, {"decision": {
+        "verdict": "distinct",
+        "entity_id": "",
+        "candidate_entity_ids": [],
+        "confidence": 1.0,
+        "reason": "An appliance and a person are different identities.",
+    }})
+    llm.call_structured.side_effect = responses
+
+    result = await dream.router.route([ClaimEvidence(claim, source)])
+
+    assert result.failures == []
+    assert [(entity.entity_type, entity.title) for entity in result.new_entities] == [
+        ("artifact", "thirty-inch induction range")
+    ]
+    assert artifacts.get_entity(person.entity_id).title == "Rosa Alvarez"
+    unit = artifacts.list_identity_work_units()[0]
+    assert unit.existing_identity_verdicts["I001"]["verdict"] == "distinct"
 
 
 @pytest.mark.asyncio

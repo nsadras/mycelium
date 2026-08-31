@@ -329,6 +329,7 @@ def fact_resolution_plan(
     facts: dict[str, tuple[list[str], str, str]],
     *,
     truth_changes: list[dict] | None = None,
+    incoming_aliases: list[str] | None = None,
 ) -> list[dict]:
     keyed = {
         fact_key: f"F{index:03d}"
@@ -344,8 +345,37 @@ def fact_resolution_plan(
         }
         for fact_key, (_, text, section) in facts.items()
     }
+    changes_by_incoming = {
+        alias: change
+        for change in truth_changes or []
+        for alias in change["incoming_claim_aliases"]
+    }
+    incoming_aliases = incoming_aliases or (
+        sorted(changes_by_incoming)
+        if changes_by_incoming
+        else sorted({alias for aliases, _, _ in facts.values() for alias in aliases})
+    )
     return [
-        {"truth_changes": list(truth_changes or [])},
+        {"decisions": {
+            alias: (
+                {
+                    "disposition": "truth_change",
+                    "relation": changes_by_incoming[alias]["relation"],
+                    "target_claim_aliases": changes_by_incoming[alias][
+                        "target_claim_aliases"
+                    ],
+                    "explanation": changes_by_incoming[alias]["explanation"],
+                    "confidence": changes_by_incoming[alias]["confidence"],
+                }
+                if alias in changes_by_incoming
+                else {
+                    "disposition": "no_change",
+                    "reason": "No accepted truth is changed.",
+                    "confidence": 0.9,
+                }
+            )
+            for alias in incoming_aliases
+        }},
         {"assignments": {
             alias: {"fact_key": keyed[fact_key]}
             for fact_key, (aliases, _, _) in facts.items()
@@ -1086,7 +1116,7 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
             "early": (["C001"], early.text, "next_steps_deadlines"),
             "identity": (["C002"], identity.text, "overview"),
             "state": (["C003"], state.text, "current_status"),
-        }),
+        }, incoming_aliases=["C002", "C003"]),
     ]
 
     report = await dream.run()
@@ -1149,7 +1179,7 @@ async def test_later_dream_discovers_page_from_claims_across_episodes(tmp_path):
         *fact_resolution_plan({
             "research": (["C001"], first.text, "timeline"),
             "interview": (["C002"], second.text, "next_steps_deadlines"),
-        }),
+        }, incoming_aliases=["C002"]),
     ]
 
     report = await dream.run()
@@ -1620,7 +1650,7 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
         *fact_resolution_plan({
             "tea": (["C001"], "Stable Page records a tea preference.", "why_it_matters"),
             "coffee": (["C002"], "Stable Page records a coffee preference.", "why_it_matters"),
-        }),
+        }, incoming_aliases=["C002"]),
     ]
     report = await dream.run()
 
@@ -1748,7 +1778,11 @@ async def test_invalid_fact_resolution_keeps_source_pending_and_page_unchanged(t
     )
     llm.call_structured.side_effect = [
         *split_scope_plan(you_scope()),
-        {"truth_changes": []},
+        {"decisions": {"C002": {
+            "disposition": "no_change",
+            "reason": "No accepted truth is changed.",
+            "confidence": 0.9,
+        }}},
         {"assignments": {}},
     ]
 

@@ -198,7 +198,8 @@ class FactResolver:
             relations_text,
             json.dumps(incoming_aliases),
         )
-        truth_schema = fact_truth_output_model(aliases)
+        target_aliases = sorted(set(aliases) - set(incoming_aliases))
+        truth_schema = fact_truth_output_model(incoming_aliases, target_aliases)
         response = await self.llm.call_structured(
             system,
             user,
@@ -206,7 +207,20 @@ class FactResolver:
             num_predict=2048,
             debug_label="dream-fact-truth",
         )
-        changes = truth_schema.model_validate(response).model_dump()["truth_changes"]
+        adjudications = truth_schema.model_validate(response).model_dump()[
+            "decisions"
+        ]
+        changes = [
+            {
+                "relation": decision["relation"],
+                "incoming_claim_aliases": [alias],
+                "target_claim_aliases": decision["target_claim_aliases"],
+                "explanation": decision["explanation"],
+                "confidence": decision["confidence"],
+            }
+            for alias, decision in adjudications.items()
+            if decision["disposition"] == "truth_change"
+        ]
         self._validate_truth_changes(changes, aliases, incoming_claim_ids)
 
         system, user = prompts.fact_grouping_prompt(

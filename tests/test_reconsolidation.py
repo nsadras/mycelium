@@ -2,6 +2,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from mycelium.artifacts import (
     ArtifactStore,
@@ -16,6 +17,7 @@ from mycelium.facts import FactResolutionResult, FactResolver
 from mycelium.materialization import PageMaterializer
 from mycelium.reconsolidation import ReconsolidationReviewService
 from mycelium.store import WikiStore
+from mycelium.structured_outputs import fact_truth_output_model
 
 
 def claim(claim_id: str, text: str, recorded_at: str) -> MemoryClaim:
@@ -76,8 +78,37 @@ def fact(item: MemoryClaim) -> ConsolidatedFact:
 
 
 def staged_fact_responses(plan: dict) -> list[dict]:
+    changes_by_incoming = {
+        alias: change
+        for change in plan["truth_changes"]
+        for alias in change["incoming_claim_aliases"]
+    }
+    incoming_aliases = (
+        sorted(changes_by_incoming)
+        if changes_by_incoming
+        else sorted(plan["assignments"])
+    )
     return [
-        {"truth_changes": plan["truth_changes"]},
+        {"decisions": {
+            alias: (
+                {
+                    "disposition": "truth_change",
+                    "relation": changes_by_incoming[alias]["relation"],
+                    "target_claim_aliases": changes_by_incoming[alias][
+                        "target_claim_aliases"
+                    ],
+                    "explanation": changes_by_incoming[alias]["explanation"],
+                    "confidence": changes_by_incoming[alias]["confidence"],
+                }
+                if alias in changes_by_incoming
+                else {
+                    "disposition": "no_change",
+                    "reason": "No accepted truth is changed.",
+                    "confidence": 0.9,
+                }
+            )
+            for alias in incoming_aliases
+        }},
         {"assignments": plan["assignments"]},
         {"facts": {
             item["fact_key"]: {
@@ -86,6 +117,26 @@ def staged_fact_responses(plan: dict) -> list[dict]:
             for item in plan["facts"]
         }},
     ]
+
+
+def test_truth_schema_separates_incoming_from_prior_targets():
+    schema = fact_truth_output_model(["C002"], ["C001"])
+
+    valid = {"decisions": {"C002": {
+        "disposition": "truth_change",
+        "relation": "supersedes",
+        "target_claim_aliases": ["C001"],
+        "explanation": "The incoming evidence explicitly replaces the prior state.",
+        "confidence": 0.9,
+    }}}
+    assert schema.model_validate(valid).decisions.C002.disposition == "truth_change"
+
+    invalid = {"decisions": {"C002": {
+        **valid["decisions"]["C002"],
+        "target_claim_aliases": ["C002"],
+    }}}
+    with pytest.raises(ValidationError):
+        schema.model_validate(invalid)
 
 
 @pytest.mark.asyncio
@@ -229,7 +280,13 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
     artifacts.save_consolidated_fact(old_fact)
     llm = AsyncMock()
     llm.call_structured.side_effect = [
-        {"truth_changes": [{"relation": "supersedes", "incoming_claim_aliases": ["C002"], "target_claim_aliases": ["C001"], "explanation": "Replacement.", "confidence": 0.9}]},
+        {"decisions": {"C002": {
+            "disposition": "truth_change",
+            "relation": "supersedes",
+            "target_claim_aliases": ["C001"],
+            "explanation": "Replacement.",
+            "confidence": 0.9,
+        }}},
         {"assignments": {"C001": {"fact_key": "F001"}, "C002": {"fact_key": "F001"}}},
     ]
 
@@ -277,7 +334,14 @@ async def test_fact_presentations_are_rendered_in_bounded_batches(tmp_path):
 
     llm = AsyncMock()
     llm.call_structured.side_effect = [
-        {"truth_changes": []},
+        {"decisions": {
+            alias: {
+                "disposition": "no_change",
+                "reason": "No accepted truth is changed.",
+                "confidence": 0.9,
+            }
+            for alias in assignments
+        }},
         {"assignments": assignments},
         rendered(1, 13),
         rendered(13, 14),

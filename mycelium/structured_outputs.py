@@ -244,53 +244,88 @@ class FactPresentationOutput(BaseModel):
     reason: str = Field(min_length=1, max_length=800)
 
 
+class FactTruthNoChangeOutput(BaseModel):
+    """An incoming claim that does not change an accepted truth."""
+
+    model_config = ConfigDict(extra="forbid")
+    disposition: Literal["no_change"]
+    reason: str = Field(min_length=1, max_length=800)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class FactTruthChangeOutput(BaseModel):
     """An unsafe truth change that must be reviewed before claim mutation."""
 
     model_config = ConfigDict(extra="forbid")
+    disposition: Literal["truth_change"]
     relation: Literal["contradicts", "supersedes"]
-    incoming_claim_aliases: list[str] = Field(min_length=1, max_length=48)
     target_claim_aliases: list[str] = Field(min_length=1, max_length=48)
     explanation: str = Field(min_length=1, max_length=800)
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-def fact_truth_output_model(claim_aliases: Collection[str]) -> type[BaseModel]:
-    """Build a compact owner-wide truth-change decision."""
-    claims = tuple(dict.fromkeys(str(value) for value in claim_aliases if value))
-    if not claims:
-        raise ValueError("Fact truth resolution requires claim aliases")
-    claim_type = Literal.__getitem__(claims)
-    exact_change = create_model(
-        "ExactFactTruthChange",
-        __base__=FactTruthChangeOutput,
-        incoming_claim_aliases=(
-            list[claim_type],  # type: ignore[valid-type]
-            Field(min_length=1, max_length=48),
-        ),
-        target_claim_aliases=(
-            list[claim_type],  # type: ignore[valid-type]
-            Field(min_length=1, max_length=48),
-        ),
+def fact_truth_output_model(
+    incoming_claim_aliases: Collection[str],
+    target_claim_aliases: Collection[str],
+) -> type[BaseModel]:
+    """Build one exact truth adjudication for every incoming claim alias."""
+    incoming = tuple(dict.fromkeys(
+        str(value) for value in incoming_claim_aliases if value
+    ))
+    targets = tuple(dict.fromkeys(
+        str(value) for value in target_claim_aliases if value
+    ))
+    if not incoming:
+        raise ValueError("Fact truth resolution requires incoming claim aliases")
+    decision_fields: dict[str, Any] = {}
+    for alias in incoming:
+        no_change = create_model(
+            f"{alias}FactTruthNoChange",
+            __base__=FactTruthNoChangeOutput,
+        )
+        if not targets:
+            decision_fields[alias] = (no_change, ...)
+            continue
+        target_type = Literal.__getitem__(targets)
+        truth_change = create_model(
+            f"{alias}FactTruthChange",
+            __base__=FactTruthChangeOutput,
+            target_claim_aliases=(
+                list[target_type],  # type: ignore[valid-type]
+                Field(min_length=1, max_length=len(targets)),
+            ),
+        )
+        decision_fields[alias] = (
+            Annotated[
+                Union[no_change, truth_change],
+                Field(discriminator="disposition"),
+            ],
+            ...,
+        )
+    decisions_model = create_model(
+        "ExactFactTruthDecisions",
+        __config__=ConfigDict(extra="forbid"),
+        **decision_fields,
     )
     base_model = create_model(
         "ExactFactTruthPlan",
         __config__=ConfigDict(extra="forbid"),
-        truth_changes=(list[exact_change], Field(default_factory=list, max_length=48)),
+        decisions=(decisions_model, ...),
     )
 
     class ExactFactTruthPlan(base_model):  # type: ignore[valid-type, misc]
         @model_validator(mode="after")
-        def validate_disjoint_changes(self):
-            changed: set[str] = set()
-            for change in self.truth_changes:
-                incoming = set(change.incoming_claim_aliases)
-                targets = set(change.target_claim_aliases)
-                if incoming & targets or changed & (incoming | targets):
+        def validate_noncompeting_targets(self):
+            changed_targets: set[str] = set()
+            for decision in self.decisions:
+                if decision[1].disposition != "truth_change":
+                    continue
+                decision_targets = set(decision[1].target_claim_aliases)
+                if changed_targets & decision_targets:
                     raise ValueError(
-                        "Truth-change claim sides must be distinct and non-overlapping"
+                        "Incoming truth changes cannot compete for the same target claim"
                     )
-                changed.update(incoming | targets)
+                changed_targets.update(decision_targets)
             return self
 
     return ExactFactTruthPlan

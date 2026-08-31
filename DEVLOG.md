@@ -2191,3 +2191,23 @@ one prose-similarity summary.
   extracted the three meeting claims once with exact evidence coverage and no malformed duplication.
 - Validation: **252 passed, 2 skipped**; focused extraction/runtime/ontology tests passed **63/63**; Ruff and
   `git diff --check` passed.
+
+## 2026-08-31 — Exact keyed fact truth adjudication
+
+- The corrected fresh transfer run at
+  `benchmark_runs/daily-driver-unrelated-v1-contracts-fresh-v2-20260831` achieved exact extraction accounting but
+  exposed a repeated fact-truth contract failure for owner `you`. The frozen debug replay at
+  `benchmark_runs/daily-driver-unrelated-v1-contracts-replay-debug-20260831` captured all three attempts: the schema
+  allowed every canonical alias on both truth-change sides, while runtime required incoming aliases to oppose only
+  previously accepted aliases. The model consequently proposed self-supersessions even though each explanation said
+  that no truth change existed.
+- The first direct schema probe separated incoming and target enums. It removed self-reference but still forced the
+  model's per-claim “no change” conclusions into proposal objects. The final contract therefore adjudicates every
+  incoming alias through an exact keyed discriminated decision: `no_change`, or `truth_change` with target aliases
+  schema-limited to prior claims. Deterministic validation rejects competing incoming decisions for the same target;
+  runtime converts only truth-change decisions into review proposals.
+- Direct `gemma4:12b` probes of the final contract returned `no_change` for three compatible or independent incoming
+  facts from the transfer run, and returned `supersedes` with the exact prior alias for a neutral explicit date
+  correction counterexample. No lexical or benchmark-specific rule was added.
+- Validation: **253 passed, 2 skipped**; focused FactResolver and Dream tests passed **46/46**; Ruff and
+  `git diff --check` passed.

@@ -26,6 +26,7 @@ from mycelium.artifact_models import (
     EntityResolutionDecision,
     EpisodeManifest,
     ExtractionSegmentDisposition,
+    IdentityMaturityAssessment,
     MemoryClaim,
     NonWikiRetentionRecord,
     OrganizationProposal,
@@ -68,6 +69,7 @@ class ArtifactStore:
         self.retention_records_dir = root / "retention-records"
         self.entity_references_dir = root / "entity-references"
         self.entity_resolution_decisions_dir = root / "entity-resolution-decisions"
+        self.identity_maturity_assessments_dir = root / "identity-maturity-assessments"
         self.scope_cohorts_dir = root / "scope-cohorts"
         self.encounters_dir = root / "encounters"
         self.consolidated_facts_dir = root / "consolidated-facts"
@@ -84,6 +86,7 @@ class ArtifactStore:
             self.retention_records_dir,
             self.entity_references_dir,
             self.entity_resolution_decisions_dir,
+            self.identity_maturity_assessments_dir,
             self.scope_cohorts_dir,
             self.encounters_dir,
             self.consolidated_facts_dir,
@@ -498,6 +501,37 @@ class ArtifactStore:
             for path in sorted(self.dream_runs_dir.glob("*.json"), reverse=True)
         ]
 
+    def save_identity_maturity_assessment(
+        self, assessment: IdentityMaturityAssessment
+    ) -> None:
+        _atomic_json(
+            self.identity_maturity_assessments_dir
+            / f"{_safe_id(assessment.assessment_id)}.json",
+            asdict(assessment),
+        )
+
+    def get_identity_maturity_assessment(
+        self, assessment_id: str
+    ) -> IdentityMaturityAssessment:
+        return IdentityMaturityAssessment(**self._read(
+            self.identity_maturity_assessments_dir
+            / f"{_safe_id(assessment_id)}.json"
+        ))
+
+    def list_identity_maturity_assessments(
+        self, *, dream_run_id: str | None = None
+    ) -> list[IdentityMaturityAssessment]:
+        values = [
+            self.get_identity_maturity_assessment(path.stem)
+            for path in sorted(
+                self.identity_maturity_assessments_dir.glob("*.json"), reverse=True
+            )
+        ]
+        return [
+            item for item in values
+            if dream_run_id is None or item.dream_run_id == dream_run_id
+        ]
+
     def save_reconsolidation_proposal(self, proposal: ReconsolidationProposal) -> None:
         _atomic_json(
             self.reconsolidation_proposals_dir / f"{_safe_id(proposal.proposal_id)}.json",
@@ -572,6 +606,7 @@ class ArtifactStore:
             "retention_records": 0,
             "entity_references": 0,
             "entity_resolution_decisions": 0,
+            "identity_maturity_assessments": 0,
             "scope_cohorts": 0,
             "encounters": 0,
             "consolidated_facts": 0,
@@ -589,6 +624,7 @@ class ArtifactStore:
             ("retention_records", self.retention_records_dir),
             ("entity_references", self.entity_references_dir),
             ("entity_resolution_decisions", self.entity_resolution_decisions_dir),
+            ("identity_maturity_assessments", self.identity_maturity_assessments_dir),
             ("scope_cohorts", self.scope_cohorts_dir),
             ("encounters", self.encounters_dir),
             ("consolidated_facts", self.consolidated_facts_dir),
@@ -608,6 +644,7 @@ class ArtifactStore:
             "retention_records": 0,
             "entity_references": 0,
             "entity_resolution_decisions": 0,
+            "identity_maturity_assessments": 0,
             "scope_cohorts": 0,
             "encounters": 0,
             "consolidated_facts": 0,
@@ -621,6 +658,7 @@ class ArtifactStore:
             ("retention_records", self.retention_records_dir),
             ("entity_references", self.entity_references_dir),
             ("entity_resolution_decisions", self.entity_resolution_decisions_dir),
+            ("identity_maturity_assessments", self.identity_maturity_assessments_dir),
             ("scope_cohorts", self.scope_cohorts_dir),
             ("encounters", self.encounters_dir),
             ("consolidated_facts", self.consolidated_facts_dir),

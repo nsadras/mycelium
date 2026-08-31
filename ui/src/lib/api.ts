@@ -398,6 +398,27 @@ export interface DreamClaimDecisionArtifact {
   page_slugs: string[];
 }
 
+export interface IdentityMaturityAssessmentArtifact {
+  assessment_id: string;
+  dream_run_id: string;
+  identity_key: string;
+  source_node_ids: string[];
+  entity_id?: string | null;
+  proposed_title: string;
+  proposed_entity_type: string;
+  supporting_source_ids: string[];
+  supporting_claim_ids: string[];
+  supporting_segment_ids: string[];
+  proposal_admission: 'materialized' | 'provisional';
+  proposal_basis: Record<string, unknown>;
+  proposal_reason: string;
+  proposal_confidence: number;
+  verifier_verdict: 'supported' | 'unsupported' | 'not_required';
+  verifier_reason: string;
+  effective_admission: 'materialized' | 'provisional' | 'no_page' | 'review_required';
+  created_at: string;
+}
+
 export interface DreamRunArtifact {
   run_id: string;
   started_at: string;
@@ -411,6 +432,7 @@ export interface DreamRunArtifact {
   claim_decisions: DreamClaimDecisionArtifact[];
   failures: Record<string, string>[];
   reconsolidation_proposal_ids: string[];
+  identity_maturity_assessments: IdentityMaturityAssessmentArtifact[];
 }
 
 export interface DreamRunArtifactSummary {

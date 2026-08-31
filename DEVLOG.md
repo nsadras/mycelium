@@ -2137,3 +2137,16 @@ one prose-similarity summary.
   Two independent taxonomy probes accepted a clearly outcome-directed relocation Project and marked a recurring
   gathering with an unresolved Project/Series boundary ambiguous in both runs.
 - Validation: **251 passed, 2 skipped**; Ruff and `git diff --check` passed.
+
+## 2026-08-31 — Persist identity maturity proposals and verifier results
+
+- Added append-only identity maturity assessment artifacts. Every evaluated identity now records its local identity
+  group and source nodes, proposed title/type, exact supporting sources/claims/segments, proposed admission and full
+  structured continuity basis, proposal rationale/confidence, independent verifier verdict/rationale, effective page
+  admission, Dream run, and eventual canonical entity ID when one exists.
+- Dream persists these assessments alongside identity-resolution decisions, preserves both initial and revision-pass
+  assessments, and removes them with the rest of the derived projection. Artifact APIs support list, filtered-by-run,
+  and detail reads; Dream-run detail includes its assessments, and the Memory Inspector displays the proposal and
+  verifier audit together.
+- Validation: **251 passed, 2 skipped**; focused persistence/API/Dream tests passed **96/96**; Ruff, UI lint, and UI
+  build passed. The existing 854.25 kB UI chunk-size warning remains.

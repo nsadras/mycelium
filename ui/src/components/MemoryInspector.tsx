@@ -356,6 +356,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
                   <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Pages updated</div><strong>{selectedDreamRun.pages_updated}</strong></div>
                 </div>
                 <section><h3 className="mb-2 text-sm font-bold">Source outcome</h3><JsonBlock value={{ completed: selectedDreamRun.completed_source_ids, pending: selectedDreamRun.pending_source_ids }} /></section>
+                <section><h3 className="mb-2 text-sm font-bold">Identity maturity proposals and verification ({selectedDreamRun.identity_maturity_assessments.length})</h3><JsonBlock value={selectedDreamRun.identity_maturity_assessments} /></section>
                 <section>
                   <h3 className="mb-3 text-sm font-bold">Claim decisions ({selectedDreamRun.claim_decisions.length})</h3>
                   <div className="space-y-2">

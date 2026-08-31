@@ -17,6 +17,7 @@ from mycelium.artifacts import (
     ClaimPlacement,
     EntityRecord,
     EntityResolutionDecision,
+    IdentityMaturityAssessment,
 )
 from mycelium.ollama import OllamaClient
 from mycelium.structured_outputs import (
@@ -571,6 +572,50 @@ class ClaimRouter:
                 proposed_page_state=page_state,
                 proposed_aliases=[str(value) for value in node["aliases"]],
                 proposed_type_reason=str(node["type_reason"]),
+            ))
+            maturity = maturity_decisions[node_id]
+            verdict = maturity_verdicts[node_id]
+            result.maturity_assessments.append(IdentityMaturityAssessment(
+                assessment_id=f"maturity-{uuid.uuid4().hex[:12]}",
+                dream_run_id=dream_run_id,
+                identity_key=node_id,
+                source_node_ids=list(node["source_node_ids"]),
+                proposed_title=str(node["title"]),
+                proposed_entity_type=str(node["entity_type"]),
+                supporting_source_ids=[
+                    *[item.source.source_id for item in supporting],
+                    *[source.source_id for source, _, _ in participant_support],
+                ],
+                supporting_claim_ids=supporting_claim_ids,
+                supporting_segment_ids=[
+                    *[
+                        segment_id
+                        for item in supporting
+                        for provenance in item.claim.provenance
+                        for segment_id in provenance.segment_ids
+                    ],
+                    *[
+                        segment.segment_id
+                        for source, surface, _ in participant_support
+                        for segment in source.segments
+                        if str(segment.speaker or "").strip() == surface
+                    ],
+                ],
+                proposal_admission=str(maturity["admission"]),
+                proposal_basis=dict(maturity.get("basis") or {}),
+                proposal_reason=str(maturity["reason"]),
+                proposal_confidence=float(maturity["confidence"]),
+                verifier_verdict=str(verdict["verdict"]),
+                verifier_reason=str(verdict["reason"]),
+                effective_admission=(
+                    "review_required"
+                    if decision["adjudication"] == "review_required"
+                    else scope
+                    if scope in {"materialized", "provisional"}
+                    else "no_page"
+                ),
+                created_at=now,
+                entity_id=entity.entity_id if entity else None,
             ))
 
         result.encounters = self.resolution.participant_encounters(

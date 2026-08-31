@@ -10,6 +10,7 @@ from mycelium.artifacts import (
     EntityEncounter,
     EntityRecord,
     EntityResolutionDecision,
+    IdentityMaturityAssessment,
     MemoryClaim,
     SourceDocument,
 )
@@ -66,4 +67,5 @@ class RoutingResult:
     failures: list[RoutingFailure] = field(default_factory=list)
     encounters: list[EntityEncounter] = field(default_factory=list)
     entity_decisions: list[EntityResolutionDecision] = field(default_factory=list)
+    maturity_assessments: list[IdentityMaturityAssessment] = field(default_factory=list)
     entity_references: list[ClaimEntityReference] = field(default_factory=list)

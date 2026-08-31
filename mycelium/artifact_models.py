@@ -272,6 +272,53 @@ class EntityResolutionDecision:
 
 
 @dataclass
+class IdentityMaturityAssessment:
+    assessment_id: str
+    dream_run_id: str
+    identity_key: str
+    source_node_ids: list[str]
+    proposed_title: str
+    proposed_entity_type: str
+    supporting_source_ids: list[str]
+    supporting_claim_ids: list[str]
+    supporting_segment_ids: list[str]
+    proposal_admission: str
+    proposal_basis: dict
+    proposal_reason: str
+    proposal_confidence: float
+    verifier_verdict: str
+    verifier_reason: str
+    effective_admission: str
+    created_at: str
+    entity_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.proposal_admission not in {"materialized", "provisional"}:
+            raise ValueError(
+                f"Unsupported maturity proposal: {self.proposal_admission}"
+            )
+        if self.verifier_verdict not in {
+            "supported", "unsupported", "not_required",
+        }:
+            raise ValueError(
+                f"Unsupported maturity verdict: {self.verifier_verdict}"
+            )
+        if self.effective_admission not in {
+            "materialized", "provisional", "no_page", "review_required",
+        }:
+            raise ValueError(
+                f"Unsupported effective maturity: {self.effective_admission}"
+            )
+        self.source_node_ids = sorted(set(self.source_node_ids))
+        self.supporting_source_ids = sorted(set(self.supporting_source_ids))
+        self.supporting_claim_ids = sorted(set(self.supporting_claim_ids))
+        self.supporting_segment_ids = sorted(set(self.supporting_segment_ids))
+        self.proposal_confidence = max(
+            0.0, min(1.0, float(self.proposal_confidence))
+        )
+
+
+@dataclass
 class ScopeCohort:
     """Persisted, non-lexical evidence neighborhood used for scope revision."""
 

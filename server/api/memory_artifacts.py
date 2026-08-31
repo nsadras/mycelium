@@ -248,10 +248,41 @@ async def list_artifact_dream_runs():
 @router.get("/artifacts/dream-runs/{run_id}")
 async def get_artifact_dream_run(run_id: str):
     try:
-        return asdict(get_mem().artifacts.get_dream_run(run_id))
+        artifacts = get_mem().artifacts
+        return {
+            **asdict(artifacts.get_dream_run(run_id)),
+            "identity_maturity_assessments": [
+                asdict(item)
+                for item in artifacts.list_identity_maturity_assessments(
+                    dream_run_id=run_id
+                )
+            ],
+        }
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404, detail="Dream run artifact not found"
+        ) from exc
+
+
+@router.get("/artifacts/identity-maturity-assessments")
+async def list_identity_maturity_assessments(dream_run_id: str | None = None):
+    return [
+        asdict(item)
+        for item in get_mem().artifacts.list_identity_maturity_assessments(
+            dream_run_id=dream_run_id
+        )
+    ]
+
+
+@router.get("/artifacts/identity-maturity-assessments/{assessment_id}")
+async def get_identity_maturity_assessment(assessment_id: str):
+    try:
+        return asdict(
+            get_mem().artifacts.get_identity_maturity_assessment(assessment_id)
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail="Identity maturity assessment not found"
         ) from exc
 
 

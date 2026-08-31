@@ -10,6 +10,7 @@ from mycelium.artifacts import (
     ConsolidatedFact,
     EpisodeManifest,
     EntityResolutionDecision,
+    IdentityMaturityAssessment,
     MemoryClaim,
     OrganizationProposal,
     ReconsolidationProposal,
@@ -172,6 +173,25 @@ def artifact_memory(tmp_path, monkeypatch):
         proposed_scope="independent",
         proposed_page_state="provisional",
     ))
+    mem.artifacts.save_identity_maturity_assessment(IdentityMaturityAssessment(
+        assessment_id="maturity-test",
+        dream_run_id="dream-test",
+        identity_key="I001",
+        source_node_ids=["N001"],
+        proposed_title="Tea Journal",
+        proposed_entity_type="project",
+        supporting_source_ids=["source-test"],
+        supporting_claim_ids=["claim-test"],
+        supporting_segment_ids=["source-test#seg-0001"],
+        proposal_admission="provisional",
+        proposal_basis={},
+        proposal_reason="Continuity is not established.",
+        proposal_confidence=0.6,
+        verifier_verdict="not_required",
+        verifier_reason="No explicit prior-history basis was proposed.",
+        effective_admission="review_required",
+        created_at="2026-07-22T12:00:00",
+    ))
     monkeypatch.setattr(memory_artifacts, "get_mem", lambda: mem)
     monkeypatch.setattr(memory_curation, "get_mem", lambda: mem)
     monkeypatch.setattr(memory_artifacts, "load_meta", lambda: {
@@ -203,11 +223,16 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
     proposals = await memory_artifacts.list_reconsolidation_proposals()
     organization_proposals = await memory_artifacts.list_organization_proposals()
     identity_decisions = await memory_artifacts.list_entity_resolution_decisions()
+    maturity_assessments = (
+        await memory_artifacts.list_identity_maturity_assessments("dream-test")
+    )
     files = await memory_artifacts.list_stored_memory_files()
     wiki_index = await memory_artifacts.get_stored_memory_file("index", "_index.md")
 
     assert overview["coverage"]["accounted_coverage"] == 1.0
     assert identity_decisions[0]["decision_id"] == "identity-review-test"
+    assert maturity_assessments[0]["assessment_id"] == "maturity-test"
+    assert maturity_assessments[0]["verifier_verdict"] == "not_required"
     assert overview["lifecycle"] == {
         "consolidated_facts": 1,
         "entities": 1,

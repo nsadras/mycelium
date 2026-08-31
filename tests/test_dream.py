@@ -891,6 +891,11 @@ async def test_evidence_maturity_is_separate_from_identity_confidence(tmp_path):
     assert entity.materialization_state == "provisional"
     assert not wiki.exists(entity.slug)
     assert artifacts.get_placement(claim.claim_id).status == "deferred"
+    assessment = artifacts.list_identity_maturity_assessments()[0]
+    assert assessment.proposal_admission == "provisional"
+    assert assessment.verifier_verdict == "not_required"
+    assert assessment.effective_admission == "provisional"
+    assert assessment.supporting_claim_ids == [claim.claim_id]
 
 
 @pytest.mark.asyncio
@@ -1450,6 +1455,7 @@ async def test_ambiguous_subject_type_is_deferred_for_identity_review(tmp_path):
     assert decision.proposed_type_reason == (
         "Project and Series are both materially plausible."
     )
+    assert result.maturity_assessments[0].effective_admission == "review_required"
     assert llm.call_structured.await_count == 7
 
 

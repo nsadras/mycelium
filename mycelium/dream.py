@@ -328,6 +328,10 @@ class DreamProcess:
                 routing.entity_decisions if routing is not None else []
             ):
                 self.artifacts.save_entity_resolution_decision(identity_decision)
+            for assessment in (
+                routing.maturity_assessments if routing is not None else []
+            ):
+                self.artifacts.save_identity_maturity_assessment(assessment)
             for reference in (
                 routing.entity_references if routing is not None else []
             ):

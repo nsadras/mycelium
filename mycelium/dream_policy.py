@@ -112,9 +112,17 @@ class DreamPolicy:
             encounter.encounter_id: encounter
             for encounter in [*initial.encounters, *revision.encounters]
         }
+        assessments = {
+            assessment.assessment_id: assessment
+            for assessment in [
+                *initial.maturity_assessments,
+                *revision.maturity_assessments,
+            ]
+        }
         revision.new_entities = list(entities.values())
         revision.entity_decisions = list(decisions.values())
         revision.encounters = list(encounters.values())
+        revision.maturity_assessments = list(assessments.values())
         return revision
 
     def retention_records(

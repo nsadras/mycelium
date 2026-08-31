@@ -131,13 +131,18 @@ class RoutingFormatter:
         lines = ["Nodes:"]
         for node_id, node in nodes.items():
             details = [
-                f"type={node['entity_type']}",
-                f"type_adjudication={node['type_adjudication']}",
-                f"type_reason={node['type_reason']!r}",
                 f"title={node['title']!r}",
                 f"evidence={','.join(node['supporting_evidence'])}",
                 f"participant_evidence={','.join(node['participant_evidence']) or 'none'}",
             ]
+            if node.get("entity_type"):
+                details.insert(0, f"type={node['entity_type']}")
+                details.insert(1, f"type_adjudication={node['type_adjudication']}")
+                details.insert(2, f"type_reason={node['type_reason']!r}")
+            if node.get("identity_resolution"):
+                details.append(f"identity_resolution={node['identity_resolution']}")
+                details.append(f"entity_id={node.get('entity_id') or 'new'}")
+                details.append(f"aliases={','.join(node.get('aliases', [])) or 'none'}")
             lines.append(f"- {node_id}: {'; '.join(details)}")
         lines.append("Edges:")
         lines.extend(
@@ -149,6 +154,29 @@ class RoutingFormatter:
         if not edges:
             lines.append("- none")
         return "\n".join(lines)
+
+    @staticmethod
+    def format_identity_groups(identities: dict[str, dict]) -> str:
+        lines = []
+        for identity_key, identity in identities.items():
+            lines.append(
+                f"- {identity_key}: nodes={','.join(identity['source_node_ids'])}; "
+                f"resolution={identity['identity_resolution']}; "
+                f"entity_id={identity['entity_id'] or 'new'}; "
+                f"preferred_title={identity['title']!r}; "
+                f"aliases={','.join(identity['aliases']) or 'none'}; "
+                f"evidence={','.join(identity['supporting_evidence'])}"
+            )
+        return "\n".join(lines) or "none"
+
+    @staticmethod
+    def format_type_proposals(proposals: dict[str, dict]) -> str:
+        return "\n".join(
+            f"- {identity_key}: proposed_type={proposal['entity_type']}; "
+            f"reason={proposal['reason']!r}; "
+            f"evidence={','.join(proposal['supporting_evidence'])}"
+            for identity_key, proposal in proposals.items()
+        ) or "none"
 
     @staticmethod
     def format_maturity_decisions(decisions: dict[str, dict]) -> str:

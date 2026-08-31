@@ -1,6 +1,6 @@
 """Typed entry points for production memory prompt templates."""
 
-from mycelium.ontology import CLAIM_TYPES
+from mycelium.ontology import CLAIM_TYPES, entity_type_prompt_catalog
 from mycelium.prompting import render_prompt, render_prompt_pair
 
 
@@ -17,6 +17,44 @@ def subject_node_prompt(index_content: str, evidence: str) -> tuple[str, str]:
         "memory/subject_nodes",
         registry=index_content,
         evidence=evidence,
+    )
+
+
+def identity_matching_prompt(
+    registry: str,
+    nodes: str,
+    evidence: str,
+    reviewed_adjudications: str,
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/identity_matching",
+        registry=registry,
+        nodes=nodes,
+        evidence=evidence,
+        reviewed_adjudications=reviewed_adjudications,
+    )
+
+
+def identity_types_prompt(identities: str, evidence: str) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/identity_types",
+        identities=identities,
+        evidence=evidence,
+        ontology=entity_type_prompt_catalog(discoverable_only=True),
+    )
+
+
+def identity_type_verification_prompt(
+    proposals: str,
+    identities: str,
+    evidence: str,
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/identity_type_verification",
+        proposals=proposals,
+        identities=identities,
+        evidence=evidence,
+        ontology=entity_type_prompt_catalog(discoverable_only=True),
     )
 
 

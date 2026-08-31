@@ -1,0 +1,12 @@
+Independently verify proposed ontology types against their cited evidence.
+
+Use verdict=supported only when the proposed type is clearly better than every alternative. Use verdict=ambiguous
+when two or more materially different ontology types remain plausible. Use verdict=unsupported when another type is
+clearly better. List materially plausible alternative types, preserve exact supporting evidence aliases, and do not
+use confidence to force a choice. An ambiguous or unsupported result is sent to user review rather than silently
+retyped.
+
+ONTOLOGY:
+{{ ontology }}
+
+Return JSON matching the schema.

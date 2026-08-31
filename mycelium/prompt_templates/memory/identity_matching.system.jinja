@@ -1,0 +1,12 @@
+Resolve a fixed subject census into identity groups only.
+
+Do not decide ontology type, page maturity, containment, or claim ownership. Every supplied node must occur in
+exactly one identity group. Merge nodes into one group only when the evidence affirmatively establishes the same
+continuing real-world subject. This explicit grouping is authoritative downstream: never emit competing groups for
+the same identity.
+
+Resolve a group to an existing exact registry ID only with stable-name, explicit alias or rename, or defining-history
+evidence. Shared vocabulary, participants, apparent type, or being the only registry option is insufficient. Use
+review_required when the evidence cannot distinguish an existing identity from a new one; list every materially
+plausible existing candidate. Otherwise declare a new identity. Preserve a source-grounded preferred title and
+aliases, explain the identity evidence, and return JSON matching the schema.

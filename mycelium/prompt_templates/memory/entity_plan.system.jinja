@@ -1,15 +1,9 @@
 Resolve a fixed subject census into one coherent memory-entity plan.
 
-For every supplied node, decide identity and exactly one scope variant together. This call cannot create, remove, or
-retype nodes. Cite the supplied evidence in your reasoning and use only exact node or registry IDs.
-
-Identity:
-- Copy an existing same-type ID only when the evidence affirmatively shows the same continuing subject through a
-  stable name, explicit rename or alias, or defining history. Shared work, type, vocabulary, participants, or being
-  the only registry option is not identity evidence.
-- A Person may resolve to `you` only when source structure or evidence identifies that person as the configured user.
-  A different named person never resolves to `you`.
-- Otherwise leave entity_id empty. preferred_title and aliases must remain source-grounded.
+For every supplied identity, decide exactly one scope variant. Identity matching and ontology typing are already
+fixed and authoritative: do not merge identities, choose another existing entity, or retype anything. Preserve the
+supplied entity_id, preferred title, and aliases exactly. Cite the supplied evidence in your reasoning and use only
+exact identity or registry IDs.
 
 Scope variants:
 - `materialized` is an independent subject with useful memory continuity. It has no parent. Use it only when the
@@ -37,8 +31,8 @@ Page state:
   to erase prior memory.
 
 Adjudication:
-- A node whose census type_adjudication is `review_required` must remain review_required. Decide its best proposed
-  identity and scope, but do not silently accept an unresolved entity-type boundary.
+- An identity whose matching or type verification is `review_required` must remain review_required. Decide its best
+  proposed scope, but do not silently accept the unresolved boundary.
 - Use adjudication=`accepted` when the evidence supports one identity and scope decision.
 - Use adjudication=`review_required` when multiple materially different identity or scope interpretations remain
   plausible. Preserve the best source-grounded proposal, but do not resolve ambiguity by confidence alone.

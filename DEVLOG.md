@@ -2118,3 +2118,22 @@ one prose-similarity summary.
   **100/100**; Ruff, UI lint, and UI build passed. A bare repository-wide pytest invocation still discovers the
   intentionally stale `benchmark_runs/mab-loader-check/test_routing_q49.py` artifact, which imports the previously
   removed routing recall index; the maintained `tests/` suite is clean.
+
+## 2026-08-31 — Separate identity matching and taxonomy verification
+
+- Split identity decisions into explicit stages: the subject census now declares evidence-grounded candidates without
+  typing them; identity matching partitions every candidate node into exactly one identity group and fixes each group
+  as existing, new, or review-required; ontology type proposal and independent type verification then run before
+  maturity and containment. Entity planning can no longer choose a different existing entity or rename/retype the
+  identity decision because its entity ID is schema-fixed and its title/aliases come from matching.
+- Identity grouping is the structural duplicate boundary. Candidate nodes may be merged into one identity group, all
+  nodes must be covered exactly once, group keys must be unique, and an existing canonical entity may appear in only
+  one group. Reviewed manual identity references are checked against the matching result before later stages run.
+- Taxonomy verification returns `supported`, `ambiguous`, or `unsupported` with exact evidence and alternative types.
+  Only supported proposals can be accepted automatically; ambiguous and unsupported results force the identity into
+  review and defer its claims. No lexical or title-similarity identity rule was added.
+- Before integration, two repeated direct `gemma4:12b` probes grouped two explicitly co-referential census nodes and,
+  when canonical facts were supplied as in production, matched that group to its existing registry ID in both runs.
+  Two independent taxonomy probes accepted a clearly outcome-directed relocation Project and marked a recurring
+  gathering with an unresolved Project/Series boundary ambiguous in both runs.
+- Validation: **251 passed, 2 skipped**; Ruff and `git diff --check` passed.

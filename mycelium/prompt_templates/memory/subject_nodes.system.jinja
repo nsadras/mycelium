@@ -11,25 +11,11 @@ relationships about it, declare a candidate node for that subject again. Identit
 the stable ID so admission can reconsider whether its page is now mature; do not omit it merely because it is already
 known provisionally.
 
-Use the typed entity ontology supplied in the registry exactly.
+For a human subject who is a named source participant, put the exact `P...` alias in participant_evidence. Use an
+empty participant_evidence list for every other node. Keep all cited claim and participant aliases in
+supporting_evidence.
 
-For every node, adjudicate its entity type. Use type_adjudication=`accepted` only when the evidence makes one
-ontology type clearly better than the alternatives. Use `review_required` when two or more types remain materially
-plausible; choose the best proposed entity_type, explain the unresolved boundary in type_reason, and preserve it for
-user review. Do not use confidence or wording strength to force acceptance.
-For a Person who is a named source participant, put the exact `P...` alias in participant_evidence. Use an empty
-participant_evidence list for every other node. Keep all cited claim and participant aliases in supporting_evidence.
-
-A workstream, feature, milestone, issue, tool, or deliverable inside a larger effort may need a node so its
-relationship can be stated later, but local goals, deadlines, participants, or complexity do not by themselves make
-it an independent Project. Represent both a continuing effort and its bounded occurrences when the evidence supports
-both. Repeated or plural activities organized around a shared purpose or stated future continuation can establish a
-descriptively named Project or Series even when the speaker has not given the effort a proper name; do not collapse
-that continuing container into its next scheduled occurrence. Prefer Project for an effort working toward an outcome
-and Series when the recurring frame itself is the subject. Do not infer a Series merely from plural wording, an
-occupation, a habitual background activity, or inputs that a proposed system will process. A Series requires
-source-grounded plans, state, or history about tracking the recurrence itself. When someone proposes building a
-tool, workspace, archive, or system for a recurring activity, the continuing build effort is a Project candidate;
-the background activity remains context unless it has separate accumulating memory. A particular occurrence remains
-separate from its Project or Series. Do not create a Topic merely to restate what a Project or Event concerns. Use
-N001-style IDs and cite only supplied evidence aliases. Return JSON matching the schema.
+A workstream, feature, milestone, issue, tool, deliverable, recurring frame, or bounded occurrence may need a node so
+its identity or relationship can be decided later, but local details and incidental nouns do not. Preserve genuinely
+distinct subjects without deciding their ontology type. Use N001-style IDs and cite only supplied evidence aliases.
+Return JSON matching the schema.

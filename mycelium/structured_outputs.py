@@ -145,11 +145,41 @@ class SubjectGraphNodeOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     node_id: str = Field(pattern=r"^N[0-9]{3}$")
     title: str = Field(min_length=1, max_length=160)
-    entity_type: DiscoverableEntityType
-    type_adjudication: Literal["accepted", "review_required"]
-    type_reason: str = Field(min_length=1, max_length=500)
     supporting_evidence: list[str] = Field(min_length=1, max_length=48)
     participant_evidence: list[str] = Field(max_length=48)
+
+
+class IdentityMatchGroupOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    identity_key: str = Field(pattern=r"^I[0-9]{3}$")
+    node_ids: list[str] = Field(min_length=1, max_length=32)
+    preferred_title: str = Field(min_length=1, max_length=160)
+    aliases: list[str] = Field(max_length=12)
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class IdentityTypeProposalOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    entity_type: DiscoverableEntityType
+    reason: str = Field(min_length=1, max_length=500)
+    supporting_evidence: list[str] = Field(min_length=1, max_length=48)
+
+
+class IdentityTypeVerdictOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    verdict: Literal["supported", "ambiguous", "unsupported"]
+    alternative_types: list[DiscoverableEntityType] = Field(max_length=8)
+    reason: str = Field(min_length=1, max_length=500)
+    supporting_evidence: list[str] = Field(min_length=1, max_length=48)
+
+    @model_validator(mode="after")
+    def validate_alternatives(self):
+        if self.verdict == "supported" and self.alternative_types:
+            raise ValueError("Supported type verdicts cannot list alternatives")
+        if self.verdict != "supported" and not self.alternative_types:
+            raise ValueError("Ambiguous and unsupported verdicts require alternatives")
+        return self
 
 
 class IdentityMaturityDecisionOutput(BaseModel):
@@ -174,8 +204,6 @@ class EntityPlanDecisionOutput(BaseModel):
     """Fields shared by every structurally valid identity-scope decision."""
 
     model_config = ConfigDict(extra="forbid")
-    preferred_title: str = Field(min_length=1, max_length=160)
-    aliases: list[str] = Field(max_length=12)
     adjudication: Literal["accepted", "review_required"]
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str = Field(min_length=1, max_length=500)
@@ -356,6 +384,160 @@ def subject_node_output_model(
     )
 
 
+def identity_matching_output_model(
+    node_ids: Collection[str],
+    existing_entity_ids: Collection[str],
+) -> type[BaseModel]:
+    """Build an exact identity partition before any type or scope decision."""
+    nodes = tuple(dict.fromkeys(str(value) for value in node_ids if value))
+    existing = tuple(
+        dict.fromkeys(str(value) for value in existing_entity_ids if value)
+    )
+    if not nodes:
+        raise ValueError("Identity matching requires subject nodes")
+    node_type = Literal.__getitem__(nodes)
+    common_fields: dict[str, Any] = {
+        "node_ids": (
+            list[node_type],  # type: ignore[valid-type]
+            Field(min_length=1, max_length=len(nodes)),
+        ),
+    }
+    variants: list[type[BaseModel]] = [create_model(
+        "NewIdentityMatchGroup",
+        __base__=IdentityMatchGroupOutput,
+        resolution=(Literal["new"], ...),
+        entity_id=(Literal[""], ...),
+        candidate_entity_ids=(list[str], Field(max_length=0)),
+        **common_fields,
+    )]
+    if existing:
+        existing_type = Literal.__getitem__(existing)
+        variants.extend([
+            create_model(
+                "ExistingIdentityMatchGroup",
+                __base__=IdentityMatchGroupOutput,
+                resolution=(Literal["existing"], ...),
+                entity_id=(existing_type, ...),  # type: ignore[valid-type]
+                candidate_entity_ids=(list[str], Field(max_length=0)),
+                **common_fields,
+            ),
+            create_model(
+                "ReviewIdentityMatchGroup",
+                __base__=IdentityMatchGroupOutput,
+                resolution=(Literal["review_required"], ...),
+                entity_id=(Literal[""], ...),
+                candidate_entity_ids=(
+                    list[existing_type],  # type: ignore[valid-type]
+                    Field(min_length=1, max_length=len(existing)),
+                ),
+                **common_fields,
+            ),
+        ])
+    group_union = Annotated[
+        Union.__getitem__(tuple(variants)),
+        Field(discriminator="resolution"),
+    ]
+    base_model = create_model(
+        "ExactIdentityMatchingPlan",
+        __config__=ConfigDict(extra="forbid"),
+        identities=(list[group_union], Field(min_length=1, max_length=len(nodes))),
+    )
+
+    class ExactIdentityMatchingPlan(base_model):  # type: ignore[valid-type, misc]
+        @model_validator(mode="after")
+        def validate_identity_partition(self):
+            grouped_nodes = [
+                node_id for group in self.identities for node_id in group.node_ids
+            ]
+            if len(grouped_nodes) != len(set(grouped_nodes)):
+                raise ValueError("Identity groups cannot share subject nodes")
+            if set(grouped_nodes) != set(nodes):
+                raise ValueError("Identity groups must exactly partition subject nodes")
+            identity_keys = [group.identity_key for group in self.identities]
+            if len(identity_keys) != len(set(identity_keys)):
+                raise ValueError("Identity keys must be unique")
+            resolved_ids = [
+                group.entity_id
+                for group in self.identities
+                if group.resolution == "existing"
+            ]
+            if len(resolved_ids) != len(set(resolved_ids)):
+                raise ValueError(
+                    "An existing entity can belong to only one identity group"
+                )
+            return self
+
+    return ExactIdentityMatchingPlan
+
+
+def identity_type_output_model(
+    identity_evidence: Mapping[str, Collection[str]],
+) -> type[BaseModel]:
+    """Build exact type proposals for unresolved identity groups."""
+    fields: dict[str, Any] = {}
+    for identity_key, evidence in identity_evidence.items():
+        evidence_values = tuple(dict.fromkeys(str(value) for value in evidence))
+        evidence_type = Literal.__getitem__(evidence_values)
+        fields[str(identity_key)] = (create_model(
+            f"{identity_key}TypeProposal",
+            __base__=IdentityTypeProposalOutput,
+            supporting_evidence=(
+                list[evidence_type],  # type: ignore[valid-type]
+                Field(min_length=1, max_length=len(evidence_values)),
+            ),
+        ), ...)
+    decisions_model = create_model(
+        "ExactIdentityTypeProposals",
+        __config__=ConfigDict(extra="forbid"),
+        **fields,
+    )
+    return create_model(
+        "ExactIdentityTypePlan",
+        __config__=ConfigDict(extra="forbid"),
+        decisions=(decisions_model, ...),
+    )
+
+
+def identity_type_verification_output_model(
+    proposals: Mapping[str, str],
+    identity_evidence: Mapping[str, Collection[str]],
+) -> type[BaseModel]:
+    """Build exact independent verdicts for proposed ontology types."""
+    fields: dict[str, Any] = {}
+    for identity_key, proposed_type in proposals.items():
+        evidence_values = tuple(
+            dict.fromkeys(str(value) for value in identity_evidence[identity_key])
+        )
+        evidence_type = Literal.__getitem__(evidence_values)
+        alternatives = tuple(
+            value for value in DiscoverableEntityType.__args__
+            if value != proposed_type
+        )
+        alternative_type = Literal.__getitem__(alternatives)
+        fields[str(identity_key)] = (create_model(
+            f"{identity_key}TypeVerdict",
+            __base__=IdentityTypeVerdictOutput,
+            alternative_types=(
+                list[alternative_type],  # type: ignore[valid-type]
+                Field(max_length=len(alternatives)),
+            ),
+            supporting_evidence=(
+                list[evidence_type],  # type: ignore[valid-type]
+                Field(min_length=1, max_length=len(evidence_values)),
+            ),
+        ), ...)
+    decisions_model = create_model(
+        "ExactIdentityTypeVerdicts",
+        __config__=ConfigDict(extra="forbid"),
+        **fields,
+    )
+    return create_model(
+        "ExactIdentityTypeVerification",
+        __config__=ConfigDict(extra="forbid"),
+        decisions=(decisions_model, ...),
+    )
+
+
 def identity_maturity_output_model(
     allowed_bases: Mapping[str, Collection[str]],
     evidence_aliases: Collection[str],
@@ -458,7 +640,7 @@ def entity_plan_output_model(
     node_types: Mapping[str, str],
     participant_roles: Mapping[str, str | None],
     existing_entity_types: Mapping[str, str],
-    reviewed_entity_ids: Mapping[str, str] | None = None,
+    matched_entity_ids: Mapping[str, str] | None = None,
     materialization_bases: Mapping[str, Collection[str]] | None = None,
     review_required_nodes: Collection[str] = (),
 ) -> type[BaseModel]:
@@ -472,14 +654,14 @@ def entity_plan_output_model(
         or existing_entity_types.get(value) in {"project", "series"}
     )
     decision_fields: dict[str, Any] = {}
-    reviewed_entity_ids = reviewed_entity_ids or {}
+    matched_entity_ids = matched_entity_ids or {}
     materialization_bases = materialization_bases or {}
     review_required_nodes = set(review_required_nodes)
     for node_id, node_type in node_types.items():
-        reviewed_id = reviewed_entity_ids.get(node_id)
+        matched_id = matched_entity_ids.get(node_id)
         adjudication_values = (
             ("accepted",)
-            if reviewed_id
+            if matched_id
             else (
                 ("review_required",)
                 if node_id in review_required_nodes
@@ -487,19 +669,7 @@ def entity_plan_output_model(
             )
         )
         adjudication_type = Literal.__getitem__(adjudication_values)
-        same_type_ids = (
-            (reviewed_id,)
-            if reviewed_id
-            else tuple(
-                entity_id
-                for entity_id, entity_type in existing_entity_types.items()
-                if entity_type == node_type
-                or (node_type == "person" and entity_type == "you")
-            )
-        )
-        entity_id_type = Literal.__getitem__(
-            same_type_ids if reviewed_id else ("", *same_type_ids)
-        )
+        entity_id_type = Literal.__getitem__((matched_id,) if matched_id else ("",))
         provisional_model = create_model(
             f"{node_id}ProvisionalEntityDecision",
             __base__=EntityPlanDecisionOutput,

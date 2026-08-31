@@ -22,8 +22,11 @@ from mycelium.ollama import OllamaClient
 from mycelium.structured_outputs import (
     claim_routing_output_model,
     entity_plan_output_model,
+    identity_matching_output_model,
     identity_maturity_output_model,
     identity_maturity_verification_output_model,
+    identity_type_output_model,
+    identity_type_verification_output_model,
     subject_node_output_model,
 )
 
@@ -95,6 +98,176 @@ class ClaimRouter:
                 "Subject node response did not satisfy the contract: "
                 f"{type(exc).__name__}: {exc}",
             )
+
+        census_nodes = graph_nodes
+        reviewed_node_entities: dict[str, str] = {}
+        for node_id, node in census_nodes.items():
+            reviewed = {
+                reference.entity_id
+                for alias in node["supporting_evidence"]
+                if alias in aliases
+                for reference in self.artifacts.list_entity_references(
+                    claim_id=aliases[alias].claim.claim_id, status="active"
+                )
+                if reference.role == "identity_subject"
+                and reference.origin == "manual"
+                and reference.entity_id
+            }
+            if len(reviewed) > 1:
+                return self._fail_batch(
+                    evidence,
+                    "Reviewed claim identities conflict within one subject node",
+                )
+            if reviewed:
+                reviewed_node_entities[node_id] = next(iter(reviewed))
+
+        match_groups: list[dict] = []
+        if census_nodes:
+            match_model = identity_matching_output_model(
+                census_nodes,
+                [entity_id for entity_id in registry_types if entity_id != "you"],
+            )
+            system, user = prompts.identity_matching_prompt(
+                self.formatter.entity_planning_catalog(planned.values()),
+                self.formatter.format_subject_graph(census_nodes, []),
+                self.formatter.format_evidence(aliases, participants),
+                self.formatter.identity_review_catalog(aliases),
+            )
+            try:
+                response = await self.llm.call_structured(
+                    system,
+                    user,
+                    match_model,
+                    num_predict=4096,
+                    debug_label="dream-identity-matching",
+                )
+                match_groups = match_model.model_validate(response).model_dump()[
+                    "identities"
+                ]
+                for group in match_groups:
+                    reviewed = {
+                        reviewed_node_entities[node_id]
+                        for node_id in group["node_ids"]
+                        if node_id in reviewed_node_entities
+                    }
+                    if len(reviewed) > 1:
+                        raise ValueError(
+                            "One identity group contains conflicting reviewed identities"
+                        )
+                    if reviewed and (
+                        group["resolution"] != "existing"
+                        or group["entity_id"] != next(iter(reviewed))
+                    ):
+                        raise ValueError(
+                            "Identity matching conflicts with a reviewed identity"
+                        )
+            except Exception as exc:
+                return self._fail_batch(
+                    evidence,
+                    "Identity matching response did not satisfy the contract: "
+                    f"{type(exc).__name__}: {exc}",
+                )
+
+        graph_nodes = {}
+        for group in match_groups:
+            member_nodes = [census_nodes[node_id] for node_id in group["node_ids"]]
+            graph_nodes[group["identity_key"]] = {
+                "node_id": group["identity_key"],
+                "source_node_ids": list(group["node_ids"]),
+                "title": group["preferred_title"],
+                "aliases": list(group["aliases"]),
+                "identity_resolution": group["resolution"],
+                "entity_id": group["entity_id"],
+                "identity_reason": group["reason"],
+                "candidate_entity_ids": list(group["candidate_entity_ids"]),
+                "supporting_evidence": list(dict.fromkeys(
+                    alias
+                    for node in member_nodes
+                    for alias in node["supporting_evidence"]
+                )),
+                "participant_evidence": list(dict.fromkeys(
+                    alias
+                    for node in member_nodes
+                    for alias in node["participant_evidence"]
+                )),
+            }
+
+        unresolved_type_evidence = {
+            identity_key: node["supporting_evidence"]
+            for identity_key, node in graph_nodes.items()
+            if node["identity_resolution"] != "existing"
+        }
+        type_proposals: dict[str, dict] = {}
+        type_verdicts: dict[str, dict] = {}
+        if unresolved_type_evidence:
+            type_model = identity_type_output_model(unresolved_type_evidence)
+            system, user = prompts.identity_types_prompt(
+                self.formatter.format_identity_groups(graph_nodes),
+                self.formatter.format_evidence(aliases, participants),
+            )
+            try:
+                response = await self.llm.call_structured(
+                    system,
+                    user,
+                    type_model,
+                    num_predict=4096,
+                    debug_label="dream-identity-types",
+                )
+                type_proposals = type_model.model_validate(response).model_dump()[
+                    "decisions"
+                ]
+            except Exception as exc:
+                return self._fail_batch(
+                    evidence,
+                    "Identity type response did not satisfy the contract: "
+                    f"{type(exc).__name__}: {exc}",
+                )
+            type_verification_model = identity_type_verification_output_model(
+                {
+                    identity_key: proposal["entity_type"]
+                    for identity_key, proposal in type_proposals.items()
+                },
+                unresolved_type_evidence,
+            )
+            system, user = prompts.identity_type_verification_prompt(
+                self.formatter.format_type_proposals(type_proposals),
+                self.formatter.format_identity_groups(graph_nodes),
+                self.formatter.format_evidence(aliases, participants),
+            )
+            try:
+                response = await self.llm.call_structured(
+                    system,
+                    user,
+                    type_verification_model,
+                    num_predict=4096,
+                    debug_label="dream-identity-type-verification",
+                )
+                type_verdicts = type_verification_model.model_validate(
+                    response
+                ).model_dump()["decisions"]
+            except Exception as exc:
+                return self._fail_batch(
+                    evidence,
+                    "Identity type verification did not satisfy the contract: "
+                    f"{type(exc).__name__}: {exc}",
+                )
+
+        for identity_key, node in graph_nodes.items():
+            if node["identity_resolution"] == "existing":
+                node["entity_type"] = registry_types[node["entity_id"]]
+                node["type_adjudication"] = "accepted"
+                node["type_reason"] = "The canonical entity supplies its fixed type."
+                continue
+            proposal = type_proposals[identity_key]
+            verdict = type_verdicts[identity_key]
+            node["entity_type"] = proposal["entity_type"]
+            node["type_adjudication"] = (
+                "accepted"
+                if verdict["verdict"] == "supported"
+                and node["identity_resolution"] != "review_required"
+                else "review_required"
+            )
+            node["type_reason"] = verdict["reason"]
 
         node_types = {
             node_id: str(node["entity_type"])
@@ -202,46 +375,21 @@ class ClaimRouter:
             )
         }
         try:
-            reviewed_entity_ids: dict[str, str] = {}
-            for node_id, node in graph_nodes.items():
-                reviewed = {
-                    reference.entity_id
-                    for alias in node["supporting_evidence"]
-                    if alias in aliases
-                    for reference in self.artifacts.list_entity_references(
-                        claim_id=aliases[alias].claim.claim_id, status="active"
-                    )
-                    if reference.role == "identity_subject"
-                    and reference.origin == "manual"
-                    and reference.entity_id
-                }
-                if len(reviewed) > 1:
-                    raise ValueError(
-                        "Reviewed claim identities conflict within one subject node"
-                    )
-                if reviewed:
-                    reviewed_id = next(iter(reviewed))
-                    reviewed_type = registry_types.get(reviewed_id)
-                    node_type = node_types[node_id]
-                    if not (
-                        reviewed_type == node_type
-                        or (node_type == "person" and reviewed_type == "you")
-                    ):
-                        raise ValueError(
-                            "Subject census type conflicts with a reviewed identity"
-                        )
-                    reviewed_entity_ids[node_id] = reviewed_id
+            matched_entity_ids = {
+                node_id: node["entity_id"]
+                for node_id, node in graph_nodes.items()
+                if node["identity_resolution"] == "existing"
+            }
             entity_model = entity_plan_output_model(
                 node_types,
                 {alias: role for alias, (_, _, role) in participants.items()},
                 registry_types,
-                reviewed_entity_ids,
+                matched_entity_ids,
                 materialization_bases,
                 {
                     node_id
                     for node_id, node in graph_nodes.items()
                     if node["type_adjudication"] == "review_required"
-                    and node_id not in reviewed_entity_ids
                 } | maturity_review_required_nodes,
             )
             system, user = prompts.entity_plan_prompt(
@@ -348,10 +496,10 @@ class ClaimRouter:
                 )
                 if accepted:
                     previous_title = entity.title
-                    entity.title = str(decision["preferred_title"])
+                    entity.title = str(node["title"])
                     entity.aliases = sorted({
                         *entity.aliases,
-                        *[str(value) for value in decision["aliases"]],
+                        *[str(value) for value in node["aliases"]],
                         *([previous_title] if previous_title != entity.title else []),
                     })
                     if page_state == "materialized":
@@ -368,10 +516,10 @@ class ClaimRouter:
             elif accepted and scope in {"materialized", "provisional"}:
                 entity = self._planned_entity(
                     node["entity_type"],
-                    decision["preferred_title"],
+                    node["title"],
                     planned.values(),
                     now,
-                    aliases=decision["aliases"],
+                    aliases=node["aliases"],
                     materialization_state=page_state,
                 )
                 planned[entity.entity_id] = entity
@@ -387,7 +535,7 @@ class ClaimRouter:
                 decision_type="entity_creation",
                 entity_id=entity.entity_id if entity else None,
                 proposed_entity_type=str(node["entity_type"]),
-                proposed_title=str(decision["preferred_title"]),
+                proposed_title=str(node["title"]),
                 source_ids=[
                     *[item.source.source_id for item in supporting],
                     *[source.source_id for source, _, _ in participant_support],
@@ -421,7 +569,7 @@ class ClaimRouter:
                     parent_entity.entity_id if parent_entity else None
                 ),
                 proposed_page_state=page_state,
-                proposed_aliases=[str(value) for value in decision["aliases"]],
+                proposed_aliases=[str(value) for value in node["aliases"]],
                 proposed_type_reason=str(node["type_reason"]),
             ))
 

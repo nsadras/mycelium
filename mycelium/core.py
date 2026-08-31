@@ -318,6 +318,8 @@ class Mycelium:
     async def dream(
         self, *, dry_run: bool = False, include_deferred: bool = True
     ) -> DreamReport:
+        if not dry_run:
+            await self.encoder.retry_incomplete_extractions()
         return await self.dream_process.run(
             dry_run=dry_run, include_deferred=include_deferred
         )
@@ -325,6 +327,8 @@ class Mycelium:
     async def dream_if_ready(
         self, *, now: datetime | None = None, dry_run: bool = False
     ) -> DreamReport | None:
+        if not dry_run:
+            await self.encoder.retry_incomplete_extractions()
         status = self.short_term_memory_status(now=now)
         if not status.ready:
             return None

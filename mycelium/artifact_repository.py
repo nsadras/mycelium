@@ -25,6 +25,7 @@ from mycelium.artifact_models import (
     EntityRecord,
     EntityResolutionDecision,
     EpisodeManifest,
+    ExtractionBatchState,
     ExtractionSegmentDisposition,
     IdentityMaturityAssessment,
     MemoryClaim,
@@ -113,6 +114,10 @@ class ArtifactStore:
         data["segment_dispositions"] = [
             ExtractionSegmentDisposition(**item)
             for item in data.get("segment_dispositions", [])
+        ]
+        data["extraction_batches"] = [
+            ExtractionBatchState(**item)
+            for item in data.get("extraction_batches", [])
         ]
         return EpisodeManifest(**data)
 

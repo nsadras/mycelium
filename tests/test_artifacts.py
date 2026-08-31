@@ -428,6 +428,65 @@ async def test_encoder_rejects_claim_without_explicit_about_entity(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_encoder_retries_only_failed_claim_stage_after_persisted_coverage(tmp_path):
+    llm = AsyncMock()
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    encoder = Encoder(
+        llm,
+        LogStore(tmp_path / "logs"),
+        Config.defaults(),
+        artifacts,
+    )
+    claim_attempts = 0
+
+    async def response(system, user, output_type, **kwargs):
+        nonlocal claim_attempts
+        segment_id = next(
+            part.split("]", 1)[0]
+            for part in user.split("[")[1:]
+            if part.startswith("source-")
+        )
+        if "segment_dispositions" in output_type.model_fields:
+            return coverage_response([{"segment_ids": [segment_id]}])
+        claim_attempts += 1
+        if claim_attempts == 1:
+            raise ValueError("temporary malformed claim response")
+        return extraction_response([{
+            "text": "Ava prefers tea.",
+            "claim_type": "preference",
+            "predicate": "prefers",
+            "about": [{"entity": "Ava"}],
+            "segment_ids": [segment_id],
+        }])
+
+    llm.call_structured.side_effect = response
+    await encoder.encode_session(
+        "Ava: I prefer tea.",
+        "session-1",
+        source_type="multi_party_conversation",
+    )
+
+    partial = artifacts.list_episodes()[0]
+    assert partial.extraction_status == "partial"
+    assert partial.extraction_batches[0].coverage_status == "complete"
+    assert partial.extraction_batches[0].claim_status == "failed"
+    assert partial.segment_dispositions[0].disposition == "claim_pending"
+    report = artifacts.coverage_report()
+    assert report["unaccounted_segment_ids"] == []
+    assert len(report["pending_extraction_segment_ids"]) == 1
+
+    completed = await encoder.retry_incomplete_extractions()
+
+    assert completed == [partial.episode_id]
+    episode = artifacts.list_episodes()[0]
+    assert episode.extraction_status == "complete"
+    assert episode.extraction_batches[0].attempt_count == 2
+    assert episode.segment_dispositions[0].disposition == "claimed"
+    assert len(artifacts.list_claims()) == 1
+    assert llm.call_structured.call_count == 3
+
+
+@pytest.mark.asyncio
 async def test_encoder_records_inference_only_on_provenance(tmp_path):
     llm = AsyncMock()
     artifacts = ArtifactStore(tmp_path / "artifacts")

@@ -17,6 +17,12 @@ def coverage_report(store) -> dict[str, Any]:
         for disposition in episode.segment_dispositions
         if disposition.disposition == "source_only"
     }
+    pending_segments = {
+        disposition.segment_id
+        for episode in episodes
+        for disposition in episode.segment_dispositions
+        if disposition.disposition == "claim_pending"
+    }
     unresolved = claimed_segments - all_segments
     accounted_segments = (claimed_segments | source_only_segments) & all_segments
     return {
@@ -28,12 +34,14 @@ def coverage_report(store) -> dict[str, Any]:
         "claimed_segments": len(all_segments & claimed_segments),
         "segment_coverage": (len(all_segments & claimed_segments) / len(all_segments)) if all_segments else 1.0,
         "source_only_segments": len(all_segments & source_only_segments),
+        "pending_extraction_segments": len(all_segments & pending_segments),
         "accounted_segments": len(accounted_segments),
         "accounted_coverage": (len(accounted_segments) / len(all_segments)) if all_segments else 1.0,
         "unassigned_segment_ids": sorted(all_segments - claimed_segments),
         "unaccounted_segment_ids": sorted(
-            all_segments - claimed_segments - source_only_segments
+            all_segments - claimed_segments - source_only_segments - pending_segments
         ),
+        "pending_extraction_segment_ids": sorted(all_segments & pending_segments),
         "unplaced_claim_ids": sorted(
             claim.claim_id for claim in claims
             if not (

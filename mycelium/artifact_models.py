@@ -545,15 +545,51 @@ class ExtractionSegmentDisposition:
     reason: str | None = None
 
     def __post_init__(self) -> None:
-        if self.disposition not in {"claimed", "source_only"}:
+        if self.disposition not in {"claimed", "source_only", "claim_pending"}:
             raise ValueError(f"Unsupported extraction disposition: {self.disposition}")
         self.claim_ids = list(dict.fromkeys(self.claim_ids))
         if self.disposition == "claimed" and not self.claim_ids:
             raise ValueError("Claimed segments require at least one claim")
-        if self.disposition == "source_only" and self.claim_ids:
-            raise ValueError("Source-only segments cannot reference claims")
-        if self.disposition == "source_only" and not str(self.reason or "").strip():
-            raise ValueError("Source-only segments require a reason")
+        if self.disposition != "claimed" and self.claim_ids:
+            raise ValueError("Only claimed segments can reference claims")
+        if self.disposition in {"source_only", "claim_pending"} and not str(
+            self.reason or ""
+        ).strip():
+            raise ValueError(f"{self.disposition} segments require a reason")
+
+
+@dataclass
+class ExtractionBatchState:
+    batch_id: str
+    batch_index: int
+    segment_ids: list[str]
+    claim_bearing_segment_ids: list[str] = field(default_factory=list)
+    coverage_status: str = "pending"
+    claim_status: str = "pending"
+    attempt_count: int = 0
+    last_error: str | None = None
+
+    def __post_init__(self) -> None:
+        self.segment_ids = list(dict.fromkeys(self.segment_ids))
+        self.claim_bearing_segment_ids = list(
+            dict.fromkeys(self.claim_bearing_segment_ids)
+        )
+        if not self.segment_ids:
+            raise ValueError("Extraction batches require source segments")
+        if not set(self.claim_bearing_segment_ids) <= set(self.segment_ids):
+            raise ValueError("Claim-bearing segments must belong to their batch")
+        if self.coverage_status not in {"pending", "complete", "failed"}:
+            raise ValueError(f"Unsupported coverage status: {self.coverage_status}")
+        if self.claim_status not in {
+            "pending", "not_required", "complete", "failed"
+        }:
+            raise ValueError(f"Unsupported claim status: {self.claim_status}")
+        if self.claim_status in {"not_required", "complete"} and (
+            self.coverage_status != "complete"
+        ):
+            raise ValueError("Terminal claim status requires complete coverage")
+        if self.claim_status == "not_required" and self.claim_bearing_segment_ids:
+            raise ValueError("A source-only batch cannot have claim-bearing segments")
 
 
 @dataclass
@@ -566,6 +602,7 @@ class EpisodeManifest:
     segment_ids: list[str]
     claim_ids: list[str] = field(default_factory=list)
     segment_dispositions: list[ExtractionSegmentDisposition] = field(default_factory=list)
+    extraction_batches: list[ExtractionBatchState] = field(default_factory=list)
     extraction_status: str = "pending"
     extraction_error: str | None = None
 

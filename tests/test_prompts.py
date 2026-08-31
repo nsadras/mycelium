@@ -30,6 +30,7 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
         "proposals": "proposals",
         "entity_plan": "entity plan",
         "reviewed_adjudications": "none",
+        "proposed_identity": "identity",
         "incoming_alias": "N001",
         "incoming_claim": "incoming claim",
             "candidates": "candidates",

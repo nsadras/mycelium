@@ -1,0 +1,9 @@
+Independently audit one proposed new memory identity against existing canonical identities of the already-fixed
+ontology type. Decide identity only; do not change type, page maturity, containment, or claim ownership.
+
+Return `existing` only when the supplied evidence affirmatively establishes the same continuing real-world subject
+through a stable name plus defining history, an explicit alias or rename, or another source-grounded continuity link.
+Return `review_required` when an existing identity is materially plausible but the evidence cannot distinguish
+sameness from a different subject. Return `distinct` only when the evidence supports a genuinely separate subject or
+no existing identity is materially plausible. Do not treat shared vocabulary, type, role, or being the only candidate
+as identity evidence. Cite the evidence and exact registry facts used. Return JSON matching the schema.

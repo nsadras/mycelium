@@ -2242,3 +2242,21 @@ one prose-similarity summary.
   separate next step; no title or lexical fallback was added.
 - Validation: focused Dream/artifact/store/reconsolidation tests passed **113/113**; Ruff and `git diff --check`
   passed.
+
+## 2026-08-31 — Independent cross-run new-identity verification
+
+- Added an independent verifier before canonical creation for every identity initially classified as new when an
+  active canonical identity of the same fixed ontology type already exists. Registry comparisons are bounded to 12
+  candidates per call. Exact `existing` decisions reuse the canonical ID, `review_required` preserves all plausible
+  IDs for inspection, and only unanimously `distinct` partitions permit new creation. Multiple competing positive
+  or ambiguous partitions fail closed to review.
+- The verifier has its own strict Jinja prompt and discriminated structured-output schema. It cannot change ontology
+  type, maturity, containment, or ownership, and exact registry IDs are schema-constrained. Final verdicts and
+  evidence-backed reasons are persisted in the resumable identity work unit. No name, title, token, fuzzy, or
+  benchmark-derived comparison was added.
+- Before integration, the exact proposed contract was probed directly with `gemma4:12b`. It matched a proposed Ada
+  identity to canonical Ada from specific continuing Bluebird history. In the counterexample, a generic statement by
+  someone named Rowan could not distinguish the canonical baker from the canonical researcher, so it returned
+  `review_required` with both exact candidate IDs.
+- Validation: focused Dream/prompt/artifact/store/reconsolidation tests passed **120/120**; Ruff and
+  `git diff --check` passed.

@@ -332,6 +332,7 @@ class IdentityWorkUnit:
     identity_groups: list[dict[str, Any]] = field(default_factory=list)
     type_proposals: dict[str, dict[str, Any]] = field(default_factory=dict)
     type_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    new_identity_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
     maturity_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
     maturity_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
     entity_plan: dict[str, Any] = field(default_factory=dict)

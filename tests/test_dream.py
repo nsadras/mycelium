@@ -22,6 +22,7 @@ from mycelium.structured_outputs import (
     claim_routing_output_model,
     entity_plan_output_model,
     identity_matching_output_model,
+    new_identity_verification_output_model,
     identity_type_verification_output_model,
     subject_node_output_model,
 )
@@ -1608,6 +1609,13 @@ async def test_rejected_identity_match_cannot_mutate_existing_person(tmp_path):
         {"C001": assignment("N001", supporting=["C001"])},
         [candidate],
     ))
+    responses.insert(4, {"decision": {
+        "verdict": "distinct",
+        "entity_id": "",
+        "candidate_entity_ids": [],
+        "confidence": 0.95,
+        "reason": "The evidence establishes a different person.",
+    }})
     llm.call_structured.side_effect = responses
 
     result = await dream.router.route([ClaimEvidence(claim, source)])
@@ -1617,6 +1625,59 @@ async def test_rejected_identity_match_cannot_mutate_existing_person(tmp_path):
     ]
     assert artifacts.get_entity(person.entity_id).title == "Priya Raman"
     assert result.routes[0].owner_entity_id == "person-omar-haddad"
+
+
+@pytest.mark.asyncio
+async def test_new_identity_verifier_matches_cross_run_duplicate_to_registry(tmp_path):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    existing = artifacts.create_entity("person", "Ada")
+    _, source = add_source(logs, artifacts)
+    claim = add_claim(
+        artifacts,
+        source,
+        text="Ada scheduled another Bluebird accessibility test.",
+        about="Ada",
+        claim_type="plan",
+    )
+    responses = split_scope_plan(scope_plan(
+        {"C001": assignment("N001", supporting=["C001"])},
+        [scope_candidate("N001", "Ada", "person", ["C001"])],
+    ))
+    responses.insert(4, {"decision": {
+        "verdict": "existing",
+        "entity_id": existing.entity_id,
+        "candidate_entity_ids": [],
+        "confidence": 0.95,
+        "reason": "The specific continuing history identifies canonical Ada.",
+    }})
+    responses[7]["decisions"]["I001"]["entity_id"] = existing.entity_id
+    llm.call_structured.side_effect = responses
+
+    result = await dream.router.route([ClaimEvidence(claim, source)])
+
+    assert result.failures == []
+    assert result.new_entities == []
+    assert result.routes[0].owner_entity_id == existing.entity_id
+    unit = artifacts.list_identity_work_units()[0]
+    assert unit.new_identity_verdicts["I001"]["verdict"] == "existing"
+
+
+def test_new_identity_verifier_contract_constrains_registry_ids():
+    output_model = new_identity_verification_output_model(["person-ada"])
+    valid = {
+        "decision": {
+            "verdict": "existing",
+            "entity_id": "person-ada",
+            "candidate_entity_ids": [],
+            "confidence": 0.9,
+            "reason": "Specific history establishes continuity.",
+        }
+    }
+
+    assert output_model.model_validate(valid).decision.entity_id == "person-ada"
+    valid["decision"]["entity_id"] = "person-unknown"
+    with pytest.raises(ValidationError):
+        output_model.model_validate(valid)
 
 
 @pytest.mark.asyncio

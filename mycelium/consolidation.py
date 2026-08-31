@@ -26,6 +26,7 @@ from mycelium.structured_outputs import (
     claim_routing_output_model,
     entity_plan_output_model,
     identity_matching_output_model,
+    new_identity_verification_output_model,
     identity_maturity_output_model,
     identity_maturity_verification_output_model,
     identity_type_output_model,
@@ -340,6 +341,52 @@ class ClaimRouter:
                 else "review_required"
             )
             node["type_reason"] = verdict["reason"]
+
+        try:
+            for identity_key, node in graph_nodes.items():
+                if (
+                    node["identity_resolution"] != "new"
+                    or node["type_adjudication"] != "accepted"
+                ):
+                    continue
+                if identity_key in work_unit.new_identity_verdicts:
+                    identity_verdict = work_unit.new_identity_verdicts[identity_key]
+                else:
+                    candidates = [
+                        entity for entity in planned.values()
+                        if entity.status == "active"
+                        and entity.entity_id != "you"
+                        and entity.entity_type == node["entity_type"]
+                    ]
+                    identity_verdict = await self._verify_new_identity(
+                        node,
+                        candidates,
+                        aliases,
+                        participants,
+                    )
+                    work_unit.new_identity_verdicts[identity_key] = identity_verdict
+                    work_unit.stage = "new_identity_verification"
+                    self.artifacts.save_identity_work_unit(work_unit)
+                if identity_verdict["verdict"] == "existing":
+                    node["identity_resolution"] = "existing"
+                    node["entity_id"] = identity_verdict["entity_id"]
+                    node["candidate_entity_ids"] = []
+                elif identity_verdict["verdict"] == "review_required":
+                    node["identity_resolution"] = "review_required"
+                    node["entity_id"] = ""
+                    node["candidate_entity_ids"] = identity_verdict[
+                        "candidate_entity_ids"
+                    ]
+                    node["type_adjudication"] = "review_required"
+                node["identity_reason"] = identity_verdict["reason"]
+        except Exception as exc:
+            return self._fail_work_unit(
+                work_unit,
+                evidence,
+                "new_identity_verification",
+                "New identity verification did not satisfy the contract: "
+                f"{type(exc).__name__}: {exc}",
+            )
 
         node_types = {
             node_id: str(node["entity_type"])
@@ -933,6 +980,84 @@ class ClaimRouter:
         unit.dream_run_ids.append(dream_run_id)
         unit.dream_run_ids = list(dict.fromkeys(unit.dream_run_ids))
         return unit
+
+    async def _verify_new_identity(
+        self,
+        node: dict,
+        candidates: list[EntityRecord],
+        aliases: dict[str, ClaimEvidence],
+        participants: dict[str, tuple],
+        chunk_size: int = 12,
+    ) -> dict:
+        if not candidates:
+            return {
+                "verdict": "distinct",
+                "entity_id": "",
+                "candidate_entity_ids": [],
+                "confidence": 1.0,
+                "reason": (
+                    "No active canonical identity has the fixed ontology type, so "
+                    "there is no existing identity candidate to duplicate."
+                ),
+            }
+        decisions = []
+        proposed = self.formatter.format_identity_groups({
+            str(node["node_id"]): node
+        })
+        for start in range(0, len(candidates), chunk_size):
+            chunk = candidates[start:start + chunk_size]
+            candidate_ids = [entity.entity_id for entity in chunk]
+            output_model = new_identity_verification_output_model(candidate_ids)
+            system, user = prompts.new_identity_verification_prompt(
+                proposed,
+                self.formatter.entity_planning_catalog(chunk),
+                self.formatter.format_evidence(aliases, participants),
+            )
+            response = await self.llm.call_structured(
+                system,
+                user,
+                output_model,
+                num_predict=2048,
+                debug_label="dream-new-identity-verification",
+            )
+            decisions.append(
+                output_model.model_validate(response).model_dump()["decision"]
+            )
+        existing_ids = {
+            decision["entity_id"] for decision in decisions
+            if decision["verdict"] == "existing"
+        }
+        review_ids = {
+            entity_id for decision in decisions
+            if decision["verdict"] == "review_required"
+            for entity_id in decision["candidate_entity_ids"]
+        }
+        reasons = " ".join(decision["reason"] for decision in decisions)
+        confidence = min(float(decision["confidence"]) for decision in decisions)
+        if len(existing_ids) == 1 and not review_ids:
+            return {
+                "verdict": "existing",
+                "entity_id": next(iter(existing_ids)),
+                "candidate_entity_ids": [],
+                "confidence": confidence,
+                "reason": reasons,
+            }
+        plausible = sorted(existing_ids | review_ids)
+        if plausible:
+            return {
+                "verdict": "review_required",
+                "entity_id": "",
+                "candidate_entity_ids": plausible,
+                "confidence": confidence,
+                "reason": reasons,
+            }
+        return {
+            "verdict": "distinct",
+            "entity_id": "",
+            "candidate_entity_ids": [],
+            "confidence": confidence,
+            "reason": reasons,
+        }
 
     @staticmethod
     def _merge_result(target: RoutingResult, source: RoutingResult) -> None:

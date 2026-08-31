@@ -35,6 +35,19 @@ def identity_matching_prompt(
     )
 
 
+def new_identity_verification_prompt(
+    proposed_identity: str,
+    registry: str,
+    evidence: str,
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/new_identity_verification",
+        proposed_identity=proposed_identity,
+        registry=registry,
+        evidence=evidence,
+    )
+
+
 def identity_types_prompt(identities: str, evidence: str) -> tuple[str, str]:
     return render_prompt_pair(
         "memory/identity_types",

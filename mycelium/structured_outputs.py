@@ -149,6 +149,12 @@ class IdentityMatchGroupOutput(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class NewIdentityVerificationOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=800)
+
+
 class IdentityTypeProposalOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     entity_type: DiscoverableEntityType
@@ -516,6 +522,51 @@ def identity_matching_output_model(
             return self
 
     return ExactIdentityMatchingPlan
+
+
+def new_identity_verification_output_model(
+    existing_entity_ids: Collection[str],
+) -> type[BaseModel]:
+    """Audit one proposed-new identity against one bounded registry partition."""
+    existing = tuple(dict.fromkeys(
+        str(value) for value in existing_entity_ids if value
+    ))
+    if not existing:
+        raise ValueError("New identity verification requires registry candidates")
+    entity_type = Literal.__getitem__(existing)
+    existing_match = create_model(
+        "VerifiedExistingIdentity",
+        __base__=NewIdentityVerificationOutput,
+        verdict=(Literal["existing"], ...),
+        entity_id=(entity_type, ...),  # type: ignore[valid-type]
+        candidate_entity_ids=(list[str], Field(max_length=0)),
+    )
+    distinct = create_model(
+        "VerifiedDistinctIdentity",
+        __base__=NewIdentityVerificationOutput,
+        verdict=(Literal["distinct"], ...),
+        entity_id=(Literal[""], ...),
+        candidate_entity_ids=(list[str], Field(max_length=0)),
+    )
+    review = create_model(
+        "VerifiedAmbiguousIdentity",
+        __base__=NewIdentityVerificationOutput,
+        verdict=(Literal["review_required"], ...),
+        entity_id=(Literal[""], ...),
+        candidate_entity_ids=(
+            list[entity_type],  # type: ignore[valid-type]
+            Field(min_length=1, max_length=len(existing)),
+        ),
+    )
+    decision = Annotated[
+        Union[existing_match, distinct, review],
+        Field(discriminator="verdict"),
+    ]
+    return create_model(
+        "ExactNewIdentityVerification",
+        __config__=ConfigDict(extra="forbid"),
+        decision=(decision, ...),
+    )
 
 
 def identity_type_output_model(

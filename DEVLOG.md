@@ -2451,3 +2451,30 @@ one prose-similarity summary.
 - No prompt, ontology, or semantic division changed in this task, so a new Ollama probe was not applicable.
   Validation: the focused production/runtime/recovery/lifecycle/context suite passed **18/18**; the complete
   maintained suite passed **286/286 with 2 skipped**.
+
+## 2026-08-31 — Honest temporal and provenance-aware wiki presentation
+
+- Removed wiki page confidence from the canonical model, Markdown frontmatter, update history, store filtering,
+  retrieval context, chat metadata, APIs, benchmark snapshots, and frontend types. The deleted value was only the
+  mean of claim-model confidences and did not measure page completeness, unresolved conflicts, currentness, source
+  support, or scope quality. No substitute score is exposed until those dimensions have an explicit contract.
+- Deterministic page compilation now formats normalized temporal start/end values from structured claim facets,
+  orders Timeline facts and encounters by semantic event time, and retains the original temporal expression in
+  structured evidence metadata. The Wiki evidence view shows source wording beside the normalized value. No claim
+  text, vocabulary, or benchmark phrase is parsed during presentation.
+- Generated Markdown now carries compact exact-source footnotes down to segment IDs. The link-only Recent Changes
+  section was removed from the authoritative ontology rather than continuing to duplicate Memory Map without a true
+  fact-diff lifecycle.
+- Because the ontology changed, direct production-prompt/schema probes against `gemma4:12b` were run after
+  integration. A neutral profile preference rendered to `preferences_working_style`; a project deadline
+  counterexample rendered to `next_steps_deadlines`. Both returned valid exact fact-rendering contracts.
+- The post-integration real-model trial at
+  `benchmark_runs/daily-driver-unrelated-v1-presentation-replay-20260831` is a **replayed-extraction**, unjudged
+  downstream run, not fresh extraction. Both Dreams completed with zero failures; it preserved exact 6/6
+  claim-bearing and 2/2 source-only accounting, passed both hard lifecycle gates, and produced pages with source
+  footnotes and without page confidence or Recent Changes. It passed 5/12 measured dimensions and 3/7 acceptance
+  dimensions. The model again left the kitchen Project unresolved, so entity/ownership/page projection remained a
+  meaningful identity-quality failure; it was not overridden in presentation.
+- Validation: focused page/ontology/context/store tests passed **39/39**; the complete maintained suite passed
+  **288/288 with 2 skipped**; Ruff, `git diff --check`, UI lint, and UI production build passed. The existing large
+  frontend chunk warning remains.

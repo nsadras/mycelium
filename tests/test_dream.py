@@ -495,7 +495,7 @@ def test_subject_node_contract_rejects_extra_fields():
         output_model.model_validate({**valid, "edges": []})
 
 
-def test_identity_matching_contract_partitions_nodes_and_prevents_competing_matches():
+def test_identity_matching_contract_coalesces_competing_exact_entity_matches():
     output_model = identity_matching_output_model(
         ["N001", "N002"], ["project-atlas"]
     )
@@ -526,8 +526,27 @@ def test_identity_matching_contract_partitions_nodes_and_prevents_competing_matc
             },
         ],
     }
-    with pytest.raises(ValidationError):
-        output_model.model_validate(competing)
+    parsed = output_model.model_validate(competing)
+    assert len(parsed.identities) == 1
+    assert parsed.identities[0].entity_id == "project-atlas"
+    assert parsed.identities[0].node_ids == ["N001", "N002"]
+
+
+def test_identity_matching_contract_still_requires_an_exact_node_partition():
+    output_model = identity_matching_output_model(["N001", "N002"], [])
+    group = {
+        "identity_key": "I001",
+        "node_ids": ["N001"],
+        "resolution": "new",
+        "entity_id": "",
+        "candidate_entity_ids": [],
+        "preferred_title": "Atlas",
+        "aliases": [],
+        "confidence": 0.9,
+        "reason": "One proposed identity.",
+    }
+    with pytest.raises(ValidationError, match="exactly partition"):
+        output_model.model_validate({"identities": [group]})
 
 
 def test_identity_type_verifier_preserves_ambiguity_for_review():
@@ -865,6 +884,37 @@ def test_entity_plan_contract_combines_identity_containment_and_participants():
                 "parent_entity": "",
             },
         }, "participants": valid["participants"]})
+
+
+def test_entity_plan_contract_rejects_containment_under_nonindependent_graph_parent():
+    output_model = entity_plan_output_model(
+        {"N001": "event", "N002": "project"},
+        {},
+        {},
+    )
+    invalid = {
+        "decisions": {
+            "N001": {
+                "entity_id": "",
+                "scope": "occurrence",
+                "parent_entity": "N002",
+                "adjudication": "accepted",
+                "confidence": 0.9,
+                "reason": "The event belongs to the proposed project.",
+            },
+            "N002": {
+                "entity_id": "",
+                "scope": "context",
+                "parent_entity": "",
+                "adjudication": "accepted",
+                "confidence": 0.9,
+                "reason": "The project remains contextual.",
+            },
+        },
+        "participants": {},
+    }
+    with pytest.raises(ValidationError, match="accepted independent parent"):
+        output_model.model_validate(invalid)
 
 
 def test_scope_evidence_preserves_extracted_roles_and_stable_references(tmp_path):

@@ -2499,3 +2499,23 @@ one prose-similarity summary.
   maintained suite passed **288/288 with 2 skipped**; `git diff --check` passed. Repository-root pytest additionally
   collects an old generated benchmark test that imports the intentionally removed `routing_recall_index`; maintained
   tests remain scoped to `tests/`. The existing large frontend chunk warning remains.
+
+## 2026-09-01 — Contract-aware Dream structured-output recovery
+
+- The completed LoCoMo conversation-8 run reported generic JSON parsing failures, but exact replays with structured
+  debug capture showed valid JSON rejected by cross-record validators: extraction omitted an admitted segment, and
+  identity matching proposed two groups with the same exact canonical entity ID. An entity-plan failure separately
+  crossed a schema that allowed containment under a parent the downstream contract rejected.
+- Structured-output retries now include the invalid assistant response and exact validation error instead of making
+  the same blind request. Final failures preserve the underlying error type and message. The extraction coverage
+  validator identifies missing and unexpected exact segment IDs, so a retry can repair the incomplete contract.
+- Identity groups that select the same exact existing entity ID are coalesced before validation; this implements the
+  invariant that one canonical ID denotes one identity and makes no language-level identity decision. Entity-plan
+  validation now enforces the existing downstream invariant that a graph parent is accepted and independently
+  materialized or provisional before a child can be contained beneath it.
+- Before integration, an exact production-prompt/schema correction probe against `gemma4:12b` repaired the persisted
+  six-segment extraction failure on its first correction turn. After integration, the exact 16-claim identity work
+  unit that had failed all three original attempts replayed to completion with 16 routes, 2 proposed entities, and no
+  failures on a disposable copy of the benchmark store.
+- Validation: focused Ollama/Dream tests passed **66/66**; the complete maintained suite passed **292/292 with 2
+  skipped**.

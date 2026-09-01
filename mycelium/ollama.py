@@ -482,9 +482,25 @@ class OllamaClient:
                             else f"; debug_dump disabled, set {LLM_DEBUG_DIR_ENV}=.llm-debug"
                         )
                         raise ValueError(
-                            f"Failed to parse JSON response from Ollama after {max_retries} attempts"
+                            "Structured response did not satisfy its contract after "
+                            f"{max_retries} attempts; final_error="
+                            f"{type(parse_exc).__name__}: {parse_exc}"
                             f"{metadata_text}{debug_text}"
-                        )
+                        ) from parse_exc
+                    messages = [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                        {"role": "assistant", "content": content},
+                        {
+                            "role": "user",
+                            "content": (
+                                "The response did not satisfy the supplied structured "
+                                "output contract. Correct the response and return the "
+                                "complete JSON value only. Contract error: "
+                                f"{type(parse_exc).__name__}: {parse_exc}"
+                            ),
+                        },
+                    ]
                     continue
 
             except (RequestError, ResponseError) as e:

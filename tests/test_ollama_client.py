@@ -44,6 +44,16 @@ class FakeSdkClient:
         return SimpleNamespace(response=self.content)
 
 
+class SequencedFakeSdkClient(FakeSdkClient):
+    def __init__(self, contents: list[str]):
+        super().__init__(contents[0])
+        self.contents = iter(contents)
+
+    async def chat(self, **kwargs):
+        self.content = next(self.contents)
+        return await super().chat(**kwargs)
+
+
 class FakeToolSdkClient:
     def __init__(self):
         self.chat_calls = []
@@ -298,6 +308,31 @@ async def test_call_structured_accepts_pydantic_model():
 
 
 @pytest.mark.asyncio
+async def test_call_structured_retries_with_response_and_contract_error():
+    client = OllamaClient("http://localhost:11434", "test-model")
+    fake_sdk = SequencedFakeSdkClient([
+        '{"wrong": "value"}',
+        '{"answer": "yes"}',
+    ])
+    client.client = fake_sdk
+
+    response = await client.call_structured(
+        "system prompt", "user prompt", AnswerOutput
+    )
+
+    assert response == {"answer": "yes"}
+    retry_messages = fake_sdk.chat_calls[1]["messages"]
+    assert retry_messages[:2] == [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": "user prompt"},
+    ]
+    assert retry_messages[2] == {
+        "role": "assistant", "content": '{"wrong": "value"}'
+    }
+    assert "Contract error: ValidationError" in retry_messages[3]["content"]
+
+
+@pytest.mark.asyncio
 async def test_call_structured_accepts_pydantic_root_model():
     client = OllamaClient("http://localhost:11434", "test-model")
     fake_sdk = FakeSdkClient('[{"answer": "yes"}]')
@@ -415,3 +450,18 @@ async def test_call_structured_mentions_debug_env_when_dump_disabled(monkeypatch
 
     with pytest.raises(ValueError, match="set MYCELIUM_LLM_DEBUG_DIR=.llm-debug"):
         await client.call_structured("system prompt", "user prompt", AnswerOutput, max_retries=1)
+
+
+@pytest.mark.asyncio
+async def test_call_structured_final_error_preserves_contract_failure(monkeypatch):
+    client = OllamaClient("http://localhost:11434", "test-model")
+    client.client = FakeSdkClient('{"wrong": "value"}')
+    monkeypatch.delenv("MYCELIUM_LLM_DEBUG_DIR", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match="final_error=ValidationError",
+    ):
+        await client.call_structured(
+            "system prompt", "user prompt", AnswerOutput, max_retries=1
+        )

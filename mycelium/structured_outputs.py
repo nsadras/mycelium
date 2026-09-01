@@ -116,9 +116,14 @@ def claim_extraction_output_model(
                 for claim in self.claims
                 for segment_id in claim.segment_ids
             }
-            if covered_ids != set(segment_ids):
+            required_ids = set(segment_ids)
+            if covered_ids != required_ids:
+                missing = sorted(required_ids - covered_ids)
+                unexpected = sorted(covered_ids - required_ids)
                 raise ValueError(
-                    "Every claim-bearing segment must support at least one extracted claim"
+                    "Every claim-bearing segment must support at least one extracted "
+                    f"claim; missing_segment_ids={missing}; "
+                    f"unexpected_segment_ids={unexpected}"
                 )
             return self
 
@@ -613,6 +618,36 @@ def identity_matching_output_model(
     )
 
     class ExactIdentityMatchingPlan(base_model):  # type: ignore[valid-type, misc]
+        @model_validator(mode="before")
+        @classmethod
+        def coalesce_existing_identity_groups(cls, value):
+            if not isinstance(value, dict) or not isinstance(
+                value.get("identities"), list
+            ):
+                return value
+            normalized: list[Any] = []
+            by_entity_id: dict[str, dict[str, Any]] = {}
+            for raw_group in value["identities"]:
+                if not isinstance(raw_group, dict):
+                    normalized.append(raw_group)
+                    continue
+                group = dict(raw_group)
+                entity_id = str(group.get("entity_id") or "")
+                if group.get("resolution") != "existing" or not entity_id:
+                    normalized.append(group)
+                    continue
+                existing_group = by_entity_id.get(entity_id)
+                if existing_group is None:
+                    by_entity_id[entity_id] = group
+                    normalized.append(group)
+                    continue
+                for field_name in ("node_ids", "aliases"):
+                    existing_group[field_name] = list(dict.fromkeys([
+                        *existing_group.get(field_name, []),
+                        *group.get(field_name, []),
+                    ]))
+            return {**value, "identities": normalized}
+
         @model_validator(mode="after")
         def validate_identity_partition(self):
             grouped_nodes = [
@@ -625,15 +660,6 @@ def identity_matching_output_model(
             identity_keys = [group.identity_key for group in self.identities]
             if len(identity_keys) != len(set(identity_keys)):
                 raise ValueError("Identity keys must be unique")
-            resolved_ids = [
-                group.entity_id
-                for group in self.identities
-                if group.resolution == "existing"
-            ]
-            if len(resolved_ids) != len(set(resolved_ids)):
-                raise ValueError(
-                    "An existing entity can belong to only one identity group"
-                )
             return self
 
     return ExactIdentityMatchingPlan
@@ -972,12 +998,33 @@ def entity_plan_output_model(
         __config__=ConfigDict(extra="forbid"),
         **participant_fields,
     )
-    return create_model(
+    base_model = create_model(
         "ExactEntityPlan",
         __config__=ConfigDict(extra="forbid"),
         decisions=(decisions_model, ...),
         participants=(participants_model, ...),
     )
+
+    class ExactEntityPlan(base_model):  # type: ignore[valid-type, misc]
+        @model_validator(mode="after")
+        def validate_contained_parents(self):
+            for node_id in node_ids:
+                decision = getattr(self.decisions, node_id)
+                parent_id = decision.parent_entity
+                if not parent_id or parent_id not in node_types:
+                    continue
+                parent = getattr(self.decisions, parent_id)
+                if (
+                    parent.adjudication != "accepted"
+                    or parent.scope not in {"materialized", "provisional"}
+                ):
+                    raise ValueError(
+                        "A contained entity requires an accepted independent "
+                        f"parent; child_node_id={node_id}; parent_node_id={parent_id}"
+                    )
+            return self
+
+    return ExactEntityPlan
 
 
 def claim_routing_output_model(

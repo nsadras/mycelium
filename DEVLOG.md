@@ -2336,3 +2336,29 @@ one prose-similarity summary.
 - Validation: focused identity, prompt, artifact, and reconsolidation tests passed **112/112**; the complete maintained
   suite passed **262/262 with 2 skipped** using host access for Ollama-dependent tests. Ruff and `git diff --check`
   passed.
+
+## 2026-08-31 — Durable unresolved-identity claim blockers
+
+- The bounded v3 replay showed that an initial identity work unit correctly deferred claims associated with a
+  provisional or review-required kitchen Project, but a later overlapping revision census omitted that unresolved
+  subject and replaced the deferrals with routes to Rosa. The route reasons still named the Project as the intended
+  owner. The defect was loss of structured identity state across work-unit and Dream boundaries, not a need for a
+  lexical Project-owner override.
+- Deferred routes now carry exact identity-resolution decision IDs whenever their supporting subject is provisional
+  or review-required. Revision merging cannot replace such a route with a canonical route, and placements plus scope
+  decisions persist the blocker IDs across Dream runs. A persisted blocker clears only when its review decision is
+  rejected, or when its accepted provisional entity is the exact entity that becomes materialized. Missing blocker
+  records fail closed. Manual placement remains an explicit user override and therefore starts without automatic
+  blockers.
+- The Memory Inspector displays unresolved blocker IDs on the claim's latest Dream decision. The mechanism uses only
+  exact artifact IDs and declared review/page states; it does not inspect claim text, model rationale, titles, or
+  vocabulary. No prompt, ontology, or division of model labor changed, so no direct semantic probe was required.
+- The post-integration frozen replay is
+  `benchmark_runs/daily-driver-unrelated-v1-bounded-replay-v4-20260831`. Both Dreams completed with zero failures and
+  passed both lifecycle gates. This trial independently materialized `Project: Kitchen Renovation`; the range price,
+  electrical requirement, and permit inspection routed to that Project, while Rosa retained only her project-role
+  claim. Three claims with review-required identity decisions remained deferred through the overlapping revision and
+  persisted their exact blocker IDs instead of being reassigned.
+- Validation: focused Dream, artifact, API, queue, and reconsolidation tests passed **116/116**; the complete maintained
+  suite passed **264/264 with 2 skipped**. Ruff, `git diff --check`, UI lint, and UI production build passed. The
+  existing 854.63 kB UI chunk-size warning remains.

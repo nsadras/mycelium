@@ -802,8 +802,11 @@ async def test_encoder_batches_large_initial_extractions(tmp_path):
 def test_semantic_envelope_does_not_infer_from_kind_or_prose():
     provenance = [ClaimProvenance("source-1", ["source-1#seg-0001"])]
     unknown = MemoryClaim(
-        "unknown", "Ava bought a book.", "event", [{"entity": "Ava"}],
-        provenance, "2024-01-01",
+        claim_id="unknown",
+        text="Ava bought a book.",
+        about=[{"entity": "Ava"}],
+        provenance=provenance,
+        recorded_at="2024-01-01",
     )
 
     assert unknown.claim_type == "unknown"
@@ -1028,10 +1031,11 @@ def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
         participants=["user"], segment_ids=["source-1#seg-0001"],
     ))
     store.save_claim(MemoryClaim(
-        "claim-1", "The user greeted the assistant.", "interaction",
-        [{"entity": "user"}],
-        [ClaimProvenance("source-1", ["source-1#seg-0001"])],
-        "2024-01-01", claim_type="interaction", evidence_modality="speech",
+        claim_id="claim-1",
+        text="The user greeted the assistant.",
+        about=[{"entity": "user"}],
+        provenance=[ClaimProvenance("source-1", ["source-1#seg-0001"])],
+        recorded_at="2024-01-01", claim_type="interaction", evidence_modality="speech",
         temporal_status="past",
     ))
     store.save_reconsolidation_proposal(ReconsolidationProposal(

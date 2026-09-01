@@ -28,6 +28,8 @@ ENTITY_REFERENCE_ROLES = {
 }
 RECONSOLIDATION_RELATIONS = {"contradicts", "supersedes"}
 RECONSOLIDATION_STATUSES = {"pending", "approved", "rejected", "applied", "stale"}
+SOURCE_STATUSES = {"active", "retracted"}
+CLAIM_STATUSES = {"active", "superseded", "retracted"}
 
 def _normalized_label(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
@@ -57,6 +59,20 @@ class SourceDocument:
     segments: list[SourceSegment]
     raw_log_entry_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    status: str = "active"
+    retracted_at: str | None = None
+    retraction_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        self.status = str(self.status).strip().lower()
+        if self.status not in SOURCE_STATUSES:
+            raise ValueError(f"Unsupported source status: {self.status}")
+        if self.status == "retracted" and not (
+            self.retracted_at and str(self.retraction_reason or "").strip()
+        ):
+            raise ValueError("Retracted sources require a timestamp and reason")
+        if self.status == "active" and (self.retracted_at or self.retraction_reason):
+            raise ValueError("Active sources cannot contain retraction details")
 
 
 @dataclass
@@ -91,6 +107,10 @@ class MemoryClaim:
 
     def __post_init__(self) -> None:
         """Normalize the compact semantic envelope without inferring it from prose or labels."""
+        self.status = str(self.status).strip().lower()
+        if self.status not in CLAIM_STATUSES:
+            raise ValueError(f"Unsupported claim status: {self.status}")
+
         normalized_type = _normalized_label(self.claim_type)
         if normalized_type not in CLAIM_TYPES:
             normalized_type = "unknown"

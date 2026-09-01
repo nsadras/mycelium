@@ -330,10 +330,11 @@ def test_clear_memory_store_removes_artifacts_and_preserves_conversations(tmp_pa
         participants=["user"], segment_ids=["source-1#seg-0001"],
     ))
     myc.artifacts.save_claim(MemoryClaim(
-        "claim-1", "The user wants tea remembered.", "preference",
-        [{"entity": "user"}],
-        [ClaimProvenance("source-1", ["source-1#seg-0001"])],
-        "2026-07-22", claim_type="preference", evidence_modality="speech",
+        claim_id="claim-1",
+        text="The user wants tea remembered.",
+        about=[{"entity": "user"}],
+        provenance=[ClaimProvenance("source-1", ["source-1#seg-0001"])],
+        recorded_at="2026-07-22", claim_type="preference", evidence_modality="speech",
         temporal_status="current",
     ))
 

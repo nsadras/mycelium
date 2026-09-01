@@ -127,7 +127,6 @@ def test_benchmark_page_rendering_renders_nested_recall_fact_once():
         created=now,
         last_updated=now,
         version=1,
-        confidence=0.8,
     )
 
     assert render_memory_context([page]).count("A single useful fact") == 1

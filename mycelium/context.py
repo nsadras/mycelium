@@ -22,7 +22,7 @@ def render_memory_context(pages: list[WikiPage]) -> str:
             continue
         header = (
             f"=== MEMORY: {page.title} "
-            f"(confidence: {page.confidence:.2f}, v{page.version}) ==="
+            f"(v{page.version}) ==="
         )
         blocks.append(f"{header}\n{body}")
     return "\n\n".join(blocks) + "\n\n=== END MEMORY ===" if blocks else ""

@@ -13,7 +13,6 @@ def _page(slug: str, content: str, *, version: int = 1) -> WikiPage:
         created=now,
         last_updated=now,
         version=version,
-        confidence=0.9,
         page_type="person",
     )
 

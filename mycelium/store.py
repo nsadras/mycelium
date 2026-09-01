@@ -31,8 +31,6 @@ def _update_log_to_dict(log: UpdateLogEntry) -> dict:
         "session_id": log.session_id,
         "trigger": log.trigger,
         "reason": log.reason,
-        "previous_confidence": log.previous_confidence,
-        "new_confidence": log.new_confidence
     }
 
 def _update_log_from_dict(d: dict) -> UpdateLogEntry:
@@ -42,8 +40,6 @@ def _update_log_from_dict(d: dict) -> UpdateLogEntry:
         session_id=d["session_id"],
         trigger=d["trigger"],
         reason=d["reason"],
-        previous_confidence=d["previous_confidence"],
-        new_confidence=d["new_confidence"]
     )
 
 class WikiStore:
@@ -98,7 +94,6 @@ class WikiStore:
             created=created,
             last_updated=last_updated,
             version=post.metadata.get("version", 1),
-            confidence=post.metadata.get("confidence", 0.0),
             page_type=page_type,
             tags=post.metadata.get("tags", []),
             related=related,
@@ -119,7 +114,6 @@ class WikiStore:
         post.metadata["created"] = page.created.isoformat() if page.created else None
         post.metadata["last_updated"] = page.last_updated.isoformat() if page.last_updated else None
         post.metadata["version"] = page.version
-        post.metadata["confidence"] = page.confidence
         post.metadata["page_type"] = page.page_type
         post.metadata["tags"] = page.tags
         post.metadata["related"] = [_edge_to_dict(r) for r in page.related]
@@ -137,13 +131,11 @@ class WikiStore:
         page = self.get(slug)
         return page.update_log
 
-    def list(self, tag: Optional[str] = None, min_confidence: float = 0.0) -> List[WikiPage]:
+    def list(self, tag: Optional[str] = None) -> List[WikiPage]:
         pages = self.list_all()
         filtered = []
         for p in pages:
             if tag and tag not in p.tags:
-                continue
-            if p.confidence < min_confidence:
                 continue
             filtered.append(p)
         return filtered

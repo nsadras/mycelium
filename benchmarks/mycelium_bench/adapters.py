@@ -372,7 +372,6 @@ class MyceliumMemorySystem:
                     {
                         "slug": page.slug,
                         "title": page.title,
-                        "confidence": page.confidence,
                     }
                     for page in loaded_pages
                 ],
@@ -611,7 +610,6 @@ class MemoryAgentSystem(MyceliumMemorySystem):
                     {
                         "slug": page.slug,
                         "title": page.title,
-                        "confidence": page.confidence,
                     }
                     for page in loaded_pages
                 ],
@@ -790,7 +788,6 @@ class FullWikiMemorySystem(MyceliumMemorySystem):
                     {
                         "slug": page.slug,
                         "title": page.title,
-                        "confidence": page.confidence,
                     }
                     for page in all_pages
                 ],

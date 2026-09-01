@@ -135,7 +135,6 @@ def artifact_memory(tmp_path, monkeypatch):
         created=datetime.now(),
         last_updated=datetime.now(),
         version=1,
-        confidence=0.8,
         page_type="topic",
         entity_id="topic-archived-page",
     ))

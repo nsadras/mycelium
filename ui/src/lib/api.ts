@@ -31,7 +31,6 @@ export interface ToolEvent {
 export interface LoadedPage {
   slug: string;
   title: string;
-  confidence: number;
   version: number;
 }
 
@@ -70,7 +69,6 @@ export interface WikiPage {
   title: string;
   content?: string;
   version?: number;
-  confidence: number;
   page_type: PageType | null;
   tags: string[];
   related?: { target: string; relation: string }[];

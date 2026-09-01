@@ -220,7 +220,6 @@ async def chat(session_id: str, req: ChatRequest):
             {
                 "slug": p.slug,
                 "title": p.title,
-                "confidence": p.confidence,
                 "version": p.version,
             }
             for p in loaded_pages

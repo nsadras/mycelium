@@ -20,8 +20,6 @@ class UpdateLogEntry:
     session_id: str
     trigger: Literal['reconsolidation', 'dream', 'manual']
     reason: str
-    previous_confidence: float
-    new_confidence: float
 
 @dataclass
 class WikiPage:
@@ -31,7 +29,6 @@ class WikiPage:
     created: datetime
     last_updated: datetime
     version: int
-    confidence: float                    # 0.0–1.0
     page_type: PageType | None = None    # explicit null means classification is pending
     tags: list[str] = field(default_factory=list)
     related: list[Edge] = field(default_factory=list)

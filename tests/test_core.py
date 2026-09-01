@@ -35,7 +35,6 @@ async def test_page_search_retrieves_named_entity(temp_mycelium):
         created=datetime.now(),
         last_updated=datetime.now(),
         version=1,
-        confidence=0.8,
         page_type="person", entity_id="person-gina"
     )
     page_jon = WikiPage(
@@ -45,7 +44,6 @@ async def test_page_search_retrieves_named_entity(temp_mycelium):
         created=datetime.now(),
         last_updated=datetime.now(),
         version=1,
-        confidence=0.8,
         page_type="person", entity_id="person-jon"
     )
     temp_mycelium.wiki.save(page_gina)
@@ -65,12 +63,12 @@ async def test_full_page_search_candidate_requires_structured_admission(temp_myc
     now = datetime.now()
     temp_mycelium.wiki.save(WikiPage(
         slug="person-gina", title="Gina", content="Gina owns a clothing store.",
-        created=now, last_updated=now, version=1, confidence=0.8,
+        created=now, last_updated=now, version=1,
         page_type="person", entity_id="person-gina",
     ))
     temp_mycelium.wiki.save(WikiPage(
         slug="person-jon", title="Jon", content="Jon owns a dance studio.",
-        created=now, last_updated=now, version=1, confidence=0.8,
+        created=now, last_updated=now, version=1,
         page_type="person", entity_id="person-jon",
     ))
     loaded = await temp_mycelium.load_context(query="Who owns the dance studio?")
@@ -85,7 +83,7 @@ async def test_page_search_can_abstain_from_lexical_candidates(temp_mycelium):
     temp_mycelium.wiki.save(WikiPage(
         slug="topic-paint", title="Tea Leaf Paint",
         content="Tea Leaf Green is the selected wall color.",
-        created=now, last_updated=now, version=1, confidence=0.8,
+        created=now, last_updated=now, version=1,
         page_type="topic", entity_id="topic-paint",
     ))
     temp_mycelium.llm.call_structured.side_effect = None
@@ -107,7 +105,7 @@ async def test_temporal_claim_routes_generic_deadline_query(temp_mycelium):
     now = datetime.fromisoformat("2026-08-11T10:00:00-07:00")
     temp_mycelium.wiki.save(WikiPage(
         slug="project-alpha", title="Project Alpha", content="Quarterly report work.",
-        created=now, last_updated=now, version=1, confidence=0.9,
+        created=now, last_updated=now, version=1,
         page_type="project", entity_id="project-alpha",
     ))
     deadline = MemoryClaim(
@@ -174,7 +172,6 @@ async def test_load_context_budgets_the_authoritative_rendering(temp_mycelium):
         created=now,
         last_updated=now,
         version=1,
-        confidence=0.8,
         page_type="project",
         entity_id="project-orchid",
     )

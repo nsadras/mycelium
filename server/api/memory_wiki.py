@@ -16,7 +16,6 @@ async def list_wiki():
         {
             "slug": p.slug,
             "title": p.title,
-            "confidence": p.confidence,
             "page_type": p.page_type,
             "tags": p.tags,
             "entity_id": p.entity_id,

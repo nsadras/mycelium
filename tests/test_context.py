@@ -14,7 +14,6 @@ def _page(slug: str, title: str, content: str = "") -> WikiPage:
         created=now,
         last_updated=now,
         version=2,
-        confidence=0.8,
         page_type="project",
         entity_id=slug,
     )

@@ -14,7 +14,6 @@ def page(content: str) -> WikiPage:
         created=now,
         last_updated=now,
         version=1,
-        confidence=0.9,
         page_type="project",
         entity_id="project-orchid",
     )

@@ -224,8 +224,6 @@ class PageMaterializer:
                     session_id="system",
                     trigger="dream",
                     reason="Initial entity-owned deterministic projection",
-                    previous_confidence=0.0,
-                    new_confidence=page.confidence,
                 )]
                 result.changed_pages[entity.slug] = page
                 result.created_slugs.add(entity.slug)
@@ -238,8 +236,6 @@ class PageMaterializer:
                     session_id="system",
                     trigger="dream",
                     reason="Regenerated entity-owned deterministic projection",
-                    previous_confidence=existing.confidence,
-                    new_confidence=page.confidence,
                 )]
                 result.changed_pages[entity.slug] = page
                 result.updated_slugs.add(entity.slug)
@@ -388,7 +384,6 @@ class PageMaterializer:
             facts, claims_by_id,
         )
         claims = [claim for claim, _ in owned]
-        confidences = [max(0.0, min(1.0, claim.confidence)) for claim in claims]
         source_ids = sorted({
             provenance.raw_log_entry_id or provenance.source_id
             for claim in claims for provenance in claim.provenance
@@ -411,7 +406,6 @@ class PageMaterializer:
             created=existing.created if existing else now,
             last_updated=now,
             version=existing.version if existing else 1,
-            confidence=sum(confidences) / len(confidences) if confidences else 1.0,
             page_type=cast(PageType, entity.entity_type),
             tags=[],
             related=[
@@ -670,7 +664,6 @@ class PageMaterializer:
             and left.sections == right.sections
             and left.related == right.related
             and left.source_log_entries == right.source_log_entries
-            and abs(left.confidence - right.confidence) < 1e-9
         )
 
     @staticmethod

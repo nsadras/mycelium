@@ -100,7 +100,6 @@ def wiki_page_response(page):
         "title": page.title,
         "content": page.content,
         "version": page.version,
-        "confidence": page.confidence,
         "page_type": page.page_type,
         "tags": page.tags,
         "source_log_entries": page.source_log_entries,

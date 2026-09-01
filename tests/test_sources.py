@@ -30,7 +30,6 @@ def test_source_contexts_for_pages_deduplicates_logs_and_preserves_conversation_
             created=datetime.now(),
             last_updated=datetime.now(),
             version=1,
-            confidence=0.9,
             source_log_entries=[entry.entry_id],
         )
         for slug in ("person-jon", "dance-studio")

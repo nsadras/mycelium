@@ -116,6 +116,7 @@ export interface WikiFactItem {
   sources: WikiSourceReference[];
   links: { entity_id: string; slug: string; title: string }[];
   authoritative: boolean;
+  reconciliation_proposal_ids: string[];
 }
 
 export interface WikiLinkItem {
@@ -148,6 +149,7 @@ export interface EntityRecord {
   slug: string;
   aliases: string[];
   status: 'active' | 'archived' | 'merged';
+  materialization_state: 'provisional' | 'materialized';
   created_at: string;
   updated_at: string;
   merged_into_entity_id?: string | null;
@@ -405,6 +407,7 @@ export interface EntityArtifactDetail extends EntityRecord {
   facts: ConsolidatedFactArtifact[];
   encounters: Record<string, unknown>[];
   resolution_decisions: EntityResolutionDecisionArtifact[];
+  maturity_assessments: IdentityMaturityAssessmentArtifact[];
   page?: { slug: string; exists: boolean } | null;
 }
 
@@ -539,6 +542,13 @@ export interface ArtifactOverview {
   };
   reconsolidation_proposals: Record<string, number>;
   organization_proposals: Record<string, number>;
+  review_inbox: {
+    identity_decisions: number;
+    organization_proposals: number;
+    reconsolidation_proposals: number;
+    provisional_entities: number;
+    maturity_review_required: number;
+  };
   archived_pages: number;
 }
 

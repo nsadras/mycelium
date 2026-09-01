@@ -15,21 +15,24 @@ import api, {
   type EntityResolutionDecisionArtifact,
   type EpisodeArtifact,
   type EpisodeArtifactSummary,
+  type IdentityMaturityAssessmentArtifact,
   type MemoryClaimArtifact,
   type MemoryClaimArtifactSummary,
+  type MemoryOntology,
   type OrganizationProposalArtifact,
   type ReconsolidationProposalArtifact,
   type StoredMemoryFile,
   type StoredMemoryFiles,
 } from '../../lib/api';
-import type { InspectorTab, SelectedFile } from './types';
+import type { InspectorTab, InspectorTarget, SelectedFile } from './types';
 
 function availableId<T>(current: string | null, items: T[], id: (item: T) => string) {
   return current && items.some((item) => id(item) === current) ? current : items[0] ? id(items[0]) : null;
 }
 
-export function useMemoryInspector(refreshKey: number) {
-  const [activeTab, setActiveTab] = useState<InspectorTab>('overview');
+export function useMemoryInspector(refreshKey: number, initialTarget?: InspectorTarget | null) {
+  const targetId = (tab: InspectorTab) => initialTarget?.tab === tab ? initialTarget.id ?? null : null;
+  const [activeTab, setActiveTab] = useState<InspectorTab>(initialTarget?.tab ?? 'overview');
   const [overview, setOverview] = useState<ArtifactOverview | null>(null);
   const [chatEpisodes, setChatEpisodes] = useState<ChatEpisodeState[]>([]);
   const [sources, setSources] = useState<ArtifactSourceSummary[]>([]);
@@ -40,19 +43,21 @@ export function useMemoryInspector(refreshKey: number) {
   const [identityDecisions, setIdentityDecisions] = useState<EntityResolutionDecisionArtifact[]>([]);
   const [organizationProposals, setOrganizationProposals] = useState<OrganizationProposalArtifact[]>([]);
   const [proposals, setProposals] = useState<ReconsolidationProposalArtifact[]>([]);
+  const [maturityAssessments, setMaturityAssessments] = useState<IdentityMaturityAssessmentArtifact[]>([]);
+  const [ontology, setOntology] = useState<MemoryOntology | null>(null);
   const [dreamRuns, setDreamRuns] = useState<DreamRunArtifactSummary[]>([]);
   const [files, setFiles] = useState<StoredMemoryFiles | null>(null);
 
-  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(targetId('sources'));
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [selectedEpisodeId, setSelectedEpisodeId] = useState<string | null>(null);
-  const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
-  const [selectedFactId, setSelectedFactId] = useState<string | null>(null);
-  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
-  const [selectedIdentityDecisionId, setSelectedIdentityDecisionId] = useState<string | null>(null);
-  const [selectedOrganizationProposalId, setSelectedOrganizationProposalId] = useState<string | null>(null);
-  const [selectedDreamRunId, setSelectedDreamRunId] = useState<string | null>(null);
-  const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null);
+  const [selectedClaimId, setSelectedClaimId] = useState<string | null>(targetId('claims'));
+  const [selectedFactId, setSelectedFactId] = useState<string | null>(targetId('facts'));
+  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(targetId('entities'));
+  const [selectedIdentityDecisionId, setSelectedIdentityDecisionId] = useState<string | null>(targetId('identity'));
+  const [selectedOrganizationProposalId, setSelectedOrganizationProposalId] = useState<string | null>(targetId('organization'));
+  const [selectedDreamRunId, setSelectedDreamRunId] = useState<string | null>(targetId('dream-runs'));
+  const [selectedProposalId, setSelectedProposalId] = useState<string | null>(targetId('reconsolidation'));
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
 
   const [selectedSource, setSelectedSource] = useState<ArtifactSource | null>(null);
@@ -72,6 +77,12 @@ export function useMemoryInspector(refreshKey: number) {
   const [reviewNote, setReviewNote] = useState('');
   const [reviewing, setReviewing] = useState<'approve' | 'reject' | null>(null);
   const [lifecycleApplying, setLifecycleApplying] = useState<'correct' | 'retract' | null>(null);
+
+  useEffect(() => {
+    api.get<MemoryOntology>('/memory/ontology')
+      .then((response) => setOntology(response.data))
+      .catch((loadError) => console.error('Failed to load memory ontology', loadError));
+  }, [refreshKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -119,8 +130,26 @@ export function useMemoryInspector(refreshKey: number) {
             setEntities(response.data);
             setSelectedEntityId((value) => availableId(value, response.data, (item) => item.entity_id));
           }
+        } else if (activeTab === 'review') {
+          const [identityResponse, organizationResponse, reconciliationResponse, entityResponse, maturityResponse] = await Promise.all([
+            api.get<EntityResolutionDecisionArtifact[]>('/memory/artifacts/entity-resolution-decisions?review_state=review_required'),
+            api.get<OrganizationProposalArtifact[]>('/memory/artifacts/organization-proposals?status=pending'),
+            api.get<ReconsolidationProposalArtifact[]>('/memory/artifacts/reconsolidation-proposals'),
+            api.get<EntityRecord[]>('/memory/artifacts/entities?status=active'),
+            api.get<IdentityMaturityAssessmentArtifact[]>('/memory/artifacts/identity-maturity-assessments'),
+          ]);
+          if (!cancelled) {
+            setIdentityDecisions(identityResponse.data);
+            setOrganizationProposals(organizationResponse.data.filter((item) => item.status === 'pending'));
+            setProposals(reconciliationResponse.data.filter((item) => item.status === 'pending'));
+            setEntities(entityResponse.data);
+            setMaturityAssessments(maturityResponse.data);
+          }
         } else if (activeTab === 'identity') {
-          const response = await api.get<EntityResolutionDecisionArtifact[]>('/memory/artifacts/entity-resolution-decisions');
+          const [response, entityResponse] = await Promise.all([
+            api.get<EntityResolutionDecisionArtifact[]>('/memory/artifacts/entity-resolution-decisions'),
+            api.get<EntityRecord[]>('/memory/artifacts/entities?status=active'),
+          ]);
           const ordered = [...response.data].sort((a, b) => {
             if (a.review_state === 'review_required' && b.review_state !== 'review_required') return -1;
             if (b.review_state === 'review_required' && a.review_state !== 'review_required') return 1;
@@ -128,6 +157,7 @@ export function useMemoryInspector(refreshKey: number) {
           });
           if (!cancelled) {
             setIdentityDecisions(ordered);
+            setEntities(entityResponse.data);
             setSelectedIdentityDecisionId((value) => availableId(value, ordered, (item) => item.decision_id));
           }
         } else if (activeTab === 'organization') {
@@ -289,7 +319,10 @@ export function useMemoryInspector(refreshKey: number) {
   const selectClaim = (id: string) => { setSelectedClaimId(id); selectTab('claims'); };
   const selectFact = (id: string) => { setSelectedFactId(id); selectTab('facts'); };
   const selectEntity = (id: string) => { setSelectedEntityId(id); selectTab('entities'); };
+  const selectIdentity = (id: string) => { setSelectedIdentityDecisionId(id); setReviewNote(''); selectTab('identity'); };
+  const selectOrganization = (id: string) => { setSelectedOrganizationProposalId(id); setReviewNote(''); selectTab('organization'); };
   const selectReconciliation = (id: string) => { setSelectedProposalId(id); selectTab('reconsolidation'); };
+  const selectDreamRun = (id: string) => { setSelectedDreamRunId(id); selectTab('dream-runs'); };
   const reviewProposal = async (decision: 'approve' | 'reject') => {
     if (!selectedProposal) return;
     setReviewing(decision);
@@ -318,11 +351,11 @@ export function useMemoryInspector(refreshKey: number) {
       setReviewing(null);
     }
   };
-  const reviewIdentityDecision = async (decision: 'approve' | 'reject') => {
+  const reviewIdentityDecision = async (decision: 'approve' | 'reject', overrides: Record<string, string | null> = {}) => {
     if (!selectedIdentityDecisionId) return;
     setReviewing(decision);
     try {
-      await api.post(`/memory/identity-decisions/${encodeURIComponent(selectedIdentityDecisionId)}/${decision}`, { reviewer_note: reviewNote.trim() || null });
+      await api.post(`/memory/identity-decisions/${encodeURIComponent(selectedIdentityDecisionId)}/${decision}`, { reviewer_note: reviewNote.trim() || null, ...overrides });
       setReviewNote('');
       setReloadKey((value) => value + 1);
     } catch (reviewError) {
@@ -332,11 +365,11 @@ export function useMemoryInspector(refreshKey: number) {
       setReviewing(null);
     }
   };
-  const correctClaim = async (text: string, reason: string) => {
+  const correctClaim = async (text: string, reason: string, fields: { claim_type?: string; predicate?: string | null; temporal_status?: string } = {}) => {
     if (!selectedClaimId) return;
     setLifecycleApplying('correct');
     try {
-      const response = await api.post<ClaimLifecycleResponse>(`/memory/claims/${encodeURIComponent(selectedClaimId)}/correct`, { text, reason });
+      const response = await api.post<ClaimLifecycleResponse>(`/memory/claims/${encodeURIComponent(selectedClaimId)}/correct`, { text, reason, ...fields });
       setSelectedClaimId(response.data.claim_ids[0] ?? null);
       setActiveTab('claims');
       setReloadKey((value) => value + 1);
@@ -362,12 +395,12 @@ export function useMemoryInspector(refreshKey: number) {
   };
 
   return {
-    activeTab, overview, filteredSources, filteredChatEpisodes, filteredEpisodes, filteredClaims,
+    activeTab, overview, ontology, entities, identityDecisions, organizationProposals, proposals, filteredSources, filteredChatEpisodes, filteredEpisodes, filteredClaims,
     filteredFacts, filteredEntities, filteredIdentityDecisions, filteredOrganizationProposals, filteredDreamRuns, filteredProposals, filteredFiles,
     selectedSourceId, selectedChatId, selectedEpisodeId, selectedClaimId, selectedFactId,
     selectedEntityId, selectedIdentityDecisionId, selectedOrganizationProposalId, selectedDreamRunId, selectedProposalId, selectedFile,
     selectedSource, selectedEpisode, selectedClaim, selectedFact, selectedEntity, selectedDreamRun,
-    selectedProposal,
+    selectedProposal, maturityAssessments,
     proposalIncomingClaims: selectedProposal ? selectedProposal.incoming_claim_ids.map((id) => proposalClaims[id]).filter(Boolean) : [],
     proposalTargetClaims: selectedProposal ? selectedProposal.target_claim_ids.map((id) => proposalClaims[id]).filter(Boolean) : [],
     selectedOrganizationProposal: organizationProposals.find((item) => item.proposal_id === selectedOrganizationProposalId) ?? null,
@@ -375,7 +408,7 @@ export function useMemoryInspector(refreshKey: number) {
     search, loading, detailLoading, error, reviewNote, reviewing, lifecycleApplying,
     setSelectedSourceId, setSelectedChatId, setSelectedEpisodeId, setSelectedClaimId, setSelectedFactId,
     setSelectedEntityId, setSelectedIdentityDecisionId, setSelectedOrganizationProposalId, setSelectedDreamRunId, setSelectedProposalId, setSelectedFile, setSearch,
-    setReloadKey, setReviewNote, selectSource, selectClaim, selectFact, selectEntity, selectReconciliation, selectTab, reviewProposal, reviewOrganizationProposal, reviewIdentityDecision, correctClaim, retractSource,
+    setReloadKey, setReviewNote, selectSource, selectClaim, selectFact, selectEntity, selectIdentity, selectOrganization, selectReconciliation, selectDreamRun, selectTab, reviewProposal, reviewOrganizationProposal, reviewIdentityDecision, correctClaim, retractSource,
     selectedChatEpisode: chatEpisodes.find((item) => item.session_id === selectedChatId) ?? null,
   };
 }

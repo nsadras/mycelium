@@ -8,6 +8,7 @@ import WikiExplorer from './components/WikiExplorer';
 import LogExplorer from './components/LogExplorer';
 import Sidebar from './components/Sidebar';
 import SporeBackground from './components/SporeBackground';
+import type { InspectorTarget } from './components/memory-inspector/types';
 import { idleStatus, type AssistantActivity, type AssistantStatus } from './lib/assistantStatus';
 
 const memoryOperationStatus: Record<
@@ -32,9 +33,15 @@ function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [runningMemoryOperation, setRunningMemoryOperation] = useState<string | null>(null);
   const [memoryRevision, setMemoryRevision] = useState(0);
+  const [memoryTarget, setMemoryTarget] = useState<InspectorTarget | null>(null);
   const [assistantStatus, setAssistantStatus] = useState<AssistantStatus>(idleStatus);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
+
+  const selectPrimaryTab = (tab: 'chat' | 'engram' | 'memory' | 'wiki' | 'logs') => {
+    if (tab === 'memory') setMemoryTarget(null);
+    setActiveTab(tab);
+  };
 
   useEffect(() => {
     const fetchSessions = async () => {
@@ -141,7 +148,7 @@ function App() {
       <SporeBackground />
       <Sidebar 
         activeTab={activeTab} 
-        setActiveTab={setActiveTab} 
+        setActiveTab={selectPrimaryTab}
         onDream={handleDream}
         onMemoryOperation={handleMemoryOperation}
         hasSelectedSession={Boolean(selectedSessionId)}
@@ -197,8 +204,8 @@ function App() {
           />
         )}
         {activeTab === 'engram' && <Engram setAssistantStatus={setAssistantStatus} />}
-        {activeTab === 'memory' && <MemoryInspector refreshKey={memoryRevision} />}
-        {activeTab === 'wiki' && <WikiExplorer />}
+        {activeTab === 'memory' && <MemoryInspector refreshKey={memoryRevision} target={memoryTarget} />}
+        {activeTab === 'wiki' && <WikiExplorer onInspectReview={(proposalId) => { setMemoryTarget({ tab: 'reconsolidation', id: proposalId }); setActiveTab('memory'); }} />}
         {activeTab === 'logs' && <LogExplorer />}
       </main>
     </div>

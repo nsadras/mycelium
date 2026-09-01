@@ -377,6 +377,11 @@ async def get_artifact_entity(entity_id: str):
                     entity_id=entity_id
                 )
             ],
+            "maturity_assessments": [
+                asdict(item)
+                for item in artifacts.list_identity_maturity_assessments()
+                if item.entity_id == entity_id
+            ],
             "page": (
                 {"slug": entity.slug, "exists": True}
                 if page_exists

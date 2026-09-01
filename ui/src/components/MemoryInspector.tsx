@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  ClipboardCheck,
   ChevronRight,
   Database,
   FileArchive,
@@ -15,15 +16,17 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from 'lucide-react';
-import type { InspectorTab } from './memory-inspector/types';
+import type { InspectorTab, InspectorTarget } from './memory-inspector/types';
 import { Badge, EmptyState, JsonBlock } from './memory-inspector/presentation';
 import { OverviewPanel } from './memory-inspector/OverviewPanel';
+import { ReviewInbox } from './memory-inspector/ReviewInbox';
 import { ClaimDetail, EntityDetail, FactDetail, IdentityDetail, OrganizationDetail, SourceDetail } from './memory-inspector/LifecycleDetails';
 import { useMemoryInspector } from './memory-inspector/useMemoryInspector';
 import { formatDate, humanize, percentage } from './memory-inspector/utils';
 
 const tabs: { id: InspectorTab; label: string; icon: typeof Database }[] = [
   { id: 'overview', label: 'Overview', icon: Database },
+  { id: 'review', label: 'Review inbox', icon: ClipboardCheck },
   { id: 'chat', label: 'Chat state', icon: Layers3 },
   { id: 'sources', label: 'Sources', icon: FileText },
   { id: 'episodes', label: 'Episodes', icon: Layers3 },
@@ -37,10 +40,16 @@ const tabs: { id: InspectorTab; label: string; icon: typeof Database }[] = [
   { id: 'files', label: 'Stored files', icon: FileArchive },
 ];
 
-export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: number }) {
+export default function MemoryInspector({ refreshKey = 0, target = null }: { refreshKey?: number; target?: InspectorTarget | null }) {
   const {
     activeTab,
     overview,
+    ontology,
+    entities,
+    identityDecisions,
+    organizationProposals,
+    proposals,
+    maturityAssessments,
     filteredSources,
     filteredChatEpisodes,
     filteredEpisodes,
@@ -100,14 +109,17 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
     selectClaim,
     selectFact,
     selectEntity,
+    selectIdentity,
+    selectOrganization,
     selectReconciliation,
+    selectDreamRun,
     selectTab,
     reviewProposal,
     reviewOrganizationProposal,
     reviewIdentityDecision,
     correctClaim,
     retractSource,
-  } = useMemoryInspector(refreshKey);
+  } = useMemoryInspector(refreshKey, target);
 
   if (loading) {
     return <div className="flex flex-1 items-center justify-center bg-white text-slate-500"><Loader2 className="mr-2 animate-spin" /> Loading memory artifacts</div>;
@@ -152,7 +164,9 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
 
       {activeTab === 'overview' && overview && <OverviewPanel overview={overview} />}
 
-      {activeTab !== 'overview' && (
+      {activeTab === 'review' && <ReviewInbox identities={identityDecisions.filter((item) => item.review_state === 'review_required')} organizations={organizationProposals.filter((item) => item.status === 'pending')} reconciliations={proposals.filter((item) => item.status === 'pending')} provisionalEntities={entities.filter((item) => item.status === 'active' && item.materialization_state === 'provisional')} maturityAssessments={maturityAssessments.filter((item) => item.effective_admission === 'review_required')} selectIdentity={selectIdentity} selectOrganization={selectOrganization} selectReconciliation={selectReconciliation} selectEntity={selectEntity} selectDreamRun={selectDreamRun} />}
+
+      {activeTab !== 'overview' && activeTab !== 'review' && (
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
           <aside className="flex h-64 w-full shrink-0 flex-col border-b border-slate-200 bg-slate-50 md:h-full md:w-80 md:border-b-0 md:border-r">
             <div className="border-b border-slate-200 p-3">
@@ -195,7 +209,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
               {activeTab === 'entities' && filteredEntities.map((entity) => (
                 <button key={entity.entity_id} onClick={() => setSelectedEntityId(entity.entity_id)} className={`w-full rounded-lg p-3 text-left ${selectedEntityId === entity.entity_id ? 'bg-indigo-100 text-indigo-900' : 'hover:bg-white'}`}>
                   <div className="truncate text-sm font-semibold">{entity.title}</div>
-                  <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span>{entity.entity_type}</span><span>{entity.status}</span></div>
+                  <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span>{entity.entity_type}</span><span>{entity.status} · {entity.materialization_state}</span></div>
                 </button>
               ))}
               {activeTab === 'identity' && filteredIdentityDecisions.map((decision) => (
@@ -268,13 +282,13 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
               </div>
             ) : <EmptyState>Select an episode.</EmptyState>)}
 
-            {activeTab === 'claims' && (selectedClaim ? <ClaimDetail claim={selectedClaim} selectSource={selectSource} selectFact={selectFact} selectReconciliation={selectReconciliation} correcting={lifecycleApplying === 'correct'} correctClaim={correctClaim} /> : <EmptyState>Select a claim.</EmptyState>)}
+            {activeTab === 'claims' && (selectedClaim ? <ClaimDetail claim={selectedClaim} claimTypes={ontology?.claim_types ?? []} selectSource={selectSource} selectFact={selectFact} selectIdentity={selectIdentity} selectReconciliation={selectReconciliation} correcting={lifecycleApplying === 'correct'} correctClaim={correctClaim} /> : <EmptyState>Select a claim.</EmptyState>)}
 
             {activeTab === 'facts' && (selectedFact ? <FactDetail fact={selectedFact} selectClaim={selectClaim} selectEntity={selectEntity} /> : <EmptyState>Select a consolidated fact.</EmptyState>)}
 
             {activeTab === 'entities' && (selectedEntity ? <EntityDetail entity={selectedEntity} selectFact={selectFact} selectClaim={selectClaim} /> : <EmptyState>Select an entity.</EmptyState>)}
 
-            {activeTab === 'identity' && (selectedIdentityDecision ? <IdentityDetail decision={selectedIdentityDecision} reviewNote={reviewNote} reviewing={reviewing} setReviewNote={setReviewNote} selectClaim={selectClaim} selectEntity={selectEntity} review={reviewIdentityDecision} /> : <EmptyState>Select an identity decision.</EmptyState>)}
+            {activeTab === 'identity' && (selectedIdentityDecision ? <IdentityDetail decision={selectedIdentityDecision} entities={entities} entityTypes={ontology?.entity_types ?? []} reviewNote={reviewNote} reviewing={reviewing} setReviewNote={setReviewNote} selectClaim={selectClaim} selectEntity={selectEntity} review={reviewIdentityDecision} /> : <EmptyState>Select an identity decision.</EmptyState>)}
 
             {activeTab === 'organization' && (selectedOrganizationProposal ? <OrganizationDetail proposal={selectedOrganizationProposal} reviewNote={reviewNote} reviewing={reviewing} setReviewNote={setReviewNote} selectClaim={selectClaim} selectEntity={selectEntity} review={reviewOrganizationProposal} /> : <EmptyState>Select an organization proposal.</EmptyState>)}
 

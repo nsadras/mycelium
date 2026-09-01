@@ -313,6 +313,7 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
     assert fact["claims"][0]["claim_id"] == "claim-test"
     assert fact["owner"]["entity_id"] == "you"
     assert entity["facts"][0]["fact_id"] == "fact-tea-preference"
+    assert entity["maturity_assessments"] == []
     assert {item["claim_id"] for item in entity["placements"]} == {
         "claim-old", "claim-test",
     }

@@ -2478,3 +2478,24 @@ one prose-similarity summary.
 - Validation: focused page/ontology/context/store tests passed **39/39**; the complete maintained suite passed
   **288/288 with 2 skipped**; Ruff, `git diff --check`, UI lint, and UI production build passed. The existing large
   frontend chunk warning remains.
+
+## 2026-08-31 — Inspectable frontend memory review and lifecycle controls
+
+- Memory Inspector now has one review inbox for pending identity, claim-reconciliation, and organization decisions.
+  Provisional identities and persisted maturity/verifier evidence are visible alongside the actionable queue without
+  presenting evidence-waiting states as approval tasks. Overview counts expose the same exact backend states.
+- Canonical correction now lets the user replace the claim text and its declared claim type, predicate, temporal
+  status, and reason. Source evidence can still be retracted with a reason. Claims link unresolved identity blockers
+  to the exact identity adjudication and wiki facts link non-authoritative rendering to the exact pending truth-change
+  proposal.
+- Identity review now exposes the complete downstream contract: selecting or creating the canonical identity,
+  correcting its ontology type and title, choosing independent/contained/event/context scope, choosing provisional
+  or materialized page admission, and selecting an exact parent where containment requires one. Approve and reject
+  both use the existing rerouting endpoint.
+- Entity inspection distinguishes canonical provisional identities from materialized pages and includes persisted
+  maturity proposals and verifier results. Entity detail API responses now attach those assessments by exact entity
+  ID. No prompt, ontology, or semantic decision rule changed, so an Ollama probe was not applicable.
+- Validation: UI lint and production build passed; focused artifact/wiki tests passed **26/26**; the complete
+  maintained suite passed **288/288 with 2 skipped**; `git diff --check` passed. Repository-root pytest additionally
+  collects an old generated benchmark test that imports the intentionally removed `routing_recall_index`; maintained
+  tests remain scoped to `tests/`. The existing large frontend chunk warning remains.

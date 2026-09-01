@@ -560,6 +560,25 @@ class DreamRunAudit:
 
 
 @dataclass
+class DreamCommit:
+    """Replayable write set for one Dream lifecycle commit."""
+
+    commit_id: str
+    run_id: str
+    status: str
+    payload: dict[str, Any]
+    created_at: str
+    updated_at: str
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in {"prepared", "applying", "complete"}:
+            raise ValueError(f"Unsupported Dream commit status: {self.status}")
+        if not self.commit_id or not self.run_id or not self.payload:
+            raise ValueError("Dream commits require identity and a replay payload")
+
+
+@dataclass
 class ReconsolidationProposal:
     proposal_id: str
     incoming_claim_ids: list[str]

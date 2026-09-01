@@ -381,6 +381,18 @@ class DreamPolicy:
         report: DreamReport,
         decisions: dict[str, DreamClaimDecision],
     ) -> None:
+        self.artifacts.persist_dream_audit(
+            self.build_audit(run_id, started_at, raw_entries, report, decisions)
+        )
+
+    @staticmethod
+    def build_audit(
+        run_id: str,
+        started_at: str,
+        raw_entries: list[LogEntry],
+        report: DreamReport,
+        decisions: dict[str, DreamClaimDecision],
+    ) -> DreamRunAudit:
         completed_at = datetime.now().astimezone().isoformat()
         if report.pending_source_ids and not report.completed_source_ids:
             status = "failed"
@@ -388,8 +400,7 @@ class DreamPolicy:
             status = "partial"
         else:
             status = "completed"
-        self.artifacts.persist_dream_audit(
-            DreamRunAudit(
+        return DreamRunAudit(
                 run_id=run_id,
                 started_at=started_at,
                 completed_at=completed_at,
@@ -414,4 +425,3 @@ class DreamPolicy:
                 failures=list(report.failures),
                 reconsolidation_proposal_ids=list(report.reconsolidation_proposal_ids),
             )
-        )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
 from dataclasses import replace
 from datetime import datetime
 
@@ -16,6 +17,7 @@ from mycelium.dream_policy import DreamPolicy
 from mycelium.consolidation import ClaimRouter
 from mycelium.consolidation import placement_from_route
 from mycelium.facts import FactResolver
+from mycelium.dream_commit import DreamCommitService
 from mycelium.materialization import PageMaterializer
 from mycelium.short_term import ShortTermMemoryQueue
 from mycelium.models import DreamReport
@@ -42,10 +44,13 @@ class DreamProcess:
         self.materializer = PageMaterializer(wiki, artifacts, config)
         self.fact_resolver = FactResolver(llm, artifacts)
         self.short_term = ShortTermMemoryQueue(artifacts, config.dream)
+        self.committer = DreamCommitService(artifacts, logs, self.materializer)
 
     async def run(
         self, *, dry_run: bool = False, include_deferred: bool = False
     ) -> DreamReport:
+        if not dry_run:
+            self.committer.recover_pending()
         started_at = datetime.now().astimezone().isoformat()
         run_id = f"dream-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
         queued_claims = self.short_term.claims_for_dream(
@@ -275,9 +280,6 @@ class DreamProcess:
             for route in successful_routes
         ]
         proposals = fact_result.proposals
-        if not dry_run:
-            for proposal in proposals:
-                self.artifacts.save_reconsolidation_proposal(proposal)
         materialized = self.materializer.stage(
             successful_routes,
             retained_new_entities,
@@ -320,88 +322,6 @@ class DreamProcess:
             entry.entry_id for entry in raw_entries if entry.entry_id in failed_source_ids
         ]
 
-        if not dry_run:
-            self.materializer.persist(materialized)
-            for record in retention_records:
-                self.artifacts.save_retention_record(record)
-            for identity_decision in (
-                routing.entity_decisions if routing is not None else []
-            ):
-                self.artifacts.save_entity_resolution_decision(identity_decision)
-            for assessment in (
-                routing.maturity_assessments if routing is not None else []
-            ):
-                self.artifacts.save_identity_maturity_assessment(assessment)
-            for reference in (
-                routing.entity_references if routing is not None else []
-            ):
-                self.artifacts.save_entity_reference(reference)
-            retained_new_entity_ids = {
-                entity.entity_id for entity in retained_new_entities
-            }
-            for encounter in (routing.encounters if routing is not None else []):
-                if encounter.entity_id in retained_new_entity_ids or any(
-                    entity.entity_id == encounter.entity_id
-                    for entity in self.artifacts.list_entities()
-                ):
-                    self.artifacts.save_encounter(encounter)
-            encounter_entity_ids = {
-                encounter.entity_id
-                for encounter in (routing.encounters if routing is not None else [])
-            }
-            if encounter_entity_ids:
-                encounter_pages = self.materializer.regenerate(encounter_entity_ids | {"you"})
-                materialized.changed_pages.update(encounter_pages.changed_pages)
-                materialized.created_slugs.update(encounter_pages.created_slugs)
-                materialized.updated_slugs.update(encounter_pages.updated_slugs)
-                materialized.deleted_slugs.update(encounter_pages.deleted_slugs)
-            now = datetime.now().astimezone().isoformat()
-            for route in successful_routes:
-                self.artifacts.save_scope_decision(ClaimScopeDecision(
-                    decision_id=f"scope-{uuid.uuid4().hex[:12]}",
-                    claim_id=route.claim_id,
-                    owner_entity_id=route.owner_entity_id,
-                    section_key=route.section_key,
-                    linked_entity_ids=list(route.linked_entity_ids),
-                    supporting_claim_ids=list(route.supporting_claim_ids),
-                    confidence=route.confidence,
-                    reason=route.reason,
-                    origin="automatic",
-                    dream_run_id=run_id,
-                    status="active",
-                    created_at=now,
-                    identity_blocker_ids=list(route.identity_blocker_ids),
-                ))
-            routed_entity_ids = {
-                route.owner_entity_id for route in successful_routes if route.owner_entity_id
-            }
-            pending_related_ids = {
-                entity_id for proposal in proposals for entity_id in proposal.affected_entity_ids
-                if entity_id not in routed_entity_ids
-            }
-            if pending_related_ids:
-                related_pages = self.materializer.regenerate(pending_related_ids)
-                materialized.changed_pages.update(related_pages.changed_pages)
-                materialized.created_slugs.update(related_pages.created_slugs)
-                materialized.updated_slugs.update(related_pages.updated_slugs)
-                materialized.deleted_slugs.update(related_pages.deleted_slugs)
-            if completed_source_ids:
-                self.logs.mark_consolidated(completed_source_ids)
-            self.artifacts.save_scope_cohort(ScopeCohort(
-                cohort_id=f"cohort-{uuid.uuid4().hex[:12]}",
-                dream_run_id=run_id,
-                claim_ids=sorted(incoming_claim_ids),
-                source_ids=sorted({
-                    provenance.source_id
-                    for claim_id in incoming_claim_ids
-                    for provenance in self.artifacts.get_claim(claim_id).provenance
-                }),
-                revision_entity_ids=sorted({
-                    entity.entity_id for entity in retained_new_entities
-                }),
-                created_at=now,
-            ))
-
         report = DreamReport(
             pages_updated=len(materialized.updated_slugs),
             pages_created=len(materialized.created_slugs),
@@ -414,5 +334,89 @@ class DreamProcess:
             ],
         )
         if not dry_run:
-            self.policy.persist_audit(run_id, started_at, raw_entries, report, decisions)
+            now = datetime.now().astimezone().isoformat()
+            retained_new_entity_ids = {
+                entity.entity_id for entity in retained_new_entities
+            }
+            existing_entity_ids = {
+                entity.entity_id for entity in self.artifacts.list_entities()
+            }
+            encounters = [
+                encounter
+                for encounter in (
+                    routing.encounters if routing is not None else []
+                )
+                if encounter.entity_id in retained_new_entity_ids
+                or encounter.entity_id in existing_entity_ids
+            ]
+            scope_decisions = [
+                ClaimScopeDecision(
+                    decision_id=(
+                        "scope-"
+                        + hashlib.sha256(
+                            f"{run_id}:{route.claim_id}".encode("utf-8")
+                        ).hexdigest()[:16]
+                    ),
+                    claim_id=route.claim_id,
+                    owner_entity_id=route.owner_entity_id,
+                    section_key=route.section_key,
+                    linked_entity_ids=list(route.linked_entity_ids),
+                    supporting_claim_ids=list(route.supporting_claim_ids),
+                    confidence=route.confidence,
+                    reason=route.reason,
+                    origin="automatic",
+                    dream_run_id=run_id,
+                    status="active",
+                    created_at=now,
+                    identity_blocker_ids=list(route.identity_blocker_ids),
+                )
+                for route in successful_routes
+            ]
+            cohort = ScopeCohort(
+                cohort_id=f"cohort-{run_id}",
+                dream_run_id=run_id,
+                claim_ids=sorted(incoming_claim_ids),
+                source_ids=sorted({
+                    provenance.source_id
+                    for claim_id in incoming_claim_ids
+                    for provenance in self.artifacts.get_claim(claim_id).provenance
+                }),
+                revision_entity_ids=sorted(retained_new_entity_ids),
+                created_at=now,
+            )
+            affected_entity_ids = {
+                *materialized.entities,
+                *[encounter.entity_id for encounter in encounters],
+                *[
+                    entity_id
+                    for proposal in proposals
+                    for entity_id in proposal.affected_entity_ids
+                ],
+                "you",
+            }
+            audit = self.policy.build_audit(
+                run_id, started_at, raw_entries, report, decisions
+            )
+            commit = self.committer.prepare(
+                run_id=run_id,
+                materialization=materialized,
+                retention_records=retention_records,
+                entity_decisions=(
+                    routing.entity_decisions if routing is not None else []
+                ),
+                maturity_assessments=(
+                    routing.maturity_assessments if routing is not None else []
+                ),
+                entity_references=(
+                    routing.entity_references if routing is not None else []
+                ),
+                encounters=encounters,
+                scope_decisions=scope_decisions,
+                proposals=proposals,
+                cohort=cohort,
+                affected_entity_ids=affected_entity_ids,
+                completed_log_entry_ids=completed_source_ids,
+                audit=audit,
+            )
+            self.committer.apply(commit)
         return report

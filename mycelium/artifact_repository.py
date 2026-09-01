@@ -20,6 +20,7 @@ from mycelium.artifact_models import (
     ClaimScopeDecision,
     ConsolidatedFact,
     DreamClaimDecision,
+    DreamCommit,
     DreamRunAudit,
     EntityEncounter,
     EntityRecord,
@@ -65,6 +66,7 @@ class ArtifactStore:
         self.episodes_dir = root / "episodes"
         self.claims_dir = root / "claims"
         self.dream_runs_dir = root / "dream-runs"
+        self.dream_commits_dir = root / "dream-commits"
         self.reconsolidation_proposals_dir = root / "reconsolidation-proposals"
         self.entities_dir = root / "entities"
         self.placements_dir = root / "placements"
@@ -84,6 +86,7 @@ class ArtifactStore:
             self.episodes_dir,
             self.claims_dir,
             self.dream_runs_dir,
+            self.dream_commits_dir,
             self.reconsolidation_proposals_dir,
             self.entities_dir,
             self.placements_dir,
@@ -539,6 +542,27 @@ class ArtifactStore:
     def save_dream_run(self, run: DreamRunAudit) -> None:
         _atomic_json(self.dream_runs_dir / f"{_safe_id(run.run_id)}.json", asdict(run))
 
+    def save_dream_commit(self, commit: DreamCommit) -> None:
+        _atomic_json(
+            self.dream_commits_dir / f"{_safe_id(commit.commit_id)}.json",
+            asdict(commit),
+        )
+
+    def get_dream_commit(self, commit_id: str) -> DreamCommit:
+        return DreamCommit(**self._read(
+            self.dream_commits_dir / f"{_safe_id(commit_id)}.json"
+        ))
+
+    def list_dream_commits(self, *, status: str | None = None) -> list[DreamCommit]:
+        commits = [
+            self.get_dream_commit(path.stem)
+            for path in sorted(self.dream_commits_dir.glob("*.json"))
+        ]
+        return [
+            commit for commit in commits
+            if status is None or commit.status == status
+        ]
+
     def get_dream_run(self, run_id: str) -> DreamRunAudit:
         data = self._read(self.dream_runs_dir / f"{_safe_id(run_id)}.json")
         data["claim_decisions"] = [
@@ -649,6 +673,7 @@ class ArtifactStore:
             "episodes": 0,
             "claims": 0,
             "dream_runs": 0,
+            "dream_commits": 0,
             "reconsolidation_proposals": 0,
             "entities": 0,
             "placements": 0,
@@ -669,6 +694,7 @@ class ArtifactStore:
             ("episodes", self.episodes_dir),
             ("claims", self.claims_dir),
             ("dream_runs", self.dream_runs_dir),
+            ("dream_commits", self.dream_commits_dir),
             ("reconsolidation_proposals", self.reconsolidation_proposals_dir),
             ("entities", self.entities_dir),
             ("placements", self.placements_dir),
@@ -705,8 +731,10 @@ class ArtifactStore:
             "encounters": 0,
             "consolidated_facts": 0,
             "claims_requeued": 0,
+            "dream_commits": 0,
         }
         for label, directory in (
+            ("dream_commits", self.dream_commits_dir),
             ("entities", self.entities_dir),
             ("placements", self.placements_dir),
             ("organization_proposals", self.organization_proposals_dir),

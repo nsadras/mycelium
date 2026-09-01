@@ -1054,6 +1054,7 @@ def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
         "episodes": 1,
         "claims": 1,
         "dream_runs": 0,
+        "dream_commits": 0,
         "reconsolidation_proposals": 1,
         "entities": 0,
         "placements": 0,

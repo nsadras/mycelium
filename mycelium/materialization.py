@@ -202,7 +202,13 @@ class PageMaterializer:
             for claim_id, claim in all_claims.items()
             if claim.status == "active"
         }
-        pending_ids = self.artifacts.pending_reconsolidation_claim_ids()
+        pending_proposals_by_claim: dict[str, set[str]] = defaultdict(set)
+        for proposal in self.artifacts.list_reconsolidation_proposals(status="pending"):
+            for claim_id in {
+                *proposal.incoming_claim_ids,
+                *proposal.target_claim_ids,
+            }:
+                pending_proposals_by_claim[claim_id].add(proposal.proposal_id)
         encounters = self.artifacts.list_encounters()
         facts = {
             fact.fact_id: fact
@@ -244,7 +250,8 @@ class PageMaterializer:
                     entity_facts.append(page_fact)
             existing = self._existing_page(entity)
             page = self._build_page(
-                entity, entity_claims, entities, placements, pending_ids,
+                entity, entity_claims, entities, placements,
+                pending_proposals_by_claim,
                 encounters, entity_facts, claims, existing,
             )
             if existing is None:
@@ -403,14 +410,15 @@ class PageMaterializer:
         owned: list[tuple[MemoryClaim, ClaimPlacement]],
         entities: dict[str, EntityRecord],
         placements: dict[str, ClaimPlacement],
-        pending_ids: set[str],
+        pending_proposals_by_claim: dict[str, set[str]],
         encounters: list,
         facts: list[ConsolidatedFact],
         claims_by_id: dict[str, MemoryClaim],
         existing: WikiPage | None,
     ) -> WikiPage:
         sections = self._sections(
-            entity, owned, entities, placements, pending_ids, encounters,
+            entity, owned, entities, placements, pending_proposals_by_claim,
+            encounters,
             facts, claims_by_id,
         )
         claims = [claim for claim, _ in owned]
@@ -456,7 +464,7 @@ class PageMaterializer:
         owned: list[tuple[MemoryClaim, ClaimPlacement]],
         entities: dict[str, EntityRecord],
         placements: dict[str, ClaimPlacement],
-        pending_ids: set[str],
+        pending_proposals_by_claim: dict[str, set[str]],
         encounters: list,
         facts: list[ConsolidatedFact],
         claims_by_id: dict[str, MemoryClaim],
@@ -464,7 +472,7 @@ class PageMaterializer:
         grouped: dict[str, list[ConsolidatedFact]] = defaultdict(list)
         review: list[ConsolidatedFact] = []
         for fact in facts:
-            if set(fact.member_claim_ids) & pending_ids:
+            if set(fact.member_claim_ids) & set(pending_proposals_by_claim):
                 review.append(fact)
             else:
                 grouped[fact.section_key].append(fact)
@@ -511,6 +519,7 @@ class PageMaterializer:
                 page_entity_id=entity.entity_id,
                 canonical_placements=placements,
                 chronological=(key == "timeline"),
+                pending_proposals_by_claim=pending_proposals_by_claim,
             )
             if key == "timeline" and encounter_items:
                 items.extend(encounter_items)
@@ -534,6 +543,7 @@ class PageMaterializer:
         page_entity_id: str,
         canonical_placements: dict[str, ClaimPlacement],
         chronological: bool,
+        pending_proposals_by_claim: dict[str, set[str]],
     ) -> list[dict]:
         if not values:
             return []
@@ -654,6 +664,11 @@ class PageMaterializer:
                     for linked_id in links
                 ],
                 "authoritative": not pending,
+                "reconciliation_proposal_ids": sorted({
+                    proposal_id
+                    for claim_id in member_ids
+                    for proposal_id in pending_proposals_by_claim.get(claim_id, set())
+                }),
             })
         return items
 

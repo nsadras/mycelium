@@ -328,6 +328,10 @@ def test_pending_conflict_is_withheld_from_authoritative_section(tmp_path):
     assert [section["key"] for section in page.sections] == ["needs_review"]
     assert {item["text"] for item in page.sections[0]["items"]} == {old.text, new.text}
     assert all(not item["authoritative"] for item in page.sections[0]["items"])
+    assert all(
+        item["reconciliation_proposal_ids"] == ["recon-1"]
+        for item in page.sections[0]["items"]
+    )
 
 
 def test_merge_reassigns_claims_and_keeps_redirect_identity(tmp_path):

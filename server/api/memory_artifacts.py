@@ -21,6 +21,11 @@ async def get_ontology():
 async def artifact_overview():
     mem = get_mem()
     claims = mem.artifacts.list_claims()
+    entities = mem.artifacts.list_entities()
+    identity_decisions = mem.artifacts.list_entity_resolution_decisions()
+    maturity_assessments = mem.artifacts.list_identity_maturity_assessments()
+    organization_proposals = mem.artifacts.list_organization_proposals()
+    reconsolidation_proposals = mem.artifacts.list_reconsolidation_proposals()
     coverage = mem.artifacts.coverage_report()
     coverage["suppressed_claims"] = len(claims) - coverage["active_claims"]
     placements = mem.artifacts.list_placements()
@@ -31,7 +36,7 @@ async def artifact_overview():
             disposition_counts.get(claim.dream_disposition, 0) + 1
         )
     proposal_status_counts: dict[str, int] = {}
-    for proposal in mem.artifacts.list_reconsolidation_proposals():
+    for proposal in reconsolidation_proposals:
         proposal_status_counts[proposal.status] = (
             proposal_status_counts.get(proposal.status, 0) + 1
         )
@@ -39,7 +44,7 @@ async def artifact_overview():
         "coverage": coverage,
         "lifecycle": {
             "consolidated_facts": len(mem.artifacts.list_consolidated_facts()),
-            "entities": len(mem.artifacts.list_entities()),
+            "entities": len(entities),
             "wiki_pages": len(mem.wiki.list_all()),
         },
         "short_term_memory": mem.short_term_memory_status().as_dict(),
@@ -59,12 +64,33 @@ async def artifact_overview():
         "organization_proposals": {
             status: sum(
                 proposal.status == status
-                for proposal in mem.artifacts.list_organization_proposals()
+                for proposal in organization_proposals
             )
             for status in {
                 proposal.status
-                for proposal in mem.artifacts.list_organization_proposals()
+                for proposal in organization_proposals
             }
+        },
+        "review_inbox": {
+            "identity_decisions": sum(
+                item.review_state == "review_required"
+                for item in identity_decisions
+            ),
+            "organization_proposals": sum(
+                item.status == "pending" for item in organization_proposals
+            ),
+            "reconsolidation_proposals": sum(
+                item.status == "pending" for item in reconsolidation_proposals
+            ),
+            "provisional_entities": sum(
+                item.status == "active"
+                and item.materialization_state == "provisional"
+                for item in entities
+            ),
+            "maturity_review_required": sum(
+                item.effective_admission == "review_required"
+                for item in maturity_assessments
+            ),
         },
         "archived_pages": len(list(mem.wiki.archive_dir.glob("*.md"))),
     }

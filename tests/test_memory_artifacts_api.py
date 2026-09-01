@@ -320,6 +320,13 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
     assert organization_proposals[0]["proposal_id"] == "organization-test"
     assert overview["reconsolidation_proposals"] == {"pending": 1}
     assert overview["organization_proposals"] == {"pending": 1}
+    assert overview["review_inbox"] == {
+        "identity_decisions": 1,
+        "organization_proposals": 1,
+        "reconsolidation_proposals": 1,
+        "provisional_entities": 0,
+        "maturity_review_required": 1,
+    }
     assert files["wiki_index"]["filename"] == "_index.md"
     assert "content" not in files["wiki_index"]
     assert files["wiki_index"]["size"] > 0

@@ -27,7 +27,14 @@ from mycelium.store import WikiStore
 from mycelium.ontology import default_section
 
 
-def claim(claim_id: str, text: str, claim_type: str = "state", modality: str = "speech"):
+def claim(
+    claim_id: str,
+    text: str,
+    claim_type: str = "state",
+    modality: str = "speech",
+    *,
+    facets: dict | None = None,
+):
     return MemoryClaim(
         claim_id=claim_id,
         text=text,
@@ -37,6 +44,7 @@ def claim(claim_id: str, text: str, claim_type: str = "state", modality: str = "
         claim_type=claim_type,
         evidence_modality=modality,
         confidence=0.9,
+        facets=facets or {},
     )
 
 
@@ -114,6 +122,68 @@ def test_typed_projection_is_ordered_traceable_and_research_is_labeled(tmp_path)
     assert fact["claim_ids"] == ["claim-status"]
     assert fact["sources"][0]["segment_ids"] == ["source-1#claim-status"]
     assert "external research" in page.sections[1]["items"][0]["qualifiers"]
+
+
+def test_timeline_uses_normalized_time_and_markdown_cites_exact_evidence(tmp_path):
+    artifacts, wiki, materializer, _, project = setup_store(tmp_path)
+    later = claim(
+        "claim-later",
+        "The launch review is next Friday.",
+        "event",
+        facets={"temporal": {
+            "expression": "next Friday",
+            "role": "event_time",
+            "status": "resolved",
+            "certainty": "exact",
+            "start": "2026-08-21",
+            "end": "2026-08-21",
+        }},
+    )
+    earlier = claim(
+        "claim-earlier",
+        "The planning session is tomorrow.",
+        "event",
+        facets={"temporal": {
+            "expression": "tomorrow",
+            "role": "event_time",
+            "status": "resolved",
+            "certainty": "exact",
+            "start": "2026-08-13",
+            "end": "2026-08-13",
+        }},
+    )
+    place(artifacts, later, project, "timeline")
+    place(artifacts, earlier, project, "timeline")
+
+    materializer.regenerate({project.entity_id})
+    page = wiki.get(project.slug)
+    items = page.sections[0]["items"]
+
+    assert [item["fact_id"] for item in items] == [
+        "fact-claim-earlier", "fact-claim-later"
+    ]
+    assert items[0]["event_time"] == "2026-08-13"
+    assert items[0]["temporal_evidence"][0]["expression"] == "tomorrow"
+    assert "event time: 2026-08-13" in items[0]["qualifiers"]
+    assert "[^e1]" in page.content
+    assert "[^e1]: `source-1` · `source-1#claim-earlier`" in page.content
+
+
+def test_you_page_omits_link_only_recent_changes(tmp_path):
+    artifacts, wiki, materializer, you, project = setup_store(tmp_path)
+    place(
+        artifacts,
+        claim("claim-status", "Mycelium is in active development."),
+        project,
+        "current_status",
+    )
+
+    materializer.regenerate({project.entity_id, you.entity_id})
+    page = wiki.get(you.slug)
+
+    assert "recent_changes" not in {
+        section["key"] for section in page.sections
+    }
 
 
 def test_project_role_has_one_canonical_placement_and_two_page_views(tmp_path):

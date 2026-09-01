@@ -104,6 +104,15 @@ export interface WikiFactItem {
   manual_text: boolean;
   qualifiers: string[];
   evidence_modality: string;
+  event_time?: string | null;
+  temporal_evidence: {
+    expression: string;
+    role?: string;
+    start?: string;
+    end?: string;
+    status?: string;
+    certainty?: string;
+  }[];
   sources: WikiSourceReference[];
   links: { entity_id: string; slug: string; title: string }[];
   authoritative: boolean;
@@ -123,6 +132,7 @@ export interface WikiEncounterItem {
   text: string;
   source_id: string;
   raw_log_entry_id?: string | null;
+  event_time?: string | null;
 }
 
 export interface WikiSection {

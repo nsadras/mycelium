@@ -89,11 +89,6 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "orientation links to important memory areas",
             ),
             _section(
-                "recent_changes",
-                "Recent Changes",
-                "notable changes to the user's situation",
-            ),
-            _section(
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",

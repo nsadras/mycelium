@@ -20,6 +20,7 @@ from mycelium.consolidation import ClaimRoute, placement_from_route
 from mycelium.models import Edge, UpdateLogEntry, WikiPage
 from mycelium.ontology import ENTITY_ONTOLOGY, PageType, project_role_section, section_pairs
 from mycelium.store import WikiStore
+from mycelium.temporal import temporal_record
 
 
 INDEX_GROUPS: tuple[tuple[PageType, str], ...] = tuple(
@@ -34,6 +35,20 @@ def sections_markdown(
 ) -> str:
     """Render structured sections, deduplicating shared roles across prompt pages."""
     lines: list[str] = []
+    evidence_labels: dict[tuple[str, tuple[str, ...]], str] = {}
+
+    def evidence_suffix(sources: list[dict]) -> str:
+        labels: list[str] = []
+        for source in sources:
+            key = (
+                str(source["source_id"]),
+                tuple(str(value) for value in source.get("segment_ids", [])),
+            )
+            label = evidence_labels.setdefault(key, f"e{len(evidence_labels) + 1}")
+            if label not in labels:
+                labels.append(label)
+        return "".join(f" [^{label}]" for label in labels)
+
     for section in sections:
         item_lines: list[str] = []
         for item in section["items"]:
@@ -41,7 +56,13 @@ def sections_markdown(
                 item_lines.append(f"- [[{item['slug']}]] — {item['title']}")
                 continue
             if item["kind"] == "encounter":
-                item_lines.append(f"- {item['text']} _(source: {item['source_id']})_")
+                item_lines.append(
+                    f"- {item['text']}"
+                    + evidence_suffix([{
+                        "source_id": item["source_id"],
+                        "segment_ids": [],
+                    }])
+                )
                 continue
             claim_ids = set(item.get("claim_ids", []))
             if (
@@ -57,12 +78,21 @@ def sections_markdown(
                 f"[[{link['slug']}]]" for link in item.get("links", [])
             )
             link_suffix = f" — {linked}" if linked else ""
-            item_lines.append(f"- {item['text']}{link_suffix}{suffix}")
+            item_lines.append(
+                f"- {item['text']}{link_suffix}{suffix}"
+                + evidence_suffix(item.get("sources", []))
+            )
         if not item_lines:
             continue
         if lines:
             lines.append("")
         lines.extend([f"## {section['title']}", "", *item_lines])
+    if evidence_labels:
+        lines.extend(["", "## Sources", ""])
+        for (source_id, segment_ids), label in evidence_labels.items():
+            segments = " · ".join(f"`{segment_id}`" for segment_id in segment_ids)
+            suffix = f" · {segments}" if segments else ""
+            lines.append(f"[^{label}]: `{source_id}`{suffix}")
     return "\n".join(lines).strip()
 
 
@@ -459,17 +489,13 @@ class PageMaterializer:
                     "text": f"Participated in {context}{date_suffix}.",
                     "source_id": encounter.source_id,
                     "raw_log_entry_id": encounter.raw_log_entry_id,
+                    "event_time": date or None,
                 })
 
         sections: list[dict] = []
         for key, title in section_pairs(entity.entity_type):
             if key == "memory_map" and entity.entity_type == "you":
                 links = self._memory_map(entities)
-                if links:
-                    sections.append({"key": key, "title": title, "items": links})
-                continue
-            if key == "recent_changes" and entity.entity_type == "you":
-                links = self._recent_entities(entities)
                 if links:
                     sections.append({"key": key, "title": title, "items": links})
                 continue
@@ -484,9 +510,16 @@ class PageMaterializer:
                 pending=(key == "needs_review"),
                 page_entity_id=entity.entity_id,
                 canonical_placements=placements,
+                chronological=(key == "timeline"),
             )
             if key == "timeline" and encounter_items:
                 items.extend(encounter_items)
+            if key == "timeline":
+                items.sort(key=lambda item: (
+                    not bool(item.get("event_time")),
+                    str(item.get("event_time") or ""),
+                    str(item.get("fact_id") or item.get("encounter_id") or ""),
+                ))
             if items:
                 sections.append({"key": key, "title": title, "items": items})
         return sections
@@ -500,11 +533,29 @@ class PageMaterializer:
         pending: bool,
         page_entity_id: str,
         canonical_placements: dict[str, ClaimPlacement],
+        chronological: bool,
     ) -> list[dict]:
         if not values:
             return []
         items = []
-        for fact in sorted(values, key=lambda value: (value.created_at, value.fact_id)):
+
+        def fact_order(value: ConsolidatedFact) -> tuple:
+            if not chronological:
+                return (value.created_at, value.fact_id)
+            starts = sorted(
+                str(temporal["start"])
+                for claim_id in value.member_claim_ids
+                if claim_id in claims_by_id
+                for temporal in [temporal_record(claims_by_id[claim_id].facets)]
+                if temporal and temporal.get("start")
+            )
+            return (
+                not bool(starts),
+                starts[0] if starts else value.created_at,
+                value.fact_id,
+            )
+
+        for fact in sorted(values, key=fact_order):
             members = [
                 claims_by_id[claim_id] for claim_id in fact.member_claim_ids
                 if claim_id in claims_by_id
@@ -522,6 +573,25 @@ class PageMaterializer:
                 qualifiers.append("external research")
             if pending:
                 qualifiers.append("pending reconciliation")
+            temporal_evidence = [
+                dict(temporal)
+                for member in members
+                for temporal in [temporal_record(member.facets)]
+                if temporal
+            ]
+            event_times = sorted({
+                str(temporal["start"])
+                for temporal in temporal_evidence
+                if temporal.get("start")
+            })
+            for temporal in temporal_evidence:
+                start = str(temporal.get("start") or "")
+                end = str(temporal.get("end") or start)
+                if not start:
+                    continue
+                normalized = start if not end or end == start else f"{start}–{end}"
+                role = str(temporal.get("role") or "date").replace("_", " ")
+                qualifiers.append(f"{role}: {normalized}")
             sources = [
                 {
                     "source_id": provenance.source_id,
@@ -572,6 +642,8 @@ class PageMaterializer:
                 ),
                 "qualifiers": list(dict.fromkeys(qualifiers)),
                 "evidence_modality": claim.evidence_modality,
+                "event_time": event_times[0] if event_times else None,
+                "temporal_evidence": temporal_evidence,
                 "sources": sources,
                 "links": [
                     {
@@ -599,29 +671,6 @@ class PageMaterializer:
             if entity.entity_id != "you"
             and entity.status == "active"
             and entity.materialization_state == "materialized"
-        ]
-
-    @staticmethod
-    def _recent_entities(entities: dict[str, EntityRecord]) -> list[dict]:
-        values = sorted(
-            (
-                entity for entity in entities.values()
-                if entity.entity_id != "you"
-                and entity.status == "active"
-                and entity.materialization_state == "materialized"
-            ),
-            key=lambda value: (value.updated_at, value.entity_id),
-            reverse=True,
-        )[:5]
-        return [
-            {
-                "kind": "link",
-                "entity_id": entity.entity_id,
-                "slug": entity.slug,
-                "title": entity.title,
-                "entity_type": entity.entity_type,
-            }
-            for entity in values
         ]
 
     def rebuild_index(

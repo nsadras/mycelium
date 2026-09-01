@@ -11,6 +11,10 @@ from mycelium.ollama import OllamaClient
 from mycelium.encoder import Encoder
 from mycelium.budget import count_tokens
 from mycelium.context import render_memory_context
+from mycelium.context_selection import (
+    AssistantContextCandidate,
+    AssistantContextSelector,
+)
 from mycelium.session import Session
 from mycelium.sources import source_contexts_for_pages
 from mycelium.page_search import PageSearchIndex
@@ -161,44 +165,15 @@ class Mycelium:
         pages = self.wiki.list_all()
         loaded_pages: list[WikiPage] = []
 
-        # Short-term claims are queryable immediately but are explicitly kept
-        # separate from the canonical wiki until Dream places them.
+        # Lexical and temporal operations generate bounded candidates only.
+        # A structured relevance decision below controls admission and may
+        # decline every candidate.
         recent_results = MemoryToolset(self.artifacts).search(
             query, limit=8, memory_tier="short_term"
         )
-        if recent_results:
-            lines = [
-                "These source-grounded claims are recent and unconsolidated. Treat them as",
-                "available episodic memory, not as a polished or conflict-resolved wiki summary.",
-                "",
-                *[
-                    f"- [{item['consolidation_status']}] {item['text']} "
-                    f"(claim: {item['claim_id']})"
-                    for item in recent_results
-                ],
-            ]
-            content = "\n".join(lines)
-            recent_page = WikiPage(
-                slug="_short-term-memory",
-                title="Recent, unconsolidated memory",
-                content=content,
-                created=datetime.now().astimezone(),
-                last_updated=datetime.now().astimezone(),
-                version=1,
-                confidence=0.7,
-                page_type=None,
-                tags=["short-term-memory"],
-                entity_id="_short-term-memory",
-            )
-            if count_tokens(render_memory_context([recent_page])) <= budget_tokens:
-                loaded_pages.append(recent_page)
-
-        selection_priorities = {
-            hit.slug: rank
-            for rank, hit in enumerate(
-                self._page_search.search(pages, query, limit=2), start=1
-            )
-        }
+        page_candidate_slugs = [
+            hit.slug for hit in self._page_search.search(pages, query, limit=8)
+        ]
 
         query_temporal = query_temporal_record(
             query, query_time or datetime.now().astimezone()
@@ -221,37 +196,71 @@ class Mycelium:
                     except FileNotFoundError:
                         entity = None
                     if entity and self.wiki.exists(entity.slug):
-                        selection_priorities[entity.slug] = 0
+                        if entity.slug not in page_candidate_slugs:
+                            page_candidate_slugs.insert(0, entity.slug)
                 temporal_source_ids.update(
                     provenance.raw_log_entry_id
                     for provenance in claim.provenance
                     if provenance.raw_log_entry_id
                 )
 
-        # Explicit page names augment the lexical candidates. Keeping this
-        # decision separate from BM25 prevents a named participant from
-        # displacing the page that best matches the question's subject.
-        import re
-        query_words = set(re.findall(r'\b\w+\b', query.lower()))
-        exclude_words = {"person", "place", "event", "topic", "project", "meeting", "convo", "chat", "page", "new"}
-
-        existing_slugs = {p.slug: p for p in pages}
-        selected_slugs = set(selection_priorities)
-
-        for slug, page in existing_slugs.items():
-            if slug in selected_slugs:
-                continue
-            slug_parts = set(slug.split("-")) - exclude_words
-            title_words = set(re.findall(r'\b\w+\b', page.title.lower())) - exclude_words
-            if (slug_parts & query_words) or (title_words & query_words):
-                selection_priorities[slug] = 8
-
-        selections = sorted(
-            ((priority, slug) for slug, priority in selection_priorities.items()),
-            key=lambda item: (item[0], item[1]),
+        pages_by_slug = {page.slug: page for page in pages}
+        candidates = [
+            AssistantContextCandidate(
+                candidate_id=f"claim:{item['claim_id']}",
+                kind="short_term_claim",
+                title=item["claim_id"],
+                content=item["text"],
+            )
+            for item in recent_results
+        ]
+        candidates.extend(
+            AssistantContextCandidate(
+                candidate_id=f"page:{slug}",
+                kind="wiki_page",
+                title=pages_by_slug[slug].title,
+                content=render_memory_context([pages_by_slug[slug]]),
+            )
+            for slug in page_candidate_slugs
+            if slug in pages_by_slug
         )
+        selected_ids = set(await AssistantContextSelector(self.llm).select(
+            query, candidates
+        ))
 
-        for priority, slug in selections:
+        selected_recent = [
+            item for item in recent_results
+            if f"claim:{item['claim_id']}" in selected_ids
+        ]
+        if selected_recent:
+            lines = [
+                "These source-grounded claims are recent and unconsolidated. Treat them as",
+                "available episodic memory, not as a polished or conflict-resolved wiki summary.",
+                "",
+                *[
+                    f"- [{item['consolidation_status']}] {item['text']} "
+                    f"(claim: {item['claim_id']})"
+                    for item in selected_recent
+                ],
+            ]
+            recent_page = WikiPage(
+                slug="_short-term-memory",
+                title="Recent, unconsolidated memory",
+                content="\n".join(lines),
+                created=datetime.now().astimezone(),
+                last_updated=datetime.now().astimezone(),
+                version=1,
+                confidence=0.7,
+                page_type=None,
+                tags=["short-term-memory"],
+                entity_id="_short-term-memory",
+            )
+            if count_tokens(render_memory_context([recent_page])) <= budget_tokens:
+                loaded_pages.append(recent_page)
+
+        for slug in page_candidate_slugs:
+            if f"page:{slug}" not in selected_ids:
+                continue
             if not self.wiki.exists(slug):
                 continue
                 

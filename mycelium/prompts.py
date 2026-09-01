@@ -145,6 +145,17 @@ def fact_candidate_selection_prompt(
     )
 
 
+def assistant_context_selection_prompt(
+    query: str,
+    candidates: str,
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "assistant/context_selection",
+        query=query,
+        candidates=candidates,
+    )
+
+
 def fact_grouping_prompt(
     owner: str,
     claims: str,

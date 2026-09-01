@@ -131,6 +131,35 @@ class GroundedAnswerOutput(BaseModel):
     evidence: str | None = None
 
 
+class AssistantContextCandidateDecisionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    disposition: Literal["include", "exclude"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+def assistant_context_selection_output_model(
+    candidate_aliases: Collection[str],
+) -> type[BaseModel]:
+    """Require an explicit relevance disposition for every supplied candidate."""
+    aliases = tuple(sorted({str(value) for value in candidate_aliases if value}))
+    if not aliases:
+        raise ValueError("Context selection requires at least one candidate alias")
+    decisions_model = create_model(
+        "AssistantContextCandidateDecisions",
+        __config__=ConfigDict(extra="forbid"),
+        **{
+            alias: (AssistantContextCandidateDecisionOutput, ...)
+            for alias in aliases
+        },
+    )
+    return create_model(
+        "AssistantContextSelectionOutput",
+        __config__=ConfigDict(extra="forbid"),
+        decisions=(decisions_model, ...),
+    )
+
+
 class SubjectGraphNodeOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     node_id: str = Field(pattern=r"^N[0-9]{3}$")

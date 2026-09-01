@@ -11,6 +11,17 @@ from mycelium.artifacts import ClaimPlacement, ClaimProvenance, EntityRecord, Me
 def temp_mycelium(tmp_path):
     mem = Mycelium(store_path=tmp_path / "store")
     mem.llm = AsyncMock()
+    async def include_all_context(_system, _user, schema, **_kwargs):
+        decisions_model = schema.model_fields["decisions"].annotation
+        return {"decisions": {
+            alias: {
+                "disposition": "include",
+                "confidence": 1.0,
+                "reason": "The fixture admits its generated retrieval candidate.",
+            }
+            for alias in decisions_model.model_fields
+        }}
+    mem.llm.call_structured.side_effect = include_all_context
     mem.encoder = AsyncMock()
     return mem
 
@@ -50,7 +61,7 @@ async def test_page_search_retrieves_named_entity(temp_mycelium):
 
 
 @pytest.mark.asyncio
-async def test_full_page_search_routes_without_llm(temp_mycelium):
+async def test_full_page_search_candidate_requires_structured_admission(temp_mycelium):
     now = datetime.now()
     temp_mycelium.wiki.save(WikiPage(
         slug="person-gina", title="Gina", content="Gina owns a clothing store.",
@@ -65,7 +76,30 @@ async def test_full_page_search_routes_without_llm(temp_mycelium):
     loaded = await temp_mycelium.load_context(query="Who owns the dance studio?")
 
     assert loaded[0].slug == "person-jon"
-    temp_mycelium.llm.call_structured.assert_not_awaited()
+    temp_mycelium.llm.call_structured.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_page_search_can_abstain_from_lexical_candidates(temp_mycelium):
+    now = datetime.now()
+    temp_mycelium.wiki.save(WikiPage(
+        slug="topic-paint", title="Tea Leaf Paint",
+        content="Tea Leaf Green is the selected wall color.",
+        created=now, last_updated=now, version=1, confidence=0.8,
+        page_type="topic", entity_id="topic-paint",
+    ))
+    temp_mycelium.llm.call_structured.side_effect = None
+    temp_mycelium.llm.call_structured.return_value = {"decisions": {
+        "M001": {
+            "disposition": "exclude",
+            "confidence": 1.0,
+            "reason": "A paint color does not answer a beverage preference question.",
+        },
+    }}
+
+    loaded = await temp_mycelium.load_context("Which tea does the user prefer?")
+
+    assert loaded == []
 
 
 @pytest.mark.asyncio

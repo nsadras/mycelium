@@ -61,8 +61,9 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
         "title": "Meeting",
         "transcript": "Transcript",
         "summaries": ["one", "two"],
-        "question": "question",
-        "payload": '{"answer": "value"}',
+            "question": "question",
+            "query": "query",
+            "payload": '{"answer": "value"}',
     }
     for name in templates:
         assert render_prompt(name, **shared_context)

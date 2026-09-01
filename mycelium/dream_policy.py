@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from mycelium.artifacts import (
@@ -123,6 +124,30 @@ class DreamPolicy:
         revision.entity_decisions = list(decisions.values())
         revision.encounters = list(encounters.values())
         revision.maturity_assessments = list(assessments.values())
+        initial_routes = {route.claim_id: route for route in initial.routes}
+        revision_routes = {route.claim_id: route for route in revision.routes}
+        merged_routes = []
+        for claim_id in dict.fromkeys([*revision_routes, *initial_routes]):
+            current = revision_routes.get(claim_id)
+            prior = initial_routes.get(claim_id)
+            if prior is None:
+                assert current is not None
+                merged_routes.append(current)
+                continue
+            if not prior.identity_blocker_ids:
+                merged_routes.append(current or prior)
+                continue
+            if current is None or current.placed:
+                merged_routes.append(prior)
+                continue
+            merged_routes.append(replace(
+                current,
+                identity_blocker_ids=tuple(sorted({
+                    *prior.identity_blocker_ids,
+                    *current.identity_blocker_ids,
+                })),
+            ))
+        revision.routes = merged_routes
         return revision
 
     def retention_records(

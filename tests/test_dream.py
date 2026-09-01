@@ -16,8 +16,10 @@ from mycelium.artifacts import (
 )
 from mycelium.config import Config
 from mycelium.consolidation import ClaimEvidence, ClaimRouter, slugify
+from mycelium.consolidation_models import ClaimRoute, RoutingResult
 from mycelium.consolidation_formatting import RoutingFormatter
 from mycelium.dream import DreamProcess
+from mycelium.dream_policy import DreamPolicy
 from mycelium.models import LogEntry
 from mycelium.store import LogStore, WikiStore
 from mycelium.structured_outputs import (
@@ -610,6 +612,31 @@ def test_claim_decision_batches_preserve_every_alias_once():
 
     assert [len(batch) for batch in batches] == [24, 2]
     assert [alias for batch in batches for alias in batch] == list(aliases)
+
+
+def test_revision_cannot_overwrite_identity_blocked_deferral():
+    initial = RoutingResult(routes=[ClaimRoute(
+        claim_id="claim-kitchen",
+        owner_entity_id=None,
+        section_key=None,
+        linked_entity_ids=(),
+        raw_log_entry_id="log-1",
+        reason="The kitchen identity requires review.",
+        disposition="deferred",
+        identity_blocker_ids=("identity-kitchen-review",),
+    )])
+    revision = RoutingResult(routes=[ClaimRoute(
+        claim_id="claim-kitchen",
+        owner_entity_id="person-rosa",
+        section_key=None,
+        linked_entity_ids=(),
+        raw_log_entry_id="log-1",
+        reason="The claim discusses project work.",
+    )])
+
+    merged = DreamPolicy.merge_revision_routing(initial, revision)
+
+    assert merged.routes == initial.routes
 
 
 @pytest.mark.asyncio
@@ -1635,6 +1662,7 @@ async def test_ambiguous_subject_type_is_deferred_for_identity_review(tmp_path):
     assert result.new_entities == []
     decision = result.entity_decisions[0]
     assert decision.review_state == "review_required"
+    assert result.routes[0].identity_blocker_ids == (decision.decision_id,)
     assert decision.proposed_type_reason == (
         "Project and Series are both materially plausible."
     )

@@ -658,6 +658,7 @@ class ClaimRouter:
 
         candidate_entities: dict[str, EntityRecord] = {}
         candidate_support: dict[str, tuple[str, ...]] = {}
+        identity_blockers_by_alias: dict[str, list[str]] = {}
         now = datetime.now().astimezone().isoformat()
         for node_id, node in graph_nodes.items():
             decision = entity_decisions[node_id]
@@ -724,7 +725,7 @@ class ClaimRouter:
             supporting_claim_ids = [item.claim.claim_id for item in supporting]
             parent_ref = str(decision["parent_entity"])
             parent_entity = candidate_entities.get(parent_ref) or planned.get(parent_ref)
-            result.entity_decisions.append(EntityResolutionDecision(
+            identity_decision = EntityResolutionDecision(
                 decision_id=f"identity-{uuid.uuid4().hex[:12]}",
                 decision_type="entity_creation",
                 entity_id=entity.entity_id if entity else None,
@@ -765,7 +766,16 @@ class ClaimRouter:
                 proposed_page_state=page_state,
                 proposed_aliases=[str(value) for value in node["aliases"]],
                 proposed_type_reason=str(node["type_reason"]),
-            ))
+            )
+            result.entity_decisions.append(identity_decision)
+            if (
+                identity_decision.review_state == "review_required"
+                or identity_decision.proposed_page_state == "provisional"
+            ):
+                for alias in support:
+                    identity_blockers_by_alias.setdefault(alias, []).append(
+                        identity_decision.decision_id
+                    )
             maturity = maturity_decisions[node_id]
             verdict = maturity_verdicts[node_id]
             result.maturity_assessments.append(IdentityMaturityAssessment(
@@ -862,6 +872,7 @@ class ClaimRouter:
         routing_decisions: dict[str, dict] = {
             alias: {
                 "route_kind": "deferred",
+                "identity_blocker_ids": identity_blockers_by_alias.get(alias, []),
                 "confidence": 1.0,
                 "reason": (
                     "A supporting identity decision requires user review."
@@ -932,6 +943,9 @@ class ClaimRouter:
                     "contextual_entities": [],
                     "relationship_kind": "none",
                     "supporting_claims": [],
+                    "identity_blocker_ids": routing.get(
+                        "identity_blocker_ids", []
+                    ),
                     "confidence": routing["confidence"],
                     "reason": routing["reason"],
                 }
@@ -945,6 +959,7 @@ class ClaimRouter:
                     "contextual_entities": [],
                     "relationship_kind": "project_role",
                     "supporting_claims": [],
+                    "identity_blocker_ids": [],
                     "confidence": routing["confidence"],
                     "reason": routing["reason"],
                 }
@@ -958,6 +973,7 @@ class ClaimRouter:
                     "contextual_entities": routing["contextual_entities"],
                     "relationship_kind": routing["relationship_kind"],
                     "supporting_claims": [],
+                    "identity_blocker_ids": [],
                     "confidence": routing["confidence"],
                     "reason": routing["reason"],
                 }
@@ -1158,6 +1174,9 @@ class ClaimRouter:
                 item.claim.claim_id, None, None, (), item.raw_log_entry_id,
                 str(decision["reason"]), disposition, supporting_ids,
                 float(decision["confidence"]),
+                identity_blocker_ids=tuple(sorted(set(
+                    decision.get("identity_blocker_ids", [])
+                ))),
             )
         owner_ref = str(decision["owner_entity"])
         owner = candidates.get(owner_ref) or entities.get(owner_ref)

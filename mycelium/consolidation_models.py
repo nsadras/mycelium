@@ -45,6 +45,7 @@ class ClaimRoute:
     object_entity_ids: tuple[str, ...] = ()
     contextual_entity_ids: tuple[str, ...] = ()
     relationship_kind: str | None = None
+    identity_blocker_ids: tuple[str, ...] = ()
 
     @property
     def placed(self) -> bool:

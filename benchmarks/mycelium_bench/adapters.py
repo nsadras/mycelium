@@ -332,6 +332,7 @@ class MyceliumMemorySystem:
                 metadata={
                     key: value for key, value in metadata.items() if value is not None
                 },
+                idempotency_key=f"benchmark:{self.case_id}:{session_id}",
             )
         self._encoded_batches += 1
         if self.dream_policy == "per-batch" and not self.replay_assignments:

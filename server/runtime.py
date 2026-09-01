@@ -202,7 +202,7 @@ async def append_tool_event_logs(
     mem = get_mem()
     created_entries = []
 
-    for tool_event in tool_events:
+    for event_index, tool_event in enumerate(tool_events, start=1):
         content = _format_tool_observation_content(
             chat_session_id=session_id,
             episode_id=episode_id,
@@ -233,6 +233,10 @@ async def append_tool_event_logs(
                 content=result or "Tool call produced no result.",
                 timestamp=occurred_at,
             )],
+            idempotency_key=(
+                f"tool-observation:{session_id}:{episode_id}:"
+                f"{turn_count}:{event_index}"
+            ),
         )
         created_entries.extend(entries)
 
@@ -311,6 +315,7 @@ async def flush_session_episode(session_id: str, reason: str = "manual") -> dict
                 episode["id"],
                 occurred_at=segments[0].timestamp,
                 segments=segments,
+                idempotency_key=f"chat-episode:{episode['id']}",
             )
         except Exception as exc:
             return {

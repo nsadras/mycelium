@@ -1064,6 +1064,7 @@ def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
         "entity_resolution_decisions": 0,
         "identity_maturity_assessments": 0,
         "identity_work_units": 0,
+        "ingestion_operations": 0,
         "scope_cohorts": 0,
         "encounters": 0,
         "consolidated_facts": 0,
@@ -1072,3 +1073,121 @@ def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
     assert store.list_episodes() == []
     assert store.list_claims() == []
     assert store.list_reconsolidation_proposals() == []
+
+
+@pytest.mark.asyncio
+async def test_ingestion_idempotency_key_reuses_one_source_episode_claim_and_log(
+    tmp_path,
+):
+    llm = AsyncMock()
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    logs = LogStore(tmp_path / "logs")
+    encoder = Encoder(llm, logs, Config.defaults(), artifacts)
+
+    async def response(_system, user, output_type, **_kwargs):
+        segment_id = user.split("[", 1)[1].split("]", 1)[0]
+        return staged_response(output_type, [{
+            "text": "Ava prefers tea.",
+            "claim_type": "preference",
+            "predicate": "prefers",
+            "about": [{"entity": "Ava"}],
+            "segment_ids": [segment_id],
+        }])
+
+    llm.call_structured.side_effect = response
+    first = await encoder.encode_session(
+        "Ava: I prefer tea.",
+        "session-1",
+        idempotency_key="chat-episode:session-1-ep-1",
+    )
+    second = await encoder.encode_session(
+        "Ava: I prefer tea.",
+        "session-1",
+        idempotency_key="chat-episode:session-1-ep-1",
+    )
+
+    assert first[0].entry_id == second[0].entry_id
+    assert len(logs.list_entries(days=None)) == 1
+    assert len(artifacts.list_sources()) == 1
+    assert len(artifacts.list_episodes()) == 1
+    assert len(artifacts.list_claims()) == 1
+    assert artifacts.list_ingestion_operations()[0].status == "complete"
+    assert llm.call_structured.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_ingestion_retry_repairs_claim_saved_before_episode_checkpoint(
+    tmp_path,
+    monkeypatch,
+):
+    llm = AsyncMock()
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    logs = LogStore(tmp_path / "logs")
+    encoder = Encoder(llm, logs, Config.defaults(), artifacts)
+
+    async def response(_system, user, output_type, **_kwargs):
+        segment_id = user.split("[", 1)[1].split("]", 1)[0]
+        return staged_response(output_type, [{
+            "text": "Ava prefers tea.",
+            "claim_type": "preference",
+            "about": [{"entity": "Ava"}],
+            "segment_ids": [segment_id],
+        }])
+
+    llm.call_structured.side_effect = response
+    original_save_claim = artifacts.save_claim
+    interrupted = False
+
+    def interrupt_after_claim_write(claim):
+        nonlocal interrupted
+        original_save_claim(claim)
+        if not interrupted:
+            interrupted = True
+            raise OSError("simulated interruption after claim write")
+
+    monkeypatch.setattr(artifacts, "save_claim", interrupt_after_claim_write)
+    await encoder.encode_session(
+        "Ava: I prefer tea.",
+        "session-1",
+        idempotency_key="chat-episode:session-1-ep-1",
+    )
+    assert artifacts.list_ingestion_operations()[0].status == "failed"
+    assert len(artifacts.list_claims()) == 1
+
+    monkeypatch.setattr(artifacts, "save_claim", original_save_claim)
+    await encoder.encode_session(
+        "Ava: I prefer tea.",
+        "session-1",
+        idempotency_key="chat-episode:session-1-ep-1",
+    )
+
+    episode = artifacts.list_episodes()[0]
+    assert artifacts.list_ingestion_operations()[0].status == "complete"
+    assert episode.extraction_status == "complete"
+    assert episode.claim_ids == [artifacts.list_claims()[0].claim_id]
+    assert len(artifacts.list_claims()) == 1
+    assert len(logs.list_entries(days=None)) == 1
+
+
+@pytest.mark.asyncio
+async def test_ingestion_key_rejects_different_input(tmp_path):
+    llm = AsyncMock()
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    encoder = Encoder(
+        llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts
+    )
+    llm.call_structured.side_effect = [
+        {"segment_dispositions": [{
+            "segment_id": "unused",
+            "disposition": "source_only",
+            "reason": "No durable claim.",
+        }]},
+    ]
+    await encoder.encode_session(
+        "First transcript", "session-1", idempotency_key="stable-key"
+    )
+
+    with pytest.raises(ValueError, match="different input"):
+        await encoder.encode_session(
+            "Different transcript", "session-1", idempotency_key="stable-key"
+        )

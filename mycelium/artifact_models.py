@@ -665,5 +665,34 @@ class EpisodeManifest:
     extraction_error: str | None = None
 
 
+@dataclass
+class IngestionOperation:
+    """Durable identity and progress for one source-ingestion request."""
+
+    operation_id: str
+    idempotency_key: str
+    input_digest: str
+    entry_id: str
+    source_id: str
+    episode_id: str
+    status: str
+    created_at: str
+    updated_at: str
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in {"planned", "extracting", "complete", "failed"}:
+            raise ValueError(f"Unsupported ingestion operation status: {self.status}")
+        if not all((
+            self.operation_id,
+            self.idempotency_key,
+            self.input_digest,
+            self.entry_id,
+            self.source_id,
+            self.episode_id,
+        )):
+            raise ValueError("Ingestion operations require stable identities")
+
+
 def _slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")

@@ -164,6 +164,7 @@ async def _ingest_episode(
         participants=[str(value) for value in episode.get("participants") or []],
         metadata=metadata,
         segments=segments,
+        idempotency_key=f"daily-driver:{episode['id']}",
     )
 
 

@@ -317,6 +317,7 @@ class Mycelium:
                     session_id,
                     occurred_at=segments[0].timestamp,
                     segments=segments,
+                    idempotency_key=f"session-transcript:{session_id}",
                 )
             
     def short_term_memory_status(

@@ -1,7 +1,10 @@
 import datetime
+import hashlib
+import json
 import re
 from typing import Any, List
 import uuid
+from dataclasses import asdict
 
 from mycelium.models import LogEntry
 from mycelium.store import LogStore
@@ -18,6 +21,7 @@ from mycelium.artifacts import (
     EpisodeManifest,
     ExtractionBatchState,
     ExtractionSegmentDisposition,
+    IngestionOperation,
     MemoryClaim,
     SourceDocument,
     SourceSegment,
@@ -48,14 +52,51 @@ class Encoder:
         participants: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         segments: list[SourceSegment | dict[str, Any]] | None = None,
+        idempotency_key: str | None = None,
     ) -> List[LogEntry]:
-        now = datetime.datetime.now()
-        date_str = now.strftime("%Y-%m-%d")
-        short_id = str(uuid.uuid4())[:8]
-        entry_id = f"{date_str}#session-{short_id}"
         content = transcript.strip()
         if not content:
             return []
+
+        input_digest = self._input_digest(
+            content,
+            session_id,
+            source_type,
+            occurred_at,
+            participants,
+            metadata,
+            segments,
+        )
+        ingestion_key = idempotency_key or f"generated:{uuid.uuid4()}"
+        operation_suffix = hashlib.sha256(
+            ingestion_key.encode("utf-8")
+        ).hexdigest()[:16]
+        operation_id = f"ingest-{operation_suffix}"
+        try:
+            operation = self.artifacts.get_ingestion_operation(operation_id)
+        except FileNotFoundError:
+            now = datetime.datetime.now().astimezone()
+            operation = IngestionOperation(
+                operation_id=operation_id,
+                idempotency_key=ingestion_key,
+                input_digest=input_digest,
+                entry_id=f"{now:%Y-%m-%d}#session-{operation_suffix}",
+                source_id=f"source-{operation_suffix}",
+                episode_id=f"episode-{operation_suffix}",
+                status="planned",
+                created_at=now.isoformat(),
+                updated_at=now.isoformat(),
+            )
+            self.artifacts.save_ingestion_operation(operation)
+        if operation.idempotency_key != ingestion_key:
+            raise ValueError("Ingestion operation ID collision")
+        if operation.input_digest != input_digest:
+            raise ValueError(
+                "An ingestion idempotency key cannot be reused for different input"
+            )
+
+        now = datetime.datetime.fromisoformat(operation.created_at)
+        entry_id = operation.entry_id
 
         entry = LogEntry(
             entry_id=entry_id,
@@ -71,34 +112,100 @@ class Encoder:
         )
 
         self.log_store.append(entry)
-        source_id = f"source-{short_id}"
-        normalized_segments = self._normalize_segments(
-            segments, content, source_id, source_type
+        try:
+            source = self.artifacts.get_source(operation.source_id)
+        except FileNotFoundError:
+            normalized_segments = self._normalize_segments(
+                segments, content, operation.source_id, source_type
+            )
+            participant_names = participants or list(dict.fromkeys(
+                segment.speaker
+                for segment in normalized_segments
+                if segment.speaker
+            ))
+            occurred = (
+                occurred_at.isoformat()
+                if isinstance(occurred_at, datetime.datetime)
+                else occurred_at
+            )
+            source = SourceDocument(
+                source_id=operation.source_id,
+                source_type=source_type,
+                session_id=session_id,
+                recorded_at=now.isoformat(),
+                occurred_at=occurred,
+                participants=participant_names,
+                segments=normalized_segments,
+                raw_log_entry_id=entry_id,
+                metadata={**(metadata or {}), "ingestion_operation_id": operation_id},
+            )
+            self.artifacts.save_source(source)
+        try:
+            episode = self.artifacts.get_episode(operation.episode_id)
+        except FileNotFoundError:
+            episode = EpisodeManifest(
+                episode_id=operation.episode_id,
+                source_id=source.source_id,
+                source_type=source.source_type,
+                occurred_at=source.occurred_at,
+                participants=list(source.participants),
+                segment_ids=[segment.segment_id for segment in source.segments],
+            )
+            self.artifacts.save_episode(episode)
+
+        operation.status = "extracting"
+        operation.error = None
+        operation.updated_at = datetime.datetime.now().astimezone().isoformat()
+        self.artifacts.save_ingestion_operation(operation)
+        try:
+            await self._extract_claims(source, episode)
+        except Exception as exc:
+            operation.status = "failed"
+            operation.error = f"{type(exc).__name__}: {exc}"
+            operation.updated_at = datetime.datetime.now().astimezone().isoformat()
+            self.artifacts.save_ingestion_operation(operation)
+            raise
+        operation.status = (
+            "complete" if episode.extraction_status == "complete" else "failed"
         )
-        participant_names = participants or list(dict.fromkeys(
-            segment.speaker for segment in normalized_segments if segment.speaker
-        ))
-        occurred = occurred_at.isoformat() if isinstance(occurred_at, datetime.datetime) else occurred_at
-        source = SourceDocument(
-            source_id=source_id,
-            source_type=source_type,
-            session_id=session_id,
-            recorded_at=now.isoformat(),
-            occurred_at=occurred,
-            participants=participant_names,
-            segments=normalized_segments,
-            raw_log_entry_id=entry_id,
-            metadata=metadata or {},
-        )
-        episode = EpisodeManifest(
-            episode_id=f"episode-{short_id}", source_id=source_id, source_type=source_type,
-            occurred_at=occurred, participants=participant_names,
-            segment_ids=[segment.segment_id for segment in normalized_segments],
-        )
-        self.artifacts.save_source(source)
-        self.artifacts.save_episode(episode)
-        await self._extract_claims(source, episode)
+        operation.error = episode.extraction_error
+        operation.updated_at = datetime.datetime.now().astimezone().isoformat()
+        self.artifacts.save_ingestion_operation(operation)
         return [entry]
+
+    @staticmethod
+    def _input_digest(
+        transcript: str,
+        session_id: str,
+        source_type: str,
+        occurred_at: str | datetime.datetime | None,
+        participants: list[str] | None,
+        metadata: dict[str, Any] | None,
+        segments: list[SourceSegment | dict[str, Any]] | None,
+    ) -> str:
+        serialized_segments = []
+        for item in segments or []:
+            value = asdict(item) if isinstance(item, SourceSegment) else dict(item)
+            value.pop("segment_id", None)
+            value.pop("index", None)
+            serialized_segments.append(value)
+        payload = {
+            "transcript": transcript,
+            "session_id": session_id,
+            "source_type": source_type,
+            "occurred_at": (
+                occurred_at.isoformat()
+                if isinstance(occurred_at, datetime.datetime)
+                else occurred_at
+            ),
+            "participants": participants or [],
+            "metadata": metadata or {},
+            "segments": serialized_segments,
+        }
+        encoded = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def _normalize_segments(
         self,
@@ -286,7 +393,9 @@ class Encoder:
                     response = claim_model.model_validate(response).model_dump(
                         exclude_none=True
                     )
-                    staged_claims = self._build_extracted_claims(source, response)
+                    staged_claims = self._build_extracted_claims(
+                        source, response, state.batch_id
+                    )
                     for claim in staged_claims:
                         self.artifacts.save_claim(claim)
                         claim_ids.append(claim.claim_id)
@@ -366,10 +475,11 @@ class Encoder:
         self,
         source: SourceDocument,
         response: dict[str, Any],
+        batch_id: str,
     ) -> list[MemoryClaim]:
         """Build a validated batch before any claim in it is persisted."""
         claims: list[MemoryClaim] = []
-        for raw in response["claims"]:
+        for claim_index, raw in enumerate(response["claims"], start=1):
             claim_text = str(raw["text"]).strip()
             segment_ids = list(dict.fromkeys(raw["segment_ids"]))
             source_speakers = list(dict.fromkeys(
@@ -406,7 +516,12 @@ class Encoder:
                 else None if timestamped_segments else source.occurred_at
             )
             claims.append(MemoryClaim(
-                claim_id=f"claim-{uuid.uuid4().hex[:12]}",
+                claim_id=(
+                    "claim-"
+                    + hashlib.sha256(
+                        f"{source.source_id}:{batch_id}:{claim_index}".encode("utf-8")
+                    ).hexdigest()[:16]
+                ),
                 text=claim_text,
                 about=about,
                 provenance=[ClaimProvenance(

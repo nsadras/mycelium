@@ -1,4 +1,7 @@
 import shutil
+import os
+import tempfile
+import threading
 import frontmatter
 from datetime import datetime
 from pathlib import Path
@@ -183,26 +186,40 @@ class LogStore:
     def __init__(self, logs_dir: Path):
         self.logs_dir = logs_dir
         self.logs_dir.mkdir(parents=True, exist_ok=True)
+        self._write_lock = threading.RLock()
 
     def append(self, entry: LogEntry) -> None:
         # e.g., entry.entry_id = "2026-05-10#entry-1", we want the date part
         date_str = entry.entry_id.split("#")[0]
         path = self.logs_dir / f"{date_str}.md"
         
-        is_new = not path.exists()
-        
-        with open(path, "a", encoding="utf-8") as f:
-            if is_new:
-                f.write(f"# Log: {date_str}\n\n")
-            
-            entry_name = entry.entry_id.split("#")[1] if "#" in entry.entry_id else entry.entry_id
-            
-            f.write(f"## {entry_name} — {entry.timestamp.strftime('%H:%M')}\n\n")
-            f.write(f"**session_id:** {entry.session_id}  \n")
-            f.write(f"**durability:** {entry.durability}  \n")
-            f.write(f"**consolidated:** {str(entry.consolidated).lower()}  \n")
-            f.write("\n")
-            f.write(entry.content.strip() + "\n\n---\n\n")
+        with self._write_lock:
+            existing = path.read_text(encoding="utf-8") if path.exists() else ""
+            entry_name = (
+                entry.entry_id.split("#")[1]
+                if "#" in entry.entry_id
+                else entry.entry_id
+            )
+            header_prefix = f"## {entry_name} — "
+            if any(line.startswith(header_prefix) for line in existing.splitlines()):
+                return
+            content = existing or f"# Log: {date_str}\n\n"
+            content += (
+                f"## {entry_name} — {entry.timestamp.strftime('%H:%M')}\n\n"
+                f"**session_id:** {entry.session_id}  \n"
+                f"**durability:** {entry.durability}  \n"
+                f"**consolidated:** {str(entry.consolidated).lower()}  \n"
+                "\n"
+                f"{entry.content.strip()}\n\n---\n\n"
+            )
+            fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(content)
+                os.replace(temp_name, path)
+            finally:
+                if os.path.exists(temp_name):
+                    os.unlink(temp_name)
 
     def get_unconsolidated(self, days: int | None = 7) -> List[LogEntry]:
         return [entry for entry in self.list_entries(days=days) if not entry.consolidated]

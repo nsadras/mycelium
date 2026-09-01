@@ -208,13 +208,23 @@ export interface ArtifactSourceSummary {
   occurred_at?: string | null;
   participants: string[];
   segment_count: number;
+  status: 'active' | 'retracted';
+  retracted_at?: string | null;
+  retraction_reason?: string | null;
 }
 
 export interface ArtifactSource extends Omit<ArtifactSourceSummary, 'segment_count'> {
   raw_log_entry_id?: string | null;
   metadata: Record<string, unknown>;
   segments: ArtifactSourceSegment[];
-  segment_accounting: Record<string, 'claimed' | 'ignored' | 'unaccounted'>;
+  segment_accounting: Record<string, 'claimed' | 'source_only' | 'unaccounted'>;
+}
+
+export interface ClaimLifecycleResponse {
+  claim_ids: string[];
+  source_ids: string[];
+  pages_updated: string[];
+  pages_deleted: string[];
 }
 
 export interface EpisodeArtifactSummary {

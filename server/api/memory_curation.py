@@ -4,6 +4,10 @@ from dataclasses import asdict
 
 from fastapi import APIRouter, HTTPException
 
+from mycelium.claim_lifecycle import (
+    ClaimLifecycleConflictError,
+    ClaimLifecycleService,
+)
 from mycelium.organization import (
     EntityCurationService,
     FactCurationService,
@@ -12,6 +16,7 @@ from mycelium.organization import (
 )
 from mycelium.reconsolidation import ReconsolidationReviewService, ReviewConflictError
 from server.api.memory_contracts import (
+    ClaimCorrectionRequest,
     EntityMergeRequest,
     EntitySplitRequest,
     EntityUpdateRequest,
@@ -22,6 +27,7 @@ from server.api.memory_contracts import (
     IdentityReviewRequest,
     PlacementUpdateRequest,
     ProposalReviewRequest,
+    SourceRetractionRequest,
 )
 from server.runtime import get_mem, run_dream as run_dream_process
 
@@ -49,6 +55,15 @@ def _fact_curation_service():
     return FactCurationService(mem.artifacts, mem.dream_process.materializer)
 
 
+def _claim_lifecycle_service():
+    mem = get_mem()
+    return ClaimLifecycleService(
+        mem.artifacts,
+        mem.dream_process.materializer,
+        mem.dream_process.fact_resolver,
+    )
+
+
 def _fact_curation_response(result):
     return {
         "facts": [asdict(fact) for fact in result.facts],
@@ -64,6 +79,41 @@ def _curation_response(result):
         "pages_updated": result.pages_updated,
         "pages_deleted": result.pages_deleted,
     }
+
+
+def _claim_lifecycle_response(result):
+    return asdict(result)
+
+
+@router.post("/claims/{claim_id}/correct")
+async def correct_claim(claim_id: str, req: ClaimCorrectionRequest):
+    try:
+        result = await _claim_lifecycle_service().correct_claim(
+            claim_id,
+            req.text,
+            reason=req.reason,
+            claim_type=req.claim_type,
+            predicate=req.predicate,
+            temporal_status=req.temporal_status,
+        )
+        return _claim_lifecycle_response(result)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Claim not found") from exc
+    except (ClaimLifecycleConflictError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/sources/{source_id}/retract")
+async def retract_source(source_id: str, req: SourceRetractionRequest):
+    try:
+        result = await _claim_lifecycle_service().retract_source(
+            source_id, reason=req.reason
+        )
+        return _claim_lifecycle_response(result)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Source not found") from exc
+    except (ClaimLifecycleConflictError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.patch("/entities/{entity_id}")

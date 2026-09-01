@@ -59,6 +59,18 @@ class FactEditRequest(BaseModel):
     reason: str = "Manual fact correction"
 
 
+class ClaimCorrectionRequest(BaseModel):
+    text: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    claim_type: str | None = None
+    predicate: str | None = None
+    temporal_status: str | None = None
+
+
+class SourceRetractionRequest(BaseModel):
+    reason: str = Field(min_length=1)
+
+
 class FactMoveRequest(BaseModel):
     owner_entity_id: str
     section_key: str

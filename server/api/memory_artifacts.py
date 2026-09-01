@@ -96,6 +96,9 @@ async def list_artifact_sources():
             "occurred_at": source.occurred_at,
             "participants": source.participants,
             "segment_count": len(source.segments),
+            "status": source.status,
+            "retracted_at": source.retracted_at,
+            "retraction_reason": source.retraction_reason,
         }
         for source in get_mem().artifacts.list_sources()
     ]

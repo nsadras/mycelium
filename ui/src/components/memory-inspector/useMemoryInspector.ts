@@ -5,6 +5,7 @@ import api, {
   type ArtifactSource,
   type ArtifactSourceSummary,
   type ChatEpisodeState,
+  type ClaimLifecycleResponse,
   type ConsolidatedFactArtifactSummary,
   type ConsolidatedFactDetail,
   type DreamRunArtifact,
@@ -70,6 +71,7 @@ export function useMemoryInspector(refreshKey: number) {
   const [reloadKey, setReloadKey] = useState(0);
   const [reviewNote, setReviewNote] = useState('');
   const [reviewing, setReviewing] = useState<'approve' | 'reject' | null>(null);
+  const [lifecycleApplying, setLifecycleApplying] = useState<'correct' | 'retract' | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -330,6 +332,34 @@ export function useMemoryInspector(refreshKey: number) {
       setReviewing(null);
     }
   };
+  const correctClaim = async (text: string, reason: string) => {
+    if (!selectedClaimId) return;
+    setLifecycleApplying('correct');
+    try {
+      const response = await api.post<ClaimLifecycleResponse>(`/memory/claims/${encodeURIComponent(selectedClaimId)}/correct`, { text, reason });
+      setSelectedClaimId(response.data.claim_ids[0] ?? null);
+      setActiveTab('claims');
+      setReloadKey((value) => value + 1);
+    } catch (lifecycleError) {
+      console.error('Failed to correct canonical claim', lifecycleError);
+      setError('The canonical claim correction could not be applied.');
+    } finally {
+      setLifecycleApplying(null);
+    }
+  };
+  const retractSource = async (reason: string) => {
+    if (!selectedSourceId) return;
+    setLifecycleApplying('retract');
+    try {
+      await api.post<ClaimLifecycleResponse>(`/memory/sources/${encodeURIComponent(selectedSourceId)}/retract`, { reason });
+      setReloadKey((value) => value + 1);
+    } catch (lifecycleError) {
+      console.error('Failed to retract source evidence', lifecycleError);
+      setError('The source retraction could not be applied.');
+    } finally {
+      setLifecycleApplying(null);
+    }
+  };
 
   return {
     activeTab, overview, filteredSources, filteredChatEpisodes, filteredEpisodes, filteredClaims,
@@ -342,10 +372,10 @@ export function useMemoryInspector(refreshKey: number) {
     proposalTargetClaims: selectedProposal ? selectedProposal.target_claim_ids.map((id) => proposalClaims[id]).filter(Boolean) : [],
     selectedOrganizationProposal: organizationProposals.find((item) => item.proposal_id === selectedOrganizationProposalId) ?? null,
     selectedIdentityDecision: identityDecisions.find((item) => item.decision_id === selectedIdentityDecisionId) ?? null,
-    search, loading, detailLoading, error, reviewNote, reviewing,
+    search, loading, detailLoading, error, reviewNote, reviewing, lifecycleApplying,
     setSelectedSourceId, setSelectedChatId, setSelectedEpisodeId, setSelectedClaimId, setSelectedFactId,
     setSelectedEntityId, setSelectedIdentityDecisionId, setSelectedOrganizationProposalId, setSelectedDreamRunId, setSelectedProposalId, setSelectedFile, setSearch,
-    setReloadKey, setReviewNote, selectSource, selectClaim, selectFact, selectEntity, selectReconciliation, selectTab, reviewProposal, reviewOrganizationProposal, reviewIdentityDecision,
+    setReloadKey, setReviewNote, selectSource, selectClaim, selectFact, selectEntity, selectReconciliation, selectTab, reviewProposal, reviewOrganizationProposal, reviewIdentityDecision, correctClaim, retractSource,
     selectedChatEpisode: chatEpisodes.find((item) => item.session_id === selectedChatId) ?? null,
   };
 }

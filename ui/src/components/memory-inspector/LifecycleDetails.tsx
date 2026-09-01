@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { ChevronRight, ThumbsDown, ThumbsUp } from 'lucide-react';
 
 import type {
+  ArtifactSource,
   ConsolidatedFactDetail,
   EntityArtifactDetail,
   EntityResolutionDecisionArtifact,
@@ -15,9 +17,13 @@ interface ClaimDetailProps {
   selectSource: (id: string) => void;
   selectFact: (id: string) => void;
   selectReconciliation: (id: string) => void;
+  correcting: boolean;
+  correctClaim: (text: string, reason: string) => Promise<void>;
 }
 
-export function ClaimDetail({ claim, selectSource, selectFact, selectReconciliation }: ClaimDetailProps) {
+export function ClaimDetail({ claim, selectSource, selectFact, selectReconciliation, correcting, correctClaim }: ClaimDetailProps) {
+  const [correctionText, setCorrectionText] = useState(claim.text);
+  const [correctionReason, setCorrectionReason] = useState('');
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-5 md:p-8">
       <div>
@@ -61,7 +67,28 @@ export function ClaimDetail({ claim, selectSource, selectFact, selectReconciliat
       {(claim.reconsolidation_proposals ?? []).length > 0 && <section><h3 className="mb-2 text-sm font-bold">Reconciliation history</h3><div className="space-y-2">{claim.reconsolidation_proposals!.map((proposal) => <button key={proposal.proposal_id} onClick={() => selectReconciliation(proposal.proposal_id)} className="flex w-full items-center justify-between rounded-lg border border-slate-200 p-3 text-left"><span><strong className="text-sm">{proposal.proposed_relation.replaceAll('_', ' ')}</strong><br /><span className="text-xs text-slate-500">{proposal.status} · {proposal.explanation}</span></span><ChevronRight size={15} /></button>)}</div></section>}
       <section><h3 className="mb-2 text-sm font-bold">About</h3><JsonBlock value={claim.about} /></section>
       <section><h3 className="mb-2 text-sm font-bold">Provenance</h3><div className="space-y-2">{claim.provenance.map((item, index) => <button key={`${item.source_id}:${index}`} onClick={() => selectSource(item.source_id)} className="flex w-full items-center justify-between rounded-lg border border-slate-200 p-3 text-left text-sm hover:bg-slate-50"><span><strong>{item.source_id}</strong><br /><span className="text-xs text-slate-500">{item.segment_ids.join(', ')} · {item.speaker ?? 'unknown speaker'} · {item.evidence_type}</span></span><ChevronRight size={15} /></button>)}</div></section>
+      {claim.status === 'active' && <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4"><h3 className="text-sm font-bold text-amber-950">Correct canonical claim</h3><p className="mt-1 text-xs leading-relaxed text-amber-800">This creates new explicit source evidence, supersedes this claim, preserves its current wiki ownership, and rebuilds its facts and page.</p><label className="mt-4 block text-xs font-semibold text-slate-700" htmlFor="claim-correction-text">Replacement claim</label><textarea id="claim-correction-text" value={correctionText} onChange={(event) => setCorrectionText(event.target.value)} className="mt-1 min-h-24 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm outline-none focus:ring-2 focus:ring-amber-500" /><label className="mt-3 block text-xs font-semibold text-slate-700" htmlFor="claim-correction-reason">Reason</label><textarea id="claim-correction-reason" value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} placeholder="Why is the current claim incorrect?" className="mt-1 min-h-20 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm outline-none focus:ring-2 focus:ring-amber-500" /><button disabled={correcting || !correctionText.trim() || !correctionReason.trim()} onClick={() => void correctClaim(correctionText, correctionReason)} className="mt-3 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{correcting ? 'Correcting and rebuilding…' : 'Create corrected claim'}</button></section>}
       <section className="grid gap-4 md:grid-cols-2"><div><h3 className="mb-2 text-sm font-bold">Facets</h3><JsonBlock value={claim.facets} /></div><div><h3 className="mb-2 text-sm font-bold">Links</h3><JsonBlock value={claim.links} /></div></section>
+    </div>
+  );
+}
+
+interface SourceDetailProps {
+  source: ArtifactSource;
+  retracting: boolean;
+  retractSource: (reason: string) => Promise<void>;
+}
+
+export function SourceDetail({ source, retracting, retractSource }: SourceDetailProps) {
+  const [reason, setReason] = useState('');
+  return (
+    <div className="mx-auto max-w-5xl space-y-6 p-5 md:p-8">
+      <div><div className="flex flex-wrap items-center gap-2"><h2 className="break-all text-xl font-bold">{source.source_id}</h2><Badge tone="indigo">{source.source_type}</Badge><Badge tone={source.status === 'active' ? 'green' : 'red'}>{source.status}</Badge></div><div className="mt-2 text-xs text-slate-500">Session {source.session_id} · recorded {formatDate(source.recorded_at)} · occurred {formatDate(source.occurred_at)}</div></div>
+      {source.status === 'retracted' && <section className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900"><strong>Retracted {formatDate(source.retracted_at)}</strong><p className="mt-1">{source.retraction_reason}</p></section>}
+      <div className="grid gap-3 text-sm md:grid-cols-2"><div className="rounded-lg bg-slate-50 p-3"><span className="font-semibold">Participants:</span> {source.participants.join(', ') || 'None recorded'}</div><div className="rounded-lg bg-slate-50 p-3"><span className="font-semibold">Raw log:</span> {source.raw_log_entry_id ?? 'None'}</div></div>
+      {Object.keys(source.metadata).length > 0 && <section><h3 className="mb-2 text-sm font-bold">Metadata</h3><JsonBlock value={source.metadata} /></section>}
+      <section><h3 className="mb-3 text-sm font-bold">Segments ({source.segments.length})</h3><div className="space-y-3">{source.segments.map((segment) => { const accounting = source.segment_accounting[segment.segment_id] ?? 'unaccounted'; return <article key={segment.segment_id} className="rounded-xl border border-slate-200 p-4"><div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-500"><span className="font-mono">#{segment.index} · {segment.segment_id}</span><Badge tone={accounting === 'claimed' ? 'green' : accounting === 'source_only' ? 'slate' : 'amber'}>{accounting.replaceAll('_', ' ')}</Badge>{(segment.speaker || segment.role) && <Badge>{segment.speaker || segment.role}</Badge>}{segment.timestamp && <span>{formatDate(segment.timestamp)}</span>}</div><p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">{segment.content}</p>{Object.keys(segment.metadata).length > 0 && <div className="mt-3"><JsonBlock value={segment.metadata} /></div>}</article>; })}</div></section>
+      {source.status === 'active' && <section className="rounded-xl border border-rose-200 bg-rose-50/40 p-4"><h3 className="text-sm font-bold text-rose-950">Retract source</h3><p className="mt-1 text-xs leading-relaxed text-rose-800">Retraction preserves this evidence for audit, removes claims with no other active support, and rebuilds affected facts and pages.</p><label className="mt-4 block text-xs font-semibold text-slate-700" htmlFor="source-retraction-reason">Reason</label><textarea id="source-retraction-reason" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why should this source no longer support memory?" className="mt-1 min-h-20 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm outline-none focus:ring-2 focus:ring-rose-500" /><button disabled={retracting || !reason.trim()} onClick={() => void retractSource(reason)} className="mt-3 rounded-lg bg-rose-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{retracting ? 'Retracting and rebuilding…' : 'Retract source'}</button></section>}
     </div>
   );
 }

@@ -18,7 +18,7 @@ import {
 import type { InspectorTab } from './memory-inspector/types';
 import { Badge, EmptyState, JsonBlock } from './memory-inspector/presentation';
 import { OverviewPanel } from './memory-inspector/OverviewPanel';
-import { ClaimDetail, EntityDetail, FactDetail, IdentityDetail, OrganizationDetail } from './memory-inspector/LifecycleDetails';
+import { ClaimDetail, EntityDetail, FactDetail, IdentityDetail, OrganizationDetail, SourceDetail } from './memory-inspector/LifecycleDetails';
 import { useMemoryInspector } from './memory-inspector/useMemoryInspector';
 import { formatDate, humanize, percentage } from './memory-inspector/utils';
 
@@ -81,6 +81,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
     error,
     reviewNote,
     reviewing,
+    lifecycleApplying,
     setSelectedSourceId,
     setSelectedChatId,
     setSelectedEpisodeId,
@@ -104,6 +105,8 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
     reviewProposal,
     reviewOrganizationProposal,
     reviewIdentityDecision,
+    correctClaim,
+    retractSource,
   } = useMemoryInspector(refreshKey);
 
   if (loading) {
@@ -247,41 +250,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
               </div>
             ) : <EmptyState>Select a chat session.</EmptyState>)}
 
-            {activeTab === 'sources' && (!selectedSourceId ? <EmptyState>Select a source.</EmptyState> : selectedSource?.source_id !== selectedSourceId ? <EmptyState>Loading source…</EmptyState> : selectedSource ? (
-              <div className="mx-auto max-w-5xl space-y-6 p-5 md:p-8">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2"><h2 className="break-all text-xl font-bold">{selectedSource.source_id}</h2><Badge tone="indigo">{selectedSource.source_type}</Badge></div>
-                  <div className="mt-2 text-xs text-slate-500">Session {selectedSource.session_id} · recorded {formatDate(selectedSource.recorded_at)} · occurred {formatDate(selectedSource.occurred_at)}</div>
-                </div>
-                <div className="grid gap-3 text-sm md:grid-cols-2">
-                  <div className="rounded-lg bg-slate-50 p-3"><span className="font-semibold">Participants:</span> {selectedSource.participants.join(', ') || 'None recorded'}</div>
-                  <div className="rounded-lg bg-slate-50 p-3"><span className="font-semibold">Raw log:</span> {selectedSource.raw_log_entry_id ?? 'None'}</div>
-                </div>
-                {Object.keys(selectedSource.metadata).length > 0 && <section><h3 className="mb-2 text-sm font-bold">Metadata</h3><JsonBlock value={selectedSource.metadata} /></section>}
-                <section>
-                  <h3 className="mb-3 text-sm font-bold">Segments ({selectedSource.segments.length})</h3>
-                  <div className="space-y-3">
-                    {selectedSource.segments.map((segment) => {
-                      const accounting = selectedSource.segment_accounting[segment.segment_id] ?? 'unaccounted';
-                      const claimed = accounting === 'claimed';
-                      const ignored = accounting === 'ignored';
-                      return (
-                        <article key={segment.segment_id} className="rounded-xl border border-slate-200 p-4">
-                          <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                            <span className="font-mono">#{segment.index} · {segment.segment_id}</span>
-                            <Badge tone={claimed ? 'green' : ignored ? 'slate' : 'amber'}>{claimed ? 'claimed' : ignored ? 'ignored' : 'unaccounted'}</Badge>
-                            {(segment.speaker || segment.role) && <Badge>{segment.speaker || segment.role}</Badge>}
-                            {segment.timestamp && <span>{formatDate(segment.timestamp)}</span>}
-                          </div>
-                          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">{segment.content}</p>
-                          {Object.keys(segment.metadata).length > 0 && <div className="mt-3"><JsonBlock value={segment.metadata} /></div>}
-                        </article>
-                      );
-                    })}
-                  </div>
-                </section>
-              </div>
-            ) : <EmptyState>Select a source.</EmptyState>)}
+            {activeTab === 'sources' && (!selectedSourceId ? <EmptyState>Select a source.</EmptyState> : selectedSource?.source_id !== selectedSourceId ? <EmptyState>Loading source…</EmptyState> : selectedSource ? <SourceDetail source={selectedSource} retracting={lifecycleApplying === 'retract'} retractSource={retractSource} /> : <EmptyState>Select a source.</EmptyState>)}
 
             {activeTab === 'episodes' && (selectedEpisode ? (
               <div className="mx-auto max-w-4xl space-y-6 p-5 md:p-8">
@@ -299,7 +268,7 @@ export default function MemoryInspector({ refreshKey = 0 }: { refreshKey?: numbe
               </div>
             ) : <EmptyState>Select an episode.</EmptyState>)}
 
-            {activeTab === 'claims' && (selectedClaim ? <ClaimDetail claim={selectedClaim} selectSource={selectSource} selectFact={selectFact} selectReconciliation={selectReconciliation} /> : <EmptyState>Select a claim.</EmptyState>)}
+            {activeTab === 'claims' && (selectedClaim ? <ClaimDetail claim={selectedClaim} selectSource={selectSource} selectFact={selectFact} selectReconciliation={selectReconciliation} correcting={lifecycleApplying === 'correct'} correctClaim={correctClaim} /> : <EmptyState>Select a claim.</EmptyState>)}
 
             {activeTab === 'facts' && (selectedFact ? <FactDetail fact={selectedFact} selectClaim={selectClaim} selectEntity={selectEntity} /> : <EmptyState>Select a consolidated fact.</EmptyState>)}
 

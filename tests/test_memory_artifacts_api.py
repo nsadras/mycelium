@@ -21,7 +21,12 @@ from mycelium.core import Mycelium
 from mycelium.facts import FactResolutionResult
 from mycelium.models import LogEntry, WikiPage
 from server.api import memory_artifacts, memory_curation
-from server.api.memory_contracts import IdentityReviewRequest, ProposalReviewRequest
+from server.api.memory_contracts import (
+    ClaimCorrectionRequest,
+    IdentityReviewRequest,
+    ProposalReviewRequest,
+    SourceRetractionRequest,
+)
 
 
 @pytest.fixture
@@ -278,6 +283,7 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
         "encoded_episodes": [{"id": "chat-1-ep-1", "reason": "manual"}],
     }]
     assert sources[0]["segment_count"] == 1
+    assert sources[0]["status"] == "active"
     assert source["segments"][0]["content"] == "I prefer tea."
     assert source["segment_accounting"] == {
         "source-test#seg-0001": "claimed",
@@ -352,6 +358,44 @@ async def test_review_proposal_endpoint_returns_404(artifact_memory):
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_correct_claim_endpoint_creates_replacement_artifacts(artifact_memory):
+    artifact_memory.dream_process.fact_resolver.resolve = AsyncMock(
+        return_value=FactResolutionResult(deleted_fact_ids={"fact-tea-preference"})
+    )
+
+    response = await memory_curation.correct_claim(
+        "claim-test",
+        ClaimCorrectionRequest(
+            text="The user prefers herbal tea.",
+            reason="The original claim omitted the kind of tea.",
+        ),
+    )
+
+    replacement = artifact_memory.artifacts.get_claim(response["claim_ids"][0])
+    assert replacement.text == "The user prefers herbal tea."
+    assert artifact_memory.artifacts.get_claim("claim-test").status == "superseded"
+    assert artifact_memory.artifacts.get_source(
+        response["source_ids"][0]
+    ).source_type == "manual_correction"
+
+
+@pytest.mark.asyncio
+async def test_retract_source_endpoint_marks_source_and_claims(artifact_memory):
+    artifact_memory.dream_process.fact_resolver.resolve = AsyncMock(
+        return_value=FactResolutionResult(deleted_fact_ids={"fact-tea-preference"})
+    )
+
+    response = await memory_curation.retract_source(
+        "source-test",
+        SourceRetractionRequest(reason="The imported chat was not authentic."),
+    )
+
+    assert set(response["claim_ids"]) == {"claim-test", "claim-old"}
+    assert artifact_memory.artifacts.get_source("source-test").status == "retracted"
+    assert artifact_memory.artifacts.get_claim("claim-test").status == "retracted"
 
 
 @pytest.mark.asyncio

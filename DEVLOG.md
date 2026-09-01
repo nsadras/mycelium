@@ -2381,3 +2381,21 @@ one prose-similarity summary.
   passed. Repository-root pytest also collected a generated `benchmark_runs/mab-loader-check/test_routing_q49.py`
   artifact that imports the intentionally removed `routing_recall_index`; the maintained suite is scoped to
   `tests/`.
+
+## 2026-08-31 — Retrieval abstention and a total assistant prompt budget
+
+- Page FTS, temporal matching, and short-term claim search now generate bounded candidates only. A structured
+  relevance decision evaluates every candidate, can exclude all of them, and fails closed to no memory on malformed
+  output. The previous title/slug word-intersection admission override was removed. No lexical score threshold,
+  keyword margin, fuzzy match, or benchmark-derived semantic rule was introduced.
+- Before integration, direct production-prompt/schema probes against `gemma4:12b` included a record that directly
+  answered a scheduling question, rejected an unrelated project record, distinguished a jasmine-tea preference from
+  a paint color containing “Tea,” and excluded every candidate for an unrelated writing request.
+- Assistant chat assembly now enforces `session.context_budget_tokens` as one budget across the system prompt,
+  current request, recent transcript, and admitted memory, capped by the model context window. It preserves the most
+  recent transcript first, admits memory only when the complete prompt still fits, backfills older history with
+  remaining space, and retains the end of an individually oversized current request. The exact pages that survive
+  prompt assembly are the pages reported to the UI and session log.
+- Validation: focused retrieval, prompt, context, runtime, and budgeting tests passed **25/25** before the portability
+  cleanup and **23/23** afterward; the complete maintained suite passed **278/278 with 2 skipped**. Ruff and
+  `git diff --check` passed. The direct probes were valid structured responses with no timeouts or malformed output.

@@ -40,14 +40,17 @@ class AssistantContextSelector:
             f"M{index:03d}": candidate
             for index, candidate in enumerate(candidates, start=1)
         }
-        rendered = "\n".join(
-            f"{alias}: {json.dumps({
-                'kind': candidate.kind,
-                'title': candidate.title,
-                'content': truncate_text_tokens(candidate.content, 1200),
-            }, ensure_ascii=False, sort_keys=True)}"
-            for alias, candidate in aliases.items()
-        )
+        rendered_records = []
+        for alias, candidate in aliases.items():
+            payload = {
+                "kind": candidate.kind,
+                "title": candidate.title,
+                "content": truncate_text_tokens(candidate.content, 1200),
+            }
+            rendered_records.append(
+                f"{alias}: {json.dumps(payload, ensure_ascii=False, sort_keys=True)}"
+            )
+        rendered = "\n".join(rendered_records)
         system, user = prompts.assistant_context_selection_prompt(query, rendered)
         schema = assistant_context_selection_output_model(aliases)
         try:

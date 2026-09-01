@@ -198,6 +198,8 @@ deferred_revisit_hours = 168
 The default memory store is `./mycelium_store`. It consists primarily of Markdown and JSON, so it can be
 inspected with ordinary text tools or opened as a wiki outside the app. Every saved chat message carries its own
 timestamp, allowing one conversation to span multiple days without losing temporal context.
+`session.context_budget_tokens` is the total input budget shared by the assistant system prompt, recent transcript,
+and retrieved memory; it is capped by `llm.context_window_tokens`.
 
 Architecture, storage contracts, retrieval details, migrations, development checks, and benchmark workflows are
 documented in [DESIGN.md](DESIGN.md). The Daily Driver fixture has its own

@@ -2529,3 +2529,7 @@ one prose-similarity summary.
 - No prompt, ontology, or semantic decision changed, so no additional model probe was applicable. Validation:
   focused artifact/core/runtime/production-lifecycle tests passed **69/69**; the complete maintained suite passed
   **292/292 with 2 skipped**.
+- Post-integration, the exact failed episode from
+  `benchmark_runs/locomo-mycelium-convo-8-fresh-overnight-20260901` was replayed against `gemma4:12b` on a
+  disposable store copy. Its persisted batch moved from coverage-complete/claims-failed at attempt 14 to complete
+  at attempt 15; the episode and ingestion operation both became complete with no remaining error.

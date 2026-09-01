@@ -2362,3 +2362,22 @@ one prose-similarity summary.
 - Validation: focused Dream, artifact, API, queue, and reconsolidation tests passed **116/116**; the complete maintained
   suite passed **264/264 with 2 skipped**. Ruff, `git diff --check`, UI lint, and UI production build passed. The
   existing 854.63 kB UI chunk-size warning remains.
+
+## 2026-08-31 — First-class canonical correction and source retraction
+
+- Explicit claim correction now creates a new canonical claim backed by its own `manual_correction` source and
+  complete episode evidence, links it as the superseding claim, preserves an established placement, and rebuilds the
+  affected facts and wiki page. The replaced claim remains available as inactive canonical history. Corrections are
+  only accepted for active claims and require a user-authored reason.
+- Sources now have a validated active/retracted lifecycle with a timestamp and reason. Retraction preserves the
+  source and all provenance for audit, retracts an active claim only when none of its supporting sources remain
+  active, and rebuilds every affected owner so unsupported facts disappear. A claim with independent active source
+  support remains canonical.
+- The Memory Inspector exposes both operations and displays source lifecycle state and retraction details. These are
+  explicit user decisions over exact artifact IDs; no semantic prompt, ontology, natural-language rule, or model
+  division changed, so a direct Ollama probe was not applicable.
+- Validation: lifecycle/artifact/store/reconsolidation tests passed **81/81**; endpoint and lifecycle tests passed
+  **12/12**; the complete maintained `tests/` suite passed **271/271 with 2 skipped**; UI lint and production build
+  passed. Repository-root pytest also collected a generated `benchmark_runs/mab-loader-check/test_routing_q49.py`
+  artifact that imports the intentionally removed `routing_recall_index`; the maintained suite is scoped to
+  `tests/`.

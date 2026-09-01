@@ -5,6 +5,8 @@ from typing import List, Optional
 import uuid
 
 from mycelium.context import render_memory_context
+from mycelium.budget import count_message_tokens, truncate_text_tokens
+from mycelium.models import WikiPage
 from mycelium.prompting import render_prompt
 from server.runtime import (
     append_tool_event_logs,
@@ -31,6 +33,73 @@ def chat_history_messages(record: dict, current_message: str) -> list[dict[str, 
             messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": current_message})
     return messages
+
+
+def _assistant_system_prompt(pages: list[WikiPage]) -> str:
+    return render_prompt(
+        "assistant/chat.system.jinja",
+        memory_context=render_memory_context(pages),
+        no_memory_context="No relevant long-term memory context was found.",
+    )
+
+
+def build_chat_prompt(
+    record: dict,
+    current_message: str,
+    pages: list[WikiPage],
+    *,
+    budget_tokens: int,
+) -> tuple[list[dict[str, str]], list[WikiPage]]:
+    """Fit system, current request, recent transcript, and memory under one budget."""
+    if budget_tokens <= 0:
+        raise ValueError("Assistant prompt budget must be positive")
+    history = chat_history_messages(record, current_message)[:-1]
+    recent_start = max(0, len(history) - 4)
+    selected_history = history[recent_start:]
+    selected_pages: list[WikiPage] = []
+
+    def assemble(
+        prompt_history: list[dict[str, str]],
+        prompt_pages: list[WikiPage],
+        user_content: str,
+    ) -> list[dict[str, str]]:
+        return [
+            {"role": "system", "content": _assistant_system_prompt(prompt_pages)},
+            *prompt_history,
+            {"role": "user", "content": user_content},
+        ]
+
+    messages = assemble(selected_history, selected_pages, current_message)
+    while selected_history and count_message_tokens(messages) > budget_tokens:
+        selected_history.pop(0)
+        messages = assemble(selected_history, selected_pages, current_message)
+
+    if count_message_tokens(messages) > budget_tokens:
+        empty_user = assemble([], [], "")
+        available = budget_tokens - count_message_tokens(empty_user)
+        current_message = truncate_text_tokens(
+            current_message, max(0, available), keep_end=True
+        )
+        messages = assemble([], [], current_message)
+        if count_message_tokens(messages) > budget_tokens:
+            raise ValueError("Assistant prompt budget is smaller than the system prompt")
+        selected_history = []
+
+    for page in pages:
+        trial_pages = [*selected_pages, page]
+        trial = assemble(selected_history, trial_pages, current_message)
+        if count_message_tokens(trial) <= budget_tokens:
+            selected_pages = trial_pages
+            messages = trial
+
+    for item in reversed(history[:recent_start]):
+        trial_history = [item, *selected_history]
+        trial = assemble(trial_history, selected_pages, current_message)
+        if count_message_tokens(trial) <= budget_tokens:
+            selected_history = trial_history
+            messages = trial
+
+    return messages, selected_pages
 
 
 class SessionCreate(BaseModel):
@@ -128,18 +197,22 @@ async def chat(session_id: str, req: ChatRequest):
             user_message=req.message,
         )
 
-        loaded_pages = await mem.load_context(retrieval_query)
-        memory_context = render_memory_context(loaded_pages)
-
-        system_prompt = render_prompt(
-            "assistant/chat.system.jinja",
-            memory_context=memory_context,
-            no_memory_context="No relevant long-term memory context was found.",
+        prompt_budget = min(
+            mem.config.context_budget_tokens,
+            mem.config.llm.context_window_tokens,
         )
-        messages = [
-            {"role": "system", "content": system_prompt}
-        ] + chat_history_messages(record, req.message)
-        chat_response = await mem.llm.call_messages(messages)
+        candidate_pages = await mem.load_context(
+            retrieval_query, budget_tokens=prompt_budget
+        )
+        messages, loaded_pages = build_chat_prompt(
+            record,
+            req.message,
+            candidate_pages,
+            budget_tokens=prompt_budget,
+        )
+        chat_response = await mem.llm.call_messages(
+            messages, num_ctx=mem.config.llm.context_window_tokens
+        )
         assistant_timestamp = iso_now()
         response_text = chat_response.content
         tool_events = [asdict(event) for event in chat_response.tool_events]

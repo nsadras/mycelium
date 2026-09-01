@@ -178,7 +178,7 @@ async def test_chat_and_manual_flush_are_serialized(tmp_path, monkeypatch):
     generation_started = asyncio.Event()
     finish_generation = asyncio.Event()
 
-    async def call_messages(_messages):
+    async def call_messages(_messages, **_kwargs):
         generation_started.set()
         await finish_generation.wait()
         return SimpleNamespace(content="Saved reply", tool_events=[])
@@ -188,6 +188,10 @@ async def test_chat_and_manual_flush_are_serialized(tmp_path, monkeypatch):
     mem = SimpleNamespace(
         load_context=AsyncMock(return_value=[]),
         llm=SimpleNamespace(call_messages=call_messages),
+        config=SimpleNamespace(
+            context_budget_tokens=32768,
+            llm=SimpleNamespace(context_window_tokens=32768),
+        ),
         encoder=encoder,
     )
     monkeypatch.setattr(runtime, "get_mem", lambda: mem)
@@ -245,7 +249,7 @@ async def test_concurrent_chats_in_different_sessions_preserve_both(tmp_path, mo
     both_started = asyncio.Event()
     started_count = 0
 
-    async def call_messages(messages):
+    async def call_messages(messages, **_kwargs):
         nonlocal started_count
         started_count += 1
         if started_count == 2:
@@ -259,6 +263,10 @@ async def test_concurrent_chats_in_different_sessions_preserve_both(tmp_path, mo
     mem = SimpleNamespace(
         load_context=AsyncMock(return_value=[]),
         llm=SimpleNamespace(call_messages=call_messages),
+        config=SimpleNamespace(
+            context_budget_tokens=32768,
+            llm=SimpleNamespace(context_window_tokens=32768),
+        ),
     )
     monkeypatch.setattr(sessions, "get_mem", lambda: mem)
 

@@ -2435,3 +2435,19 @@ one prose-similarity summary.
   identity judgment and changes no prompt or ontology, so a direct Ollama probe was not applicable. Validation:
   focused curation, artifact, API, and recovery tests passed **81/81**; the complete maintained suite passed
   **285/285 with 2 skipped**. Ruff and `git diff --check` passed.
+
+## 2026-08-31 — Production-path memory lifecycle acceptance
+
+- A production-shaped acceptance test now enters through the real session API and session file, overlaps chat
+  generation with automatic episode flushing, and verifies that the per-session lock prevents the flush from
+  racing ahead of the new turn. It also checks persisted message timestamps, relative-date normalization, the
+  total assistant prompt budget, short-term recall, complete retrieval abstention, canonical correction, source
+  retraction, and state visibility from a newly constructed store.
+- The fixture uses a deterministic schema-aware model double so storage, API, locking, and lifecycle behavior are
+  isolated from semantic variance. It supplies only IDs declared by the production structured-output contracts and
+  accounts for every extraction segment. It is therefore production-path structural evidence, not a fresh or judged
+  real-model semantic trial. The earlier retrieval work separately records fresh direct production-prompt/schema
+  probes; restart recovery of an interrupted Dream journal remains covered by its dedicated fresh-store test.
+- No prompt, ontology, or semantic division changed in this task, so a new Ollama probe was not applicable.
+  Validation: the focused production/runtime/recovery/lifecycle/context suite passed **18/18**; the complete
+  maintained suite passed **286/286 with 2 skipped**.

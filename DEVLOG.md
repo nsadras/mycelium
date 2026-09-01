@@ -2399,3 +2399,22 @@ one prose-similarity summary.
 - Validation: focused retrieval, prompt, context, runtime, and budgeting tests passed **25/25** before the portability
   cleanup and **23/23** afterward; the complete maintained suite passed **278/278 with 2 skipped**. Ruff and
   `git diff --check` passed. The direct probes were valid structured responses with no timeouts or malformed output.
+
+## 2026-08-31 — Crash-idempotent ingestion and Dream lifecycle persistence
+
+- Source ingestion now records a stable operation identity and input digest before writing its log, source, episode,
+  or claims. Production chat episodes, tool observations, Engram meetings, benchmark batches, and session transcripts
+  supply stable idempotency keys. Repeating the same request resumes its episode; reusing a key for different input is
+  rejected. Log append is atomic and idempotent within the process, and extracted claim IDs are deterministic per
+  source batch so a claim written before an episode checkpoint is overwritten rather than duplicated on retry.
+- Dream now journals its complete artifact write set before applying it. Entity, placement, fact, proposal, retention,
+  identity, encounter, scope, cohort, projection, log, and audit writes are replayed in dependency order. Claim
+  dispositions are published only with the final Dream audit after projection and log persistence. Every non-dry run
+  first recovers prepared/applying commits, and exact run/claim-derived IDs make replay idempotent.
+- A simulated ingestion interruption immediately after the first claim write recovered to one log, source, episode,
+  and claim. A separate restart test interrupted a Dream commit immediately before audit publication, constructed
+  fresh repository/store/service instances, then recovered one fact, scope decision, cohort, Dream audit, routed
+  claim state, consolidated log, and an unchanged wiki page version.
+- No prompt, ontology, or semantic division changed, so no direct Ollama probe was applicable. Validation: focused
+  ingestion/store/runtime/Engram tests passed **91/91**; focused Dream/recovery tests passed **130/130**; the complete
+  maintained suite passed **282/282 with 2 skipped**. Ruff and `git diff --check` passed.

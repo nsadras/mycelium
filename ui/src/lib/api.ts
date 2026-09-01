@@ -154,6 +154,7 @@ export interface ClaimPlacementArtifact {
   reason: string;
   created_at: string;
   updated_at: string;
+  identity_blocker_ids: string[];
 }
 
 export interface OrganizationProposalArtifact {
@@ -306,6 +307,7 @@ export interface ClaimScopeDecisionArtifact {
   status: 'active' | 'superseded' | 'proposed' | 'rejected';
   created_at: string;
   superseded_by_decision_id?: string | null;
+  identity_blocker_ids: string[];
 }
 
 export interface ClaimEntityReferenceArtifact {

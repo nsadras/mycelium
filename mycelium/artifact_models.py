@@ -380,6 +380,7 @@ class ClaimPlacement:
     created_at: str
     updated_at: str
     relationship_kind: str | None = None
+    identity_blocker_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.status not in {"placed", "deferred"}:
@@ -396,6 +397,7 @@ class ClaimPlacement:
             value for value in self.linked_entity_ids
             if value and value != self.owner_entity_id
         })
+        self.identity_blocker_ids = sorted(set(self.identity_blocker_ids))
 
 
 @dataclass
@@ -415,6 +417,7 @@ class ClaimScopeDecision:
     status: str
     created_at: str
     superseded_by_decision_id: str | None = None
+    identity_blocker_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.origin not in {"automatic", "manual", "review"}:
@@ -425,6 +428,7 @@ class ClaimScopeDecision:
             raise ValueError("Superseded scope decisions require a successor")
         self.linked_entity_ids = sorted(set(self.linked_entity_ids))
         self.supporting_claim_ids = sorted(set(self.supporting_claim_ids))
+        self.identity_blocker_ids = sorted(set(self.identity_blocker_ids))
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
 
 

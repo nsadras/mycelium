@@ -1169,14 +1169,23 @@ class ClaimRouter:
             for value in support_aliases
             if value in aliases
         )
+        identity_blockers = tuple(sorted({
+            *self._unresolved_identity_blockers(item.claim.claim_id, entities),
+            *decision.get("identity_blocker_ids", []),
+        }))
         if disposition != "canonical":
             return ClaimRoute(
                 item.claim.claim_id, None, None, (), item.raw_log_entry_id,
                 str(decision["reason"]), disposition, supporting_ids,
                 float(decision["confidence"]),
-                identity_blocker_ids=tuple(sorted(set(
-                    decision.get("identity_blocker_ids", [])
-                ))),
+                identity_blocker_ids=identity_blockers,
+            )
+        if identity_blockers:
+            return ClaimRoute(
+                item.claim.claim_id, None, None, (), item.raw_log_entry_id,
+                "An attached identity decision is still unresolved.",
+                "deferred", supporting_ids, float(decision["confidence"]),
+                identity_blocker_ids=identity_blockers,
             )
         owner_ref = str(decision["owner_entity"])
         owner = candidates.get(owner_ref) or entities.get(owner_ref)
@@ -1247,6 +1256,39 @@ class ClaimRouter:
             })),
             None if relationship_kind == "none" else relationship_kind,
         )
+
+    def _unresolved_identity_blockers(
+        self,
+        claim_id: str,
+        entities: dict[str, EntityRecord],
+    ) -> tuple[str, ...]:
+        placement = self.artifacts.placement_for_claim(claim_id)
+        if placement is None:
+            return ()
+        unresolved = []
+        for decision_id in placement.identity_blocker_ids:
+            try:
+                decision = self.artifacts.get_entity_resolution_decision(
+                    decision_id
+                )
+            except FileNotFoundError:
+                unresolved.append(decision_id)
+                continue
+            if decision.review_state == "rejected":
+                continue
+            if decision.review_state == "review_required":
+                unresolved.append(decision_id)
+                continue
+            entity = entities.get(str(decision.entity_id or ""))
+            if (
+                decision.proposed_page_state == "provisional"
+                and (
+                    entity is None
+                    or entity.materialization_state != "materialized"
+                )
+            ):
+                unresolved.append(decision_id)
+        return tuple(sorted(set(unresolved)))
 
     @staticmethod
     def _alias_batches(
@@ -1347,4 +1389,5 @@ def placement_from_route(route: ClaimRoute, *, now: str | None = None) -> ClaimP
         created_at=timestamp,
         updated_at=timestamp,
         relationship_kind=route.relationship_kind,
+        identity_blocker_ids=list(route.identity_blocker_ids),
     )

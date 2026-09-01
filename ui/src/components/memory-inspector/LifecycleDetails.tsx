@@ -42,6 +42,7 @@ export function ClaimDetail({ claim, selectSource, selectFact, selectReconciliat
       <section className="rounded-xl border border-slate-200 p-4">
         <h3 className="mb-2 text-sm font-bold">Latest Dream decision</h3>
         <div className="text-sm text-slate-700">{claim.dream_disposition_reason ?? 'This claim has not been evaluated by Dream.'}</div>
+        {(claim.placement?.identity_blocker_ids ?? []).length > 0 && <div className="mt-3"><div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Unresolved identity blockers</div><div className="mt-2 flex flex-wrap gap-1">{claim.placement!.identity_blocker_ids.map((id) => <Badge key={id} tone="amber">{id}</Badge>)}</div></div>}
         <div className="mt-2 break-all font-mono text-xs text-slate-400">{claim.dream_run_id ?? 'No run'} · {formatDate(claim.dream_disposition_at)}</div>
       </section>
       <section className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">

@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimEntityReference,
+    ClaimPlacement,
     ClaimProvenance,
     EntityResolutionDecision,
     EpisodeManifest,
@@ -637,6 +638,81 @@ def test_revision_cannot_overwrite_identity_blocked_deferral():
     merged = DreamPolicy.merge_revision_routing(initial, revision)
 
     assert merged.routes == initial.routes
+
+
+@pytest.mark.asyncio
+async def test_later_dream_cannot_route_claim_while_provisional_blocker_remains(
+    tmp_path,
+):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    person = artifacts.create_entity("person", "Rosa Alvarez")
+    project = artifacts.create_entity(
+        "project",
+        "Kitchen Renovation",
+        materialization_state="provisional",
+    )
+    _, source = add_source(logs, artifacts)
+    claim = add_claim(
+        artifacts,
+        source,
+        text="The permit inspection is scheduled for Tuesday.",
+        about="Kitchen Renovation",
+        claim_type="plan",
+    )
+    blocker = EntityResolutionDecision(
+        decision_id="identity-kitchen-provisional",
+        decision_type="entity_creation",
+        entity_id=project.entity_id,
+        proposed_entity_type="project",
+        proposed_title=project.title,
+        source_ids=[source.source_id],
+        supporting_claim_ids=[claim.claim_id],
+        supporting_segment_ids=[claim.provenance[0].segment_ids[0]],
+        confidence=0.9,
+        reason="Continuity is not established.",
+        review_state="accepted",
+        dream_run_id="dream-prior",
+        created_at="2026-08-31T12:00:00-07:00",
+        proposed_scope="independent",
+        proposed_page_state="provisional",
+    )
+    artifacts.save_entity_resolution_decision(blocker)
+    artifacts.save_placement(ClaimPlacement(
+        claim_id=claim.claim_id,
+        owner_entity_id=None,
+        section_key=None,
+        linked_entity_ids=[],
+        status="deferred",
+        reason="The project is provisional.",
+        created_at="2026-08-31T12:00:00-07:00",
+        updated_at="2026-08-31T12:00:00-07:00",
+        identity_blocker_ids=[blocker.decision_id],
+    ))
+    llm.call_structured.side_effect = split_scope_plan(scope_plan({
+        "C001": assignment(person.entity_id, supporting=["C001"]),
+    }))
+
+    result = await dream.router.route([ClaimEvidence(claim, source)])
+
+    assert result.failures == []
+    assert result.routes[0].disposition == "deferred"
+    assert result.routes[0].owner_entity_id is None
+    assert result.routes[0].identity_blocker_ids == (blocker.decision_id,)
+
+    project.materialization_state = "materialized"
+    artifacts.save_entity(project)
+    resolved_responses = split_scope_plan(scope_plan({
+        "C001": assignment(person.entity_id, supporting=["C001"]),
+    }))
+    llm.call_structured.side_effect = [
+        *resolved_responses[:3], resolved_responses[4]
+    ]
+
+    resolved = await dream.router.route([ClaimEvidence(claim, source)])
+
+    assert resolved.failures == []
+    assert resolved.routes[0].owner_entity_id == person.entity_id
+    assert resolved.routes[0].identity_blocker_ids == ()
 
 
 @pytest.mark.asyncio

@@ -370,6 +370,7 @@ class DreamProcess:
                     dream_run_id=run_id,
                     status="active",
                     created_at=now,
+                    identity_blocker_ids=list(route.identity_blocker_ids),
                 ))
             routed_entity_ids = {
                 route.owner_entity_id for route in successful_routes if route.owner_entity_id

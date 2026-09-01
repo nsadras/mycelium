@@ -226,6 +226,11 @@ class EntityCurationService:
         return self._result(self.artifacts.get_entity(owner_entity_id), pages, [])
 
     def merge(self, source_entity_id: str, target_entity_id: str) -> CurationResult:
+        if any(
+            commit.status != "complete"
+            for commit in self.artifacts.list_dream_commits()
+        ):
+            raise ValueError("Recover the pending Dream commit before merging entities")
         source = self.artifacts.get_entity(source_entity_id)
         target = self.artifacts.get_entity(target_entity_id)
         if source.entity_id == "you" or target.status != "active" or source.status != "active":
@@ -274,6 +279,7 @@ class EntityCurationService:
                 fact.updated_at = _now()
                 fact.__post_init__()
                 self.artifacts.save_consolidated_fact(fact)
+        self._redirect_merge_references(source, target)
         target.aliases = sorted(set([
             *target.aliases, source.title, source.slug, *source.aliases
         ]))
@@ -286,6 +292,177 @@ class EntityCurationService:
         self.wiki.archive(source.slug)
         pages = self.materializer.regenerate({target_entity_id, "you"})
         return self._result(target, pages, [source.slug])
+
+    def _redirect_merge_references(
+        self, source: EntityRecord, target: EntityRecord
+    ) -> None:
+        source_id = source.entity_id
+        target_id = target.entity_id
+        now = _now()
+
+        for reference in self.artifacts.list_entity_references(
+            entity_id=source_id, status="active"
+        ):
+            successor_id = f"ref-{uuid.uuid4().hex[:12]}"
+            reference.status = "superseded"
+            reference.superseded_by_reference_id = successor_id
+            self.artifacts.save_entity_reference(reference)
+            self.artifacts.save_entity_reference(ClaimEntityReference(
+                reference_id=successor_id,
+                claim_id=reference.claim_id,
+                role=reference.role,
+                surface=reference.surface,
+                entity_id=target_id,
+                confidence=1.0,
+                reason=(
+                    f"Manual entity merge redirected {source_id} to {target_id}."
+                ),
+                origin="manual",
+                dream_run_id=reference.dream_run_id,
+                status="active",
+                created_at=now,
+            ))
+
+        for decision in self.artifacts.list_entity_resolution_decisions():
+            changed = False
+            if decision.entity_id == source_id:
+                decision.entity_id = target_id
+                changed = True
+            if decision.proposed_parent_entity_id == source_id:
+                decision.proposed_parent_entity_id = target_id
+                changed = True
+            if changed:
+                note = f"Entity merge redirected {source_id} to {target_id}."
+                decision.reviewer_note = " ".join(
+                    value for value in [decision.reviewer_note, note] if value
+                )
+                self.artifacts.save_entity_resolution_decision(decision)
+
+        for assessment in self.artifacts.list_identity_maturity_assessments():
+            if assessment.entity_id != source_id:
+                continue
+            assessment.entity_id = target_id
+            self.artifacts.save_identity_maturity_assessment(assessment)
+
+        for encounter in self.artifacts.list_encounters(entity_id=source_id):
+            encounter.entity_id = target_id
+            self.artifacts.save_encounter(encounter)
+
+        for cohort in self.artifacts.list_scope_cohorts():
+            if source_id not in cohort.revision_entity_ids:
+                continue
+            cohort.revision_entity_ids = [
+                target_id if value == source_id else value
+                for value in cohort.revision_entity_ids
+            ]
+            cohort.__post_init__()
+            self.artifacts.save_scope_cohort(cohort)
+
+        for decision in self.artifacts.list_scope_decisions(status="active"):
+            if (
+                decision.owner_entity_id != source_id
+                and source_id not in decision.linked_entity_ids
+            ):
+                continue
+            successor = ClaimScopeDecision(
+                decision_id=f"scope-{uuid.uuid4().hex[:12]}",
+                claim_id=decision.claim_id,
+                owner_entity_id=(
+                    target_id
+                    if decision.owner_entity_id == source_id
+                    else decision.owner_entity_id
+                ),
+                section_key=decision.section_key,
+                linked_entity_ids=[
+                    target_id if value == source_id else value
+                    for value in decision.linked_entity_ids
+                ],
+                supporting_claim_ids=list(decision.supporting_claim_ids),
+                confidence=1.0,
+                reason=f"Manual entity merge redirected {source_id} to {target_id}.",
+                origin="manual",
+                dream_run_id=None,
+                status="active",
+                created_at=now,
+                identity_blocker_ids=list(decision.identity_blocker_ids),
+            )
+            self.artifacts.save_scope_decision(successor)
+
+        for proposal in self.artifacts.list_organization_proposals(status="pending"):
+            changed = False
+            if proposal.proposed_owner_entity_id == source_id:
+                proposal.proposed_owner_entity_id = target_id
+                changed = True
+            if proposal.source_entity_id == source_id:
+                proposal.source_entity_id = target_id
+                changed = True
+            if proposal.target_entity_id == source_id:
+                proposal.target_entity_id = target_id
+                changed = True
+            if (
+                proposal.proposal_type == "merge_entities"
+                and proposal.source_entity_id == proposal.target_entity_id
+            ):
+                proposal.status = "stale"
+                proposal.reviewer_note = (
+                    f"Entity merge redirected {source_id} to {target_id}; "
+                    "this proposal no longer has distinct endpoints."
+                )
+                changed = True
+            if changed:
+                self.artifacts.save_organization_proposal(proposal)
+
+        for proposal in self.artifacts.list_reconsolidation_proposals():
+            if source_id not in proposal.affected_entity_ids:
+                continue
+            proposal.affected_entity_ids = [
+                target_id if value == source_id else value
+                for value in proposal.affected_entity_ids
+            ]
+            proposal.__post_init__()
+            self.artifacts.save_reconsolidation_proposal(proposal)
+
+        for unit in self.artifacts.list_identity_work_units():
+            if unit.status == "complete":
+                continue
+            changed = False
+            for field_name in (
+                "subject_nodes",
+                "identity_groups",
+                "existing_identity_verdicts",
+                "type_proposals",
+                "type_verdicts",
+                "new_identity_verdicts",
+                "maturity_decisions",
+                "maturity_verdicts",
+                "entity_plan",
+            ):
+                current = getattr(unit, field_name)
+                revised = self._replace_exact_id(current, source_id, target_id)
+                if revised != current:
+                    setattr(unit, field_name, revised)
+                    changed = True
+            if changed:
+                unit.updated_at = now
+                self.artifacts.save_identity_work_unit(unit)
+
+    @staticmethod
+    def _replace_exact_id(value, source_id: str, target_id: str):
+        if isinstance(value, str):
+            return target_id if value == source_id else value
+        if isinstance(value, list):
+            return [
+                EntityCurationService._replace_exact_id(item, source_id, target_id)
+                for item in value
+            ]
+        if isinstance(value, dict):
+            return {
+                key: EntityCurationService._replace_exact_id(
+                    item, source_id, target_id
+                )
+                for key, item in value.items()
+            }
+        return value
 
     def split(
         self,
@@ -615,6 +792,8 @@ class IdentityReviewService:
     ) -> EntityRecord | None:
         if entity_id:
             entity = self.artifacts.get_entity(entity_id)
+            if entity.status != "active":
+                raise ValueError("Reviewed entity ID must be active")
             if entity.entity_type != entity_type:
                 raise ValueError("Reviewed entity ID must match the selected entity type")
             entity.title = title

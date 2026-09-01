@@ -238,6 +238,8 @@ class ArtifactStore:
         self.get_claim(placement.claim_id)
         if placement.owner_entity_id:
             entity = self.get_entity(placement.owner_entity_id)
+            if entity.status != "active":
+                raise ValueError("Placed claims require an active owner entity")
             allowed = set(section_keys(entity.entity_type))
             if placement.section_key not in allowed:
                 raise ValueError(
@@ -255,7 +257,8 @@ class ArtifactStore:
                         "exactly one linked Project"
                     )
         for linked_id in placement.linked_entity_ids:
-            self.get_entity(linked_id)
+            if self.get_entity(linked_id).status != "active":
+                raise ValueError("Placed claims require active linked entities")
         _atomic_json(
             self.placements_dir / f"{_safe_id(placement.claim_id)}.json", asdict(placement)
         )
@@ -347,7 +350,9 @@ class ArtifactStore:
     def save_entity_reference(self, reference: ClaimEntityReference) -> None:
         self.get_claim(reference.claim_id)
         if reference.entity_id:
-            self.get_entity(reference.entity_id)
+            entity = self.get_entity(reference.entity_id)
+            if reference.status == "active" and entity.status != "active":
+                raise ValueError("Active references require an active entity")
         if reference.status == "active":
             for current in self.list_entity_references(
                 claim_id=reference.claim_id, status="active"
@@ -443,7 +448,8 @@ class ArtifactStore:
         return sorted(values, key=lambda item: (item.created_at, item.cohort_id))
 
     def save_encounter(self, encounter: EntityEncounter) -> None:
-        self.get_entity(encounter.entity_id)
+        if self.get_entity(encounter.entity_id).status != "active":
+            raise ValueError("Encounters require an active entity")
         _atomic_json(
             self.encounters_dir / f"{_safe_id(encounter.encounter_id)}.json",
             asdict(encounter),
@@ -465,9 +471,11 @@ class ArtifactStore:
         ]
 
     def save_consolidated_fact(self, fact: ConsolidatedFact) -> None:
-        self.get_entity(fact.owner_entity_id)
+        owner = self.get_entity(fact.owner_entity_id)
+        if owner.status != "active":
+            raise ValueError("Consolidated facts require an active owner entity")
         allowed = set(section_keys(
-            self.get_entity(fact.owner_entity_id).entity_type
+            owner.entity_type
         ))
         if fact.section_key not in allowed:
             raise ValueError(
@@ -476,7 +484,8 @@ class ArtifactStore:
         for claim_id in fact.member_claim_ids:
             self.get_claim(claim_id)
         for linked_id in fact.linked_entity_ids:
-            self.get_entity(linked_id)
+            if self.get_entity(linked_id).status != "active":
+                raise ValueError("Consolidated facts require active linked entities")
         _atomic_json(
             self.consolidated_facts_dir / f"{_safe_id(fact.fact_id)}.json",
             asdict(fact),

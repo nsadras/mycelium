@@ -70,6 +70,12 @@ def artifact_integrity(mem) -> dict:
     entities = {entity.entity_id: entity for entity in mem.artifacts.list_entities()}
     placements = {item.claim_id: item for item in mem.artifacts.list_placements()}
     facts = mem.artifacts.list_consolidated_facts()
+    active_entity_ids = {
+        entity_id for entity_id, entity in entities.items()
+        if entity.status == "active"
+    }
+    active_scope_decisions = mem.artifacts.list_scope_decisions(status="active")
+    active_references = mem.artifacts.list_entity_references(status="active")
 
     issues = {
         "sources_without_episode": sorted(
@@ -128,6 +134,60 @@ def artifact_integrity(mem) -> dict:
             f"{fact.fact_id}:{fact.owner_entity_id}"
             for fact in facts
             if fact.owner_entity_id not in entities
+        ),
+        "placements_with_inactive_entities": sorted(
+            f"{placement.claim_id}:{entity_id}"
+            for placement in placements.values()
+            if placement.status == "placed"
+            for entity_id in [
+                placement.owner_entity_id,
+                *placement.linked_entity_ids,
+            ]
+            if entity_id and entity_id not in active_entity_ids
+        ),
+        "facts_with_inactive_entities": sorted(
+            f"{fact.fact_id}:{entity_id}"
+            for fact in facts
+            for entity_id in [fact.owner_entity_id, *fact.linked_entity_ids]
+            if entity_id not in active_entity_ids
+        ),
+        "active_references_with_inactive_entities": sorted(
+            f"{reference.reference_id}:{reference.entity_id}"
+            for reference in active_references
+            if reference.entity_id and reference.entity_id not in active_entity_ids
+        ),
+        "active_scope_with_inactive_entities": sorted(
+            f"{decision.decision_id}:{entity_id}"
+            for decision in active_scope_decisions
+            for entity_id in [
+                decision.owner_entity_id,
+                *decision.linked_entity_ids,
+            ]
+            if entity_id and entity_id not in active_entity_ids
+        ),
+        "encounters_with_inactive_entities": sorted(
+            f"{encounter.encounter_id}:{encounter.entity_id}"
+            for encounter in mem.artifacts.list_encounters()
+            if encounter.entity_id not in active_entity_ids
+        ),
+        "live_identity_decisions_with_inactive_entities": sorted(
+            f"{decision.decision_id}:{decision.entity_id}"
+            for decision in mem.artifacts.list_entity_resolution_decisions()
+            if decision.review_state != "rejected"
+            and decision.entity_id
+            and decision.entity_id not in active_entity_ids
+        ),
+        "maturity_assessments_with_inactive_entities": sorted(
+            f"{assessment.assessment_id}:{assessment.entity_id}"
+            for assessment in mem.artifacts.list_identity_maturity_assessments()
+            if assessment.entity_id
+            and assessment.entity_id not in active_entity_ids
+        ),
+        "cohorts_with_inactive_entities": sorted(
+            f"{cohort.cohort_id}:{entity_id}"
+            for cohort in mem.artifacts.list_scope_cohorts()
+            for entity_id in cohort.revision_entity_ids
+            if entity_id not in active_entity_ids
         ),
         "entities_missing_pages": sorted(
             f"{entity.entity_id}:{entity.slug}"

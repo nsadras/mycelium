@@ -2,11 +2,20 @@ import pytest
 
 from mycelium.artifacts import (
     ArtifactStore,
+    ClaimEntityReference,
     ClaimPlacement,
     ClaimProvenance,
+    ClaimScopeDecision,
     ConsolidatedFact,
+    DreamCommit,
+    EntityEncounter,
+    EntityResolutionDecision,
+    IdentityMaturityAssessment,
+    IdentityWorkUnit,
     MemoryClaim,
+    OrganizationProposal,
     ReconsolidationProposal,
+    ScopeCohort,
 )
 from mycelium.config import Config
 from mycelium.materialization import PageMaterializer
@@ -265,6 +274,196 @@ def test_merge_reassigns_claims_and_keeps_redirect_identity(tmp_path):
     assert artifacts.get_placement("claim-1").owner_entity_id == project.entity_id
     assert wiki.exists(project.slug)
     assert not wiki.exists(duplicate.slug)
+
+
+def test_merge_redirects_every_live_entity_reference_and_preserves_history(tmp_path):
+    artifacts, wiki, materializer, _, _ = setup_store(tmp_path)
+    source = artifacts.create_entity("person", "Ava Duplicate")
+    target = artifacts.create_entity("person", "Ava")
+    item = claim("claim-merge", "Ava coordinates the launch.")
+    other = claim("claim-other", "The launch begins next week.")
+    section = default_section("person", item.claim_type, item.predicate)
+    place(artifacts, item, source, section)
+    artifacts.save_claim(other)
+    artifacts.save_entity_reference(ClaimEntityReference(
+        reference_id="ref-source",
+        claim_id=item.claim_id,
+        role="subject",
+        surface="Ava",
+        entity_id=source.entity_id,
+        confidence=0.9,
+        reason="fixture",
+        origin="scope",
+        dream_run_id="dream-1",
+        status="active",
+        created_at="2026-08-12T10:00:00-07:00",
+    ))
+    artifacts.save_entity_resolution_decision(EntityResolutionDecision(
+        decision_id="decision-source",
+        decision_type="entity_creation",
+        entity_id=source.entity_id,
+        proposed_entity_type="person",
+        proposed_title="Ava Duplicate",
+        source_ids=["source-1"],
+        supporting_claim_ids=[item.claim_id],
+        supporting_segment_ids=["source-1#seg-1"],
+        confidence=0.9,
+        reason="fixture",
+        review_state="accepted",
+        dream_run_id="dream-1",
+        created_at="2026-08-12T10:00:00-07:00",
+    ))
+    artifacts.save_identity_maturity_assessment(IdentityMaturityAssessment(
+        assessment_id="maturity-source",
+        dream_run_id="dream-1",
+        identity_key="I001",
+        source_node_ids=["N001"],
+        proposed_title="Ava Duplicate",
+        proposed_entity_type="person",
+        supporting_source_ids=["source-1"],
+        supporting_claim_ids=[item.claim_id],
+        supporting_segment_ids=["source-1#seg-1"],
+        proposal_admission="materialized",
+        proposal_basis={"direct_encounter": True},
+        proposal_reason="fixture",
+        proposal_confidence=0.9,
+        verifier_verdict="not_required",
+        verifier_reason="fixture",
+        effective_admission="materialized",
+        created_at="2026-08-12T10:00:00-07:00",
+        entity_id=source.entity_id,
+    ))
+    artifacts.save_encounter(EntityEncounter(
+        encounter_id="encounter-source",
+        entity_id=source.entity_id,
+        source_id="source-1",
+        raw_log_entry_id=None,
+        occurred_at="2026-08-12",
+        title="Launch meeting",
+        created_at="2026-08-12T10:00:00-07:00",
+    ))
+    artifacts.save_scope_cohort(ScopeCohort(
+        cohort_id="cohort-source",
+        dream_run_id="dream-1",
+        claim_ids=[item.claim_id],
+        source_ids=["source-1"],
+        revision_entity_ids=[source.entity_id],
+        created_at="2026-08-12T10:00:00-07:00",
+    ))
+    artifacts.save_scope_decision(ClaimScopeDecision(
+        decision_id="scope-source",
+        claim_id=item.claim_id,
+        owner_entity_id=source.entity_id,
+        section_key=section,
+        linked_entity_ids=[],
+        supporting_claim_ids=[item.claim_id],
+        confidence=0.9,
+        reason="fixture",
+        origin="automatic",
+        dream_run_id="dream-1",
+        status="active",
+        created_at="2026-08-12T10:00:00-07:00",
+    ))
+    artifacts.save_organization_proposal(OrganizationProposal(
+        proposal_id="organization-source",
+        proposal_type="assign_claim",
+        explanation="fixture",
+        confidence=0.7,
+        created_at="2026-08-12T10:00:00-07:00",
+        claim_id=other.claim_id,
+        proposed_owner_entity_id=source.entity_id,
+        proposed_section_key=section,
+    ))
+    artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
+        proposal_id="recon-source",
+        incoming_claim_ids=[item.claim_id],
+        target_claim_ids=[other.claim_id],
+        proposed_relation="contradicts",
+        explanation="fixture",
+        confidence=0.7,
+        dream_run_id="dream-1",
+        created_at="2026-08-12T10:00:00-07:00",
+        affected_entity_ids=[source.entity_id],
+    ))
+    artifacts.save_identity_work_unit(IdentityWorkUnit(
+        unit_id="unit-source",
+        claim_ids=[item.claim_id],
+        source_ids=["source-1"],
+        status="pending",
+        entity_plan={"resolved_entity_id": source.entity_id},
+    ))
+    materializer.regenerate({source.entity_id, target.entity_id})
+
+    EntityCurationService(artifacts, wiki, materializer).merge(
+        source.entity_id, target.entity_id
+    )
+
+    original_reference = artifacts.get_entity_reference("ref-source")
+    assert original_reference.status == "superseded"
+    active_references = artifacts.list_entity_references(status="active")
+    assert [reference.entity_id for reference in active_references] == [target.entity_id]
+    assert artifacts.get_entity_resolution_decision(
+        "decision-source"
+    ).entity_id == target.entity_id
+    assert artifacts.get_identity_maturity_assessment(
+        "maturity-source"
+    ).entity_id == target.entity_id
+    assert artifacts.get_encounter("encounter-source").entity_id == target.entity_id
+    assert artifacts.get_scope_cohort(
+        "cohort-source"
+    ).revision_entity_ids == [target.entity_id]
+    assert artifacts.active_scope_decision(
+        item.claim_id
+    ).owner_entity_id == target.entity_id
+    assert artifacts.get_organization_proposal(
+        "organization-source"
+    ).proposed_owner_entity_id == target.entity_id
+    assert artifacts.get_reconsolidation_proposal(
+        "recon-source"
+    ).affected_entity_ids == [target.entity_id]
+    assert artifacts.get_identity_work_unit(
+        "unit-source"
+    ).entity_plan["resolved_entity_id"] == target.entity_id
+
+
+def test_manual_curation_rejects_inactive_entity_endpoints(tmp_path):
+    artifacts, wiki, materializer, _, project = setup_store(tmp_path)
+    archived = artifacts.create_entity("project", "Archived Project")
+    archived.status = "archived"
+    artifacts.save_entity(archived)
+    item = claim("claim-inactive-owner", "The project has a plan.", "plan")
+    artifacts.save_claim(item)
+
+    with pytest.raises(ValueError, match="active owner"):
+        EntityCurationService(artifacts, wiki, materializer).move_claim(
+            item.claim_id,
+            archived.entity_id,
+            default_section("project", item.claim_type, item.predicate),
+        )
+
+    assert artifacts.placement_for_claim(item.claim_id) is None
+    assert artifacts.get_entity(project.entity_id).status == "active"
+
+
+def test_entity_merge_waits_for_pending_dream_commit_recovery(tmp_path):
+    artifacts, wiki, materializer, _, source = setup_store(tmp_path)
+    target = artifacts.create_entity("project", "Target Project")
+    artifacts.save_dream_commit(DreamCommit(
+        commit_id="dream-commit-pending",
+        run_id="dream-pending",
+        status="applying",
+        payload={"affected_entity_ids": [source.entity_id]},
+        created_at="2026-08-12T10:00:00-07:00",
+        updated_at="2026-08-12T10:00:00-07:00",
+        error="simulated interruption",
+    ))
+
+    with pytest.raises(ValueError, match="Recover the pending Dream commit"):
+        EntityCurationService(artifacts, wiki, materializer).merge(
+            source.entity_id, target.entity_id
+        )
+
+    assert artifacts.get_entity(source.entity_id).status == "active"
 
 
 def test_manual_placement_moves_claim_between_short_term_and_canonical_memory(tmp_path):

@@ -2519,3 +2519,13 @@ one prose-similarity summary.
   failures on a disposable copy of the benchmark store.
 - Validation: focused Ollama/Dream tests passed **66/66**; the complete maintained suite passed **292/292 with 2
   skipped**.
+
+## 2026-09-01 — Recovered extraction operation consistency
+
+- Dream's pre-run extraction retry now updates the ingestion operation tied to the exact episode ID after every
+  retry. A recovered episode is marked complete with its stale error cleared; an episode that remains incomplete
+  keeps a failed operation and the current extraction error. This closes the observed state split where session 9's
+  episode recovered but its ingestion operation remained failed.
+- No prompt, ontology, or semantic decision changed, so no additional model probe was applicable. Validation:
+  focused artifact/core/runtime/production-lifecycle tests passed **69/69**; the complete maintained suite passed
+  **292/292 with 2 skipped**.

@@ -165,13 +165,29 @@ class Encoder:
             operation.updated_at = datetime.datetime.now().astimezone().isoformat()
             self.artifacts.save_ingestion_operation(operation)
             raise
+        self._sync_ingestion_operation(episode, operation=operation)
+        return [entry]
+
+    def _sync_ingestion_operation(
+        self,
+        episode: EpisodeManifest,
+        *,
+        operation: IngestionOperation | None = None,
+    ) -> None:
+        if operation is None:
+            operation = next((
+                candidate
+                for candidate in self.artifacts.list_ingestion_operations()
+                if candidate.episode_id == episode.episode_id
+            ), None)
+        if operation is None:
+            return
         operation.status = (
             "complete" if episode.extraction_status == "complete" else "failed"
         )
         operation.error = episode.extraction_error
         operation.updated_at = datetime.datetime.now().astimezone().isoformat()
         self.artifacts.save_ingestion_operation(operation)
-        return [entry]
 
     @staticmethod
     def _input_digest(
@@ -280,6 +296,7 @@ class Encoder:
             if source is None:
                 continue
             await self._extract_claims(source, episode)
+            self._sync_ingestion_operation(episode)
             if episode.extraction_status == "complete":
                 completed.append(episode.episode_id)
         return completed

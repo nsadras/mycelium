@@ -468,6 +468,7 @@ async def test_encoder_retries_only_failed_claim_stage_after_persisted_coverage(
 
     partial = artifacts.list_episodes()[0]
     assert partial.extraction_status == "partial"
+    assert artifacts.list_ingestion_operations()[0].status == "failed"
     assert partial.extraction_batches[0].coverage_status == "complete"
     assert partial.extraction_batches[0].claim_status == "failed"
     assert partial.segment_dispositions[0].disposition == "claim_pending"
@@ -480,6 +481,9 @@ async def test_encoder_retries_only_failed_claim_stage_after_persisted_coverage(
     assert completed == [partial.episode_id]
     episode = artifacts.list_episodes()[0]
     assert episode.extraction_status == "complete"
+    operation = artifacts.list_ingestion_operations()[0]
+    assert operation.status == "complete"
+    assert operation.error is None
     assert episode.extraction_batches[0].attempt_count == 2
     assert episode.segment_dispositions[0].disposition == "claimed"
     assert len(artifacts.list_claims()) == 1

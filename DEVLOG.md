@@ -2418,3 +2418,20 @@ one prose-similarity summary.
 - No prompt, ontology, or semantic division changed, so no direct Ollama probe was applicable. Validation: focused
   ingestion/store/runtime/Engram tests passed **91/91**; focused Dream/recovery tests passed **130/130**; the complete
   maintained suite passed **282/282 with 2 skipped**. Ruff and `git diff --check` passed.
+
+## 2026-08-31 — Referentially complete entity merge and manual curation
+
+- Manual entity merge now redirects every live canonical endpoint: placements, facts, claim-entity references,
+  entity-resolution decisions and proposed parents, maturity assessments, encounters, scope cohorts and decisions,
+  pending organization proposals, reconsolidation affected entities, and non-complete identity work-unit payloads.
+  Active claim and scope references receive explicit manual successors while their original records remain as
+  superseded history. Proposal meaning, titles, and rationale are not rewritten.
+- Artifact persistence rejects placed claims, consolidated facts, active references, and encounters that point to
+  archived or merged entities. Identity review likewise rejects inactive selected IDs. Merge refuses to run while a
+  Dream commit is prepared/applying, preventing a recovered write set from resurrecting pre-merge entity endpoints.
+- Artifact integrity reporting now identifies inactive entity endpoints in placements, facts, active references,
+  active scope decisions, encounters, live identity decisions, maturity assessments, and scope cohorts.
+- This change only redirects exact canonical IDs under an explicit user curation action; it makes no language-level
+  identity judgment and changes no prompt or ontology, so a direct Ollama probe was not applicable. Validation:
+  focused curation, artifact, API, and recovery tests passed **81/81**; the complete maintained suite passed
+  **285/285 with 2 skipped**. Ruff and `git diff --check` passed.

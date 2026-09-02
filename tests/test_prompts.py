@@ -93,6 +93,23 @@ def test_extraction_injects_schema_values_and_source_policy() -> None:
     assert "OCCURRED AT: unknown" in user
 
 
+def test_subject_census_prompt_explains_the_task_and_local_terms() -> None:
+    system, user = prompts.subject_node_prompt(
+        "registry", "candidate checklist", "evidence"
+    )
+
+    assert system.startswith("Create a subject census for this batch of memory claims.")
+    assert "Each item in the census is a temporary subject node." in system
+    assert "C... aliases identify extracted claims." in system
+    assert "P... aliases identify source-declared participants." in system
+    assert "A date, time, duration, or other temporal expression is not itself" in system
+    assert "Do not choose or return an entity type in this step." in system
+    assert "complete typed census" not in system
+    assert user.startswith("KNOWN ENTITY TYPES AND IDENTITIES:\nregistry")
+    assert "ELIGIBLE SUBJECT CANDIDATES:\ncandidate checklist" in user
+    assert "CLAIMS, PARTICIPANTS, AND SOURCE EVIDENCE:\nevidence" in user
+
+
 def test_prompt_templates_preserve_structured_multiline_inputs() -> None:
     _, routing_user = prompts.claim_routing_prompt(
         "ENTITY one\nENTITY two",

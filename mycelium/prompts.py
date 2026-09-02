@@ -20,10 +20,15 @@ _EXTRACTION_POLICY_TEMPLATES = {
 }
 
 
-def subject_node_prompt(index_content: str, evidence: str) -> tuple[str, str]:
+def subject_node_prompt(
+    index_content: str,
+    candidates: str,
+    evidence: str,
+) -> tuple[str, str]:
     return render_prompt_pair(
         "memory/subject_nodes",
         registry=index_content,
+        candidates=candidates,
         evidence=evidence,
         subject_policy=SUBJECT_CENSUS_POLICY,
     )

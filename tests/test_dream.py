@@ -421,6 +421,49 @@ def test_identity_review_catalog_only_exposes_human_adjudications(tmp_path):
     assert catalog.count("review_state=accepted") == 1
 
 
+def test_subject_candidate_catalog_uses_only_extraction_and_participant_fields(
+    tmp_path,
+):
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    source = SourceDocument(
+        source_id="source-test",
+        source_type="meeting_transcript",
+        session_id="session-test",
+        recorded_at="2026-09-02T12:00:00-07:00",
+        occurred_at="2026-09-02T11:00:00-07:00",
+        participants=["Ava"],
+        segments=[],
+    )
+    claim = MemoryClaim(
+        claim_id="claim-test",
+        text="Ava leads Project Cedar on Friday.",
+        about=[
+            {"entity": "Ava", "role": "subject"},
+            {"entity": "Project Cedar", "role": "owner"},
+        ],
+        provenance=[ClaimProvenance(
+            source_id=source.source_id,
+            segment_ids=["source-test#seg-0001"],
+        )],
+        recorded_at=source.recorded_at,
+        claim_type="relationship",
+        confidence=0.9,
+        facets={"deadline": "Friday"},
+    )
+
+    catalog = RoutingFormatter(artifacts).format_subject_candidates(
+        {"C001": ClaimEvidence(claim, source)},
+        {"P001": (source, "Ava", "participant")},
+    )
+
+    assert catalog == (
+        "- C001: name='Ava'; role=subject\n"
+        "- C001: name='Project Cedar'; role=owner\n"
+        "- P001: name='Ava'; role=source_participant"
+    )
+    assert "Friday" not in catalog
+
+
 def fact_resolution_plan(
     facts: dict[str, tuple[list[str], str, str]],
     *,

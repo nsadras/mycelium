@@ -90,7 +90,9 @@ def test_subject_representation_prompts_derive_from_the_global_ontology() -> Non
         ("context", "context", "no_page"),
     }
 
-    census_system, _ = prompts.subject_node_prompt("registry", "evidence")
+    census_system, _ = prompts.subject_node_prompt(
+        "registry", "candidates", "evidence"
+    )
     extraction_system, _ = prompts.claim_extraction_prompt(
         "agent_conversation", "source-1", None, "segments"
     )

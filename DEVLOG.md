@@ -2576,3 +2576,30 @@ one prose-similarity summary.
   not change, a new Ollama semantic probe was not applicable.
 - Validation: focused ontology/prompt/Dream/review tests passed **69/69**; the complete maintained suite passed
   **296/296 with 2 skipped**; Ruff and `git diff --check` passed.
+
+## 2026-09-02 — Clear, extraction-grounded subject census prompt
+
+- Rewrote the census policy in plain language. It now defines a census and temporary subject node before giving
+  instructions, explains the `C...`, `P...`, `N...`, registry, provisional-identity, and reserved `you` concepts,
+  distinguishes subjects from claim-local details and temporal metadata, and states the exact responsibilities left
+  to later identity, type, relationship, and page-admission stages.
+- The user prompt now labels its inputs directly and includes an `ELIGIBLE SUBJECT CANDIDATES` checklist generated
+  only from extraction's structured `about` mentions and source-declared participants. This is a presentation of
+  existing structured decisions, not lexical entity discovery. The model is instructed to treat those entries as
+  authoritative and to use the remaining claim, source, qualifier, stable-reference, and registry content only as
+  evidence and context.
+- Direct first-attempt production-schema probes used `gemma4:latest`. A neutral person/project example produced both
+  required nodes, while an event/place counterexample produced the event and place without promoting either the
+  claim date or the source timestamp. Earlier candidate wording was rejected after it either promoted the source
+  timestamp or undercounted the neutral and frozen cohorts.
+- The frozen 16-claim conversation-8 work unit `identity-work-264b88732bba0a96` was first probed at the census stage,
+  where the final prompt returned exactly Deborah, Jolene, a photo, Deborah's mother, and Jolene's partner—no date or
+  incidental-detail nodes. A full disposable replay at `/tmp/mycelium-census-pipeline-replay.KqDzLO/store` then
+  completed in one work-unit attempt with the same five persisted nodes, five canonical identity decisions, 16/16
+  routes, and no failures.
+- That replay still exposed downstream identity-quality issues in the previously polluted registry: identity
+  matching selected the existing parents Organization for Deborah's mother despite a Person candidate, and treated
+  Jolene's partner as new despite an existing Person. Those decisions were preserved and are not overridden by the
+  census prompt change.
+- Validation: focused prompt/ontology/Dream tests passed **64/64**; the complete maintained suite passed **298/298
+  with 2 skipped**; Ruff and `git diff --check` passed.

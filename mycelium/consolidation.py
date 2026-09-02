@@ -113,6 +113,9 @@ class ClaimRouter:
                     self.formatter.entity_catalog(
                         planned.values(), include_sections=False
                     ),
+                    self.formatter.format_subject_candidates(
+                        aliases, participants
+                    ),
                     self.formatter.format_evidence(aliases, participants),
                 )
                 response = await self.llm.call_structured(

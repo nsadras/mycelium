@@ -428,6 +428,8 @@ class EntityCurationService:
             changed = False
             for field_name in (
                 "subject_nodes",
+                "identity_node_decisions",
+                "local_identity_decisions",
                 "identity_groups",
                 "existing_identity_verdicts",
                 "type_proposals",

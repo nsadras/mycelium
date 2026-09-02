@@ -20,18 +20,31 @@ def subject_node_prompt(index_content: str, evidence: str) -> tuple[str, str]:
     )
 
 
-def identity_matching_prompt(
+def identity_node_matching_prompt(
     registry: str,
-    nodes: str,
+    node: str,
     evidence: str,
     reviewed_adjudications: str,
 ) -> tuple[str, str]:
     return render_prompt_pair(
-        "memory/identity_matching",
+        "memory/identity_node_matching",
         registry=registry,
-        nodes=nodes,
+        node=node,
         evidence=evidence,
         reviewed_adjudications=reviewed_adjudications,
+    )
+
+
+def local_identity_matching_prompt(
+    node: str,
+    evidence: str,
+    local_identities: str,
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/local_identity_matching",
+        node=node,
+        evidence=evidence,
+        local_identities=local_identities,
     )
 
 

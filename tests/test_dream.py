@@ -26,7 +26,8 @@ from mycelium.store import LogStore, WikiStore
 from mycelium.structured_outputs import (
     claim_routing_output_model,
     entity_plan_output_model,
-    identity_matching_output_model,
+    identity_node_matching_output_model,
+    local_identity_matching_output_model,
     new_identity_verification_output_model,
     identity_type_verification_output_model,
     subject_node_output_model,
@@ -172,12 +173,10 @@ def split_scope_plan(plan: dict) -> list[dict]:
             {"decisions": {}, "participants": dict(plan.get("participants", {}))},
             routing,
         ]
-    return [
-        census,
-        {"identities": [
-            {
-                "identity_key": identity_keys[candidate["candidate_id"]],
-                "node_ids": [candidate["candidate_id"]],
+    identity_responses = []
+    for index, candidate in enumerate(candidates):
+        identity_responses.append({"decision": {
+                "node_id": candidate["candidate_id"],
                 "resolution": "new",
                 "entity_id": "",
                 "candidate_entity_ids": [],
@@ -185,9 +184,18 @@ def split_scope_plan(plan: dict) -> list[dict]:
                 "aliases": [],
                 "confidence": candidate["confidence"],
                 "reason": "The evidence describes a new identity.",
-            }
-            for candidate in candidates
-        ]},
+        }})
+        if index:
+            identity_responses.append({"decision": {
+                "node_id": candidate["candidate_id"],
+                "resolution": "distinct",
+                "local_identity_key": "",
+                "confidence": candidate["confidence"],
+                "reason": "The evidence establishes a distinct local identity.",
+            }})
+    return [
+        census,
+        *identity_responses,
         {"decisions": {
             identity_keys[candidate["candidate_id"]]: {
                 "entity_type": candidate["entity_type"],
@@ -296,24 +304,40 @@ def split_scope_plan(plan: dict) -> list[dict]:
 
 def use_multiple_episode_maturity(responses: list[dict], node_id: str) -> None:
     identity_key = f"I{node_id[1:]}"
-    responses[4]["decisions"][identity_key] = {
+    maturity = next(
+        response for response in responses
+        if identity_key in response.get("decisions", {})
+        and "admission" in response["decisions"][identity_key]
+    )
+    verdict = next(
+        response for response in responses
+        if identity_key in response.get("decisions", {})
+        and "verdict" in response["decisions"][identity_key]
+        and "alternative_types" not in response["decisions"][identity_key]
+    )
+    entity_plan = next(
+        response for response in responses
+        if identity_key in response.get("decisions", {})
+        and "scope" in response["decisions"][identity_key]
+    )
+    maturity["decisions"][identity_key] = {
         "admission": "materialized",
         "basis": {"continuity_basis": "multiple_episodes"},
         "confidence": 0.9,
         "reason": "The identity is supported across source episodes.",
     }
-    responses[5]["decisions"][identity_key] = {
+    verdict["decisions"][identity_key] = {
         "verdict": "not_required",
         "reason": "The structural basis does not require verification.",
     }
-    responses[6]["decisions"][identity_key]["continuity_basis"] = "multiple_episodes"
+    entity_plan["decisions"][identity_key]["continuity_basis"] = "multiple_episodes"
 
 
 def use_existing_identity(
     responses: list[dict], entity_id: str, *, title: str, aliases: list[str]
 ) -> list[dict]:
-    group = responses[1]["identities"][0]
-    group.update({
+    decision = responses[1]["decision"]
+    decision.update({
         "resolution": "existing",
         "entity_id": entity_id,
         "candidate_entity_ids": [],
@@ -495,58 +519,80 @@ def test_subject_node_contract_rejects_extra_fields():
         output_model.model_validate({**valid, "edges": []})
 
 
-def test_identity_matching_contract_coalesces_competing_exact_entity_matches():
-    output_model = identity_matching_output_model(
-        ["N001", "N002"], ["project-atlas"]
+def test_identity_node_matching_contract_requires_the_exact_current_node():
+    output_model = identity_node_matching_output_model(
+        "N002", ["project-atlas"]
     )
-    merged = {
-        "identities": [{
-            "identity_key": "I001",
-            "node_ids": ["N001", "N002"],
-            "resolution": "existing",
-            "entity_id": "project-atlas",
-            "candidate_entity_ids": [],
-            "preferred_title": "Atlas",
-            "aliases": ["Atlas Project"],
-            "confidence": 0.95,
-            "reason": "Both nodes cite the same continuing identity.",
-        }],
-    }
-    assert output_model.model_validate(merged).identities[0].node_ids == [
-        "N001", "N002"
-    ]
-
-    competing = {
-        "identities": [
-            {**merged["identities"][0], "node_ids": ["N001"]},
-            {
-                **merged["identities"][0],
-                "identity_key": "I002",
-                "node_ids": ["N002"],
-            },
-        ],
-    }
-    parsed = output_model.model_validate(competing)
-    assert len(parsed.identities) == 1
-    assert parsed.identities[0].entity_id == "project-atlas"
-    assert parsed.identities[0].node_ids == ["N001", "N002"]
-
-
-def test_identity_matching_contract_still_requires_an_exact_node_partition():
-    output_model = identity_matching_output_model(["N001", "N002"], [])
-    group = {
-        "identity_key": "I001",
-        "node_ids": ["N001"],
-        "resolution": "new",
-        "entity_id": "",
+    decision = {
+        "node_id": "N002",
+        "resolution": "existing",
+        "entity_id": "project-atlas",
         "candidate_entity_ids": [],
         "preferred_title": "Atlas",
-        "aliases": [],
-        "confidence": 0.9,
-        "reason": "One proposed identity.",
+        "aliases": ["Atlas Project"],
+        "confidence": 0.95,
+        "reason": "The evidence establishes the accumulated identity.",
     }
-    with pytest.raises(ValidationError, match="exactly partition"):
-        output_model.model_validate({"identities": [group]})
+    parsed = output_model.model_validate({"decision": decision})
+    assert parsed.decision.node_id == "N002"
+    assert parsed.decision.entity_id == "project-atlas"
+    with pytest.raises(ValidationError):
+        output_model.model_validate({
+            "decision": {**decision, "node_id": "N001"}
+        })
+    with pytest.raises(ValidationError):
+        output_model.model_validate({
+            "decision": {**decision, "entity_id": "project-unknown"}
+        })
+
+
+def test_local_identity_matching_contract_requires_an_accumulated_target():
+    output_model = local_identity_matching_output_model("N002", ["I001"])
+    decision = {
+        "node_id": "N002",
+        "resolution": "same_as_local",
+        "local_identity_key": "I001",
+        "confidence": 0.95,
+        "reason": "The evidence establishes the accumulated identity.",
+    }
+    parsed = output_model.model_validate({"decision": decision})
+    assert parsed.decision.node_id == "N002"
+    assert parsed.decision.local_identity_key == "I001"
+    with pytest.raises(ValidationError):
+        output_model.model_validate({
+            "decision": {**decision, "local_identity_key": "I999"}
+        })
+
+
+def test_sequential_identity_accumulator_merges_exact_existing_and_local_matches():
+    first = {
+        "node_id": "N001",
+        "resolution": "existing",
+        "entity_id": "project-atlas",
+        "local_identity_key": "",
+        "candidate_entity_ids": [],
+        "preferred_title": "Atlas",
+        "aliases": ["Project Atlas"],
+        "confidence": 0.95,
+        "reason": "The evidence identifies canonical Atlas.",
+    }
+    second = {
+        **first,
+        "node_id": "N002",
+        "aliases": ["Atlas initiative"],
+    }
+    groups = ClaimRouter._accumulate_identity_decision([], first)
+    groups = ClaimRouter._accumulate_identity_decision(groups, second)
+    groups = ClaimRouter._accumulate_identity_decision(groups, {
+        **second,
+        "node_id": "N003",
+        "resolution": "same_as_local",
+        "entity_id": "",
+        "local_identity_key": "I001",
+    })
+    assert len(groups) == 1
+    assert groups[0]["node_ids"] == ["N001", "N002", "N003"]
+    assert groups[0]["aliases"] == ["Project Atlas", "Atlas initiative"]
 
 
 def test_identity_type_verifier_preserves_ambiguity_for_review():
@@ -825,6 +871,127 @@ async def test_identity_retry_resumes_after_persisted_subject_census(tmp_path):
     assert completed.attempt_count == 2
     assert completed.identity_groups
     assert llm.call_structured.call_count == 9
+
+
+@pytest.mark.asyncio
+async def test_sequential_identity_retry_resumes_after_last_completed_node(tmp_path):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, source = add_source(logs, artifacts)
+    first_claim = add_claim(
+        artifacts,
+        source,
+        claim_id="claim-one",
+        text="Atlas is a continuing accessibility project.",
+        about="Atlas",
+        claim_type="plan",
+    )
+    second_claim = add_claim(
+        artifacts,
+        source,
+        claim_id="claim-two",
+        text="Beacon is a continuing documentation project.",
+        about="Beacon",
+        claim_type="plan",
+    )
+    responses = split_scope_plan(scope_plan(
+        {
+            "C001": assignment("N001", supporting=["C001"]),
+            "C002": assignment("N002", supporting=["C002"]),
+        },
+        [
+            scope_candidate("N001", "Atlas", "topic", ["C001"]),
+            scope_candidate("N002", "Beacon", "topic", ["C002"]),
+        ],
+    ))
+    llm.call_structured.side_effect = [responses[0], responses[1], {}]
+
+    first = await dream.router.route([
+        ClaimEvidence(first_claim, source), ClaimEvidence(second_claim, source)
+    ])
+
+    assert len(first.failures) == 2
+    failed = artifacts.list_identity_work_units()[0]
+    assert list(failed.identity_node_decisions) == ["N001"]
+    assert failed.identity_groups[0]["node_ids"] == ["N001"]
+
+    llm.call_structured.side_effect = responses[2:]
+    second = await dream.router.route([
+        ClaimEvidence(first_claim, source), ClaimEvidence(second_claim, source)
+    ])
+
+    assert second.failures == []
+    completed = artifacts.list_identity_work_units()[0]
+    assert list(completed.identity_node_decisions) == ["N001", "N002"]
+    assert completed.status == "complete"
+    assert llm.call_structured.call_count == len(responses) + 1
+
+
+@pytest.mark.asyncio
+async def test_sequential_local_accumulation_resumes_without_repeating_canonical_match(
+    tmp_path,
+):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, source = add_source(logs, artifacts)
+    first_claim = add_claim(
+        artifacts,
+        source,
+        claim_id="claim-one",
+        text="Project Atlas is a continuing accessibility effort.",
+        about="Project Atlas",
+        claim_type="plan",
+    )
+    second_claim = add_claim(
+        artifacts,
+        source,
+        claim_id="claim-two",
+        text="The Atlas initiative is another name for Project Atlas.",
+        about="Atlas initiative",
+        claim_type="identity",
+    )
+    responses = split_scope_plan(scope_plan(
+        {
+            "C001": assignment("N001", supporting=["C001"]),
+            "C002": assignment("N001", supporting=["C002"]),
+        },
+        [
+            scope_candidate("N001", "Project Atlas", "topic", ["C001"]),
+            scope_candidate("N002", "Atlas initiative", "topic", ["C002"]),
+        ],
+    ))
+    responses[3]["decision"].update({
+        "resolution": "same_as_local",
+        "local_identity_key": "I001",
+        "reason": "The evidence explicitly establishes the local alias.",
+    })
+    for response in responses[4:9]:
+        response.get("decisions", {}).pop("I002", None)
+    llm.call_structured.side_effect = [
+        responses[0], responses[1], responses[2], {}
+    ]
+
+    first = await dream.router.route([
+        ClaimEvidence(first_claim, source), ClaimEvidence(second_claim, source)
+    ])
+
+    assert len(first.failures) == 2
+    failed = artifacts.list_identity_work_units()[0]
+    assert list(failed.identity_node_decisions) == ["N001", "N002"]
+    assert failed.local_identity_decisions == {}
+    assert failed.identity_groups[0]["node_ids"] == ["N001"]
+
+    llm.call_structured.side_effect = responses[3:]
+    second = await dream.router.route([
+        ClaimEvidence(first_claim, source), ClaimEvidence(second_claim, source)
+    ])
+
+    assert second.failures == []
+    completed = artifacts.list_identity_work_units()[0]
+    assert completed.local_identity_decisions["N002"]["resolution"] == (
+        "same_as_local"
+    )
+    assert completed.identity_groups[0]["node_ids"] == ["N001", "N002"]
+    assert [entity.title for entity in second.new_entities] == ["Project Atlas"]
+    assert llm.call_structured.call_count == len(responses) + 1
 
 
 def test_entity_plan_contract_combines_identity_containment_and_participants():
@@ -1298,11 +1465,11 @@ async def test_later_distinct_source_can_promote_its_provisional_owner(tmp_path)
             "N001", "Archive Effort", "project", ["C001", "C002"]
         )]))
     use_multiple_episode_maturity(second_responses, "N001")
-    second_responses[1]["identities"][0].update({
+    second_responses[1]["decision"].update({
         "resolution": "existing",
         "entity_id": "project-archive-effort",
     })
-    second_responses[1]["identities"][0]["candidate_entity_ids"] = []
+    second_responses[1]["decision"]["candidate_entity_ids"] = []
     second_responses[6]["decisions"]["I001"]["entity_id"] = (
         "project-archive-effort"
     )
@@ -1723,12 +1890,16 @@ async def test_project_components_have_no_identity_creation_path(tmp_path):
         ],
     ))
     use_multiple_episode_maturity(responses, "N001")
-    responses[6]["decisions"]["I002"].update({
+    entity_plan = next(
+        response for response in responses
+        if "scope" in response.get("decisions", {}).get("I002", {})
+    )
+    entity_plan["decisions"]["I002"].update({
         "scope": "occurrence",
         "parent_entity": "I001",
         "reason": "Its memory value belongs to the Archive Project.",
     })
-    responses[6]["decisions"]["I002"].pop("continuity_basis", None)
+    entity_plan["decisions"]["I002"].pop("continuity_basis", None)
     llm.call_structured.side_effect = responses
 
     result = await dream.router.route([
@@ -1893,7 +2064,7 @@ async def test_existing_identity_match_is_verified_before_inheriting_shape(tmp_p
             "N001", "thirty-inch induction range", "artifact", ["C001"]
         )],
     ))
-    responses[1]["identities"][0].update({
+    responses[1]["decision"].update({
         "resolution": "existing",
         "entity_id": person.entity_id,
         "candidate_entity_ids": [],

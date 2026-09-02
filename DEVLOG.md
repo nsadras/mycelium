@@ -2533,3 +2533,30 @@ one prose-similarity summary.
   `benchmark_runs/locomo-mycelium-convo-8-fresh-overnight-20260901` was replayed against `gemma4:12b` on a
   disposable store copy. Its persisted batch moved from coverage-complete/claims-failed at attempt 14 to complete
   at attempt 15; the episode and ingestion operation both became complete with no remaining error.
+
+## 2026-09-02 — Sequential identity matching with accumulated local identities
+
+- Replaced cohort-wide identity partitioning with one canonical-registry decision per subject node. Each call sees
+  the complete current registry but only the current node and its supporting evidence, so the structured contract
+  requires an exact decision for that node instead of allowing later nodes to disappear from an otherwise valid
+  response.
+- Canonically new nodes receive a separate comparison against previously accumulated, canonically new local
+  identities. This separation matters: an initial combined canonical/local probe could explain a canonical match
+  while selecting an unrelated local target. Existing canonical identities are merged only by exact entity ID;
+  all language-level identity judgments remain structured model decisions.
+- Canonical node decisions, local accumulation decisions, and the accumulated identity groups are checkpointed
+  after each successful step. A failed work unit therefore resumes at the unfinished node or unfinished local
+  comparison without repeating successful model decisions.
+- Before integration, direct `gemma4:latest` production-prompt/schema probes correctly matched a neutral known
+  person to the canonical registry and joined an explicit project alias to a prior local identity. A production
+  node from the failed conversation-8 work unit also matched the correct canonical topic on its first call. The
+  combined-decision design was rejected after a real-model replay exposed target-confusion; the split contract was
+  then probed directly before integration.
+- Post-integration, the exact 17-node work unit `identity-work-264b88732bba0a96` replayed on a disposable copy at
+  `/tmp/mycelium-sequential-final-replay.Qoc07m`. It completed with 17/17 canonical decisions, 4 required local
+  comparisons, 17 accumulated identities, 16 claim routes, and zero failures or structured-output retries. The
+  existing subject census still proposed several date-like nodes; changing census quality is intentionally outside
+  this task.
+- Validation: focused Dream/prompt tests passed **56/56**; the complete maintained suite passed **295/295 with 2
+  skipped**; Ruff and `git diff --check` passed. Repository-root pytest still collects the unrelated generated
+  benchmark scratch test that imports the intentionally removed `routing_recall_index`.

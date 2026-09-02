@@ -172,6 +172,18 @@ class RoutingFormatter:
         return "\n".join(lines) or "none"
 
     @staticmethod
+    def format_accumulated_identity_groups(identities: list[dict]) -> str:
+        return "\n".join(
+            f"- {identity['identity_key']}: "
+            f"nodes={','.join(identity['node_ids'])}; "
+            f"resolution={identity['resolution']}; "
+            f"entity_id={identity['entity_id'] or 'new'}; "
+            f"preferred_title={identity['preferred_title']!r}; "
+            f"aliases={','.join(identity['aliases']) or 'none'}"
+            for identity in identities
+        ) or "none"
+
+    @staticmethod
     def format_type_proposals(proposals: dict[str, dict]) -> str:
         return "\n".join(
             f"- {identity_key}: proposed_type={proposal['entity_type']}; "

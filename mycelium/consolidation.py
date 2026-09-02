@@ -25,7 +25,8 @@ from mycelium.ollama import OllamaClient
 from mycelium.structured_outputs import (
     claim_routing_output_model,
     entity_plan_output_model,
-    identity_matching_output_model,
+    identity_node_matching_output_model,
+    local_identity_matching_output_model,
     new_identity_verification_output_model,
     identity_maturity_output_model,
     identity_maturity_verification_output_model,
@@ -170,32 +171,110 @@ class ClaimRouter:
         match_groups: list[dict] = []
         if census_nodes:
             try:
-                if work_unit.identity_groups:
-                    match_groups = work_unit.identity_groups
-                else:
-                    match_model = identity_matching_output_model(
-                        census_nodes,
+                node_decisions = dict(work_unit.identity_node_decisions)
+                local_decisions = dict(work_unit.local_identity_decisions)
+                match_groups = []
+                for node_id, node in census_nodes.items():
+                    match_model = identity_node_matching_output_model(
+                        node_id,
                         [
                             entity_id for entity_id in registry_types
                             if entity_id != "you"
                         ],
                     )
-                    system, user = prompts.identity_matching_prompt(
-                        self.formatter.entity_planning_catalog(planned.values()),
-                        self.formatter.format_subject_graph(census_nodes, []),
-                        self.formatter.format_evidence(aliases, participants),
-                        self.formatter.identity_review_catalog(aliases),
+                    supporting = set(node["supporting_evidence"])
+                    node_aliases = {
+                        alias: item for alias, item in aliases.items()
+                        if alias in supporting
+                    }
+                    node_participants = {
+                        alias: item for alias, item in participants.items()
+                        if alias in supporting
+                    }
+                    node_text = self.formatter.format_subject_graph(
+                        {node_id: node}, []
                     )
-                    response = await self.llm.call_structured(
-                        system,
-                        user,
-                        match_model,
-                        num_predict=4096,
-                        debug_label="dream-identity-matching",
+                    evidence_text = self.formatter.format_evidence(
+                        node_aliases, node_participants
                     )
-                    match_groups = match_model.model_validate(response).model_dump()[
-                        "identities"
+                    if node_id in node_decisions:
+                        decision = match_model.model_validate({
+                            "decision": node_decisions[node_id]
+                        }).model_dump()["decision"]
+                    else:
+                        system, user = prompts.identity_node_matching_prompt(
+                            self.formatter.entity_planning_catalog(planned.values()),
+                            node_text,
+                            evidence_text,
+                            self.formatter.identity_review_catalog(node_aliases),
+                        )
+                        response = await self.llm.call_structured(
+                            system,
+                            user,
+                            match_model,
+                            num_predict=2048,
+                            debug_label=f"dream-identity-matching-{node_id}",
+                        )
+                        decision = match_model.model_validate(response).model_dump()[
+                            "decision"
+                        ]
+                        node_decisions[node_id] = decision
+                        work_unit.identity_node_decisions = node_decisions
+                        work_unit.updated_at = datetime.now().astimezone().isoformat()
+                        self.artifacts.save_identity_work_unit(work_unit)
+                    local_groups = [
+                        group for group in match_groups
+                        if group["resolution"] == "new"
                     ]
+                    if decision["resolution"] == "new" and local_groups:
+                        local_model = local_identity_matching_output_model(
+                            node_id,
+                            [group["identity_key"] for group in local_groups],
+                        )
+                        if node_id in local_decisions:
+                            local_decision = local_model.model_validate({
+                                "decision": local_decisions[node_id]
+                            }).model_dump()["decision"]
+                        else:
+                            system, user = prompts.local_identity_matching_prompt(
+                                node_text,
+                                evidence_text,
+                                self.formatter.format_accumulated_identity_groups(
+                                    local_groups
+                                ),
+                            )
+                            response = await self.llm.call_structured(
+                                system,
+                                user,
+                                local_model,
+                                num_predict=1024,
+                                debug_label=(
+                                    f"dream-local-identity-matching-{node_id}"
+                                ),
+                            )
+                            local_decision = local_model.model_validate(
+                                response
+                            ).model_dump()["decision"]
+                            local_decisions[node_id] = local_decision
+                            work_unit.local_identity_decisions = local_decisions
+                            work_unit.updated_at = (
+                                datetime.now().astimezone().isoformat()
+                            )
+                            self.artifacts.save_identity_work_unit(work_unit)
+                        if local_decision["resolution"] == "same_as_local":
+                            decision = {
+                                **decision,
+                                "resolution": "same_as_local",
+                                "local_identity_key": local_decision[
+                                    "local_identity_key"
+                                ],
+                            }
+                    match_groups = self._accumulate_identity_decision(
+                        match_groups, decision
+                    )
+                    work_unit.identity_groups = match_groups
+                    work_unit.updated_at = datetime.now().astimezone().isoformat()
+                    self.artifacts.save_identity_work_unit(work_unit)
                 for group in match_groups:
                     reviewed = {
                         reviewed_node_entities[node_id]
@@ -1017,6 +1096,60 @@ class ClaimRouter:
         work_unit.updated_at = datetime.now().astimezone().isoformat()
         self.artifacts.save_identity_work_unit(work_unit)
         return result
+
+    @staticmethod
+    def _accumulate_identity_decision(
+        groups: list[dict], decision: dict
+    ) -> list[dict]:
+        accumulated = [dict(group) for group in groups]
+        resolution = str(decision["resolution"])
+        target: dict | None = None
+        if resolution == "same_as_local":
+            target = next((
+                group for group in accumulated
+                if group["identity_key"] == decision["local_identity_key"]
+            ), None)
+            if target is None:
+                raise ValueError(
+                    "A local identity decision must reference an accumulated group"
+                )
+        elif resolution == "existing":
+            target = next((
+                group for group in accumulated
+                if group["resolution"] == "existing"
+                and group["entity_id"] == decision["entity_id"]
+            ), None)
+        if target is None:
+            if resolution == "same_as_local":
+                raise ValueError("Local identity target was not available")
+            target = {
+                "identity_key": f"I{len(accumulated) + 1:03d}",
+                "node_ids": [],
+                "preferred_title": decision["preferred_title"],
+                "aliases": [],
+                "confidence": decision["confidence"],
+                "reason": decision["reason"],
+                "resolution": resolution,
+                "entity_id": decision["entity_id"],
+                "candidate_entity_ids": list(
+                    decision["candidate_entity_ids"]
+                ),
+            }
+            accumulated.append(target)
+        target["node_ids"] = list(dict.fromkeys([
+            *target["node_ids"], decision["node_id"]
+        ]))
+        target["aliases"] = list(dict.fromkeys([
+            *target["aliases"], *decision["aliases"]
+        ]))
+        target["confidence"] = min(
+            float(target["confidence"]), float(decision["confidence"])
+        )
+        if len(target["node_ids"]) > 1:
+            target["reason"] = (
+                f"{target['reason']} {decision['node_id']}: {decision['reason']}"
+            )
+        return accumulated
 
     @staticmethod
     def _identity_units(

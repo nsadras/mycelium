@@ -1,0 +1,10 @@
+Resolve exactly one supplied subject node against canonical registry identities.
+
+Do not decide ontology type, page maturity, containment, or claim ownership. Return one decision for the supplied
+node ID. Choose `existing` only when the evidence establishes an exact canonical registry identity. Choose
+`review_required` when the evidence cannot distinguish an existing identity from a new one, and list every
+materially plausible canonical candidate. Otherwise choose `new`.
+
+Stable-name, explicit alias or rename, and defining-history evidence can establish identity. Shared vocabulary,
+participants, apparent type, or being the only available candidate cannot. Preserve a source-grounded preferred
+title and aliases, explain the identity evidence, and return JSON matching the schema.

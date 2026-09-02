@@ -173,10 +173,11 @@ class SubjectGraphNodeOutput(BaseModel):
     participant_evidence: list[str] = Field(max_length=48)
 
 
-class IdentityMatchGroupOutput(BaseModel):
+class IdentityNodeDecisionOutput(BaseModel):
+    """Fields shared by one exact-node identity decision."""
+
     model_config = ConfigDict(extra="forbid")
-    identity_key: str = Field(pattern=r"^I[0-9]{3}$")
-    node_ids: list[str] = Field(min_length=1, max_length=32)
+    node_id: str
     preferred_title: str = Field(min_length=1, max_length=160)
     aliases: list[str] = Field(max_length=12)
     confidence: float = Field(ge=0.0, le=1.0)
@@ -558,27 +559,23 @@ def subject_node_output_model(
     )
 
 
-def identity_matching_output_model(
-    node_ids: Collection[str],
+def identity_node_matching_output_model(
+    node_id: str,
     existing_entity_ids: Collection[str],
 ) -> type[BaseModel]:
-    """Build an exact identity partition before any type or scope decision."""
-    nodes = tuple(dict.fromkeys(str(value) for value in node_ids if value))
-    existing = tuple(
-        dict.fromkeys(str(value) for value in existing_entity_ids if value)
-    )
-    if not nodes:
-        raise ValueError("Identity matching requires subject nodes")
-    node_type = Literal.__getitem__(nodes)
+    """Require one identity decision for one exact subject node."""
+    node = str(node_id).strip()
+    existing = tuple(dict.fromkeys(
+        str(value) for value in existing_entity_ids if value
+    ))
+    if not node:
+        raise ValueError("Sequential identity matching requires one node ID")
     common_fields: dict[str, Any] = {
-        "node_ids": (
-            list[node_type],  # type: ignore[valid-type]
-            Field(min_length=1, max_length=len(nodes)),
-        ),
+        "node_id": (Literal.__getitem__((node,)), ...),
     }
     variants: list[type[BaseModel]] = [create_model(
-        "NewIdentityMatchGroup",
-        __base__=IdentityMatchGroupOutput,
+        "NewIdentityNodeDecision",
+        __base__=IdentityNodeDecisionOutput,
         resolution=(Literal["new"], ...),
         entity_id=(Literal[""], ...),
         candidate_entity_ids=(list[str], Field(max_length=0)),
@@ -588,16 +585,16 @@ def identity_matching_output_model(
         existing_type = Literal.__getitem__(existing)
         variants.extend([
             create_model(
-                "ExistingIdentityMatchGroup",
-                __base__=IdentityMatchGroupOutput,
+                "ExistingIdentityNodeDecision",
+                __base__=IdentityNodeDecisionOutput,
                 resolution=(Literal["existing"], ...),
                 entity_id=(existing_type, ...),  # type: ignore[valid-type]
                 candidate_entity_ids=(list[str], Field(max_length=0)),
                 **common_fields,
             ),
             create_model(
-                "ReviewIdentityMatchGroup",
-                __base__=IdentityMatchGroupOutput,
+                "ReviewIdentityNodeDecision",
+                __base__=IdentityNodeDecisionOutput,
                 resolution=(Literal["review_required"], ...),
                 entity_id=(Literal[""], ...),
                 candidate_entity_ids=(
@@ -607,62 +604,62 @@ def identity_matching_output_model(
                 **common_fields,
             ),
         ])
-    group_union = Annotated[
+    decision_union = Annotated[
         Union.__getitem__(tuple(variants)),
         Field(discriminator="resolution"),
     ]
-    base_model = create_model(
-        "ExactIdentityMatchingPlan",
+    return create_model(
+        "ExactIdentityNodeDecisionPlan",
         __config__=ConfigDict(extra="forbid"),
-        identities=(list[group_union], Field(min_length=1, max_length=len(nodes))),
+        decision=(decision_union, ...),
     )
 
-    class ExactIdentityMatchingPlan(base_model):  # type: ignore[valid-type, misc]
-        @model_validator(mode="before")
-        @classmethod
-        def coalesce_existing_identity_groups(cls, value):
-            if not isinstance(value, dict) or not isinstance(
-                value.get("identities"), list
-            ):
-                return value
-            normalized: list[Any] = []
-            by_entity_id: dict[str, dict[str, Any]] = {}
-            for raw_group in value["identities"]:
-                if not isinstance(raw_group, dict):
-                    normalized.append(raw_group)
-                    continue
-                group = dict(raw_group)
-                entity_id = str(group.get("entity_id") or "")
-                if group.get("resolution") != "existing" or not entity_id:
-                    normalized.append(group)
-                    continue
-                existing_group = by_entity_id.get(entity_id)
-                if existing_group is None:
-                    by_entity_id[entity_id] = group
-                    normalized.append(group)
-                    continue
-                for field_name in ("node_ids", "aliases"):
-                    existing_group[field_name] = list(dict.fromkeys([
-                        *existing_group.get(field_name, []),
-                        *group.get(field_name, []),
-                    ]))
-            return {**value, "identities": normalized}
 
-        @model_validator(mode="after")
-        def validate_identity_partition(self):
-            grouped_nodes = [
-                node_id for group in self.identities for node_id in group.node_ids
-            ]
-            if len(grouped_nodes) != len(set(grouped_nodes)):
-                raise ValueError("Identity groups cannot share subject nodes")
-            if set(grouped_nodes) != set(nodes):
-                raise ValueError("Identity groups must exactly partition subject nodes")
-            identity_keys = [group.identity_key for group in self.identities]
-            if len(identity_keys) != len(set(identity_keys)):
-                raise ValueError("Identity keys must be unique")
-            return self
+class LocalIdentityDecisionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    node_id: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=500)
 
-    return ExactIdentityMatchingPlan
+
+def local_identity_matching_output_model(
+    node_id: str,
+    local_identity_keys: Collection[str],
+) -> type[BaseModel]:
+    """Decide whether one canonically-new node joins a prior local identity."""
+    node = str(node_id).strip()
+    local = tuple(dict.fromkeys(
+        str(value) for value in local_identity_keys if value
+    ))
+    if not node or not local:
+        raise ValueError("Local identity matching requires a node and candidates")
+    local_type = Literal.__getitem__(local)
+    common_fields: dict[str, Any] = {
+        "node_id": (Literal.__getitem__((node,)), ...),
+    }
+    same = create_model(
+        "SameLocalIdentityDecision",
+        __base__=LocalIdentityDecisionOutput,
+        resolution=(Literal["same_as_local"], ...),
+        local_identity_key=(local_type, ...),  # type: ignore[valid-type]
+        **common_fields,
+    )
+    distinct = create_model(
+        "DistinctLocalIdentityDecision",
+        __base__=LocalIdentityDecisionOutput,
+        resolution=(Literal["distinct"], ...),
+        local_identity_key=(Literal[""], ...),
+        **common_fields,
+    )
+    decision_union = Annotated[
+        Union.__getitem__((same, distinct)),
+        Field(discriminator="resolution"),
+    ]
+    return create_model(
+        "ExactLocalIdentityDecisionPlan",
+        __config__=ConfigDict(extra="forbid"),
+        decision=(decision_union, ...),
+    )
 
 
 def new_identity_verification_output_model(

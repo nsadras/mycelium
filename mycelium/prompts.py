@@ -1,6 +1,14 @@
 """Typed entry points for production memory prompt templates."""
 
-from mycelium.ontology import CLAIM_TYPES, entity_type_prompt_catalog
+from mycelium.ontology import (
+    CLAIM_TYPES,
+    EXTRACTION_SUBJECT_POLICY,
+    ROUTING_SUBJECT_POLICY,
+    SUBJECT_CENSUS_POLICY,
+    SUBJECT_PAGE_STATE_POLICY,
+    entity_type_prompt_catalog,
+    subject_scope_prompt_catalog,
+)
 from mycelium.prompting import render_prompt, render_prompt_pair
 
 
@@ -17,6 +25,7 @@ def subject_node_prompt(index_content: str, evidence: str) -> tuple[str, str]:
         "memory/subject_nodes",
         registry=index_content,
         evidence=evidence,
+        subject_policy=SUBJECT_CENSUS_POLICY,
     )
 
 
@@ -114,6 +123,8 @@ def entity_plan_prompt(
         nodes=nodes,
         evidence=evidence,
         reviewed_adjudications=reviewed_adjudications,
+        subject_scopes=subject_scope_prompt_catalog(),
+        page_state_policy=SUBJECT_PAGE_STATE_POLICY,
     )
 
 
@@ -127,6 +138,7 @@ def claim_routing_prompt(
         registry=registry,
         entity_plan=entity_plan,
         evidence=evidence,
+        subject_policy=ROUTING_SUBJECT_POLICY,
     )
 
 
@@ -239,6 +251,7 @@ def claim_extraction_prompt(
         "memory/extraction",
         source_type=source_type,
         source_policy=render_prompt(policy_template),
+        subject_policy=EXTRACTION_SUBJECT_POLICY,
         claim_types=CLAIM_TYPES,
         source_id=source_id,
         occurred_at=occurred_at,

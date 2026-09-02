@@ -51,6 +51,120 @@ class EntityTypeDefinition:
         return dict(self.default_sections)
 
 
+@dataclass(frozen=True)
+class SubjectScopeDefinition:
+    """One representation scope available after identity and type are fixed."""
+
+    key: str
+    description: str
+    persisted_scope: str
+    page_state: str
+
+
+# These policies intentionally preserve the current model-facing language. They live
+# beside the entity ontology so extraction, census, planning, and routing do not each
+# become independent authorities for what enters the subject graph.
+SUBJECT_CENSUS_POLICY = """This call declares nodes only. Do not decide identity matches, page admission, claim ownership, relationships, or
+participant resolution. The registry's `you` identity is reserved and must not appear as a node. Include distinct
+real subjects needed as stable identity or relationship endpoints, including meaningful components, occurrences,
+people, and artifacts. Do not create a node for every noun or mentioned object: a person's attributes and practices,
+and contextual inputs or descriptive content, can remain in the claim without becoming graph identities. Merge
+repeated mentions of the same subject within the cohort and combine their cited evidence.
+When the registry contains a provisional identity and the supplied evidence adds personal history, state, plans, or
+relationships about it, declare a candidate node for that subject again. Identity resolution will match it back to
+the stable ID so admission can reconsider whether its page is now mature; do not omit it merely because it is already
+known provisionally.
+
+For a human subject who is a named source participant, put the exact `P...` alias in participant_evidence. Use an
+empty participant_evidence list for every other node. Keep all cited claim and participant aliases in
+supporting_evidence.
+
+A workstream, feature, milestone, issue, tool, deliverable, recurring frame, or bounded occurrence may need a node so
+its identity or relationship can be decided later, but local details and incidental nouns do not. Preserve genuinely
+distinct subjects without deciding their ontology type. Use N001-style IDs and cite only supplied evidence aliases."""
+
+EXTRACTION_SUBJECT_POLICY = """The about list is semantic routing data, not a keyword list. Include the primary subject whose state,
+belief, preference, plan, relationship, or action the claim predicates, with role=subject. Include a
+different durable entity with role=owner when the claim chiefly changes that entity (for example, a
+project requirement). Other named participants may use role=participant. Do not put incidental objects,
+generic activities, or predicate complements in about merely because their words occur in the claim."""
+
+ROUTING_SUBJECT_POLICY = """Resolve explicit subject and object endpoints plus useful context endpoints, but
+do not add endpoints merely because they appear nearby."""
+
+SUBJECT_SCOPE_ONTOLOGY: tuple[SubjectScopeDefinition, ...] = (
+    SubjectScopeDefinition(
+        "materialized",
+        """is an independent subject with useful memory continuity. It has no parent. Use it only when the
+  supplied evidence spans multiple source episodes or explicitly describes prior history plus present or future
+  continuation, or when the schema permits `direct_encounter` for a Person structurally identified as a named source
+  participant. State the allowed continuity_basis. The age, era, or background history of an object is not history of
+  an effort concerning it. Multiple details, requirements, decisions, or work items inside one episode do not
+  establish memory continuity.""",
+        "independent",
+        "materialized",
+    ),
+    SubjectScopeDefinition(
+        "provisional",
+        "is a plausible independent subject whose continuity is not established yet. It has no parent.",
+        "independent",
+        "provisional",
+    ),
+    SubjectScopeDefinition(
+        "component",
+        """is a dependent non-Event part of exactly one Project or Series. It has an exact parent and always uses
+  no page.""",
+        "component",
+        "no_page",
+    ),
+    SubjectScopeDefinition(
+        "occurrence",
+        """is one bounded Event within exactly one Project or Series. It has an exact parent and always uses
+  no page.""",
+        "occurrence",
+        "no_page",
+    ),
+    SubjectScopeDefinition(
+        "standalone_event",
+        "is a bounded Event with no supported Project or Series parent. It has no page and no parent.",
+        "standalone_event",
+        "no_page",
+    ),
+    SubjectScopeDefinition(
+        "context",
+        "is an incidental non-event subject, attribute, or object with no independent page and no parent.",
+        "context",
+        "no_page",
+    ),
+)
+SUBJECT_SCOPES = tuple(definition.key for definition in SUBJECT_SCOPE_ONTOLOGY)
+SUBJECT_SCOPES_BY_KEY = {
+    definition.key: definition for definition in SUBJECT_SCOPE_ONTOLOGY
+}
+SUBJECT_PERSISTED_SCOPES = tuple(dict.fromkeys(
+    definition.persisted_scope for definition in SUBJECT_SCOPE_ONTOLOGY
+))
+SUBJECT_PAGE_STATES = tuple(dict.fromkeys(
+    definition.page_state for definition in SUBJECT_SCOPE_ONTOLOGY
+))
+INDEPENDENT_SUBJECT_SCOPES = tuple(
+    definition.key
+    for definition in SUBJECT_SCOPE_ONTOLOGY
+    if definition.persisted_scope == "independent"
+)
+
+SUBJECT_SCOPE_CONTAINMENT_POLICY = """- Require affirmative parent evidence. Related domain, organization, people, timing, or an available registry option
+  is not containment. A separately named effort remains separate unless evidence places it inside a parent."""
+
+SUBJECT_PAGE_STATE_POLICY = """Page state:
+- Scope directly determines page state: materialized creates a page, provisional preserves an identity without a
+  page, and component, occurrence, standalone_event, and context have no page.
+- A Series is independent only when evidence treats recurrence as a shared frame with its own evolving state, plans,
+  decisions, or history. A person's occupation, habit, hobby, or repeated background activity is not itself a Series.
+- Existing materialized identities remain usable even when this cohort is thin; do not treat scope as a request
+  to erase prior memory."""
+
+
 def _section(key: str, title: str, description: str) -> SectionDefinition:
     return SectionDefinition(key, title, description)
 
@@ -553,6 +667,13 @@ def entity_type_definition(entity_type: str) -> EntityTypeDefinition:
         raise ValueError(f"Unsupported entity type: {entity_type}") from exc
 
 
+def subject_scope_definition(scope: str) -> SubjectScopeDefinition:
+    try:
+        return SUBJECT_SCOPES_BY_KEY[scope]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported subject scope: {scope}") from exc
+
+
 def section_keys(entity_type: str) -> tuple[str, ...]:
     return entity_type_definition(entity_type).section_keys()
 
@@ -597,6 +718,17 @@ def entity_type_prompt_catalog(*, discoverable_only: bool = False) -> str:
     return "\n".join(
         f"- {item.label} (`{item.key}`): {item.description}" for item in definitions
     )
+
+
+def subject_scope_prompt_catalog() -> str:
+    """Render the authoritative subject-scope definitions for model decisions."""
+    lines = ["Scope variants:"]
+    lines.extend(
+        f"- `{definition.key}` {definition.description}"
+        for definition in SUBJECT_SCOPE_ONTOLOGY
+    )
+    lines.append(SUBJECT_SCOPE_CONTAINMENT_POLICY)
+    return "\n".join(lines)
 
 
 def section_prompt_catalog() -> str:

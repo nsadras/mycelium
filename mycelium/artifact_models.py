@@ -6,7 +6,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from mycelium.ontology import CLAIM_TYPES, ENTITY_TYPES
+from mycelium.ontology import (
+    CLAIM_TYPES,
+    ENTITY_TYPES,
+    SUBJECT_PAGE_STATES,
+    SUBJECT_PERSISTED_SCOPES,
+)
 
 EVIDENCE_MODALITIES = {"speech", "visual", "tool", "mixed", "unknown"}
 TEMPORAL_STATUSES = {"past", "current", "future", "recurring", "atemporal", "unknown"}
@@ -273,14 +278,13 @@ class EntityResolutionDecision:
             raise ValueError(f"Unsupported entity-resolution decision: {self.decision_type}")
         if self.review_state not in {"accepted", "review_required", "rejected"}:
             raise ValueError(f"Unsupported identity review state: {self.review_state}")
-        if self.proposed_scope not in {
-            None, "independent", "component", "occurrence", "standalone_event",
-            "context",
-        }:
+        if self.proposed_scope is not None and (
+            self.proposed_scope not in SUBJECT_PERSISTED_SCOPES
+        ):
             raise ValueError(f"Unsupported proposed identity scope: {self.proposed_scope}")
-        if self.proposed_page_state not in {
-            None, "materialized", "provisional", "no_page",
-        }:
+        if self.proposed_page_state is not None and (
+            self.proposed_page_state not in SUBJECT_PAGE_STATES
+        ):
             raise ValueError(
                 f"Unsupported proposed identity page state: {self.proposed_page_state}"
             )

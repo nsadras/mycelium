@@ -5,30 +5,9 @@ fixed and authoritative: do not merge identities, choose another existing entity
 supplied entity_id, preferred title, and aliases exactly. Cite the supplied evidence in your reasoning and use only
 exact identity or registry IDs.
 
-Scope variants:
-- `materialized` is an independent subject with useful memory continuity. It has no parent. Use it only when the
-  supplied evidence spans multiple source episodes or explicitly describes prior history plus present or future
-  continuation, or when the schema permits `direct_encounter` for a Person structurally identified as a named source
-  participant. State the allowed continuity_basis. The age, era, or background history of an object is not history of
-  an effort concerning it. Multiple details, requirements, decisions, or work items inside one episode do not
-  establish memory continuity.
-- `provisional` is a plausible independent subject whose continuity is not established yet. It has no parent.
-- `component` is a dependent non-Event part of exactly one Project or Series. It has an exact parent and always uses
-  no page.
-- `occurrence` is one bounded Event within exactly one Project or Series. It has an exact parent and always uses
-  no page.
-- `standalone_event` is a bounded Event with no supported Project or Series parent. It has no page and no parent.
-- `context` is an incidental non-event subject, attribute, or object with no independent page and no parent.
-- Require affirmative parent evidence. Related domain, organization, people, timing, or an available registry option
-  is not containment. A separately named effort remains separate unless evidence places it inside a parent.
+{{ subject_scopes }}
 
-Page state:
-- Scope directly determines page state: materialized creates a page, provisional preserves an identity without a
-  page, and component, occurrence, standalone_event, and context have no page.
-- A Series is independent only when evidence treats recurrence as a shared frame with its own evolving state, plans,
-  decisions, or history. A person's occupation, habit, hobby, or repeated background activity is not itself a Series.
-- Existing materialized identities remain usable even when this cohort is thin; do not treat scope as a request
-  to erase prior memory.
+{{ page_state_policy }}
 
 Adjudication:
 - An identity whose matching or type verification is `review_required` must remain review_required. Decide its best

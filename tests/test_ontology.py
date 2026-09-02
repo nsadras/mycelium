@@ -8,12 +8,20 @@ from mycelium.ontology import (
     DISCOVERABLE_ENTITY_TYPES,
     ENTITY_ONTOLOGY,
     ENTITY_TYPES,
+    EXTRACTION_SUBJECT_POLICY,
+    INDEPENDENT_SUBJECT_SCOPES,
+    ROUTING_SUBJECT_POLICY,
+    SUBJECT_CENSUS_POLICY,
+    SUBJECT_PAGE_STATE_POLICY,
+    SUBJECT_SCOPES,
+    SUBJECT_SCOPE_ONTOLOGY,
     ClaimType,
     DiscoverableEntityType,
     default_section,
     entity_type_prompt_catalog,
     ontology_response,
     section_prompt_catalog,
+    subject_scope_prompt_catalog,
 )
 from mycelium.structured_outputs import (
     ExtractedClaimOutput,
@@ -62,6 +70,42 @@ def test_prompt_catalogs_derive_keys_and_descriptions_from_the_registry() -> Non
         "agent_conversation", "source-1", None, "[segment-1] Example"
     )
     assert f"claim_type ({'/'.join(CLAIM_TYPES)})" in extraction_system
+
+
+def test_subject_representation_prompts_derive_from_the_global_ontology() -> None:
+    assert tuple(
+        definition.key for definition in SUBJECT_SCOPE_ONTOLOGY
+    ) == SUBJECT_SCOPES
+    assert len(SUBJECT_SCOPES) == len(set(SUBJECT_SCOPES))
+    assert set(INDEPENDENT_SUBJECT_SCOPES) == {"materialized", "provisional"}
+    assert {
+        (definition.key, definition.persisted_scope, definition.page_state)
+        for definition in SUBJECT_SCOPE_ONTOLOGY
+    } == {
+        ("materialized", "independent", "materialized"),
+        ("provisional", "independent", "provisional"),
+        ("component", "component", "no_page"),
+        ("occurrence", "occurrence", "no_page"),
+        ("standalone_event", "standalone_event", "no_page"),
+        ("context", "context", "no_page"),
+    }
+
+    census_system, _ = prompts.subject_node_prompt("registry", "evidence")
+    extraction_system, _ = prompts.claim_extraction_prompt(
+        "agent_conversation", "source-1", None, "segments"
+    )
+    entity_plan_system, _ = prompts.entity_plan_prompt(
+        "registry", "nodes", "evidence"
+    )
+    routing_system, _ = prompts.claim_routing_prompt(
+        "registry", "entity plan", "evidence"
+    )
+
+    assert SUBJECT_CENSUS_POLICY in census_system
+    assert EXTRACTION_SUBJECT_POLICY in extraction_system
+    assert subject_scope_prompt_catalog() in entity_plan_system
+    assert SUBJECT_PAGE_STATE_POLICY in entity_plan_system
+    assert ROUTING_SUBJECT_POLICY in routing_system
 
 
 def test_declared_default_section_rules_are_centralized() -> None:

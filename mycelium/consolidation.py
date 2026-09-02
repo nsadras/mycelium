@@ -22,6 +22,7 @@ from mycelium.artifacts import (
     IdentityMaturityAssessment,
 )
 from mycelium.ollama import OllamaClient
+from mycelium.ontology import subject_scope_definition
 from mycelium.structured_outputs import (
     claim_routing_output_model,
     entity_plan_output_model,
@@ -757,9 +758,8 @@ class ClaimRouter:
             confidence = float(decision["confidence"])
             accepted = decision["adjudication"] == "accepted"
             scope = str(decision["scope"])
-            page_state = (
-                scope if scope in {"materialized", "provisional"} else "no_page"
-            )
+            scope_definition = subject_scope_definition(scope)
+            page_state = scope_definition.page_state
             entity: EntityRecord | None = None
             if accepted and decision["entity_id"]:
                 entity = planned[str(decision["entity_id"])]
@@ -787,7 +787,7 @@ class ClaimRouter:
                     )
                     if after != before:
                         result.new_entities.append(entity)
-            elif accepted and scope in {"materialized", "provisional"}:
+            elif accepted and scope_definition.persisted_scope == "independent":
                 entity = self._planned_entity(
                     node["entity_type"],
                     node["title"],
@@ -834,11 +834,7 @@ class ClaimRouter:
                 review_state=str(decision["adjudication"]),
                 dream_run_id=dream_run_id,
                 created_at=now,
-                proposed_scope=(
-                    "independent"
-                    if scope in {"materialized", "provisional"}
-                    else scope
-                ),
+                proposed_scope=scope_definition.persisted_scope,
                 proposed_parent_entity_id=(
                     parent_entity.entity_id if parent_entity else None
                 ),
@@ -892,9 +888,7 @@ class ClaimRouter:
                 effective_admission=(
                     "review_required"
                     if decision["adjudication"] == "review_required"
-                    else scope
-                    if scope in {"materialized", "provisional"}
-                    else "no_page"
+                    else page_state
                 ),
                 created_at=now,
                 entity_id=entity.entity_id if entity else None,

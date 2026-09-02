@@ -2560,3 +2560,19 @@ one prose-similarity summary.
 - Validation: focused Dream/prompt tests passed **56/56**; the complete maintained suite passed **295/295 with 2
   skipped**; Ruff and `git diff --check` passed. Repository-root pytest still collects the unrelated generated
   benchmark scratch test that imports the intentionally removed `routing_recall_index`.
+
+## 2026-09-02 — Centralized subject representation ontology
+
+- Moved the existing extraction `about` policy, subject-census eligibility policy, routing endpoint policy,
+  entity-planning scope definitions, containment guidance, and page-state guidance out of their individual prompt
+  templates and into the authoritative ontology module. Prompt entry points now inject the relevant projection of
+  that shared definition.
+- Subject scopes now centrally declare their model-facing key, persisted review scope, and resulting page state.
+  Entity-plan schemas, consolidation, formatting, persisted-artifact validation, and identity-review validation
+  consume those authoritative values instead of maintaining separate scope/page-state lists and mappings.
+- This was intentionally a semantic no-op. Before and after SHA-256 hashes and character lengths were identical for
+  the rendered census (`02b4b837…`, 1743), extraction (`83ba9415…`, 3138), entity-plan (`b9359e00…`, 3321), and
+  claim-routing (`be54501b…`, 1493) system prompts. Because the production prompts and structured decision space did
+  not change, a new Ollama semantic probe was not applicable.
+- Validation: focused ontology/prompt/Dream/review tests passed **69/69**; the complete maintained suite passed
+  **296/296 with 2 skipped**; Ruff and `git diff --check` passed.

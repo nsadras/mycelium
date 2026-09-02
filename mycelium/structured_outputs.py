@@ -5,7 +5,12 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
-from mycelium.ontology import ClaimType, DiscoverableEntityType
+from mycelium.ontology import (
+    INDEPENDENT_SUBJECT_SCOPES,
+    ClaimType,
+    DiscoverableEntityType,
+    subject_scope_definition,
+)
 
 
 class ExtractedEntityOutput(BaseModel):
@@ -910,7 +915,10 @@ def entity_plan_output_model(
         provisional_model = create_model(
             f"{node_id}ProvisionalEntityDecision",
             __base__=EntityPlanDecisionOutput,
-            scope=(Literal["provisional"], ...),
+            scope=(
+                Literal.__getitem__((subject_scope_definition("provisional").key,)),
+                ...,
+            ),
             entity_id=(entity_id_type, ...),  # type: ignore[valid-type]
             parent_entity=(Literal[""], ...),
             adjudication=(adjudication_type, ...),  # type: ignore[valid-type]
@@ -918,7 +926,10 @@ def entity_plan_output_model(
         context_model = create_model(
             f"{node_id}ContextEntityDecision",
             __base__=EntityPlanDecisionOutput,
-            scope=(Literal["context"], ...),
+            scope=(
+                Literal.__getitem__((subject_scope_definition("context").key,)),
+                ...,
+            ),
             entity_id=(entity_id_type, ...),  # type: ignore[valid-type]
             parent_entity=(Literal[""], ...),
             adjudication=(adjudication_type, ...),  # type: ignore[valid-type]
@@ -930,7 +941,12 @@ def entity_plan_output_model(
             variants.insert(0, create_model(
                 f"{node_id}MaterializedEntityDecision",
                 __base__=EntityPlanDecisionOutput,
-                scope=(Literal["materialized"], ...),
+                scope=(
+                    Literal.__getitem__((
+                        subject_scope_definition("materialized").key,
+                    )),
+                    ...,
+                ),
                 entity_id=(entity_id_type, ...),  # type: ignore[valid-type]
                 parent_entity=(Literal[""], ...),
                 continuity_basis=(continuity_type, ...),  # type: ignore[valid-type]
@@ -940,7 +956,12 @@ def entity_plan_output_model(
             variants.append(create_model(
                 f"{node_id}StandaloneEventDecision",
                 __base__=EntityPlanDecisionOutput,
-                scope=(Literal["standalone_event"], ...),
+                scope=(
+                    Literal.__getitem__((
+                        subject_scope_definition("standalone_event").key,
+                    )),
+                    ...,
+                ),
                 entity_id=(entity_id_type, ...),  # type: ignore[valid-type]
                 parent_entity=(Literal[""], ...),
                 adjudication=(adjudication_type, ...),  # type: ignore[valid-type]
@@ -948,7 +969,9 @@ def entity_plan_output_model(
         allowed_parents = tuple(value for value in parent_ids if value != node_id)
         if allowed_parents:
             parent_type = Literal.__getitem__(allowed_parents)
-            scope_value = "occurrence" if node_type == "event" else "component"
+            scope_value = subject_scope_definition(
+                "occurrence" if node_type == "event" else "component"
+            ).key
             scope_type = Literal.__getitem__((scope_value,))
             contained_model = create_model(
                 f"{node_id}ContainedEntityDecision",
@@ -1013,7 +1036,7 @@ def entity_plan_output_model(
                 parent = getattr(self.decisions, parent_id)
                 if (
                     parent.adjudication != "accepted"
-                    or parent.scope not in {"materialized", "provisional"}
+                    or parent.scope not in INDEPENDENT_SUBJECT_SCOPES
                 ):
                     raise ValueError(
                         "A contained entity requires an accepted independent "

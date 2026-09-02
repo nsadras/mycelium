@@ -19,7 +19,13 @@ from mycelium.artifacts import (
     OrganizationProposal,
 )
 from mycelium.materialization import MaterializationResult, PageMaterializer
-from mycelium.ontology import ENTITY_TYPES, default_section, section_keys
+from mycelium.ontology import (
+    ENTITY_TYPES,
+    SUBJECT_PAGE_STATES,
+    SUBJECT_PERSISTED_SCOPES,
+    default_section,
+    section_keys,
+)
 from mycelium.store import WikiStore
 from mycelium.projection import display_claim_text
 
@@ -824,6 +830,10 @@ class IdentityReviewService:
     ) -> None:
         if entity_type not in set(ENTITY_TYPES) - {"you"}:
             raise ValueError("Identity review requires a discoverable entity type")
+        if scope not in SUBJECT_PERSISTED_SCOPES:
+            raise ValueError("Identity review requires an explicit scope")
+        if page_state not in SUBJECT_PAGE_STATES:
+            raise ValueError("Identity review requires an explicit page state")
         if scope == "independent":
             if page_state not in {"materialized", "provisional"} or parent_entity_id:
                 raise ValueError("Independent identities require a page state and no parent")
@@ -844,8 +854,6 @@ class IdentityReviewService:
         elif scope == "component":
             if entity_type == "event":
                 raise ValueError("Events use occurrence rather than component scope")
-        else:
-            raise ValueError("Identity review requires an explicit scope")
         if page_state != "no_page" or not parent_entity_id:
             raise ValueError("Contained identities require an exact parent and no page")
         parent = self.artifacts.get_entity(parent_entity_id)

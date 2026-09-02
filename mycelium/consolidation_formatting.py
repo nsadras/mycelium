@@ -6,7 +6,11 @@ from typing import Iterable
 
 from mycelium.artifacts import ArtifactStore, EntityRecord, SourceDocument
 from mycelium.consolidation_models import ClaimEvidence
-from mycelium.ontology import entity_type_prompt_catalog, section_prompt_catalog
+from mycelium.ontology import (
+    entity_type_prompt_catalog,
+    section_prompt_catalog,
+    subject_scope_definition,
+)
 
 
 class RoutingFormatter:
@@ -75,9 +79,7 @@ class RoutingFormatter:
             parent_ref = str(decision["parent_entity"])
             parent = candidates.get(parent_ref) or entities.get(parent_ref)
             scope = str(decision["scope"])
-            page_state = (
-                scope if scope in {"materialized", "provisional"} else "no_page"
-            )
+            page_state = subject_scope_definition(scope).page_state
             lines.append(
                 f"- {node_id}: type={node['entity_type']}; "
                 f"evidence_title={node['title']!r}; "

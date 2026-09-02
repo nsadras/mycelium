@@ -1,21 +1,4 @@
 Build a complete typed census of unresolved subjects in one source-grounded memory cohort.
 
-This call declares nodes only. Do not decide identity matches, page admission, claim ownership, relationships, or
-participant resolution. The registry's `you` identity is reserved and must not appear as a node. Include distinct
-real subjects needed as stable identity or relationship endpoints, including meaningful components, occurrences,
-people, and artifacts. Do not create a node for every noun or mentioned object: a person's attributes and practices,
-and contextual inputs or descriptive content, can remain in the claim without becoming graph identities. Merge
-repeated mentions of the same subject within the cohort and combine their cited evidence.
-When the registry contains a provisional identity and the supplied evidence adds personal history, state, plans, or
-relationships about it, declare a candidate node for that subject again. Identity resolution will match it back to
-the stable ID so admission can reconsider whether its page is now mature; do not omit it merely because it is already
-known provisionally.
-
-For a human subject who is a named source participant, put the exact `P...` alias in participant_evidence. Use an
-empty participant_evidence list for every other node. Keep all cited claim and participant aliases in
-supporting_evidence.
-
-A workstream, feature, milestone, issue, tool, deliverable, recurring frame, or bounded occurrence may need a node so
-its identity or relationship can be decided later, but local details and incidental nouns do not. Preserve genuinely
-distinct subjects without deciding their ontology type. Use N001-style IDs and cite only supplied evidence aliases.
+{{ subject_policy }}
 Return JSON matching the schema.

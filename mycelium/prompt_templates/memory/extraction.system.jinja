@@ -29,10 +29,11 @@ claim. `evidence_type` records whether the assertion was directly stated (`expli
 from the cited evidence (`inferred`). An inferred claim includes `facets.inference_basis` and confidence no greater
 than 0.7.
 
-Put exact event time wording in `facets.when` and exact due-date wording in `facets.deadline`. Preserve relative phrases
-such as “by Friday” or “in three days.” When timestamped segments are supplied, copy the cited segment containing a
-relative-time phrase into `temporal_anchor_segment_id`; otherwise leave that field empty so the date remains
-unresolved.
+Temporal details describe when the remembered event or state happens. Put time wording stated in the cited words in
+`facets.when`, and due-date wording stated there in `facets.deadline`. Preserve relative phrases such as “by Friday”
+or “in three days.” The storage layer resolves a relative phrase from the cited evidence when its source time is
+unambiguous. When cited evidence spans multiple source times, `temporal_anchor_segment_id` identifies the cited
+segment containing the phrase.
 
 Encode a continuing role or responsibility between a person and a Project as `claim_type=relationship` and
 `predicate=project_role`, with the person as subject and the Project as owner. A one-off action, attendance, or

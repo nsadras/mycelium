@@ -224,7 +224,7 @@ class RoutingFormatter:
         blocks = []
         for decision in decisions:
             claims = []
-            for claim_id in decision.supporting_claim_ids:
+            for claim_id in decision.identity_evidence_claim_ids:
                 try:
                     claim = self.artifacts.get_claim(claim_id)
                 except FileNotFoundError:
@@ -233,9 +233,8 @@ class RoutingFormatter:
             blocks.append(
                 f"[{decision.decision_id}] type={decision.proposed_entity_type}; "
                 f"title={decision.proposed_title!r}; "
-                f"aliases={','.join(decision.proposed_aliases) or 'none'}; "
                 f"scope={decision.proposed_scope or 'unspecified'}; "
-                f"evidence={' | '.join(claims) or 'none'}"
+                f"identity_defining_evidence={' | '.join(claims) or 'none'}"
             )
         return "\n".join(blocks) or "none"
 

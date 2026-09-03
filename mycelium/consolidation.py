@@ -58,6 +58,7 @@ class ClaimRouter:
         """Route bounded source cohorts so one malformed identity plan stays local."""
         result = RoutingResult()
         seeds = list(seed_entities)
+        pending_decisions: dict[str, EntityResolutionDecision] = {}
         for unit_evidence in self._identity_units(evidence):
             unit = self._work_unit(unit_evidence, dream_run_id)
             partial = await self._route_unit(
@@ -66,9 +67,16 @@ class ClaimRouter:
                 seed_entities=seeds,
                 participant_source_ids=participant_source_ids,
                 work_unit=unit,
+                seed_identity_decisions=pending_decisions.values(),
             )
             self._merge_result(result, partial)
             seeds.extend(partial.new_entities)
+            pending_decisions.update({
+                decision.decision_id: decision
+                for decision in partial.entity_decisions
+                if decision.decision_type == "entity_creation"
+                and decision.review_state == "review_required"
+            })
         return result
 
     async def _route_unit(
@@ -79,6 +87,7 @@ class ClaimRouter:
         seed_entities: Iterable[EntityRecord] = (),
         participant_source_ids: set[str] | None = None,
         work_unit: IdentityWorkUnit,
+        seed_identity_decisions: Iterable[EntityResolutionDecision] = (),
     ) -> RoutingResult:
         result = RoutingResult()
         planned = {entity.entity_id: entity for entity in self.artifacts.list_entities()}
@@ -333,75 +342,19 @@ class ClaimRouter:
                 )),
             }
 
-        pending_proposals = [
-            decision
+        pending_by_id = {
+            decision.decision_id: decision
             for decision in self.artifacts.list_entity_resolution_decisions(
                 review_state="review_required"
             )
             if decision.decision_type == "entity_creation"
-        ]
-        if pending_proposals:
-            try:
-                pending_matches = dict(work_unit.pending_identity_decisions)
-                pending_ids = [
-                    decision.decision_id for decision in pending_proposals
-                ]
-                for identity_key, node in graph_nodes.items():
-                    if node["identity_resolution"] == "existing":
-                        continue
-                    if identity_key in pending_matches:
-                        output_model = pending_identity_matching_output_model(
-                            pending_ids
-                        )
-                        pending_match = output_model.model_validate({
-                            "decision": pending_matches[identity_key]
-                        }).model_dump()["decision"]
-                    else:
-                        supporting = set(node["supporting_evidence"])
-                        node_aliases = {
-                            alias: item for alias, item in aliases.items()
-                            if alias in supporting
-                        }
-                        node_participants = {
-                            alias: item for alias, item in participants.items()
-                            if alias in supporting
-                        }
-                        pending_match = await self._match_pending_identity(
-                            node,
-                            pending_proposals,
-                            node_aliases,
-                            node_participants,
-                        )
-                        pending_matches[identity_key] = pending_match
-                        work_unit.pending_identity_decisions = pending_matches
-                        work_unit.stage = "pending_identity_matching"
-                        work_unit.updated_at = (
-                            datetime.now().astimezone().isoformat()
-                        )
-                        self.artifacts.save_identity_work_unit(work_unit)
-                    if pending_match["resolution"] == "distinct":
-                        continue
-                    node["identity_resolution"] = "review_required"
-                    node["entity_id"] = ""
-                    node["candidate_entity_ids"] = []
-                    node["pending_identity_resolution"] = pending_match[
-                        "resolution"
-                    ]
-                    node["pending_identity_decision_ids"] = (
-                        [pending_match["decision_id"]]
-                        if pending_match["resolution"] == "same_as_pending"
-                        else list(pending_match["candidate_decision_ids"])
-                    )
-                    node["identity_reason"] = pending_match["reason"]
-            except Exception as exc:
-                return self._fail_work_unit(
-                    work_unit,
-                    evidence,
-                    "pending_identity_matching",
-                    "Pending identity matching did not satisfy the contract: "
-                    f"{type(exc).__name__}: {exc}",
-                )
-
+        }
+        pending_by_id.update({
+            decision.decision_id: decision
+            for decision in seed_identity_decisions
+            if decision.decision_type == "entity_creation"
+            and decision.review_state == "review_required"
+        })
         identity_type_evidence = {
             identity_key: node["supporting_evidence"]
             for identity_key, node in graph_nodes.items()
@@ -500,6 +453,73 @@ class ClaimRouter:
                 node["entity_id"] = ""
                 node["identity_resolution"] = "review_required"
 
+        try:
+            pending_matches = dict(work_unit.pending_identity_decisions)
+            for identity_key, node in graph_nodes.items():
+                if (
+                    node["identity_resolution"] != "new"
+                    or node["type_adjudication"] != "accepted"
+                ):
+                    continue
+                pending_proposals = [
+                    decision
+                    for _, decision in sorted(pending_by_id.items())
+                    if decision.proposed_entity_type == node["entity_type"]
+                ]
+                if not pending_proposals:
+                    continue
+                pending_ids = [
+                    decision.decision_id for decision in pending_proposals
+                ]
+                if identity_key in pending_matches:
+                    output_model = pending_identity_matching_output_model(
+                        pending_ids
+                    )
+                    pending_match = output_model.model_validate({
+                        "decision": pending_matches[identity_key]
+                    }).model_dump()["decision"]
+                else:
+                    supporting = set(node["supporting_evidence"])
+                    node_aliases = {
+                        alias: item for alias, item in aliases.items()
+                        if alias in supporting
+                    }
+                    node_participants = {
+                        alias: item for alias, item in participants.items()
+                        if alias in supporting
+                    }
+                    pending_match = await self._match_pending_identity(
+                        node,
+                        pending_proposals,
+                        node_aliases,
+                        node_participants,
+                    )
+                    pending_matches[identity_key] = pending_match
+                    work_unit.pending_identity_decisions = pending_matches
+                    work_unit.stage = "pending_identity_matching"
+                    work_unit.updated_at = datetime.now().astimezone().isoformat()
+                    self.artifacts.save_identity_work_unit(work_unit)
+                if pending_match["resolution"] == "distinct":
+                    continue
+                node["identity_resolution"] = "review_required"
+                node["entity_id"] = ""
+                node["candidate_entity_ids"] = []
+                node["pending_identity_resolution"] = pending_match["resolution"]
+                node["pending_identity_decision_ids"] = (
+                    [pending_match["decision_id"]]
+                    if pending_match["resolution"] == "same_as_pending"
+                    else list(pending_match["candidate_decision_ids"])
+                )
+                node["identity_reason"] = pending_match["reason"]
+        except Exception as exc:
+            return self._fail_work_unit(
+                work_unit,
+                evidence,
+                "pending_identity_matching",
+                "Pending identity matching did not satisfy the contract: "
+                f"{type(exc).__name__}: {exc}",
+            )
+
         rejected_existing_ids: dict[str, str] = {}
         try:
             for identity_key, node in graph_nodes.items():
@@ -547,10 +567,24 @@ class ClaimRouter:
                     node["candidate_entity_ids"] = identity_verdict[
                         "candidate_entity_ids"
                     ]
+                    node["type_adjudication"] = "review_required"
                 else:
-                    node["identity_resolution"] = "new"
-                    node["candidate_entity_ids"] = []
-                    rejected_existing_ids[identity_key] = proposed_entity_id
+                    proposed_entity = planned[proposed_entity_id]
+                    if proposed_entity.entity_type == node["entity_type"]:
+                        # Two independent identity decisions disagree about a
+                        # same-type canonical candidate. That is unresolved
+                        # identity, not evidence authorizing a duplicate.
+                        node["identity_resolution"] = "review_required"
+                        node["candidate_entity_ids"] = [proposed_entity_id]
+                        node["type_adjudication"] = "review_required"
+                    else:
+                        # The initial untyped match selected an entity whose
+                        # shape conflicts with the independently verified type.
+                        # A distinct verdict over the correctly typed registry
+                        # therefore supports a genuinely new identity.
+                        node["identity_resolution"] = "new"
+                        node["candidate_entity_ids"] = []
+                        rejected_existing_ids[identity_key] = proposed_entity_id
         except Exception as exc:
             return self._fail_work_unit(
                 work_unit,
@@ -744,6 +778,7 @@ class ClaimRouter:
                     node_id
                     for node_id, node in graph_nodes.items()
                     if node["type_adjudication"] == "review_required"
+                    or node["identity_resolution"] == "review_required"
                 } | maturity_review_required_nodes,
             )
             if work_unit.entity_plan:
@@ -882,7 +917,11 @@ class ClaimRouter:
                     )
                     if after != before:
                         result.new_entities.append(entity)
-            elif accepted and scope_definition.persisted_scope == "independent":
+            elif (
+                accepted
+                and node["identity_resolution"] == "new"
+                and scope_definition.persisted_scope == "independent"
+            ):
                 entity = self._planned_entity(
                     node["entity_type"],
                     node["title"],
@@ -927,11 +966,7 @@ class ClaimRouter:
                     pending_id = pending_ids[0]
                     identity_decision = reused_pending_decisions.get(pending_id)
                     if identity_decision is None:
-                        identity_decision = (
-                            self.artifacts.get_entity_resolution_decision(
-                                pending_id
-                            )
-                        )
+                        identity_decision = pending_by_id[pending_id]
                     identity_decision.source_ids = sorted({
                         *identity_decision.source_ids, *supporting_source_ids
                     })
@@ -957,6 +992,7 @@ class ClaimRouter:
                     proposed_title=str(node["title"]),
                     source_ids=supporting_source_ids,
                     supporting_claim_ids=supporting_claim_ids,
+                    identity_evidence_claim_ids=supporting_claim_ids,
                     supporting_segment_ids=supporting_segment_ids,
                     confidence=confidence,
                     reason=str(decision["reason"]),
@@ -1435,7 +1471,13 @@ class ClaimRouter:
         target.new_entities.extend(source.new_entities)
         target.failures.extend(source.failures)
         target.encounters.extend(source.encounters)
-        target.entity_decisions.extend(source.entity_decisions)
+        decisions = {
+            decision.decision_id: decision for decision in target.entity_decisions
+        }
+        decisions.update({
+            decision.decision_id: decision for decision in source.entity_decisions
+        })
+        target.entity_decisions = list(decisions.values())
         target.maturity_assessments.extend(source.maturity_assessments)
         target.entity_references.extend(source.entity_references)
 
@@ -1510,12 +1552,15 @@ class ClaimRouter:
         contextual_refs = [
             str(value) for value in decision.get("contextual_entities", [])
         ]
-        linked = set()
-        resolved_references: dict[str, str] = {}
-        for value in dict.fromkeys([
+        endpoint_refs = [
             *link_refs,
             *([subject_ref] if subject_ref else []),
             *object_refs,
+        ]
+        linked = set()
+        resolved_references: dict[str, str] = {}
+        for value in dict.fromkeys([
+            *endpoint_refs,
             *contextual_refs,
         ]):
             linked_entity = candidates.get(value) or entities.get(value)
@@ -1531,7 +1576,7 @@ class ClaimRouter:
                     "deferred", supporting_ids, float(decision["confidence"]),
                 )
             resolved_references[value] = linked_entity.entity_id
-        linked.update(resolved_references.values())
+        linked.update(resolved_references[value] for value in endpoint_refs)
         linked.discard(owner.entity_id)
         link_entities = [entities[value] for value in linked if value in entities]
         relationship_kind = str(decision.get("relationship_kind") or "none")

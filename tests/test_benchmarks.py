@@ -153,6 +153,37 @@ async def test_run_locomo_writes_predictions(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_run_locomo_can_finalize_a_bounded_session_prefix(tmp_path):
+    data_path = tmp_path / "locomo.json"
+    data_path.write_text(json.dumps([{
+        "sample_id": "bounded",
+        "conversation": {
+            "session_1": [
+                {"dia_id": "D1:1", "speaker": "A", "text": "First."}
+            ],
+            "session_2": [
+                {"dia_id": "D2:1", "speaker": "A", "text": "Second."}
+            ],
+            "session_3": [
+                {"dia_id": "D3:1", "speaker": "A", "text": "Third."}
+            ],
+        },
+        "qa": [],
+    }]), encoding="utf-8")
+    system = FakeMemorySystem()
+
+    await run_locomo(
+        data_path=data_path,
+        output_dir=tmp_path / "run",
+        system=system,
+        prediction_key="fake_prediction",
+        max_sessions=2,
+    )
+
+    assert [message.message_id for message in system.messages] == ["D1:1", "D2:1"]
+
+
+@pytest.mark.asyncio
 async def test_run_locomo_reports_labeled_retrieval_evidence_recall(tmp_path):
     summary = await run_locomo(
         data_path=Path("tests/fixtures/locomo_tiny.json"),

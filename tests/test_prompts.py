@@ -37,6 +37,7 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
         "reviewed_adjudications": "none",
             "subject_policy": "subject policy",
             "ownership_policy": "ownership policy",
+            "fact_evidence_policy": "fact evidence policy",
         "subject_scopes": "subject scopes",
         "page_state_policy": "page-state policy",
         "proposed_identity": "identity",
@@ -89,7 +90,6 @@ def test_extraction_injects_schema_values_and_source_policy() -> None:
     system, user = prompts.claim_extraction_prompt(
         "meeting_transcript",
         "source-1",
-        None,
         ["Ava", "Dana"],
         "[segment-1] A decision was made.",
     )
@@ -97,15 +97,14 @@ def test_extraction_injects_schema_values_and_source_policy() -> None:
     assert f"claim_type ({'/'.join(CLAIM_TYPES)})" in system
     assert "Capture decisions, proposals, action items" in system
     assert "SOURCE: source-1" in user
-    assert "SOURCE TIME: unknown" in user
     assert "SOURCE PARTICIPANTS:\n- Ava\n- Dana" in user
+    assert "SOURCE TIME" not in user
 
 
 def test_extraction_explains_structured_memory_terms() -> None:
     system, _ = prompts.claim_extraction_prompt(
         "agent_conversation",
         "source-1",
-        None,
         ["Dana"],
         "[segment-1] Dana selected Atlas.",
     )
@@ -116,6 +115,20 @@ def test_extraction_explains_structured_memory_terms() -> None:
     assert "`facets` stores structured details" in system
     assert "`evidence_modality` records how the evidence was observed" in system
     assert "`evidence_type` records whether the assertion was directly stated" in system
+
+
+def test_fact_prompts_share_the_authoritative_evidence_policy() -> None:
+    prompt_pairs = [
+        prompts.fact_rendering_prompt("owner", "sections", "groups", "facts"),
+        prompts.fact_quality_prompt("owner", "rendered", "groups"),
+        prompts.fact_repair_prompt("owner", "rejected", "groups"),
+    ]
+
+    for system, _ in prompt_pairs:
+        assert "Linked entities and the linked" in system
+        assert "registry are navigation context" in system
+        assert "does not assert involvement" in system
+        assert "expression itself remains supported exactly as stated" in system
 
 
 def test_entity_plan_receives_fixed_page_admission_decisions() -> None:

@@ -316,6 +316,10 @@ class FactTruthChangeOutput(BaseModel):
     disposition: Literal["truth_change"]
     relation: Literal["contradicts", "supersedes"]
     target_claim_aliases: list[str] = Field(min_length=1, max_length=48)
+    durable_field: str = Field(min_length=1, max_length=200)
+    prior_state: str = Field(min_length=1, max_length=300)
+    incoming_state: str = Field(min_length=1, max_length=300)
+    transition_evidence: str = Field(min_length=1, max_length=500)
     explanation: str = Field(min_length=1, max_length=800)
     confidence: float = Field(ge=0.0, le=1.0)
 

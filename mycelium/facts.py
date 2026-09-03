@@ -54,6 +54,8 @@ class FactResolutionResult:
 class FactResolver:
     """Make one complete, fail-closed fact decision for each affected owner."""
 
+    _MAX_UNREPRESENTED_PER_GROUPING = 12
+
     def __init__(self, llm: OllamaClient, artifacts: ArtifactStore):
         self.llm = llm
         self.artifacts = artifacts
@@ -100,27 +102,11 @@ class FactResolver:
                 claim = owner_claims[0]
                 placement = placement_by_claim[claim.claim_id]
                 owner = entities[owner_id]
-                section = default_section(
-                    owner.entity_type, claim.claim_type, claim.predicate
+                direct_fact, direct_placement = self._direct_projection(
+                    owner, claim, placement
                 )
-                now = datetime.now().astimezone().isoformat()
-                result.facts.append(ConsolidatedFact(
-                    fact_id=f"fact-{uuid.uuid4().hex[:12]}",
-                    text=display_claim_text(claim),
-                    member_claim_ids=[claim.claim_id],
-                    owner_entity_id=owner_id,
-                    section_key=section,
-                    state="history" if claim.temporal_status == "past" else "current",
-                    linked_entity_ids=list(placement.linked_entity_ids),
-                    synthesis_origin="claim",
-                    confidence=claim.confidence,
-                    reason="Direct projection of one owner-scoped canonical claim.",
-                    created_at=now,
-                    updated_at=now,
-                ))
-                result.placements.append(replace(
-                    placement, section_key=section, updated_at=now
-                ))
+                result.facts.append(direct_fact)
+                result.placements.append(direct_placement)
                 continue
             try:
                 resolved = await self._resolve_owner(
@@ -157,6 +143,105 @@ class FactResolver:
         return result
 
     async def _resolve_owner(
+        self,
+        owner_id: str,
+        claims: list[MemoryClaim],
+        placements: dict[str, ClaimPlacement],
+        existing: list[ConsolidatedFact],
+        incoming_claim_ids: set[str],
+        dream_run_id: str,
+        entities: dict[str, EntityRecord],
+    ) -> FactResolutionResult:
+        represented_claim_ids = {
+            claim_id for fact in existing for claim_id in fact.member_claim_ids
+        }
+        unrepresented = [
+            claim for claim in claims
+            if claim.claim_id not in represented_claim_ids
+        ]
+        if len(unrepresented) <= self._MAX_UNREPRESENTED_PER_GROUPING:
+            return await self._resolve_owner_step(
+                owner_id,
+                claims,
+                placements,
+                existing,
+                incoming_claim_ids,
+                dream_run_id,
+                entities,
+            )
+
+        # Resolve bounded groups of new claims against the facts accumulated so
+        # far. Later groups can still join facts created earlier in this run.
+        working_facts = list(existing)
+        placement_updates: dict[str, ClaimPlacement] = {}
+        proposals: list[ReconsolidationProposal] = []
+        claim_by_id = {claim.claim_id: claim for claim in claims}
+        for start in range(
+            0, len(unrepresented), self._MAX_UNREPRESENTED_PER_GROUPING
+        ):
+            incoming_group = unrepresented[
+                start:start + self._MAX_UNREPRESENTED_PER_GROUPING
+            ]
+            represented = {
+                claim_id
+                for fact in working_facts
+                for claim_id in fact.member_claim_ids
+            }
+            incoming_group_ids = {claim.claim_id for claim in incoming_group}
+            step_claims = [
+                claim_by_id[claim_id]
+                for claim_id in sorted(represented | incoming_group_ids)
+                if claim_id in claim_by_id
+            ]
+            step = await self._resolve_owner_step(
+                owner_id,
+                step_claims,
+                placements,
+                working_facts,
+                incoming_group_ids,
+                dream_run_id,
+                entities,
+            )
+            working_facts = step.facts
+            placement_updates.update({
+                placement.claim_id: placement for placement in step.placements
+            })
+            proposals.extend(step.proposals)
+        return FactResolutionResult(
+            facts=working_facts,
+            placements=list(placement_updates.values()),
+            proposals=proposals,
+        )
+
+    @staticmethod
+    def _direct_projection(
+        owner: EntityRecord,
+        claim: MemoryClaim,
+        placement: ClaimPlacement,
+    ) -> tuple[ConsolidatedFact, ClaimPlacement]:
+        section = default_section(
+            owner.entity_type, claim.claim_type, claim.predicate
+        )
+        now = datetime.now().astimezone().isoformat()
+        return (
+            ConsolidatedFact(
+                fact_id=f"fact-{uuid.uuid4().hex[:12]}",
+                text=display_claim_text(claim),
+                member_claim_ids=[claim.claim_id],
+                owner_entity_id=owner.entity_id,
+                section_key=section,
+                state="history" if claim.temporal_status == "past" else "current",
+                linked_entity_ids=list(placement.linked_entity_ids),
+                synthesis_origin="claim",
+                confidence=claim.confidence,
+                reason="Direct projection of one owner-scoped canonical claim.",
+                created_at=now,
+                updated_at=now,
+            ),
+            replace(placement, section_key=section, updated_at=now),
+        )
+
+    async def _resolve_owner_step(
         self,
         owner_id: str,
         claims: list[MemoryClaim],
@@ -313,6 +398,10 @@ class FactResolver:
                 "relation": decision["relation"],
                 "incoming_claim_aliases": [alias],
                 "target_claim_aliases": decision["target_claim_aliases"],
+                "durable_field": decision["durable_field"],
+                "prior_state": decision["prior_state"],
+                "incoming_state": decision["incoming_state"],
+                "transition_evidence": decision["transition_evidence"],
                 "explanation": decision["explanation"],
                 "confidence": decision["confidence"],
             }
@@ -359,14 +448,18 @@ class FactResolver:
                 fact for fact in existing
                 if set(fact.member_claim_ids) & batch_claim_ids
             ]
-            groups_text = self._fact_groups_text(
-                batch_keys,
-                members_by_key,
-                batch_aliases,
-                placements,
-                alias_for_entity,
-                entities,
-            )
+            groups_by_key = {
+                key: self._fact_groups_text(
+                    [key],
+                    members_by_key,
+                    batch_aliases,
+                    placements,
+                    alias_for_entity,
+                    entities,
+                )
+                for key in batch_keys
+            }
+            groups_text = "\n\n".join(groups_by_key[key] for key in batch_keys)
             system, user = prompts.fact_rendering_prompt(
                 owner_text,
                 "\n".join(
@@ -391,7 +484,7 @@ class FactResolver:
             ]
             batch_rendered = await self._verify_and_repair_facts(
                 owner_text,
-                groups_text,
+                groups_by_key,
                 batch_rendered,
             )
             rendered_facts.update(batch_rendered)
@@ -446,6 +539,10 @@ class FactResolver:
                             for linked_id in placements[claim_id].linked_entity_ids
                         ),
                     }),
+                    durable_field=change["durable_field"],
+                    prior_state=change["prior_state"],
+                    incoming_state=change["incoming_state"],
+                    transition_evidence=change["transition_evidence"],
                 ))
         existing_pending = [
             proposal
@@ -583,11 +680,11 @@ class FactResolver:
     async def _verify_and_repair_facts(
         self,
         owner_text: str,
-        groups_text: str,
+        groups_by_key: dict[str, str],
         rendered: dict[str, dict],
     ) -> dict[str, dict]:
         verdicts = await self._fact_quality_verdicts(
-            owner_text, groups_text, rendered
+            owner_text, groups_by_key, rendered
         )
         rejected = {
             key: rendered[key] for key, verdict in verdicts.items()
@@ -595,62 +692,83 @@ class FactResolver:
         }
         if not rejected:
             return rendered
-        feedback = "\n".join(
-            f"[{key}] fixed_state={rendered[key]['state']}; "
-            f"fixed_section={rendered[key]['section_key']}; "
-            f"rejected_text={rendered[key]['text']}; "
-            f"verifier={verdicts[key]['reason']}"
-            for key in rejected
-        )
-        repair_model = fact_repair_output_model(rejected)
-        system, user = prompts.fact_repair_prompt(
-            owner_text, feedback, groups_text
-        )
-        response = await self.llm.call_structured(
-            system,
-            user,
-            repair_model,
-            num_predict=4096,
-            debug_label="dream-fact-repair",
-        )
-        repairs = repair_model.model_validate(response).model_dump()["facts"]
+        repairs: dict[str, dict] = {}
+        for key, rejected_fact in rejected.items():
+            feedback = (
+                f"[{key}] fixed_state={rejected_fact['state']}; "
+                f"fixed_section={rejected_fact['section_key']}; "
+                f"rejected_text={rejected_fact['text']}; "
+                f"verifier={verdicts[key]['reason']}"
+            )
+            repair_model = fact_repair_output_model({key: rejected_fact})
+            system, user = prompts.fact_repair_prompt(
+                owner_text, feedback, groups_by_key[key]
+            )
+            response = await self.llm.call_structured(
+                system,
+                user,
+                repair_model,
+                num_predict=4096,
+                debug_label=f"dream-fact-repair-{key}",
+            )
+            repairs.update(
+                repair_model.model_validate(response).model_dump()["facts"]
+            )
         repaired_verdicts = await self._fact_quality_verdicts(
-            owner_text, groups_text, repairs
+            owner_text,
+            {key: groups_by_key[key] for key in repairs},
+            repairs,
         )
         still_rejected = [
             key for key, verdict in repaired_verdicts.items()
             if verdict["verdict"] == "unsupported"
         ]
         if still_rejected:
+            diagnostics = {
+                key: {
+                    "fixed_group": groups_by_key[key],
+                    "initial_fact": rendered[key],
+                    "initial_verdict": verdicts[key],
+                    "repaired_fact": repairs[key],
+                    "repaired_verdict": repaired_verdicts[key],
+                }
+                for key in still_rejected
+            }
             raise ValueError(
                 "Presentation facts remained unsupported after repair: "
                 + ", ".join(still_rejected)
+                + "; diagnostics="
+                + json.dumps(diagnostics, ensure_ascii=False, sort_keys=True)
             )
         return {**rendered, **repairs}
 
     async def _fact_quality_verdicts(
         self,
         owner_text: str,
-        groups_text: str,
+        groups_by_key: dict[str, str],
         rendered: dict[str, dict],
     ) -> dict[str, dict]:
-        output_model = fact_quality_output_model(rendered)
-        rendered_text = "\n".join(
-            f"[{key}] state={fact['state']}; section={fact['section_key']}; "
-            f"text={fact['text']}"
-            for key, fact in rendered.items()
-        )
-        system, user = prompts.fact_quality_prompt(
-            owner_text, rendered_text, groups_text
-        )
-        response = await self.llm.call_structured(
-            system,
-            user,
-            output_model,
-            num_predict=2048,
-            debug_label="dream-fact-quality",
-        )
-        return output_model.model_validate(response).model_dump()["decisions"]
+        verdicts: dict[str, dict] = {}
+        for key, fact in rendered.items():
+            output_model = fact_quality_output_model([key])
+            rendered_text = (
+                f"[{key}] state={fact['state']}; "
+                f"section={fact['section_key']}; text={fact['text']}"
+            )
+            system, user = prompts.fact_quality_prompt(
+                owner_text, rendered_text, groups_by_key[key]
+            )
+            response = await self.llm.call_structured(
+                system,
+                user,
+                output_model,
+                num_predict=2048,
+                debug_label=f"dream-fact-quality-{key}",
+            )
+            verdicts.update(
+                output_model.model_validate(response).model_dump()["decisions"]
+            )
+        return verdicts
 
     @staticmethod
     def _owned_by(placement: ClaimPlacement | None, owner_id: str) -> bool:
@@ -699,12 +817,18 @@ class FactResolver:
                 f"[{alias}] id={claim.claim_id}; type={claim.claim_type}; "
                 f"predicate={claim.predicate or 'unknown'}; temporal_status={claim.temporal_status}; "
                 f"temporal={json.dumps(temporal_record(claim.facets), sort_keys=True)}; "
-                f"recorded_at={claim.recorded_at}; "
                 f"linked_entities={json.dumps(linked)}\nclaim={claim.text}\n"
                 f"evidence={json.dumps(evidence, ensure_ascii=False, sort_keys=True)}"
             )
         linked_registry = []
+        used_entity_ids = {
+            entity_id
+            for claim in aliases.values()
+            for entity_id in placements[claim.claim_id].linked_entity_ids
+        }
         for entity_id, alias in alias_for_entity.items():
+            if entity_id not in used_entity_ids:
+                continue
             entity = entities.get(entity_id)
             if entity is not None:
                 linked_registry.append(
@@ -735,17 +859,22 @@ class FactResolver:
         alias_for_entity: dict[str, str],
         entities: dict[str, EntityRecord],
     ) -> str:
+        member_aliases = {
+            alias: aliases[alias]
+            for fact_key in fact_keys
+            for alias in members_by_key[fact_key]
+        }
         membership = "\n".join(
             f"[{fact_key}] members={json.dumps(members_by_key[fact_key])}"
             for fact_key in fact_keys
         )
         return membership + "\n\n" + self._claims_text(
-            aliases, placements, alias_for_entity, entities
+            member_aliases, placements, alias_for_entity, entities
         )
 
     @staticmethod
     def _fact_key_batches(
-        fact_keys: list[str], batch_size: int = 12
+        fact_keys: list[str], batch_size: int = 1
     ) -> list[list[str]]:
         return [
             fact_keys[index:index + batch_size]

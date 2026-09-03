@@ -3,6 +3,7 @@
 from mycelium.ontology import (
     CLAIM_TYPES,
     EXTRACTION_SUBJECT_POLICY,
+    FACT_EVIDENCE_POLICY,
     ROUTING_OWNERSHIP_POLICY,
     ROUTING_SUBJECT_POLICY,
     SUBJECT_CENSUS_POLICY,
@@ -232,6 +233,7 @@ def fact_rendering_prompt(
         sections=sections,
         groups=groups,
         existing_facts=existing_facts,
+        fact_evidence_policy=FACT_EVIDENCE_POLICY,
     )
 
 
@@ -245,6 +247,7 @@ def fact_quality_prompt(
         owner=owner,
         rendered_facts=rendered_facts,
         groups=groups,
+        fact_evidence_policy=FACT_EVIDENCE_POLICY,
     )
 
 
@@ -258,13 +261,13 @@ def fact_repair_prompt(
         owner=owner,
         rejected_facts=rejected_facts,
         groups=groups,
+        fact_evidence_policy=FACT_EVIDENCE_POLICY,
     )
 
 
 def claim_extraction_prompt(
     source_type: str,
     source_id: str,
-    occurred_at: str | None,
     participants: list[str],
     segments: str,
 ) -> tuple[str, str]:
@@ -279,8 +282,6 @@ def claim_extraction_prompt(
         subject_policy=EXTRACTION_SUBJECT_POLICY,
         claim_types=CLAIM_TYPES,
         source_id=source_id,
-        occurred_at=occurred_at,
-        unknown_time="unknown",
         participants=participants,
         segments=segments,
     )

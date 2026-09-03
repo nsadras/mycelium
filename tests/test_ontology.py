@@ -68,7 +68,7 @@ def test_prompt_catalogs_derive_keys_and_descriptions_from_the_registry() -> Non
             assert f"{section.key}={section.description}" in section_catalog
 
     extraction_system, _ = prompts.claim_extraction_prompt(
-        "agent_conversation", "source-1", None, ["Ava"], "[segment-1] Example"
+        "agent_conversation", "source-1", ["Ava"], "[segment-1] Example"
     )
     assert f"claim_type ({'/'.join(CLAIM_TYPES)})" in extraction_system
 
@@ -95,7 +95,7 @@ def test_subject_representation_prompts_derive_from_the_global_ontology() -> Non
         "registry", "candidates", "evidence"
     )
     extraction_system, _ = prompts.claim_extraction_prompt(
-        "agent_conversation", "source-1", None, ["Ava"], "segments"
+        "agent_conversation", "source-1", ["Ava"], "segments"
     )
     entity_plan_system, _ = prompts.entity_plan_prompt(
         "registry", "nodes", "maturity decisions", "evidence"

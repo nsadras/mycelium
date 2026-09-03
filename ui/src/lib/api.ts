@@ -352,6 +352,7 @@ export interface EntityResolutionDecisionArtifact {
   proposed_title: string;
   source_ids: string[];
   supporting_claim_ids: string[];
+  identity_evidence_claim_ids: string[];
   supporting_segment_ids: string[];
   confidence: number;
   reason: string;
@@ -485,6 +486,10 @@ export interface ReconsolidationProposalArtifact {
   reviewed_at?: string | null;
   applied_at?: string | null;
   application_error?: string | null;
+  durable_field?: string | null;
+  prior_state?: string | null;
+  incoming_state?: string | null;
+  transition_evidence?: string | null;
 }
 
 export interface ArtifactCoverage {

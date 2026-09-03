@@ -299,6 +299,14 @@ export default function MemoryInspector({ refreshKey = 0, target = null }: { ref
                   <div className="mt-2 break-all font-mono text-xs text-slate-400">{selectedProposal.proposal_id} · {formatDate(selectedProposal.created_at)}</div>
                 </div>
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-relaxed text-amber-900">{selectedProposal.explanation}</div>
+                {selectedProposal.durable_field && (
+                  <section className="grid gap-3 rounded-xl border border-slate-200 p-4 text-sm md:grid-cols-2">
+                    <div><strong>Durable field:</strong> {selectedProposal.durable_field}</div>
+                    <div><strong>Transition evidence:</strong> {selectedProposal.transition_evidence}</div>
+                    <div><strong>Prior state:</strong> {selectedProposal.prior_state}</div>
+                    <div><strong>Incoming state:</strong> {selectedProposal.incoming_state}</div>
+                  </section>
+                )}
                 <div className="grid gap-4 lg:grid-cols-2">
                   <section className="rounded-xl border border-indigo-200 p-4">
                     <div className="mb-2 text-xs font-bold uppercase tracking-wide text-indigo-600">New source-grounded claim</div>

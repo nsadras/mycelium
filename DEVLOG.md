@@ -2717,3 +2717,101 @@ one prose-similarity summary.
   grouped equivalent weekend-hours claims together and kept delivery service separate.
 - Validation: focused consolidation, extraction, prompt, ontology, and artifact suites passed **140/140**; the complete
   maintained suite passed **314/314 with 2 skipped**; Ruff passed across `mycelium` and `tests`.
+
+## 2026-09-03 — LoCoMo accumulated-state correctness fixes
+
+- Audited the twelve-session partial run at
+  `benchmark_runs/locomo-mycelium-convo-2-refactored-e2e-20260903-005917`. Extraction accounted for all 799 source
+  segments, but six of eleven committed consolidation runs had owner-scoped fact failures. The store also contained a
+  completed fact whose text came from a different claim than its declared member, six competing review proposals for
+  one studio, noisy truth-change proposals, and an integrity warning caused only by provisional entities without
+  pages.
+- Fact resolution now processes more than twelve unrepresented owner claims as accumulated groups of at most twelve.
+  Fact rendering, quality verification, and repair each receive exactly one fact and its own fixed claim group per
+  call, preventing another group's evidence from legitimizing cross-wired text and keeping presentation calls below
+  the model context ceiling. A second failed
+  verification now persists the initial draft, repair, both verdicts, and fixed group in the Dream failure reason.
+  Recording timestamps were removed from fact-semantic evidence because an integrated real-model fixture initially
+  rendered an unsupported September 3 event date from `recorded_at`; the corrected rerun at
+  `/tmp/mycelium-fact-in-situ-v2-p4sxi6j4` completed with three correctly bound facts, no added dates, no failures, and
+  no truth-change proposals.
+- Truth-change output now has to state the shared durable field, prior value, incoming value, and transition evidence.
+  The first revised wording still missed a genuine later bicycle-color state, so it was rejected. The final
+  proposition-comparison contract returned `no_change` for an elaborated business priority, equivalent
+  opened/started wording, and two compatible benefits, while returning `supersedes` with exact old/new values for the
+  explicit repainting transition. The structured comparison is persisted on review proposals and displayed in the
+  Memory Inspector.
+- Unresolved entity proposals now retain immutable identity-defining claim IDs separately from their growing support
+  set. Later matching sees that anchor evidence rather than every claim ever associated with the proposal, and review
+  proposals created by one bounded identity unit are accumulated for subsequent units in the same Dream. Pending
+  matching now runs after independent type verification and compares only proposals with the same exact verified
+  ontology type. This prevents a Topic such as an activity from being compared with an Organization proposal merely
+  because their broad subject matter overlaps. The integrated same-type prompt probe reused the intended studio
+  proposal; the different-type boundary is deterministic and covered in the routing suite.
+- Clarified the central extraction `about` contract around the record actually changed. Post-integration production
+  prompt/schema probes assigned a person's operating-hours update to the named Organization as `owner`, while keeping
+  the person's volunteering commitment on the Person and representing the Organization as `participant`.
+- Page integrity now requires a wiki page only for active materialized entities. Re-evaluating the audited partial
+  LoCoMo store reports healthy with no issues; its provisional entities remain intentionally page-less.
+- Validation: the focused prompt, ontology, Dream, fact, artifact, and API suites passed **151/151** before the final
+  type-ordering regression was added; the final complete suite passed **319/319 with 2 skipped**. Ruff, UI lint, UI
+  production build, and `git diff --check` passed. The existing large UI chunk warning remains.
+
+## 2026-09-03 — Five-session Dream failure follow-up
+
+- Audited the five-session rerun at
+  `benchmark_runs/locomo-mycelium-convo-2-refactored-e2e-20260903-032716`. All five ingestions and extraction
+  manifests were complete, but all four attempted Dreams failed. The persisted diagnostics showed that a verifier
+  call declared one member alias while still rendering every claim in its fact batch. The final Dream also exhausted
+  the 32,768-token context while producing structured output. Fixed-group rendering now selects only the group's
+  declared member aliases and only their linked registry entries; presentation rendering itself is singleton rather
+  than a twelve-fact batch.
+- The rerun also showed that source session timestamps had entered canonical claim semantics before fact rendering:
+  41 of 78 claims used the source timestamp as their event-time expression and 20 embedded it in claim text. The
+  extraction model no longer receives `SOURCE TIME` or per-segment timestamp metadata. It extracts temporal wording
+  from the cited source words; the storage layer uses an unambiguous cited-segment timestamp to resolve a relative
+  phrase. A proposed production prompt/schema probe against `gemma4:12b` kept an untimed rehearsal untimed and
+  preserved “tomorrow” as a relative expression on its first attempt. Post-integration production Encoder checks at
+  `/tmp/mycelium-untimed-check.yqDvec` and `/tmp/mycelium-temporal-check.KurpvY` persisted, respectively, only
+  `observed_at` for an untimed durable statement and a correctly resolved 2026-09-04 event time for “tomorrow.”
+- Identity creation now treats disagreement between the initial matcher and independent verifier about a same-type
+  canonical candidate as `review_required`. It cannot turn that disagreement into a duplicate entity. A new entity
+  remains allowed when the initial untyped match has a different verified ontology type and the correctly typed
+  registry is adjudicated distinct. Entity-plan schemas receive identity-review state explicitly, and entity
+  construction has a final exact-state guard requiring `identity_resolution=new`.
+- A disposable real-model FactResolver run at `/tmp/mycelium-fact-singleton.iARMs2` rendered and verified two distinct
+  facts on their first attempts with correct one-claim membership and no failures. Validation passed **147/147** for
+  the combined Dream, fact, prompt, ontology, and artifact regression set, then **322/322 with 2 skipped** for the
+  complete maintained suite. Ruff and `git diff --check` passed.
+
+## 2026-09-03 — Two-session LoCoMo pipeline iteration
+
+- Added a `--max-sessions` benchmark option, forwarded by `MAX_SESSIONS` in `scripts/benchmark-locomo.sh`, so a fresh
+  run can exercise ingestion and Dream over a bounded session prefix without truncating the individual conversations.
+- The first two-session run at
+  `benchmark_runs/locomo-mycelium-convo-2-pipeline-iteration-20260903-01` extracted 22 claims but exposed one fact
+  verification failure. A correctly rendered absolute date for “yesterday” was rejected because the verifier treated
+  a linked conversation participant as required assertion content. Direct production-prompt probes accepted the
+  evidence-supported dated fact and rejected a counterexample that falsely added the participant. The central fact
+  evidence policy now defines linked registry entries as navigation context rather than evidence of involvement.
+- The second run at
+  `benchmark_runs/locomo-mycelium-convo-2-pipeline-iteration-20260903-02` exposed a separate interpretation error:
+  the verifier treated an unresolved relative-time normalization as uncertainty about whether the source statement
+  was supported. Direct production-prompt probes accepted the exact relative phrase and rejected an invented absolute
+  date. The central evidence policy now distinguishes unresolved calendar normalization from epistemic uncertainty.
+- The third fresh run at
+  `benchmark_runs/locomo-mycelium-convo-2-pipeline-iteration-20260903-03` completed both Dreams without failures. All
+  three identity work units completed on their first attempts; 22 claims yielded 18 placed facts and two coherent,
+  cited person pages. Inspection found that routing's explicit object endpoints and incidental contextual identities
+  were still collapsed into the same persisted link list, causing unsupported participant links on otherwise correct
+  facts.
+- Routing now constructs persisted relationship links only from the structured subject/object endpoint decisions.
+  It still validates and retains the model's contextual identities on the transient route, but they no longer become
+  relationship annotations on facts and wiki pages. The frozen-extraction replay at
+  `benchmark_runs/locomo-mycelium-convo-2-pipeline-iteration-20260903-04` completed both Dreams and all three identity
+  work units without retry or failure. It retained Gina as the explicit endpoint of Jon's commitment, removed Gina
+  from Jon's unrelated Paris visit, and produced 17 evidence-bound facts across coherent Gina and Jon pages. One
+  second-session claim was conservatively deferred rather than fabricated.
+- Final replay integrity is healthy. All 148 source segments are accounted for: 22 claimed and 126 explicitly
+  `source_only`, with no pending or unaccounted segments. The complete maintained suite passed **325/325 with 2
+  skipped**; Ruff and `git diff --check` passed.

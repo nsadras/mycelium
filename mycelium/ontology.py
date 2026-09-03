@@ -87,12 +87,14 @@ than separate nodes. A date, time, duration, deadline, or age is not a subject b
 ontology type, containment, or page visibility here. Return schema-valid JSON; use an empty node list only when the
 candidate list contains no representable subject."""
 
-EXTRACTION_SUBJECT_POLICY = """The `about` list contains named identities used by later routing. Each entry uses one of
-three roles: `subject` for the primary identity whose action or state the claim asserts; `owner` for a different
-identity whose lasting state, requirement, plan, or decision the claim chiefly updates; or `participant` for another
-named relationship endpoint. Use one primary subject. When a person's decision or requirement changes a named
-Project, use the person as subject and the Project as owner. Every explicitly named durable identity in the claim must
-appear in `about`."""
+EXTRACTION_SUBJECT_POLICY = """The `about` list is the complete set of named identities needed by later identity
+resolution and routing. Use `subject` for the primary person or identity whose action or state the sentence directly
+asserts. Use `owner` for a different durable identity when the proposition asserts that identity's own operations,
+requirements, plans, decisions, status, or history, even when a person performs the action. Use `participant` for
+another named relationship endpoint. A claim may have both a subject and an owner. Work that operates or changes a
+named Organization or Project belongs to that identity as owner. A personal commitment to visit, join, help, or
+volunteer with another identity belongs to the person; the other identity is a participant. Include every explicitly
+named durable identity in `about`."""
 
 ROUTING_SUBJECT_POLICY = """For a general route, `subject_entity` is the identity grammatically described by the claim,
 `object_entities` are explicit relationship endpoints, and `contextual_entities` are useful secondary endpoints.
@@ -104,6 +106,12 @@ offerings, obligations, and history. A Project owns its purpose, scope, requirem
 work products, and next steps. A Person owns that person's commitments, actions, views, relationships, and personal
 history. A person speaking about or acting within another identity does not by itself make the person the owner. Keep
 other explicitly involved identities as relationship or context endpoints."""
+
+FACT_EVIDENCE_POLICY = """Use the claim sentence, cited evidence, and structured temporal record as truth-bearing
+content. A resolved temporal start or end may be rendered as its absolute date. Linked entities and the linked
+registry are navigation context; their presence alone does not assert involvement or require mention in the display
+sentence. An unresolved temporal status means that a relative expression has not been mapped to an absolute calendar
+interval; the expression itself remains supported exactly as stated."""
 
 SUBJECT_SCOPE_ONTOLOGY: tuple[SubjectScopeDefinition, ...] = (
     SubjectScopeDefinition(

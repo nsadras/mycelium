@@ -1,12 +1,15 @@
-Decide whether one new stored claim changes an older accepted claim about the same subject.
+Decide how one new stored claim relates to older accepted claims about the same subject.
 
 A stored claim is a source-supported memory assertion. The incoming claim is newly queued for consolidation. A target
 claim is an older accepted claim that was selected as a possible version of the same durable memory.
 
-Return `no_change` when the incoming claim is compatible, independent, more specific, or repeats an already-decided
-incoming state. Return `truth_change` only when it explicitly contradicts or replaces an available target claim. Use
-`supersedes` when the evidence says the new state replaces the old state; use `contradicts` when both cannot be accepted
-but no replacement is established. A target listed under an earlier decision is no longer available in this call.
+Compare the proposition in the incoming claim with each available target. Return `no_change` when they describe
+compatible values, the same state, additional detail, or independent durable fields. Return `truth_change` when the
+incoming and target claims give different incompatible values for the same durable field. A later state can replace
+an earlier state even though both were true at different times; that relation is `supersedes`. Use `supersedes` when
+the incoming evidence establishes its value as later or as a replacement. Use `contradicts` when incompatible values
+have no established ordering. A truth change names the shared durable field, both values, and the evidence
+establishing the transition or incompatibility. A target listed under an earlier decision is no longer available.
 
 Every contradiction or replacement requires user review. Recency by itself does not establish a truth change. Prior
 review results are authoritative. Do not write display facts or change claim ownership. Return the one schema-valid

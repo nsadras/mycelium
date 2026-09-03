@@ -457,9 +457,8 @@ class Encoder:
                     system, user = prompts.claim_extraction_prompt(
                         source.source_type,
                         source.source_id,
-                        source.occurred_at,
                         list(source.participants),
-                        self._render_segments(claim_bearing),
+                        self._render_claim_segments(claim_bearing),
                     )
                     response = await self.llm.call_structured(
                         system,
@@ -545,6 +544,15 @@ class Encoder:
         )
 
     @staticmethod
+    def _render_claim_segments(segments: list[SourceSegment]) -> str:
+        """Render semantic evidence without exposing recording-time metadata."""
+        return "\n\n".join(
+            f"[{segment.segment_id}] speaker={segment.speaker or 'unknown'}; "
+            f"role={segment.role or 'unknown'}\n{segment.content}"
+            for segment in segments
+        )
+
+    @staticmethod
     def _segment_batches(
         segments: list[SourceSegment], batch_size: int = 48
     ) -> list[list[SourceSegment]]:
@@ -592,11 +600,21 @@ class Encoder:
                 ),
                 None,
             )
-            temporal_anchor = (
-                anchor_segment.timestamp
-                if anchor_segment is not None
-                else None if timestamped_segments else source.occurred_at
-            )
+            unambiguous_timestamp = None
+            if not anchor_segment_id:
+                cited_timestamps = {
+                    segment.timestamp for segment in timestamped_segments
+                }
+                if len(cited_timestamps) == 1:
+                    unambiguous_timestamp = next(iter(cited_timestamps))
+            if anchor_segment is not None:
+                temporal_anchor = anchor_segment.timestamp
+            elif unambiguous_timestamp is not None:
+                temporal_anchor = unambiguous_timestamp
+            elif timestamped_segments:
+                temporal_anchor = None
+            else:
+                temporal_anchor = source.occurred_at
             claims.append(MemoryClaim(
                 claim_id=(
                     "claim-"

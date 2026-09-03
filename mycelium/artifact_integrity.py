@@ -192,7 +192,9 @@ def artifact_integrity(mem) -> dict:
         "entities_missing_pages": sorted(
             f"{entity.entity_id}:{entity.slug}"
             for entity in entities.values()
-            if entity.status == "active" and entity.slug not in pages
+            if entity.status == "active"
+            and entity.materialization_state == "materialized"
+            and entity.slug not in pages
         ),
         "sources_missing_raw_log": sorted(
             source.source_id

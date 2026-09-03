@@ -334,6 +334,53 @@ async def test_chat_claim_uses_its_cited_message_as_temporal_anchor(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_single_cited_source_time_anchors_relative_phrase_without_model_choice(
+    tmp_path,
+):
+    llm = AsyncMock()
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    encoder = Encoder(
+        llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts,
+    )
+
+    async def response(system, user, output_type, **kwargs):
+        segment_id = next(
+            part.split("]", 1)[0]
+            for part in user.split("[")[1:]
+            if part.startswith("source-")
+        )
+        if "segment_dispositions" in output_type.model_fields:
+            return coverage_response([{"segment_ids": [segment_id]}])
+        assert "2026-08-27T08:00:00+00:00" not in user
+        assert "time=" not in user
+        return extraction_response([{
+            "text": "Ava will finish the report tomorrow.",
+            "claim_type": "commitment",
+            "temporal_status": "future",
+            "about": [{"entity": "Ava"}],
+            "segment_ids": [segment_id],
+            "facets": {"deadline": "tomorrow"},
+        }])
+
+    llm.call_structured.side_effect = response
+    await encoder.encode_session(
+        "A multi-day chat",
+        "chat-1-ep-1",
+        source_type="agent_conversation",
+        occurred_at="2026-08-26T23:00:00+00:00",
+        segments=[SourceSegment(
+            "", 0, "I will finish the report tomorrow.",
+            speaker="Ava", role="user",
+            timestamp="2026-08-27T08:00:00+00:00",
+        )],
+    )
+
+    temporal = artifacts.list_claims()[0].facets["temporal"]
+    assert temporal["anchor"] == "2026-08-27T08:00:00+00:00"
+    assert temporal["start"] == "2026-08-28"
+
+
+@pytest.mark.asyncio
 async def test_chat_relative_time_stays_unresolved_with_wrong_anchor_segment(tmp_path):
     llm = AsyncMock()
     artifacts = ArtifactStore(tmp_path / "artifacts")

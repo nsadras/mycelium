@@ -19,6 +19,7 @@ async def run_locomo(
     prediction_key: str,
     max_samples: int | None = None,
     max_questions: int | None = None,
+    max_sessions: int | None = None,
     questions_per_category: int | None = None,
     sample_index: int | None = None,
 ) -> dict[str, Any]:
@@ -44,6 +45,10 @@ async def run_locomo(
         print(f"[locomo] sample {sample_index + 1}/{len(samples)} reset: {sample_id}", flush=True)
         await system.reset(sample_id)
         sessions = iter_locomo_sessions(sample)
+        if max_sessions is not None:
+            if max_sessions <= 0:
+                raise ValueError("--max-sessions must be positive")
+            sessions = sessions[:max_sessions]
         for session_index, (session_id, timestamp, messages) in enumerate(sessions):
             print(
                 f"[locomo] sample {sample_id} memorize session {session_index + 1}/{len(sessions)}: {session_id}",

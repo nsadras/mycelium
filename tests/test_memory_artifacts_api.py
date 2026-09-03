@@ -18,6 +18,7 @@ from mycelium.artifacts import (
     SourceSegment,
 )
 from mycelium.core import Mycelium
+from mycelium.artifact_integrity import artifact_integrity
 from mycelium.facts import FactResolutionResult
 from mycelium.models import LogEntry, WikiPage
 from server.api import memory_artifacts, memory_curation
@@ -27,6 +28,23 @@ from server.api.memory_contracts import (
     ProposalReviewRequest,
     SourceRetractionRequest,
 )
+
+
+def test_integrity_requires_pages_only_for_materialized_entities(tmp_path):
+    mem = Mycelium(store_path=tmp_path / "store", memory_profile="none")
+    provisional = mem.artifacts.create_entity(
+        "project", "Possible Project", materialization_state="provisional"
+    )
+
+    report = artifact_integrity(mem)
+
+    assert report["issues"]["entities_missing_pages"] == []
+    provisional.materialization_state = "materialized"
+    mem.artifacts.save_entity(provisional)
+    report = artifact_integrity(mem)
+    assert report["issues"]["entities_missing_pages"] == [
+        f"{provisional.entity_id}:{provisional.slug}"
+    ]
 
 
 @pytest.fixture

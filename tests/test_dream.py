@@ -521,6 +521,15 @@ def fact_resolution_plan(
         if changes_by_incoming
         else sorted({alias for aliases, _, _ in facts.values() for alias in aliases})
     )
+    fact_responses = []
+    for key, presentation in presentations.items():
+        fact_responses.extend([
+            {"facts": {key: presentation}},
+            {"decisions": {key: {
+                "verdict": "supported",
+                "reason": "The presentation is self-contained and source-grounded.",
+            }}},
+        ])
     return [
         {"decisions": {
             alias: (
@@ -530,6 +539,18 @@ def fact_resolution_plan(
                     "target_claim_aliases": changes_by_incoming[alias][
                         "target_claim_aliases"
                     ],
+                    "durable_field": changes_by_incoming[alias].get(
+                        "durable_field", "tested durable field"
+                    ),
+                    "prior_state": changes_by_incoming[alias].get(
+                        "prior_state", "prior state"
+                    ),
+                    "incoming_state": changes_by_incoming[alias].get(
+                        "incoming_state", "incoming state"
+                    ),
+                    "transition_evidence": changes_by_incoming[alias].get(
+                        "transition_evidence", "The test establishes a transition."
+                    ),
                     "explanation": changes_by_incoming[alias]["explanation"],
                     "confidence": changes_by_incoming[alias]["confidence"],
                 }
@@ -548,14 +569,7 @@ def fact_resolution_plan(
             for fact_key, (aliases, _, _) in facts.items()
             for alias in aliases
         }},
-        {"facts": presentations},
-        {"decisions": {
-            key: {
-                "verdict": "supported",
-                "reason": "The presentation is self-contained and source-grounded.",
-            }
-            for key in presentations
-        }},
+        *fact_responses,
     ]
 
 
@@ -653,6 +667,69 @@ def test_pending_identity_matching_contract_requires_an_exact_proposal():
         })
 
 
+@pytest.mark.asyncio
+async def test_identity_units_accumulate_review_proposals_within_one_run(
+    tmp_path, monkeypatch
+):
+    dream, _, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, first_source = add_source(logs, artifacts, suffix="first-unit")
+    first_claim = add_claim(
+        artifacts,
+        first_source,
+        claim_id="claim-first-unit",
+        text="A proposed subject has initial identity evidence.",
+        about="Proposed Subject",
+    )
+    _, second_source = add_source(logs, artifacts, suffix="second-unit")
+    second_claim = add_claim(
+        artifacts,
+        second_source,
+        claim_id="claim-second-unit",
+        text="Later evidence concerns the same proposed subject.",
+        about="Proposed Subject",
+    )
+    evidence = [
+        ClaimEvidence(first_claim, first_source),
+        ClaimEvidence(second_claim, second_source),
+    ]
+    monkeypatch.setattr(
+        dream.router, "_identity_units", lambda _evidence: [[evidence[0]], [evidence[1]]]
+    )
+    pending = EntityResolutionDecision(
+        decision_id="identity-proposed-review",
+        decision_type="entity_creation",
+        entity_id=None,
+        proposed_entity_type="project",
+        proposed_title="Proposed Subject",
+        source_ids=[first_source.source_id],
+        supporting_claim_ids=[first_claim.claim_id],
+        identity_evidence_claim_ids=[first_claim.claim_id],
+        supporting_segment_ids=first_claim.provenance[0].segment_ids,
+        confidence=0.8,
+        reason="The identity requires review.",
+        review_state="review_required",
+        dream_run_id="dream-test",
+        created_at="2026-09-03T12:00:00-07:00",
+    )
+    seen_seed_ids: list[list[str]] = []
+
+    async def route_unit(_evidence, **kwargs):
+        seen_seed_ids.append([
+            item.decision_id for item in kwargs["seed_identity_decisions"]
+        ])
+        return (
+            RoutingResult(entity_decisions=[pending])
+            if len(seen_seed_ids) == 1
+            else RoutingResult()
+        )
+
+    monkeypatch.setattr(dream.router, "_route_unit", route_unit)
+
+    await dream.router.route(evidence, dream_run_id="dream-test")
+
+    assert seen_seed_ids == [[], [pending.decision_id]]
+
+
 def test_sequential_identity_accumulator_merges_exact_existing_and_local_matches():
     first = {
         "node_id": "N001",
@@ -704,6 +781,7 @@ async def test_later_evidence_reuses_an_unresolved_identity_proposal(tmp_path):
         proposed_title="Northwind Cafe",
         source_ids=[prior_source.source_id],
         supporting_claim_ids=[prior_claim.claim_id],
+        identity_evidence_claim_ids=[prior_claim.claim_id],
         supporting_segment_ids=prior_claim.provenance[0].segment_ids,
         confidence=0.8,
         reason="The proposed subject requires user review.",
@@ -730,6 +808,8 @@ async def test_later_evidence_reuses_an_unresolved_identity_proposal(tmp_path):
     llm.call_structured.side_effect = [
         responses[0],
         responses[1],
+        responses[2],
+        responses[3],
         {"decision": {
             "resolution": "same_as_pending",
             "decision_id": pending.decision_id,
@@ -737,7 +817,7 @@ async def test_later_evidence_reuses_an_unresolved_identity_proposal(tmp_path):
             "confidence": 0.95,
             "reason": "The lease evidence concerns the same proposed cafe.",
         }},
-        *responses[2:],
+        *responses[4:],
     ]
 
     result = await dream.router.route([
@@ -752,6 +832,9 @@ async def test_later_evidence_reuses_an_unresolved_identity_proposal(tmp_path):
     assert result.entity_decisions[0].supporting_claim_ids == sorted([
         prior_claim.claim_id, current_claim.claim_id
     ])
+    assert result.entity_decisions[0].identity_evidence_claim_ids == [
+        prior_claim.claim_id
+    ]
     assert result.routes[0].disposition == "deferred"
     assert result.routes[0].identity_blocker_ids == (pending.decision_id,)
     pending_call = next(
@@ -760,6 +843,69 @@ async def test_later_evidence_reuses_an_unresolved_identity_proposal(tmp_path):
     )
     assert prior_claim.text in pending_call.args[1]
     assert current_claim.text in pending_call.args[1]
+    pending_catalog = RoutingFormatter(artifacts).format_pending_identity_proposals(
+        result.entity_decisions
+    )
+    assert prior_claim.text in pending_catalog
+    assert current_claim.text not in pending_catalog
+
+
+@pytest.mark.asyncio
+async def test_pending_identity_matching_only_compares_the_verified_same_type(
+    tmp_path,
+):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, prior_source = add_source(logs, artifacts, suffix="prior-organization")
+    prior_claim = add_claim(
+        artifacts,
+        prior_source,
+        claim_id="claim-prior-organization",
+        text="Priya signed a lease for Harbor Studio.",
+        claim_type="event",
+        about="Harbor Studio",
+    )
+    artifacts.save_entity_resolution_decision(EntityResolutionDecision(
+        decision_id="identity-harbor-review",
+        decision_type="entity_creation",
+        entity_id=None,
+        proposed_entity_type="organization",
+        proposed_title="Harbor Studio",
+        source_ids=[prior_source.source_id],
+        supporting_claim_ids=[prior_claim.claim_id],
+        identity_evidence_claim_ids=[prior_claim.claim_id],
+        supporting_segment_ids=prior_claim.provenance[0].segment_ids,
+        confidence=0.8,
+        reason="The organization requires review.",
+        review_state="review_required",
+        dream_run_id="dream-prior",
+        created_at="2026-09-01T12:00:00-07:00",
+        proposed_scope="independent",
+        proposed_page_state="materialized",
+    ))
+    _, current_source = add_source(logs, artifacts, suffix="current-topic")
+    current_claim = add_claim(
+        artifacts,
+        current_source,
+        claim_id="claim-current-topic",
+        text="Dance helps Priya relax after work.",
+        claim_type="preference",
+        about="Dance",
+    )
+    llm.call_structured.side_effect = split_scope_plan(
+        new_scope("C001", "Dance", "topic")
+    )
+
+    result = await dream.router.route([
+        ClaimEvidence(current_claim, current_source)
+    ])
+
+    assert result.failures == []
+    assert all(
+        call.kwargs.get("debug_label") != "dream-pending-identity-matching"
+        for call in llm.call_structured.await_args_list
+    )
+    assert result.entity_decisions[0].proposed_entity_type == "topic"
+    assert result.entity_decisions[0].decision_id != "identity-harbor-review"
 
 
 def test_identity_type_verifier_preserves_ambiguity_for_review():
@@ -836,6 +982,45 @@ def test_claim_routing_contract_requires_exact_claims_and_registry_values():
                 "C002": valid["decisions"]["C002"],
             }
         })
+
+
+def test_route_keeps_relationship_endpoints_separate_from_context(tmp_path):
+    dream, _, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    owner = artifacts.create_entity("person", "Ava")
+    endpoint = artifacts.create_entity("person", "Ben")
+    context = artifacts.create_entity("person", "Casey")
+    _, source = add_source(logs, artifacts)
+    claim = add_claim(artifacts, source, text="Ava agreed to meet Ben.")
+    item = ClaimEvidence(claim, source)
+    route = dream.router._route_decision(
+        "C001",
+        item,
+        {
+            "disposition": "canonical",
+            "owner_entity": owner.entity_id,
+            "linked_entities": [],
+            "subject_entity": owner.entity_id,
+            "object_entities": [endpoint.entity_id],
+            "contextual_entities": [context.entity_id],
+            "relationship_kind": "none",
+            "supporting_claims": [],
+            "identity_blocker_ids": [],
+            "confidence": 1.0,
+            "reason": "Ava owns the commitment; Ben is its endpoint.",
+        },
+        {"C001": item},
+        {
+            owner.entity_id: owner,
+            endpoint.entity_id: endpoint,
+            context.entity_id: context,
+        },
+        {},
+        {},
+    )
+
+    assert route.linked_entity_ids == (endpoint.entity_id,)
+    assert route.object_entity_ids == (endpoint.entity_id,)
+    assert route.contextual_entity_ids == (context.entity_id,)
 
 
 def test_claim_decision_batches_preserve_every_alias_once():
@@ -2336,6 +2521,58 @@ async def test_existing_identity_match_is_verified_before_inheriting_shape(tmp_p
     ]
     assert artifacts.get_entity(person.entity_id).title == "Rosa Alvarez"
     unit = artifacts.list_identity_work_units()[0]
+    assert unit.existing_identity_verdicts["I001"]["verdict"] == "distinct"
+
+
+@pytest.mark.asyncio
+async def test_same_type_identity_disagreement_requires_review_instead_of_duplicate(
+    tmp_path,
+):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    existing = artifacts.create_entity("person", "Gina")
+    _, source = add_source(logs, artifacts)
+    claim = add_claim(
+        artifacts,
+        source,
+        text="Gina shared an update.",
+        about="Gina",
+        claim_type="state",
+    )
+    responses = split_scope_plan(scope_plan(
+        {"C001": assignment("N001", supporting=["C001"])},
+        [scope_candidate("N001", "Gina", "person", ["C001"])],
+    ))
+    responses[1]["decision"].update({
+        "resolution": "existing",
+        "entity_id": existing.entity_id,
+        "candidate_entity_ids": [],
+        "reason": "The initial matcher selected canonical Gina.",
+    })
+    verification = {"decision": {
+        "verdict": "distinct",
+        "entity_id": "",
+        "candidate_entity_ids": [],
+        "confidence": 0.8,
+        "reason": "The independent verifier did not establish continuity.",
+    }}
+    responses[6]["decisions"]["I001"]["adjudication"] = "review_required"
+    llm.call_structured.side_effect = [
+        responses[0], responses[1], *responses[2:4], verification, *responses[4:]
+    ]
+
+    result = await dream.router.route([ClaimEvidence(claim, source)])
+
+    assert result.failures == []
+    assert result.new_entities == []
+    assert result.routes[0].disposition == "deferred"
+    creation = next(
+        decision for decision in result.entity_decisions
+        if decision.decision_type == "entity_creation"
+    )
+    assert creation.review_state == "review_required"
+    assert creation.entity_id is None
+    unit = artifacts.list_identity_work_units()[0]
+    assert unit.new_identity_verdicts == {}
     assert unit.existing_identity_verdicts["I001"]["verdict"] == "distinct"
 
 

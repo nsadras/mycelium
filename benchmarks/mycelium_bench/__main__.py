@@ -20,6 +20,12 @@ def main() -> None:
     locomo.add_argument("--max-samples", type=int, default=None)
     locomo.add_argument("--max-questions", type=int, default=None)
     locomo.add_argument(
+        "--max-sessions",
+        type=int,
+        default=None,
+        help="Ingest only the first N sessions of each selected sample.",
+    )
+    locomo.add_argument(
         "--questions-per-category",
         type=int,
         default=None,
@@ -61,6 +67,7 @@ def main() -> None:
                 prediction_key=args.prediction_key or f"{args.system}_prediction",
                 max_samples=args.max_samples,
                 max_questions=args.max_questions,
+                max_sessions=args.max_sessions,
                 questions_per_category=args.questions_per_category,
                 sample_index=args.sample_index,
             )

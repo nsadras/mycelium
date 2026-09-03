@@ -272,6 +272,7 @@ class EntityResolutionDecision:
     proposed_type_reason: str | None = None
     reviewer_note: str | None = None
     reviewed_at: str | None = None
+    identity_evidence_claim_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.decision_type not in {"entity_creation", "participant_resolution"}:
@@ -290,6 +291,13 @@ class EntityResolutionDecision:
             )
         self.source_ids = sorted(set(self.source_ids))
         self.supporting_claim_ids = sorted(set(self.supporting_claim_ids))
+        self.identity_evidence_claim_ids = sorted(set(
+            self.identity_evidence_claim_ids
+        ))
+        if set(self.identity_evidence_claim_ids) - set(self.supporting_claim_ids):
+            raise ValueError(
+                "Identity-defining claims must also be supporting claims"
+            )
         self.supporting_segment_ids = sorted(set(self.supporting_segment_ids))
         self.proposed_aliases = sorted(set(self.proposed_aliases))
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
@@ -607,6 +615,10 @@ class ReconsolidationProposal:
     reviewed_at: str | None = None
     applied_at: str | None = None
     application_error: str | None = None
+    durable_field: str | None = None
+    prior_state: str | None = None
+    incoming_state: str | None = None
+    transition_evidence: str | None = None
 
     def __post_init__(self) -> None:
         self.incoming_claim_ids = sorted(set(self.incoming_claim_ids))

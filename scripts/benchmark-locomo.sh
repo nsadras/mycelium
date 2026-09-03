@@ -24,6 +24,9 @@ extra_args=()
 if [ -n "${MAX_QUESTIONS:-}" ]; then
   extra_args+=(--max-questions "${MAX_QUESTIONS}")
 fi
+if [ -n "${MAX_SESSIONS:-}" ]; then
+  extra_args+=(--max-sessions "${MAX_SESSIONS}")
+fi
 if [ -n "${QUESTIONS_PER_CATEGORY:-}" ]; then
   extra_args+=(--questions-per-category "${QUESTIONS_PER_CATEGORY}")
 fi

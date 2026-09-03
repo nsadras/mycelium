@@ -17,6 +17,7 @@ from mycelium.artifacts import ArtifactStore, MemoryClaim
 from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.prompting import render_prompt
+from mycelium.operations import ConsolidationRequest, RetrievalRequest, SourceInput
 from mycelium.memory_tools import MemoryToolset
 from mycelium.structured_outputs import GroundedAnswerOutput
 
@@ -324,21 +325,21 @@ class MyceliumMemorySystem:
                 )
         else:
             transcript = format_messages_for_memory(messages, metadata)
-            await mem.encoder.encode_session(
-                transcript,
-                session_id,
+            await mem.ingest_source(SourceInput(
+                transcript=transcript,
+                session_id=session_id,
                 source_type="multi_party_conversation",
                 occurred_at=metadata.get("timestamp"),
                 metadata={
                     key: value for key, value in metadata.items() if value is not None
                 },
                 idempotency_key=f"benchmark:{self.case_id}:{session_id}",
-            )
+            ))
         self._encoded_batches += 1
         if self.dream_policy == "per-batch" and not self.replay_assignments:
             try:
-                report = await mem.dream()
-                self._record_dream_report(report, session_id=session_id)
+                result = await mem.consolidate(ConsolidationRequest())
+                self._record_dream_report(result.report, session_id=session_id)
                 self._dream_runs += 1
             except Exception as exc:
                 self._errors.append(
@@ -353,13 +354,18 @@ class MyceliumMemorySystem:
         metadata = metadata or {}
         start = time.perf_counter()
         try:
-            loaded_pages = await mem.load_context(
-                question,
+            retrieval = await mem.retrieve_context(RetrievalRequest(
+                query=question,
                 budget_tokens=self.context_budget_tokens,
-            )
+            ))
+            loaded_pages = list(retrieval.pages)
         except Exception as exc:
             self._errors.append(
-                {"stage": "load_context", "question": question, "error": str(exc)}
+                {
+                    "stage": "retrieve_context",
+                    "question": question,
+                    "error": str(exc),
+                }
             )
             loaded_pages = []
         memory_construction_time = time.perf_counter() - start
@@ -436,8 +442,8 @@ class MyceliumMemorySystem:
         ):
             start = time.perf_counter()
             try:
-                report = await self.mem.dream()
-                self._record_dream_report(report, session_id=self.case_id)
+                result = await self.mem.consolidate(ConsolidationRequest())
+                self._record_dream_report(result.report, session_id=self.case_id)
                 self._dream_runs += 1
             except Exception as exc:
                 self._errors.append(
@@ -536,7 +542,7 @@ class MyceliumMemorySystem:
             if (placement := mem.artifacts.placement_for_claim(claim.claim_id))
             and placement.owner_entity_id
         }
-        mem.dream_process.materializer.regenerate(owner_ids)
+        mem.consolidator.materializer.regenerate(owner_ids)
 
         eligible = [claim for claim in claims if claim.status == "active"]
         if eligible and all(
@@ -568,10 +574,11 @@ class MemoryAgentSystem(MyceliumMemorySystem):
         mem = self._require_mem()
         metadata = metadata or {}
         started = time.perf_counter()
-        loaded_pages = await mem.load_context(
-            question,
+        retrieval = await mem.retrieve_context(RetrievalRequest(
+            query=question,
             budget_tokens=self.context_budget_tokens,
-        )
+        ))
+        loaded_pages = list(retrieval.pages)
         initial_context = render_memory_context(loaded_pages)
 
         escalation_reason = memory_escalation_reason(question)

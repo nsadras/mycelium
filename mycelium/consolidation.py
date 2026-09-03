@@ -28,6 +28,7 @@ from mycelium.structured_outputs import (
     entity_plan_output_model,
     identity_node_matching_output_model,
     local_identity_matching_output_model,
+    pending_identity_matching_output_model,
     new_identity_verification_output_model,
     identity_maturity_output_model,
     identity_maturity_verification_output_model,
@@ -332,69 +333,93 @@ class ClaimRouter:
                 )),
             }
 
-        rejected_existing_ids: dict[str, str] = {}
-        try:
-            for identity_key, node in graph_nodes.items():
-                if node["identity_resolution"] != "existing":
-                    continue
-                proposed_entity_id = str(node["entity_id"])
-                if identity_key in work_unit.existing_identity_verdicts:
-                    identity_verdict = work_unit.existing_identity_verdicts[
-                        identity_key
-                    ]
-                else:
-                    identity_verdict = await self._verify_identity(
-                        node,
-                        [planned[proposed_entity_id]],
-                        aliases,
-                        participants,
-                    )
-                    work_unit.existing_identity_verdicts[
-                        identity_key
-                    ] = identity_verdict
-                    work_unit.stage = "existing_identity_verification"
-                    self.artifacts.save_identity_work_unit(work_unit)
-                if (
-                    identity_verdict["verdict"] == "existing"
-                    and identity_verdict["entity_id"] == proposed_entity_id
-                ):
-                    node["identity_reason"] = identity_verdict["reason"]
-                    continue
-                node["entity_id"] = ""
-                node["identity_reason"] = identity_verdict["reason"]
-                if identity_verdict["verdict"] == "review_required":
-                    node["identity_resolution"] = "review_required"
-                    node["candidate_entity_ids"] = identity_verdict[
-                        "candidate_entity_ids"
-                    ]
-                else:
-                    node["identity_resolution"] = "new"
-                    node["candidate_entity_ids"] = []
-                    rejected_existing_ids[identity_key] = proposed_entity_id
-        except Exception as exc:
-            return self._fail_work_unit(
-                work_unit,
-                evidence,
-                "existing_identity_verification",
-                "Existing identity verification did not satisfy the contract: "
-                f"{type(exc).__name__}: {exc}",
+        pending_proposals = [
+            decision
+            for decision in self.artifacts.list_entity_resolution_decisions(
+                review_state="review_required"
             )
+            if decision.decision_type == "entity_creation"
+        ]
+        if pending_proposals:
+            try:
+                pending_matches = dict(work_unit.pending_identity_decisions)
+                pending_ids = [
+                    decision.decision_id for decision in pending_proposals
+                ]
+                for identity_key, node in graph_nodes.items():
+                    if node["identity_resolution"] == "existing":
+                        continue
+                    if identity_key in pending_matches:
+                        output_model = pending_identity_matching_output_model(
+                            pending_ids
+                        )
+                        pending_match = output_model.model_validate({
+                            "decision": pending_matches[identity_key]
+                        }).model_dump()["decision"]
+                    else:
+                        supporting = set(node["supporting_evidence"])
+                        node_aliases = {
+                            alias: item for alias, item in aliases.items()
+                            if alias in supporting
+                        }
+                        node_participants = {
+                            alias: item for alias, item in participants.items()
+                            if alias in supporting
+                        }
+                        pending_match = await self._match_pending_identity(
+                            node,
+                            pending_proposals,
+                            node_aliases,
+                            node_participants,
+                        )
+                        pending_matches[identity_key] = pending_match
+                        work_unit.pending_identity_decisions = pending_matches
+                        work_unit.stage = "pending_identity_matching"
+                        work_unit.updated_at = (
+                            datetime.now().astimezone().isoformat()
+                        )
+                        self.artifacts.save_identity_work_unit(work_unit)
+                    if pending_match["resolution"] == "distinct":
+                        continue
+                    node["identity_resolution"] = "review_required"
+                    node["entity_id"] = ""
+                    node["candidate_entity_ids"] = []
+                    node["pending_identity_resolution"] = pending_match[
+                        "resolution"
+                    ]
+                    node["pending_identity_decision_ids"] = (
+                        [pending_match["decision_id"]]
+                        if pending_match["resolution"] == "same_as_pending"
+                        else list(pending_match["candidate_decision_ids"])
+                    )
+                    node["identity_reason"] = pending_match["reason"]
+            except Exception as exc:
+                return self._fail_work_unit(
+                    work_unit,
+                    evidence,
+                    "pending_identity_matching",
+                    "Pending identity matching did not satisfy the contract: "
+                    f"{type(exc).__name__}: {exc}",
+                )
 
-        unresolved_type_evidence = {
+        identity_type_evidence = {
             identity_key: node["supporting_evidence"]
             for identity_key, node in graph_nodes.items()
-            if node["identity_resolution"] != "existing"
         }
         type_proposals: dict[str, dict] = {}
         type_verdicts: dict[str, dict] = {}
-        if unresolved_type_evidence:
+        if identity_type_evidence:
+            neutral_identities = "\n".join(
+                self.formatter.format_identity_evidence(node)
+                for node in graph_nodes.values()
+            )
             try:
                 if work_unit.type_proposals:
                     type_proposals = work_unit.type_proposals
                 else:
-                    type_model = identity_type_output_model(unresolved_type_evidence)
+                    type_model = identity_type_output_model(identity_type_evidence)
                     system, user = prompts.identity_types_prompt(
-                        self.formatter.format_identity_groups(graph_nodes),
+                        neutral_identities,
                         self.formatter.format_evidence(aliases, participants),
                     )
                     response = await self.llm.call_structured(
@@ -423,11 +448,11 @@ class ClaimRouter:
                     identity_key: proposal["entity_type"]
                     for identity_key, proposal in type_proposals.items()
                 },
-                unresolved_type_evidence,
+                identity_type_evidence,
             )
             system, user = prompts.identity_type_verification_prompt(
                 self.formatter.format_type_proposals(type_proposals),
-                self.formatter.format_identity_groups(graph_nodes),
+                neutral_identities,
                 self.formatter.format_evidence(aliases, participants),
             )
             try:
@@ -457,11 +482,6 @@ class ClaimRouter:
                 )
 
         for identity_key, node in graph_nodes.items():
-            if node["identity_resolution"] == "existing":
-                node["entity_type"] = registry_types[node["entity_id"]]
-                node["type_adjudication"] = "accepted"
-                node["type_reason"] = "The canonical entity supplies its fixed type."
-                continue
             proposal = type_proposals[identity_key]
             verdict = type_verdicts[identity_key]
             node["entity_type"] = proposal["entity_type"]
@@ -472,6 +492,73 @@ class ClaimRouter:
                 else "review_required"
             )
             node["type_reason"] = verdict["reason"]
+            if (
+                verdict["verdict"] != "supported"
+                and node["identity_resolution"] == "existing"
+            ):
+                node["candidate_entity_ids"] = [str(node["entity_id"])]
+                node["entity_id"] = ""
+                node["identity_resolution"] = "review_required"
+
+        rejected_existing_ids: dict[str, str] = {}
+        try:
+            for identity_key, node in graph_nodes.items():
+                if (
+                    node["identity_resolution"] != "existing"
+                    or node["type_adjudication"] != "accepted"
+                ):
+                    continue
+                proposed_entity_id = str(node["entity_id"])
+                if identity_key in work_unit.existing_identity_verdicts:
+                    identity_verdict = work_unit.existing_identity_verdicts[
+                        identity_key
+                    ]
+                else:
+                    candidates = sorted(
+                        (
+                            entity for entity in planned.values()
+                            if entity.status == "active"
+                            and entity.entity_id != "you"
+                            and entity.entity_type == node["entity_type"]
+                        ),
+                        key=lambda entity: entity.entity_id,
+                    )
+                    identity_verdict = await self._verify_identity(
+                        node,
+                        candidates,
+                        aliases,
+                        participants,
+                    )
+                    work_unit.existing_identity_verdicts[
+                        identity_key
+                    ] = identity_verdict
+                    work_unit.stage = "existing_identity_verification"
+                    self.artifacts.save_identity_work_unit(work_unit)
+                if identity_verdict["verdict"] == "existing":
+                    node["identity_resolution"] = "existing"
+                    node["entity_id"] = identity_verdict["entity_id"]
+                    node["candidate_entity_ids"] = []
+                    node["identity_reason"] = identity_verdict["reason"]
+                    continue
+                node["entity_id"] = ""
+                node["identity_reason"] = identity_verdict["reason"]
+                if identity_verdict["verdict"] == "review_required":
+                    node["identity_resolution"] = "review_required"
+                    node["candidate_entity_ids"] = identity_verdict[
+                        "candidate_entity_ids"
+                    ]
+                else:
+                    node["identity_resolution"] = "new"
+                    node["candidate_entity_ids"] = []
+                    rejected_existing_ids[identity_key] = proposed_entity_id
+        except Exception as exc:
+            return self._fail_work_unit(
+                work_unit,
+                evidence,
+                "existing_identity_verification",
+                "Existing identity verification did not satisfy the contract: "
+                f"{type(exc).__name__}: {exc}",
+            )
 
         try:
             for identity_key, node in graph_nodes.items():
@@ -667,6 +754,10 @@ class ClaimRouter:
                 system, user = prompts.entity_plan_prompt(
                     self.formatter.entity_planning_catalog(planned.values()),
                     self.formatter.format_subject_graph(graph_nodes, []),
+                    self.formatter.format_maturity_decisions(
+                        maturity_decisions,
+                        maturity_verdicts,
+                    ),
                     self.formatter.format_evidence(aliases, participants),
                     self.formatter.identity_review_catalog(aliases),
                 )
@@ -742,6 +833,7 @@ class ClaimRouter:
         candidate_entities: dict[str, EntityRecord] = {}
         candidate_support: dict[str, tuple[str, ...]] = {}
         identity_blockers_by_alias: dict[str, list[str]] = {}
+        reused_pending_decisions: dict[str, EntityResolutionDecision] = {}
         now = datetime.now().astimezone().isoformat()
         for node_id, node in graph_nodes.items():
             decision = entity_decisions[node_id]
@@ -805,55 +897,89 @@ class ClaimRouter:
                 candidate_entities[node_id] = entity
                 candidate_support[entity.entity_id] = support
             supporting_claim_ids = [item.claim.claim_id for item in supporting]
+            supporting_source_ids = [
+                *[item.source.source_id for item in supporting],
+                *[source.source_id for source, _, _ in participant_support],
+            ]
+            supporting_segment_ids = [
+                *[
+                    segment_id
+                    for item in supporting
+                    for provenance in item.claim.provenance
+                    for segment_id in provenance.segment_ids
+                ],
+                *[
+                    segment.segment_id
+                    for source, surface, _ in participant_support
+                    for segment in source.segments
+                    if str(segment.speaker or "").strip() == surface
+                ],
+            ]
             parent_ref = str(decision["parent_entity"])
             parent_entity = candidate_entities.get(parent_ref) or planned.get(parent_ref)
-            identity_decision = EntityResolutionDecision(
-                decision_id=f"identity-{uuid.uuid4().hex[:12]}",
-                decision_type="entity_creation",
-                entity_id=entity.entity_id if entity else None,
-                proposed_entity_type=str(node["entity_type"]),
-                proposed_title=str(node["title"]),
-                source_ids=[
-                    *[item.source.source_id for item in supporting],
-                    *[source.source_id for source, _, _ in participant_support],
-                ],
-                supporting_claim_ids=supporting_claim_ids,
-                supporting_segment_ids=[
-                    *[
-                        segment_id
-                        for item in supporting
-                        for provenance in item.claim.provenance
-                        for segment_id in provenance.segment_ids
-                    ],
-                    *[
-                        segment.segment_id
-                        for source, surface, _ in participant_support
-                        for segment in source.segments
-                        if str(segment.speaker or "").strip() == surface
-                    ],
-                ],
-                confidence=confidence,
-                reason=str(decision["reason"]),
-                review_state=str(decision["adjudication"]),
-                dream_run_id=dream_run_id,
-                created_at=now,
-                proposed_scope=scope_definition.persisted_scope,
-                proposed_parent_entity_id=(
-                    parent_entity.entity_id if parent_entity else None
-                ),
-                proposed_page_state=page_state,
-                proposed_aliases=[str(value) for value in node["aliases"]],
-                proposed_type_reason=str(node["type_reason"]),
-            )
-            result.entity_decisions.append(identity_decision)
-            if (
-                identity_decision.review_state == "review_required"
-                or identity_decision.proposed_page_state == "provisional"
-            ):
+            pending_ids = list(node.get("pending_identity_decision_ids", []))
+            if pending_ids:
                 for alias in support:
-                    identity_blockers_by_alias.setdefault(alias, []).append(
-                        identity_decision.decision_id
+                    identity_blockers_by_alias.setdefault(alias, []).extend(
+                        pending_ids
                     )
+                if node.get("pending_identity_resolution") == "same_as_pending":
+                    pending_id = pending_ids[0]
+                    identity_decision = reused_pending_decisions.get(pending_id)
+                    if identity_decision is None:
+                        identity_decision = (
+                            self.artifacts.get_entity_resolution_decision(
+                                pending_id
+                            )
+                        )
+                    identity_decision.source_ids = sorted({
+                        *identity_decision.source_ids, *supporting_source_ids
+                    })
+                    identity_decision.supporting_claim_ids = sorted({
+                        *identity_decision.supporting_claim_ids,
+                        *supporting_claim_ids,
+                    })
+                    identity_decision.supporting_segment_ids = sorted({
+                        *identity_decision.supporting_segment_ids,
+                        *supporting_segment_ids,
+                    })
+                    identity_decision.proposed_aliases = sorted({
+                        *identity_decision.proposed_aliases,
+                        *[str(value) for value in node["aliases"]],
+                    })
+                    reused_pending_decisions[pending_id] = identity_decision
+            else:
+                identity_decision = EntityResolutionDecision(
+                    decision_id=f"identity-{uuid.uuid4().hex[:12]}",
+                    decision_type="entity_creation",
+                    entity_id=entity.entity_id if entity else None,
+                    proposed_entity_type=str(node["entity_type"]),
+                    proposed_title=str(node["title"]),
+                    source_ids=supporting_source_ids,
+                    supporting_claim_ids=supporting_claim_ids,
+                    supporting_segment_ids=supporting_segment_ids,
+                    confidence=confidence,
+                    reason=str(decision["reason"]),
+                    review_state=str(decision["adjudication"]),
+                    dream_run_id=dream_run_id,
+                    created_at=now,
+                    proposed_scope=scope_definition.persisted_scope,
+                    proposed_parent_entity_id=(
+                        parent_entity.entity_id if parent_entity else None
+                    ),
+                    proposed_page_state=page_state,
+                    proposed_aliases=[str(value) for value in node["aliases"]],
+                    proposed_type_reason=str(node["type_reason"]),
+                )
+                result.entity_decisions.append(identity_decision)
+                if (
+                    identity_decision.review_state == "review_required"
+                    or identity_decision.proposed_page_state == "provisional"
+                ):
+                    for alias in support:
+                        identity_blockers_by_alias.setdefault(alias, []).append(
+                            identity_decision.decision_id
+                        )
             maturity = maturity_decisions[node_id]
             verdict = maturity_verdicts[node_id]
             result.maturity_assessments.append(IdentityMaturityAssessment(
@@ -863,25 +989,9 @@ class ClaimRouter:
                 source_node_ids=list(node["source_node_ids"]),
                 proposed_title=str(node["title"]),
                 proposed_entity_type=str(node["entity_type"]),
-                supporting_source_ids=[
-                    *[item.source.source_id for item in supporting],
-                    *[source.source_id for source, _, _ in participant_support],
-                ],
+                supporting_source_ids=supporting_source_ids,
                 supporting_claim_ids=supporting_claim_ids,
-                supporting_segment_ids=[
-                    *[
-                        segment_id
-                        for item in supporting
-                        for provenance in item.claim.provenance
-                        for segment_id in provenance.segment_ids
-                    ],
-                    *[
-                        segment.segment_id
-                        for source, surface, _ in participant_support
-                        for segment in source.segments
-                        if str(segment.speaker or "").strip() == surface
-                    ],
-                ],
+                supporting_segment_ids=supporting_segment_ids,
                 proposal_admission=str(maturity["admission"]),
                 proposal_basis=dict(maturity.get("basis") or {}),
                 proposal_reason=str(maturity["reason"]),
@@ -896,6 +1006,8 @@ class ClaimRouter:
                 created_at=now,
                 entity_id=entity.entity_id if entity else None,
             ))
+
+        result.entity_decisions.extend(reused_pending_decisions.values())
 
         result.encounters = self.resolution.participant_encounters(
             participants,
@@ -1176,6 +1288,71 @@ class ClaimRouter:
         unit.dream_run_ids = list(dict.fromkeys(unit.dream_run_ids))
         return unit
 
+    async def _match_pending_identity(
+        self,
+        node: dict,
+        proposals: list[EntityResolutionDecision],
+        aliases: dict[str, ClaimEvidence],
+        participants: dict[str, tuple],
+        chunk_size: int = 12,
+    ) -> dict:
+        decisions = []
+        for start in range(0, len(proposals), chunk_size):
+            chunk = proposals[start:start + chunk_size]
+            output_model = pending_identity_matching_output_model(
+                [proposal.decision_id for proposal in chunk]
+            )
+            system, user = prompts.pending_identity_matching_prompt(
+                self.formatter.format_identity_evidence(node),
+                self.formatter.format_evidence(aliases, participants),
+                self.formatter.format_pending_identity_proposals(chunk),
+            )
+            response = await self.llm.call_structured(
+                system,
+                user,
+                output_model,
+                num_predict=2048,
+                debug_label="dream-pending-identity-matching",
+            )
+            decisions.append(
+                output_model.model_validate(response).model_dump()["decision"]
+            )
+        same_ids = {
+            decision["decision_id"] for decision in decisions
+            if decision["resolution"] == "same_as_pending"
+        }
+        review_ids = {
+            decision_id for decision in decisions
+            if decision["resolution"] == "review_required"
+            for decision_id in decision["candidate_decision_ids"]
+        }
+        plausible = sorted(same_ids | review_ids)
+        confidence = min(float(item["confidence"]) for item in decisions)
+        reasons = " ".join(str(item["reason"]) for item in decisions)
+        if len(same_ids) == 1 and plausible == sorted(same_ids):
+            return {
+                "resolution": "same_as_pending",
+                "decision_id": next(iter(same_ids)),
+                "candidate_decision_ids": [],
+                "confidence": confidence,
+                "reason": reasons,
+            }
+        if plausible:
+            return {
+                "resolution": "review_required",
+                "decision_id": "",
+                "candidate_decision_ids": plausible,
+                "confidence": confidence,
+                "reason": reasons,
+            }
+        return {
+            "resolution": "distinct",
+            "decision_id": "",
+            "candidate_decision_ids": [],
+            "confidence": confidence,
+            "reason": reasons,
+        }
+
     async def _verify_identity(
         self,
         node: dict,
@@ -1196,9 +1373,7 @@ class ClaimRouter:
                 ),
             }
         decisions = []
-        proposed = self.formatter.format_identity_groups({
-            str(node["node_id"]): node
-        })
+        proposed = self.formatter.format_identity_evidence(node)
         for start in range(0, len(candidates), chunk_size):
             chunk = candidates[start:start + chunk_size]
             candidate_ids = [entity.entity_id for entity in chunk]

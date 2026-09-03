@@ -20,6 +20,7 @@ from server.runtime import (
     recent_thread_context,
     save_meta,
 )
+from mycelium.operations import RetrievalRequest
 
 router = APIRouter()
 
@@ -201,9 +202,11 @@ async def chat(session_id: str, req: ChatRequest):
             mem.config.context_budget_tokens,
             mem.config.llm.context_window_tokens,
         )
-        candidate_pages = await mem.load_context(
-            retrieval_query, budget_tokens=prompt_budget
-        )
+        retrieval = await mem.retrieve_context(RetrievalRequest(
+            query=retrieval_query,
+            budget_tokens=prompt_budget,
+        ))
+        candidate_pages = list(retrieval.pages)
         messages, loaded_pages = build_chat_prompt(
             record,
             req.message,

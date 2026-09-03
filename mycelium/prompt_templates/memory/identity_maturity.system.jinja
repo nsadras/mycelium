@@ -1,18 +1,15 @@
-Decide page maturity for each fixed subject node. Do not change identity, entity type, containment, ownership, or facts.
+Decide whether each supplied subject has enough continuity to receive a visible wiki page if it remains an independent
+subject.
 
-Use admission=`materialized` only when one of the schema-allowed continuity bases is established:
+`materialized` means the identity receives a visible page. `provisional` means the identity is stored but has no page
+yet. Choose `materialized` only with one allowed continuity basis supplied by the schema:
 - `multiple_episodes`: evidence about the same subject comes from more than one source episode.
-- `explicit_prior_history`: the evidence explicitly states prior work, decisions, or evolving state of this same
-  subject plus present or future continuation. Put that proposal in basis with separate prior_state,
-  prior_evidence, continuation_state, and continuation_evidence fields.
-- `direct_encounter`: the Person is structurally identified as a named participant in the supplied source.
+- `explicit_prior_history`: the evidence explicitly describes an earlier state, decision, or work on this subject and
+  also describes present or future continuation. Cite the earlier and continuing evidence separately.
+- `direct_encounter`: a named Person is structurally identified as a source participant.
 
-The age, era, or background history of an object is not prior history of an effort concerning it. Multiple details,
-requirements, decisions, work items, intended activity, or confident wording inside one episode do not establish
-memory continuity. Evidence from one source episode is concurrent unless its language explicitly locates a state or
-action before that episode. Use admission=`provisional` when an independent subject is plausible but no allowed continuity
-basis is established. Cite only supplied evidence and return JSON matching the schema.
-
-A single-episode explicit-prior-history proposal for a Project or Series is preserved for user adjudication rather
-than accepted as automatic page admission. When the schema offers multiple_episodes or direct_encounter, use that
-structural basis instead of explicit_prior-history.
+Otherwise choose `provisional`. Several details from one episode do not establish continuity, and the age or history
+of an object does not establish prior work involving it. A single-episode `explicit_prior_history` proposal for a
+Project or Series requires user review later. Prefer `multiple_episodes` or `direct_encounter` when the schema offers
+that directly established basis. Do not change identity, type, containment, ownership, or facts. Return one
+schema-valid decision for every node.

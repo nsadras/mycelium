@@ -1,5 +1,10 @@
-SOURCE ID: {{ source_id }}
-OCCURRED AT: {{ occurred_at or unknown_time }}
+SOURCE: {{ source_id }}
+SOURCE TIME: {{ occurred_at or unknown_time }}
 
-SEGMENTS:
+SOURCE PARTICIPANTS:
+{% for participant in participants %}- {{ participant }}
+{% else %}none
+{% endfor %}
+
+ADMITTED CLAIM-BEARING SEGMENTS:
 {{ segments }}

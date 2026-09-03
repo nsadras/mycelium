@@ -180,14 +180,20 @@ class FactResolver:
             fact.fact_id for fact in existing
             if not set(fact.member_claim_ids) <= owner_claim_ids
         }
+        candidate_fact_ids_by_claim: dict[str, set[str]] = {}
         selected_fact_ids = set(structurally_affected)
         if unrepresented and existing:
-            selected_fact_ids.update(await self._select_prior_facts(
+            candidate_fact_ids_by_claim = await self._select_prior_facts(
                 unrepresented,
                 placements,
                 existing,
                 entities,
-            ))
+            )
+            selected_fact_ids.update({
+                fact_id
+                for fact_ids in candidate_fact_ids_by_claim.values()
+                for fact_id in fact_ids
+            })
         selected_existing = [
             fact for fact in existing if fact.fact_id in selected_fact_ids
         ]
@@ -227,22 +233,59 @@ class FactResolver:
             aliases, placements, alias_for_entity, entities
         )
         existing_text = self._existing_facts_text(existing, alias_for_claim)
-        relations_text = self._relations_text(owner_id, alias_for_claim)
         incoming_aliases = sorted(
             alias for alias, claim in aliases.items()
             if claim.claim_id in incoming_claim_ids
         )
-        adjudications = {}
-        if incoming_aliases:
+        adjudications: dict[str, dict] = {}
+        reserved_target_aliases: set[str] = set()
+        prior_decisions: list[dict] = []
+        facts_by_id = {fact.fact_id: fact for fact in existing}
+        for incoming_alias in incoming_aliases:
+            incoming_claim = aliases[incoming_alias]
+            candidate_facts = [
+                facts_by_id[fact_id]
+                for fact_id in sorted(candidate_fact_ids_by_claim.get(
+                    incoming_claim.claim_id, set()
+                ))
+                if fact_id in facts_by_id
+            ]
+            target_aliases = sorted({
+                alias_for_claim[claim_id]
+                for fact in candidate_facts
+                for claim_id in fact.member_claim_ids
+                if claim_id in alias_for_claim
+                and alias_for_claim[claim_id] not in reserved_target_aliases
+            })
+            decision_aliases = {
+                alias: aliases[alias]
+                for alias in [incoming_alias, *target_aliases]
+            }
+            incoming_claim_text = self._claims_text(
+                {incoming_alias: incoming_claim},
+                placements,
+                alias_for_entity,
+                entities,
+            )
+            target_claims_text = self._claims_text(
+                {alias: aliases[alias] for alias in target_aliases},
+                placements,
+                alias_for_entity,
+                entities,
+            ) if target_aliases else "none"
+            decision_relations_text = self._relations_text(
+                owner_id,
+                {claim.claim_id: alias for alias, claim in decision_aliases.items()},
+            )
             system, user = prompts.fact_truth_prompt(
                 owner_text,
-                claims_text,
-                existing_text,
-                relations_text,
-                json.dumps(incoming_aliases),
+                target_claims_text,
+                self._existing_facts_text(candidate_facts, alias_for_claim),
+                decision_relations_text,
+                incoming_claim_text,
+                json.dumps(prior_decisions, ensure_ascii=False, sort_keys=True),
             )
-            target_aliases = sorted(set(aliases) - set(incoming_aliases))
-            truth_schema = fact_truth_output_model(incoming_aliases, target_aliases)
+            truth_schema = fact_truth_output_model([incoming_alias], target_aliases)
             response = await self.llm.call_structured(
                 system,
                 user,
@@ -250,9 +293,21 @@ class FactResolver:
                 num_predict=2048,
                 debug_label="dream-fact-truth",
             )
-            adjudications = truth_schema.model_validate(response).model_dump()[
+            decision = truth_schema.model_validate(response).model_dump()[
                 "decisions"
-            ]
+            ][incoming_alias]
+            adjudications[incoming_alias] = decision
+            prior_decision = {
+                "incoming_claim_alias": incoming_alias,
+                "disposition": decision["disposition"],
+            }
+            if decision["disposition"] == "truth_change":
+                reserved_target_aliases.update(decision["target_claim_aliases"])
+                prior_decision.update({
+                    "relation": decision["relation"],
+                    "target_claim_aliases": decision["target_claim_aliases"],
+                })
+            prior_decisions.append(prior_decision)
         changes = [
             {
                 "relation": decision["relation"],
@@ -423,12 +478,15 @@ class FactResolver:
                 for member in members
                 for linked_id in placements[member.claim_id].linked_entity_ids
             })
-            prior = next((
+            prior_candidates = [
                 fact for fact in existing
                 if fact.owner_entity_id == owner_id
                 and fact.section_key == section
-                and set(fact.member_claim_ids) == member_ids
-            ), None)
+                and set(fact.member_claim_ids) <= member_ids
+            ]
+            prior = (
+                prior_candidates[0] if len(prior_candidates) == 1 else None
+            )
             manual = prior is not None and prior.manual_text
             output.facts.append(ConsolidatedFact(
                 fact_id=prior.fact_id if prior else f"fact-{uuid.uuid4().hex[:12]}",
@@ -467,60 +525,59 @@ class FactResolver:
         existing: list[ConsolidatedFact],
         entities: dict[str, EntityRecord],
         chunk_size: int = 12,
-    ) -> set[str]:
-        aliases = {
-            f"C{index:03d}": claim
-            for index, claim in enumerate(incoming, start=1)
-        }
-        linked_ids = sorted({
-            linked_id for claim in incoming
-            for linked_id in placements[claim.claim_id].linked_entity_ids
-        })
-        alias_for_entity = {
-            entity_id: f"E{index:03d}"
-            for index, entity_id in enumerate(linked_ids, start=1)
-        }
-        incoming_text = self._claims_text(
-            aliases, placements, alias_for_entity, entities
-        )
+    ) -> dict[str, set[str]]:
         fact_aliases = {
             fact.fact_id: f"X{index:03d}"
             for index, fact in enumerate(existing, start=1)
         }
-        selected: set[str] = set()
-        for start in range(0, len(existing), chunk_size):
-            chunk = existing[start:start + chunk_size]
-            aliases_for_chunk = {
-                fact_aliases[fact.fact_id]: fact for fact in chunk
+        selected: dict[str, set[str]] = {
+            claim.claim_id: set() for claim in incoming
+        }
+        for claim_index, claim in enumerate(incoming, start=1):
+            claim_alias = f"C{claim_index:03d}"
+            aliases = {claim_alias: claim}
+            linked_ids = sorted(
+                placements[claim.claim_id].linked_entity_ids
+            )
+            alias_for_entity = {
+                entity_id: f"E{index:03d}"
+                for index, entity_id in enumerate(linked_ids, start=1)
             }
-            output_model = fact_candidate_selection_output_model(
-                aliases,
-                aliases_for_chunk,
+            incoming_text = self._claims_text(
+                aliases, placements, alias_for_entity, entities
             )
-            prior_text = "\n".join(
-                f"[{alias}] state={fact.state}; section={fact.section_key}; "
-                f"text={fact.text}"
-                for alias, fact in aliases_for_chunk.items()
-            )
-            system, user = prompts.fact_candidate_selection_prompt(
-                incoming_text,
-                prior_text,
-            )
-            response = await self.llm.call_structured(
-                system,
-                user,
-                output_model,
-                num_predict=2048,
-                debug_label="dream-fact-candidate-selection",
-            )
-            decisions = output_model.model_validate(response).model_dump()[
-                "decisions"
-            ]
-            selected.update(
-                aliases_for_chunk[alias].fact_id
-                for decision in decisions.values()
-                for alias in decision["candidate_fact_ids"]
-            )
+            for start in range(0, len(existing), chunk_size):
+                chunk = existing[start:start + chunk_size]
+                aliases_for_chunk = {
+                    fact_aliases[fact.fact_id]: fact for fact in chunk
+                }
+                output_model = fact_candidate_selection_output_model(
+                    aliases,
+                    aliases_for_chunk,
+                )
+                prior_text = "\n".join(
+                    f"[{alias}] state={fact.state}; section={fact.section_key}; "
+                    f"text={fact.text}"
+                    for alias, fact in aliases_for_chunk.items()
+                )
+                system, user = prompts.fact_candidate_selection_prompt(
+                    incoming_text,
+                    prior_text,
+                )
+                response = await self.llm.call_structured(
+                    system,
+                    user,
+                    output_model,
+                    num_predict=2048,
+                    debug_label="dream-fact-candidate-selection",
+                )
+                decision = output_model.model_validate(response).model_dump()[
+                    "decisions"
+                ][claim_alias]
+                selected[claim.claim_id].update(
+                    aliases_for_chunk[alias].fact_id
+                    for alias in decision["candidate_fact_ids"]
+                )
         return selected
 
     async def _verify_and_repair_facts(

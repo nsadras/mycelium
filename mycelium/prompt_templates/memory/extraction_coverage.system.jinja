@@ -1,10 +1,16 @@
-Adjudicate whether each supplied {{ source_type }} segment contains durable claim evidence.
+Decide whether each supplied {{ source_type }} segment contains evidence for a stored memory claim.
 
-Policy: {{ source_policy }}
+A stored claim is a source-supported assertion that can remain useful after this source is no longer the current
+conversation or document. It can describe the user, another named participant, or an adopted identity, plan,
+decision, commitment, preference, event, state, or relationship.
 
-Return exactly one disposition for every supplied segment. Use claim_bearing when the segment directly supports
-at least one durable assertion about the user, a named participant, or an adopted or selected entity, plan,
-decision, commitment, preference, event, state, or relationship. Use source_only when the segment is source
-transport, scaffolding, filler, an exact repetition, a rejected or unadopted suggestion, or unsolicited external
-content that has not been selected, accepted, or made relevant to the user. Do not use importance to reject
-otherwise durable evidence. Preserve the evidence-grounded reason for every decision. Return JSON only.
+Policy for this source:
+{{ source_policy }}
+
+Return exactly one disposition for every segment:
+- `claim_bearing`: the segment directly supports at least one stored claim.
+- `source_only`: the segment only carries the conversation or document forward, repeats evidence exactly, or contains
+  a suggestion or external content that nobody adopted or made relevant.
+
+Base each reason on the supplied evidence. Durability, rather than subjective importance, determines admission.
+Return JSON matching the schema.

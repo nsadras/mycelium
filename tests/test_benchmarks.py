@@ -346,7 +346,7 @@ async def test_mycelium_benchmark_adapter_surfaces_encode_failure_without_fallba
         dream_policy="none",
     )
     await system.reset("case-1")
-    system.mem.encoder.encode_session = AsyncMock(side_effect=ValueError("bad json"))
+    system.mem.ingest_source = AsyncMock(side_effect=ValueError("bad json"))
 
     with pytest.raises(ValueError, match="bad json"):
         await system.memorize([
@@ -355,8 +355,34 @@ async def test_mycelium_benchmark_adapter_surfaces_encode_failure_without_fallba
             )
         ])
 
-    system.mem.encoder.encode_session.assert_awaited_once()
+    system.mem.ingest_source.assert_awaited_once()
     assert system.stats()["encoded_batches"] == 0
+
+
+@pytest.mark.asyncio
+async def test_mycelium_benchmark_leaves_segments_unspecified_for_transcript_ingestion(
+    tmp_path,
+):
+    class FakeQa:
+        pass
+
+    system = MyceliumMemorySystem(
+        run_dir=tmp_path,
+        qa_client=FakeQa(),
+        memory_model="test",
+        ollama_url="http://localhost:11434",
+        dream_policy="none",
+    )
+    await system.reset("case-1")
+    system.mem.ingest_source = AsyncMock()
+
+    await system.memorize([
+        BenchmarkMessage(role="user", content="Caroline researched adoption agencies.")
+    ])
+
+    source_input = system.mem.ingest_source.await_args.args[0]
+    assert source_input.transcript
+    assert source_input.segments is None
 
 
 @pytest.mark.asyncio
@@ -374,12 +400,12 @@ async def test_frozen_store_is_copied_exactly_and_skips_memorization(tmp_path):
     )
 
     await system.reset("case-1")
-    system.mem.encoder.encode_session = AsyncMock()
+    system.mem.ingest_source = AsyncMock()
     await system.memorize([BenchmarkMessage(role="user", content="must be skipped")])
 
     copied = tmp_path / "run" / "stores" / "case-1" / "marker.txt"
     assert copied.read_text(encoding="utf-8") == "exact fixture"
-    system.mem.encoder.encode_session.assert_not_awaited()
+    system.mem.ingest_source.assert_not_awaited()
     assert system.stats()["encoded_batches"] == 0
 
 

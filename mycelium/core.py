@@ -1,31 +1,28 @@
 from pathlib import Path
-from typing import List, Optional, Literal, cast
+from typing import Optional, Literal, cast
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from mycelium.models import WikiPage, DreamReport
 from mycelium.store import WikiStore, LogStore
 from mycelium.config import Config
 from mycelium.ollama import OllamaClient
 from mycelium.encoder import Encoder
-from mycelium.budget import count_tokens
-from mycelium.context import render_memory_context
-from mycelium.context_selection import (
-    AssistantContextCandidate,
-    AssistantContextSelector,
-)
 from mycelium.session import Session
-from mycelium.sources import source_contexts_for_pages
-from mycelium.page_search import PageSearchIndex
-from mycelium.memory_tools import MemoryToolset
 from mycelium.short_term import ShortTermMemoryQueue, ShortTermMemoryStatus
+from mycelium.operations import (
+    ConsolidationRequest,
+    ConsolidationResult,
+    RetrievalRequest,
+    RetrievalResult,
+    SourceInput,
+    IngestionResult,
+)
+from mycelium.pipeline import MemoryPipeline
+from mycelium.retrieval import MemoryRetriever
 from mycelium.artifacts import (
     ArtifactStore,
     SourceSegment,
-    query_temporal_record,
-    temporal_intervals_overlap,
-    temporal_record,
 )
 
 class Mycelium:
@@ -53,7 +50,6 @@ class Mycelium:
         self._wiki = WikiStore(self.store_path / "wiki")
         self._log_store = LogStore(self.store_path / "logs")
         self.artifacts = ArtifactStore(self.store_path / "artifacts")
-        self._page_search = PageSearchIndex()
         self._ensure_seed_profile(memory_profile)
         self.llm = OllamaClient(
             url=self.config.llm.url,
@@ -67,8 +63,23 @@ class Mycelium:
             self.artifacts, self.config.dream
         )
         
-        from mycelium.dream import DreamProcess
-        self.dream_process = DreamProcess(self.llm, self._wiki, self._log_store, self.config, self.artifacts)
+        from mycelium.dream import ConsolidationProcess
+        self.consolidator = ConsolidationProcess(
+            self.llm, self._wiki, self._log_store, self.config, self.artifacts
+        )
+        self.retriever = MemoryRetriever(
+            self.llm,
+            self._wiki,
+            self._log_store,
+            self.artifacts,
+            default_budget_tokens=self.config.context_budget_tokens,
+        )
+        self.pipeline = MemoryPipeline(
+            self.encoder,
+            self.retriever,
+            self.consolidator,
+            self.short_term_memory,
+        )
 
     def _ensure_seed_profile(self, memory_profile: Literal["user", "none"]) -> None:
         if memory_profile == "none":
@@ -152,144 +163,21 @@ class Mycelium:
     def log_store(self) -> LogStore:
         return self._log_store
 
-    async def load_context(
-        self,
-        query: str,
-        budget_tokens: Optional[int] = None,
-        query_time: datetime | None = None,
-    ) -> List[WikiPage]:
-        
-        budget_tokens = budget_tokens or self.config.context_budget_tokens
-        
-        pages = self.wiki.list_all()
-        loaded_pages: list[WikiPage] = []
+    async def retrieve_context(
+        self, request: RetrievalRequest
+    ) -> RetrievalResult:
+        return await self.pipeline.retrieve_context(request)
 
-        # Lexical and temporal operations generate bounded candidates only.
-        # A structured relevance decision below controls admission and may
-        # decline every candidate.
-        recent_results = MemoryToolset(self.artifacts).search(
-            query, limit=8, memory_tier="short_term"
-        )
-        page_candidate_slugs = [
-            hit.slug for hit in self._page_search.search(pages, query, limit=8)
-        ]
-
-        query_temporal = query_temporal_record(
-            query, query_time or datetime.now().astimezone()
-        )
-        temporal_source_ids: set[str] = set()
-        if query_temporal and query_temporal.get("start"):
-            for claim in self.artifacts.list_claims(status="active"):
-                claim_temporal = temporal_record(claim.facets)
-                if claim_temporal is None:
-                    continue
-                requested_role = query_temporal.get("role")
-                if requested_role == "deadline" and claim_temporal.get("role") != "deadline":
-                    continue
-                if not temporal_intervals_overlap(query_temporal, claim_temporal):
-                    continue
-                placement = self.artifacts.placement_for_claim(claim.claim_id)
-                if placement and placement.owner_entity_id:
-                    try:
-                        entity = self.artifacts.get_entity(placement.owner_entity_id)
-                    except FileNotFoundError:
-                        entity = None
-                    if entity and self.wiki.exists(entity.slug):
-                        if entity.slug not in page_candidate_slugs:
-                            page_candidate_slugs.insert(0, entity.slug)
-                temporal_source_ids.update(
-                    provenance.raw_log_entry_id
-                    for provenance in claim.provenance
-                    if provenance.raw_log_entry_id
-                )
-
-        pages_by_slug = {page.slug: page for page in pages}
-        candidates = [
-            AssistantContextCandidate(
-                candidate_id=f"claim:{item['claim_id']}",
-                kind="short_term_claim",
-                title=item["claim_id"],
-                content=item["text"],
-            )
-            for item in recent_results
-        ]
-        candidates.extend(
-            AssistantContextCandidate(
-                candidate_id=f"page:{slug}",
-                kind="wiki_page",
-                title=pages_by_slug[slug].title,
-                content=render_memory_context([pages_by_slug[slug]]),
-            )
-            for slug in page_candidate_slugs
-            if slug in pages_by_slug
-        )
-        selected_ids = set(await AssistantContextSelector(self.llm).select(
-            query, candidates
-        ))
-
-        selected_recent = [
-            item for item in recent_results
-            if f"claim:{item['claim_id']}" in selected_ids
-        ]
-        if selected_recent:
-            lines = [
-                "These source-grounded claims are recent and unconsolidated. Treat them as",
-                "available episodic memory, not as a polished or conflict-resolved wiki summary.",
-                "",
-                *[
-                    f"- [{item['consolidation_status']}] {item['text']} "
-                    f"(claim: {item['claim_id']})"
-                    for item in selected_recent
-                ],
-            ]
-            recent_page = WikiPage(
-                slug="_short-term-memory",
-                title="Recent, unconsolidated memory",
-                content="\n".join(lines),
-                created=datetime.now().astimezone(),
-                last_updated=datetime.now().astimezone(),
-                version=1,
-                page_type=None,
-                tags=["short-term-memory"],
-                entity_id="_short-term-memory",
-            )
-            if count_tokens(render_memory_context([recent_page])) <= budget_tokens:
-                loaded_pages.append(recent_page)
-
-        for slug in page_candidate_slugs:
-            if f"page:{slug}" not in selected_ids:
-                continue
-            if not self.wiki.exists(slug):
-                continue
-                
-            page = self.wiki.get(slug)
-            if count_tokens(
-                render_memory_context([*loaded_pages, page])
-            ) <= budget_tokens:
-                loaded_pages.append(page)
-
-        source_contexts = source_contexts_for_pages(
-            loaded_pages,
-            self.log_store,
-            query,
-            preferred_entry_ids=temporal_source_ids,
-        )
-        for page in loaded_pages:
-            source_context = source_contexts.get(page.slug, "")
-            if not source_context:
-                continue
-            page.source_context = source_context
-            if count_tokens(render_memory_context(loaded_pages)) > budget_tokens:
-                page.source_context = ""
-                
-        return loaded_pages
+    async def ingest_source(self, source: SourceInput) -> IngestionResult:
+        return await self.pipeline.ingest_source(source)
 
     @asynccontextmanager
     async def session(self, query: str, session_id: Optional[str] = None):
         session_id = session_id or str(uuid.uuid4())
         
         sess = Session(mycelium=self, session_id=session_id, query=query)
-        sess.loaded_pages = await self.load_context(query)
+        retrieval = await self.retrieve_context(RetrievalRequest(query=query))
+        sess.loaded_pages = list(retrieval.pages)
         
         try:
             yield sess
@@ -310,37 +198,25 @@ class Mycelium:
                     )
                     for index, msg in enumerate(sess.transcript)
                 ]
-                await self.encoder.encode_session(
-                    transcript_str,
-                    session_id,
+                await self.ingest_source(SourceInput(
+                    transcript=transcript_str,
+                    session_id=session_id,
                     occurred_at=segments[0].timestamp,
-                    segments=segments,
+                    segments=tuple(segments),
                     idempotency_key=f"session-transcript:{session_id}",
-                )
+                ))
             
-    def short_term_memory_status(
+    def consolidation_status(
         self, *, now: datetime | None = None
     ) -> ShortTermMemoryStatus:
-        return self.short_term_memory.status(now=now)
+        return self.pipeline.consolidation_status(now=now)
 
-    async def dream(
-        self, *, dry_run: bool = False, include_deferred: bool = True
-    ) -> DreamReport:
-        if not dry_run:
-            await self.encoder.retry_incomplete_extractions()
-        return await self.dream_process.run(
-            dry_run=dry_run, include_deferred=include_deferred
-        )
+    async def consolidate(
+        self, request: ConsolidationRequest = ConsolidationRequest()
+    ) -> ConsolidationResult:
+        return await self.pipeline.consolidate(request)
 
-    async def dream_if_ready(
+    async def consolidate_if_ready(
         self, *, now: datetime | None = None, dry_run: bool = False
-    ) -> DreamReport | None:
-        if not dry_run:
-            await self.encoder.retry_incomplete_extractions()
-        status = self.short_term_memory_status(now=now)
-        if not status.ready:
-            return None
-        return await self.dream_process.run(
-            dry_run=dry_run,
-            include_deferred=status.include_deferred,
-        )
+    ) -> ConsolidationResult | None:
+        return await self.pipeline.consolidate_if_ready(now=now, dry_run=dry_run)

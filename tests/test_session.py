@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, patch
 from mycelium.core import Mycelium
 from mycelium.models import WikiPage
+from mycelium.operations import IngestionResult, RetrievalResult
 
 @pytest.fixture
 def temp_mycelium(tmp_path):
@@ -12,8 +13,14 @@ def temp_mycelium(tmp_path):
 
 @pytest.mark.asyncio
 async def test_session_lifecycle(temp_mycelium):
-    # Setup mock for load_context
-    with patch.object(temp_mycelium, 'load_context', new_callable=AsyncMock) as mock_load:
+    with (
+        patch.object(
+            temp_mycelium, "retrieve_context", new_callable=AsyncMock
+        ) as mock_retrieve,
+        patch.object(
+            temp_mycelium, "ingest_source", new_callable=AsyncMock
+        ) as mock_ingest,
+    ):
         mock_page = WikiPage(
             slug="test-page",
             title="Test Page",
@@ -22,7 +29,10 @@ async def test_session_lifecycle(temp_mycelium):
             last_updated=None,
             version=1,
         )
-        mock_load.return_value = [mock_page]
+        mock_retrieve.return_value = RetrievalResult(
+            pages=(mock_page,), rendered_context=""
+        )
+        mock_ingest.return_value = IngestionResult(status="complete")
         
         async with temp_mycelium.session(query="test query", session_id="ses-123") as session:
             assert session.session_id == "ses-123"
@@ -37,14 +47,13 @@ async def test_session_lifecycle(temp_mycelium):
             session.record("user", "Hello assistant")
             session.record("assistant", "Hello user")
             
-        # On exit, encoder.encode_session should be called
-        temp_mycelium.encoder.encode_session.assert_called_once()
-        args, kwargs = temp_mycelium.encoder.encode_session.call_args
-        assert "USER: Hello assistant" in args[0]
-        assert "ASSISTANT: Hello user" in args[0]
-        assert args[1] == "ses-123"
-        assert kwargs["occurred_at"] == kwargs["segments"][0].timestamp
-        assert all(segment.timestamp for segment in kwargs["segments"])
+        mock_ingest.assert_awaited_once()
+        source_input = mock_ingest.await_args.args[0]
+        assert "USER: Hello assistant" in source_input.transcript
+        assert "ASSISTANT: Hello user" in source_input.transcript
+        assert source_input.session_id == "ses-123"
+        assert source_input.occurred_at == source_input.segments[0].timestamp
+        assert all(segment.timestamp for segment in source_input.segments)
 
 
 def test_memory_context_renders_shared_project_role_once_across_endpoint_pages(temp_mycelium):

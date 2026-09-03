@@ -1,33 +1,43 @@
-Extract durable atomic claims from {{ source_type }} segments in one pass.
+Turn the admitted {{ source_type }} segments into durable, atomic stored claims.
 
-Policy: {{ source_policy }}
+A stored claim is one source-supported assertion that can be evaluated and updated independently. Write each claim as
+a standalone third-person subject-predicate sentence with explicit names. Resolve first- and second-person references
+from the supplied source context. Preserve exact names, dates, relative-time phrases, locations, quantities, reasons,
+and ownership. Cite only segment IDs that directly support the claim.
 
-Each claim must be one standalone third-person subject-predicate assertion with explicit named
-entities. Resolve first/second-person references; do not copy dialogue-shaped text. Preserve exact
-names, dates, relative-time phrases, locations, quantities, reasons, and ownership. Cite only supplied
-segment IDs that directly support the claim. Do not invent context or combine unrelated facts.
+The source-participant roster is an unordered attendance list. Speaker labels identify who spoke; the words and turn
+context identify who was addressed. Use those together to turn first-, second-, and plural-person references into
+explicit names. A two-person roster resolves “both of us” to those two people. With a larger roster, use an explicit
+name or clear turn context to identify the other member.
 
-Encode a continuing role or responsibility connecting a person to a project as
-claim_type=relationship and predicate=project_role; include both the person and project in about, with the
-person as subject. Do not classify a one-off action item, attendance, or incidental contribution as a role.
+Policy for this source:
+{{ source_policy }}
 
-Populate claim_type ({{ claim_types | join('/') }}), an open predicate, evidence_modality, temporal_status, about,
-speaker, confidence, optional replaceable-state slot, and open facets. Evidence modality describes
-the observation channel, never whether a claim is inferred: use speech for spoken or written
-conversation, visual for visible evidence, tool for tool observations, and mixed only when multiple
-channels directly support one claim. Put exact time wording in
-facets.when for event times and facets.deadline for due dates. Never convert relative time yourself;
-preserve phrases such as “by Friday” or “in three days” exactly so the deterministic resolver can anchor
-them to their evidence time. When timestamped segments are supplied, a claim with relative time must copy the
-one cited segment ID containing that time expression into temporal_anchor_segment_id. Otherwise leave
-temporal_anchor_segment_id empty and the date will remain unresolved. Set evidence_type=explicit for
-every directly stated claim. Set evidence_type=inferred for a claim that is not directly stated but
-follows with high certainty from the cited evidence; every such claim must include
-facets.inference_basis and confidence at most 0.7. Do not label a derived conclusion explicit merely
-because its premises are explicit.
-
+For each claim:
+- claim_type ({{ claim_types | join('/') }}) chooses one declared category.
+- `predicate` is a short open label for what the sentence asserts.
+- `about` lists the named identities used by later identity resolution and routing:
 {{ subject_policy }}
+- `slot` optionally names a replaceable state whose newest supported value can supersede an older value. Leave it
+  empty when the claim is cumulative history rather than one current value.
+- `facets` stores structured details such as `when`, `deadline`, or `inference_basis` without replacing the readable
+  claim sentence.
 
-Every supplied segment was separately adjudicated as claim-bearing. Extract one or more claims so that the union
-of claim segment_ids covers every supplied segment. Do not emit temporary keys or segment dispositions. Do not
-omit an admitted claim because it seems unimportant. Return JSON only.
+`evidence_modality` records how the evidence was observed: `speech` for spoken or written conversation, `visual` for
+visible evidence, `tool` for a tool observation, and `mixed` only when multiple channels directly support the same
+claim. `evidence_type` records whether the assertion was directly stated (`explicit`) or follows with high certainty
+from the cited evidence (`inferred`). An inferred claim includes `facets.inference_basis` and confidence no greater
+than 0.7.
+
+Put exact event time wording in `facets.when` and exact due-date wording in `facets.deadline`. Preserve relative phrases
+such as “by Friday” or “in three days.” When timestamped segments are supplied, copy the cited segment containing a
+relative-time phrase into `temporal_anchor_segment_id`; otherwise leave that field empty so the date remains
+unresolved.
+
+Encode a continuing role or responsibility between a person and a Project as `claim_type=relationship` and
+`predicate=project_role`, with the person as subject and the Project as owner. A one-off action, attendance, or
+incidental contribution is not a continuing role.
+
+Every supplied segment has already been admitted as claim-bearing. The combined `segment_ids` across all returned
+claims must cover every supplied segment. Return only schema-valid stored claims; temporary segment classifications
+belong to the preceding coverage step.

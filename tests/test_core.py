@@ -4,6 +4,7 @@ from mycelium.core import Mycelium
 from mycelium.budget import count_tokens
 from mycelium.context import render_memory_context
 from mycelium.models import WikiPage
+from mycelium.operations import RetrievalRequest
 from datetime import datetime
 from mycelium.artifacts import ClaimPlacement, ClaimProvenance, EntityRecord, MemoryClaim
 
@@ -22,8 +23,14 @@ def temp_mycelium(tmp_path):
             for alias in decisions_model.model_fields
         }}
     mem.llm.call_structured.side_effect = include_all_context
+    mem.retriever.llm = mem.llm
     mem.encoder = AsyncMock()
     return mem
+
+
+async def retrieve_pages(memory, query, **kwargs):
+    result = await memory.retrieve_context(RetrievalRequest(query=query, **kwargs))
+    return list(result.pages)
 
 @pytest.mark.asyncio
 async def test_page_search_retrieves_named_entity(temp_mycelium):
@@ -50,7 +57,7 @@ async def test_page_search_retrieves_named_entity(temp_mycelium):
     temp_mycelium.wiki.save(page_jon)
     
     # Query mentions "Gina" but not "Jon"
-    loaded = await temp_mycelium.load_context(query="When did Gina get her tattoo?")
+    loaded = await retrieve_pages(temp_mycelium, "When did Gina get her tattoo?")
     
     # The title-weighted page index should load person-gina but not person-jon.
     loaded_slugs = [p.slug for p in loaded]
@@ -71,7 +78,7 @@ async def test_full_page_search_candidate_requires_structured_admission(temp_myc
         created=now, last_updated=now, version=1,
         page_type="person", entity_id="person-jon",
     ))
-    loaded = await temp_mycelium.load_context(query="Who owns the dance studio?")
+    loaded = await retrieve_pages(temp_mycelium, "Who owns the dance studio?")
 
     assert loaded[0].slug == "person-jon"
     temp_mycelium.llm.call_structured.assert_awaited_once()
@@ -95,7 +102,7 @@ async def test_page_search_can_abstain_from_lexical_candidates(temp_mycelium):
         },
     }}
 
-    loaded = await temp_mycelium.load_context("Which tea does the user prefer?")
+    loaded = await retrieve_pages(temp_mycelium, "Which tea does the user prefer?")
 
     assert loaded == []
 
@@ -133,8 +140,8 @@ async def test_temporal_claim_routes_generic_deadline_query(temp_mycelium):
         reason="test", created_at=now.isoformat(), updated_at=now.isoformat(),
     ))
 
-    loaded = await temp_mycelium.load_context(
-        "What is due next week?", query_time=now
+    loaded = await retrieve_pages(
+        temp_mycelium, "What is due next week?", query_time=now
     )
 
     assert [page.slug for page in loaded] == ["project-alpha"]
@@ -155,7 +162,9 @@ async def test_load_context_exposes_relevant_short_term_memory_without_wiki_writ
     )
     temp_mycelium.artifacts.save_claim(claim)
 
-    loaded = await temp_mycelium.load_context("What class does Gina plan to take?")
+    loaded = await retrieve_pages(
+        temp_mycelium, "What class does Gina plan to take?"
+    )
 
     recent = next(page for page in loaded if page.slug == "_short-term-memory")
     assert claim.text in recent.content
@@ -178,11 +187,11 @@ async def test_load_context_budgets_the_authoritative_rendering(temp_mycelium):
     temp_mycelium.wiki.save(page)
     exact_tokens = count_tokens(render_memory_context([page]))
 
-    loaded = await temp_mycelium.load_context(
-        "Orchid planning", budget_tokens=exact_tokens
+    loaded = await retrieve_pages(
+        temp_mycelium, "Orchid planning", budget_tokens=exact_tokens
     )
-    rejected = await temp_mycelium.load_context(
-        "Orchid planning", budget_tokens=exact_tokens - 1
+    rejected = await retrieve_pages(
+        temp_mycelium, "Orchid planning", budget_tokens=exact_tokens - 1
     )
 
     assert [item.slug for item in loaded] == [page.slug]

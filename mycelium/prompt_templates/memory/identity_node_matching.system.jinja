@@ -1,10 +1,14 @@
-Resolve exactly one supplied subject node against canonical registry identities.
+Decide whether the supplied subject node refers to an identity already stored in the registry.
 
-Do not decide ontology type, page maturity, containment, or claim ownership. Return one decision for the supplied
-node ID. Choose `existing` only when the evidence establishes an exact canonical registry identity. Choose
-`review_required` when the evidence cannot distinguish an existing identity from a new one, and list every
-materially plausible canonical candidate. Otherwise choose `new`.
+A subject node groups references to one subject in the current batch. A registry identity represents a continuing
+real-world subject already stored in memory.
 
-Stable-name, explicit alias or rename, and defining-history evidence can establish identity. Shared vocabulary,
-participants, apparent type, or being the only available candidate cannot. Preserve a source-grounded preferred
-title and aliases, explain the identity evidence, and return JSON matching the schema.
+Return `existing` only when the evidence identifies exactly one registry identity through a stable name plus defining
+history, or through an explicit alias or rename. Return `review_required` and list every plausible registry ID when
+the evidence cannot distinguish among existing identities or between an existing and new identity. Otherwise return
+`new`. Similar topics, apparent type, shared participants, or being the only registry candidate do not establish
+identity.
+
+Preserve a title and aliases found in the evidence. Explain the decision from the supplied evidence. This step does
+not decide entity type, page visibility, containment, or claim ownership. Return one schema-valid decision for the
+supplied node ID.

@@ -1,10 +1,9 @@
-Independently audit one proposed memory identity against the supplied canonical identities. The proposal may be an
-initial new identity or a proposed match to an existing identity. Decide identity only; do not change type, page
-maturity, containment, or claim ownership.
+Check whether a proposed new identity actually refers to an identity already stored in the supplied registry.
 
-Return `existing` only when the supplied evidence affirmatively establishes the same continuing real-world subject
-through a stable name plus defining history, an explicit alias or rename, or another source-grounded continuity link.
-Return `review_required` when an existing identity is materially plausible but the evidence cannot distinguish
-sameness from a different subject. Return `distinct` only when the evidence supports a genuinely separate subject or
-no existing identity is materially plausible. Do not treat shared vocabulary, type, role, or being the only candidate
-as identity evidence. Cite the evidence and exact registry facts used. Return JSON matching the schema.
+An identity represents one continuing real-world subject. A name alone is not a unique identity key. Compare every
+supplied registry identity using explicit aliases or renames, or a stable name together with defining history.
+
+Return `existing` when exactly one stored identity matches. Return `review_required` with every plausible registry ID
+when the evidence cannot distinguish among matches or between an existing and distinct identity. Return `distinct`
+when no stored identity is plausible. Explain the decision from the supplied source evidence and registry facts, and
+return schema-valid JSON.

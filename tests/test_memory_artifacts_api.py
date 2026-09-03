@@ -125,7 +125,7 @@ def artifact_memory(tmp_path, monkeypatch):
         updated_at="2026-07-22T12:00:00",
     )
     mem.artifacts.save_consolidated_fact(stored_fact)
-    mem.dream_process.fact_resolver.resolve = AsyncMock(
+    mem.consolidator.fact_resolver.resolve = AsyncMock(
         return_value=FactResolutionResult(facts=[stored_fact])
     )
     mem.wiki.save(WikiPage(
@@ -377,7 +377,7 @@ async def test_review_proposal_endpoint_returns_404(artifact_memory):
 
 @pytest.mark.asyncio
 async def test_correct_claim_endpoint_creates_replacement_artifacts(artifact_memory):
-    artifact_memory.dream_process.fact_resolver.resolve = AsyncMock(
+    artifact_memory.consolidator.fact_resolver.resolve = AsyncMock(
         return_value=FactResolutionResult(deleted_fact_ids={"fact-tea-preference"})
     )
 
@@ -399,7 +399,7 @@ async def test_correct_claim_endpoint_creates_replacement_artifacts(artifact_mem
 
 @pytest.mark.asyncio
 async def test_retract_source_endpoint_marks_source_and_claims(artifact_memory):
-    artifact_memory.dream_process.fact_resolver.resolve = AsyncMock(
+    artifact_memory.consolidator.fact_resolver.resolve = AsyncMock(
         return_value=FactResolutionResult(deleted_fact_ids={"fact-tea-preference"})
     )
 
@@ -418,7 +418,7 @@ async def test_identity_review_approves_reopens_and_reroutes(
     artifact_memory, monkeypatch
 ):
     reroute = AsyncMock(return_value={"failures": [], "pages_created": 0})
-    monkeypatch.setattr(memory_curation, "run_dream_process", reroute)
+    monkeypatch.setattr(memory_curation, "run_consolidation", reroute)
 
     response = await memory_curation.review_identity_decision(
         "identity-review-test",

@@ -12,6 +12,7 @@ from typing import Any
 import mycelium
 from mycelium.artifacts import SourceSegment
 from mycelium.models import LogEntry
+from mycelium.operations import ConsolidationRequest, SourceInput
 from engram import EngramConfig, EngramService, EngramStore
 
 SESSIONS_FILE = Path("mycelium_store/sessions_meta.json")
@@ -211,9 +212,9 @@ async def append_tool_event_logs(
         )
         tool_name = str(tool_event.get("tool_name") or "unknown")
         result = str(tool_event.get("result") or "").strip()
-        entries = await mem.encoder.encode_session(
-            content,
-            episode_id,
+        ingestion = await mem.ingest_source(SourceInput(
+            transcript=content,
+            session_id=episode_id,
             source_type="tool_observation",
             occurred_at=occurred_at,
             metadata={
@@ -225,20 +226,20 @@ async def append_tool_event_logs(
                 "failed": bool(tool_event.get("failed")),
                 "truncated": bool(tool_event.get("truncated")),
             },
-            segments=[SourceSegment(
+            segments=(SourceSegment(
                 segment_id="",
                 index=0,
                 speaker=tool_name,
                 role="tool",
                 content=result or "Tool call produced no result.",
                 timestamp=occurred_at,
-            )],
+            ),),
             idempotency_key=(
                 f"tool-observation:{session_id}:{episode_id}:"
                 f"{turn_count}:{event_index}"
             ),
-        )
-        created_entries.extend(entries)
+        ))
+        created_entries.extend(ingestion.log_entries)
 
     return created_entries
 
@@ -310,13 +311,13 @@ async def flush_session_episode(session_id: str, reason: str = "manual") -> dict
             }
 
         try:
-            entries = await get_mem().encoder.encode_session(
-                transcript,
-                episode["id"],
+            ingestion = await get_mem().ingest_source(SourceInput(
+                transcript=transcript,
+                session_id=episode["id"],
                 occurred_at=segments[0].timestamp,
-                segments=segments,
+                segments=tuple(segments),
                 idempotency_key=f"chat-episode:{episode['id']}",
-            )
+            ))
         except Exception as exc:
             return {
                 "session_id": session_id,
@@ -327,7 +328,7 @@ async def flush_session_episode(session_id: str, reason: str = "manual") -> dict
                 "turn_count": turn_count,
                 "transcript_chars": transcript_chars,
             }
-        if not entries:
+        if not ingestion.log_entries:
             return {
                 "session_id": session_id,
                 "episode_id": episode["id"],
@@ -348,7 +349,7 @@ async def flush_session_episode(session_id: str, reason: str = "manual") -> dict
                     "encoded_at": iso_now(),
                     "reason": reason,
                     "turn_count": turn_count,
-                    "entries_encoded": len(entries),
+                    "entries_encoded": len(ingestion.log_entries),
                 }
             )
             start_new_episode(record, session_id)
@@ -357,7 +358,7 @@ async def flush_session_episode(session_id: str, reason: str = "manual") -> dict
             "session_id": session_id,
             "episode_id": episode["id"],
             "status": "flushed",
-            "entries_encoded": len(entries),
+            "entries_encoded": len(ingestion.log_entries),
             "turn_count": turn_count,
             "transcript_chars": transcript_chars,
         }
@@ -409,28 +410,32 @@ def _dream_report_response(report) -> dict[str, Any]:
     }
 
 
-async def run_dream() -> dict[str, Any]:
+async def run_consolidation() -> dict[str, Any]:
     async with _get_dream_lock():
-        report = await get_mem().dream(include_deferred=True)
-    return _dream_report_response(report)
+        result = await get_mem().consolidate(ConsolidationRequest(
+            include_deferred=True
+        ))
+    return _dream_report_response(result.report)
 
 
-async def run_dream_if_ready() -> dict[str, Any]:
+async def run_consolidation_if_ready() -> dict[str, Any]:
     mem = get_mem()
-    status = mem.short_term_memory_status()
+    status = mem.consolidation_status()
     if not status.ready:
         return {"status": "not_ready", "queue": status.as_dict(), "report": None}
     async with _get_dream_lock():
         # Recheck after acquiring the lock because another request may have
         # consolidated the queue while this task was waiting.
-        status = mem.short_term_memory_status()
+        status = mem.consolidation_status()
         if not status.ready:
             return {"status": "not_ready", "queue": status.as_dict(), "report": None}
-        report = await mem.dream_if_ready()
+        result = await mem.consolidate_if_ready()
     return {
-        "status": "consolidated" if report is not None else "not_ready",
+        "status": "consolidated" if result is not None else "not_ready",
         "queue": status.as_dict(),
-        "report": _dream_report_response(report) if report is not None else None,
+        "report": (
+            _dream_report_response(result.report) if result is not None else None
+        ),
     }
 
 

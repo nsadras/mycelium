@@ -15,18 +15,19 @@ mem = mycelium.Mycelium(
 
 async def memory_node(state: AgentState) -> AgentState:
     """Load relevant memory into agent state."""
-    # We load pages without starting a full session just for context
-    pages = await mem.load_context(query=state['input'])
-    state['memory_context'] = mycelium.render_memory_context(pages)
+    retrieval = await mem.retrieve_context(
+        mycelium.RetrievalRequest(query=state['input'])
+    )
+    state['memory_context'] = retrieval.rendered_context
     return state
 
 async def record_node(state: AgentState) -> AgentState:
     """Record session output to episodic log."""
-    await mem.encoder.encode_session(
+    await mem.ingest_source(mycelium.SourceInput(
         transcript=f"USER: {state['input']}\nASSISTANT: {state['output']}",
         session_id=state['session_id'],
         source_type="agent_conversation",
-    )
+    ))
     return state
 
 async def generate_node(state: AgentState) -> AgentState:

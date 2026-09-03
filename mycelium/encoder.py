@@ -7,6 +7,7 @@ import uuid
 from dataclasses import asdict
 
 from mycelium.models import LogEntry
+from mycelium.operations import IngestionResult, SourceInput
 from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.config import Config
@@ -41,6 +42,58 @@ class Encoder:
         self.log_store = log_store
         self.config = config
         self.artifacts = artifacts
+
+    async def ingest_source(self, source_input: SourceInput) -> IngestionResult:
+        entries = await self.encode_session(
+            source_input.transcript,
+            source_input.session_id,
+            source_type=source_input.source_type,
+            occurred_at=source_input.occurred_at,
+            participants=list(source_input.participants),
+            metadata=dict(source_input.metadata),
+            segments=(
+                None
+                if source_input.segments is None
+                else list(source_input.segments)
+            ),
+            idempotency_key=source_input.idempotency_key,
+        )
+        if not entries:
+            return IngestionResult(status="empty")
+
+        entry_ids = {entry.entry_id for entry in entries}
+        sources = [
+            source for source in self.artifacts.list_sources()
+            if source.raw_log_entry_id in entry_ids
+        ]
+        source_ids = {source.source_id for source in sources}
+        episodes = [
+            episode for episode in self.artifacts.list_episodes()
+            if episode.source_id in source_ids
+        ]
+        claim_ids = tuple(dict.fromkeys(
+            claim_id for episode in episodes for claim_id in episode.claim_ids
+        ))
+        operation_ids = tuple(dict.fromkeys(
+            str(source.metadata["ingestion_operation_id"])
+            for source in sources
+            if source.metadata.get("ingestion_operation_id")
+        ))
+        status = (
+            "complete"
+            if episodes and all(
+                episode.extraction_status == "complete" for episode in episodes
+            )
+            else "incomplete"
+        )
+        return IngestionResult(
+            status=status,
+            log_entries=tuple(entries),
+            source_ids=tuple(source.source_id for source in sources),
+            episode_ids=tuple(episode.episode_id for episode in episodes),
+            claim_ids=claim_ids,
+            operation_ids=operation_ids,
+        )
 
     async def encode_session(
         self,
@@ -118,6 +171,15 @@ class Encoder:
             normalized_segments = self._normalize_segments(
                 segments, content, operation.source_id, source_type
             )
+            if not normalized_segments:
+                error = (
+                    "A non-empty source transcript must produce at least one segment"
+                )
+                operation.status = "failed"
+                operation.error = f"ValueError: {error}"
+                operation.updated_at = datetime.datetime.now().astimezone().isoformat()
+                self.artifacts.save_ingestion_operation(operation)
+                raise ValueError(error)
             participant_names = participants or list(dict.fromkeys(
                 segment.speaker
                 for segment in normalized_segments
@@ -199,12 +261,14 @@ class Encoder:
         metadata: dict[str, Any] | None,
         segments: list[SourceSegment | dict[str, Any]] | None,
     ) -> str:
-        serialized_segments = []
-        for item in segments or []:
-            value = asdict(item) if isinstance(item, SourceSegment) else dict(item)
-            value.pop("segment_id", None)
-            value.pop("index", None)
-            serialized_segments.append(value)
+        serialized_segments = None
+        if segments is not None:
+            serialized_segments = []
+            for item in segments:
+                value = asdict(item) if isinstance(item, SourceSegment) else dict(item)
+                value.pop("segment_id", None)
+                value.pop("index", None)
+                serialized_segments.append(value)
         payload = {
             "transcript": transcript,
             "session_id": session_id,
@@ -394,6 +458,7 @@ class Encoder:
                         source.source_type,
                         source.source_id,
                         source.occurred_at,
+                        list(source.participants),
                         self._render_segments(claim_bearing),
                     )
                     response = await self.llm.call_structured(

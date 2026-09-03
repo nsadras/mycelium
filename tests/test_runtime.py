@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 from mycelium.artifacts import ArtifactStore
 from mycelium.config import Config
 from mycelium.encoder import Encoder
+from mycelium.operations import IngestionResult, RetrievalResult
 from mycelium.store import LogStore
 from server import runtime
 from server.api import sessions
@@ -73,7 +74,12 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
 
     llm.call_structured.side_effect = source_aware_response
     monkeypatch.setattr(
-        runtime, "get_mem", lambda: SimpleNamespace(log_store=log_store, encoder=encoder)
+        runtime,
+        "get_mem",
+        lambda: SimpleNamespace(
+            log_store=log_store,
+            ingest_source=encoder.ingest_source,
+        ),
     )
 
     created = await append_tool_event_logs(
@@ -138,18 +144,21 @@ async def test_manual_flush_preserves_each_message_timestamp(tmp_path, monkeypat
             },
         }
     })
-    encoder = AsyncMock()
-    encoder.encode_session.return_value = [SimpleNamespace(entry_id="entry-1")]
-    monkeypatch.setattr(runtime, "get_mem", lambda: SimpleNamespace(encoder=encoder))
+    ingest_source = AsyncMock(return_value=IngestionResult(
+        status="complete",
+        log_entries=(SimpleNamespace(entry_id="entry-1"),),
+    ))
+    monkeypatch.setattr(
+        runtime, "get_mem", lambda: SimpleNamespace(ingest_source=ingest_source)
+    )
 
     result = await runtime.flush_session_episode("chat-1")
 
     assert result["status"] == "flushed"
-    _, episode_id = encoder.encode_session.call_args.args
-    kwargs = encoder.encode_session.call_args.kwargs
-    assert episode_id == "chat-1-ep-1"
-    assert kwargs["occurred_at"] == "2026-08-26T23:59:00+00:00"
-    assert [segment.timestamp for segment in kwargs["segments"]] == [
+    source_input = ingest_source.await_args.args[0]
+    assert source_input.session_id == "chat-1-ep-1"
+    assert source_input.occurred_at == "2026-08-26T23:59:00+00:00"
+    assert [segment.timestamp for segment in source_input.segments] == [
         "2026-08-26T23:59:00+00:00",
         "2026-08-27T08:00:01+00:00",
     ]
@@ -183,16 +192,18 @@ async def test_chat_and_manual_flush_are_serialized(tmp_path, monkeypatch):
         await finish_generation.wait()
         return SimpleNamespace(content="Saved reply", tool_events=[])
 
-    encoder = AsyncMock()
-    encoder.encode_session.return_value = [SimpleNamespace(entry_id="entry-1")]
+    ingest_source = AsyncMock(return_value=IngestionResult(
+        status="complete",
+        log_entries=(SimpleNamespace(entry_id="entry-1"),),
+    ))
     mem = SimpleNamespace(
-        load_context=AsyncMock(return_value=[]),
+        retrieve_context=AsyncMock(return_value=RetrievalResult((), "")),
         llm=SimpleNamespace(call_messages=call_messages),
         config=SimpleNamespace(
             context_budget_tokens=32768,
             llm=SimpleNamespace(context_window_tokens=32768),
         ),
-        encoder=encoder,
+        ingest_source=ingest_source,
     )
     monkeypatch.setattr(runtime, "get_mem", lambda: mem)
     monkeypatch.setattr(sessions, "get_mem", lambda: mem)
@@ -261,7 +272,7 @@ async def test_concurrent_chats_in_different_sessions_preserve_both(tmp_path, mo
         )
 
     mem = SimpleNamespace(
-        load_context=AsyncMock(return_value=[]),
+        retrieve_context=AsyncMock(return_value=RetrievalResult((), "")),
         llm=SimpleNamespace(call_messages=call_messages),
         config=SimpleNamespace(
             context_budget_tokens=32768,

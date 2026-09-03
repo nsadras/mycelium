@@ -3,6 +3,7 @@
 from mycelium.ontology import (
     CLAIM_TYPES,
     EXTRACTION_SUBJECT_POLICY,
+    ROUTING_OWNERSHIP_POLICY,
     ROUTING_SUBJECT_POLICY,
     SUBJECT_CENSUS_POLICY,
     SUBJECT_PAGE_STATE_POLICY,
@@ -59,6 +60,19 @@ def local_identity_matching_prompt(
         node=node,
         evidence=evidence,
         local_identities=local_identities,
+    )
+
+
+def pending_identity_matching_prompt(
+    identity: str,
+    evidence: str,
+    pending_proposals: str,
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/pending_identity_matching",
+        identity=identity,
+        evidence=evidence,
+        pending_proposals=pending_proposals,
     )
 
 
@@ -119,6 +133,7 @@ def identity_maturity_verification_prompt(
 def entity_plan_prompt(
     registry: str,
     nodes: str,
+    maturity_decisions: str,
     evidence: str,
     reviewed_adjudications: str = "none",
 ) -> tuple[str, str]:
@@ -126,6 +141,7 @@ def entity_plan_prompt(
         "memory/entity_plan",
         registry=registry,
         nodes=nodes,
+        maturity_decisions=maturity_decisions,
         evidence=evidence,
         reviewed_adjudications=reviewed_adjudications,
         subject_scopes=subject_scope_prompt_catalog(),
@@ -144,6 +160,7 @@ def claim_routing_prompt(
         entity_plan=entity_plan,
         evidence=evidence,
         subject_policy=ROUTING_SUBJECT_POLICY,
+        ownership_policy=ROUTING_OWNERSHIP_POLICY,
     )
 
 
@@ -153,6 +170,7 @@ def fact_truth_prompt(
     existing_facts: str,
     reviewed_relations: str,
     incoming_claims: str,
+    prior_decisions: str,
 ) -> tuple[str, str]:
     return render_prompt_pair(
         "memory/fact_truth",
@@ -161,6 +179,7 @@ def fact_truth_prompt(
         existing_facts=existing_facts,
         reviewed_relations=reviewed_relations,
         incoming_claims=incoming_claims,
+        prior_decisions=prior_decisions,
     )
 
 
@@ -246,6 +265,7 @@ def claim_extraction_prompt(
     source_type: str,
     source_id: str,
     occurred_at: str | None,
+    participants: list[str],
     segments: str,
 ) -> tuple[str, str]:
     policy_template = _EXTRACTION_POLICY_TEMPLATES.get(
@@ -261,6 +281,7 @@ def claim_extraction_prompt(
         source_id=source_id,
         occurred_at=occurred_at,
         unknown_time="unknown",
+        participants=participants,
         segments=segments,
     )
 

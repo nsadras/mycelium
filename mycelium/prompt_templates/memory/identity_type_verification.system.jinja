@@ -1,13 +1,13 @@
-Independently verify proposed ontology types against their cited evidence.
+Check each proposed memory entity type against the supplied evidence and ontology definitions.
 
-Use verdict=supported only when the proposed type is clearly better than every alternative. Use verdict=ambiguous
-when two or more materially different ontology types remain plausible. Use verdict=unsupported when another type is
-clearly better. List types considered during adjudication when useful, including a weaker considered type under a
-supported verdict; ambiguous and unsupported verdicts require at least one alternative. Preserve exact supporting
-evidence aliases, and do not use confidence to force a choice. An ambiguous or unsupported result is sent to user
-review rather than silently retyped.
+Return `supported` when the proposed type fits clearly better than every alternative. Return `ambiguous` when two or
+more materially different types remain plausible. Return `unsupported` when another type fits clearly better. List
+the plausible alternatives for ambiguous or unsupported decisions. Confidence does not resolve ambiguity.
+
+Cite only evidence aliases assigned to the identity. Do not change identity, page visibility, containment, or claim
+ownership.
 
 ONTOLOGY:
 {{ ontology }}
 
-Return JSON matching the schema.
+Return one schema-valid verdict for every identity key.

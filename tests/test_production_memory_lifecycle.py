@@ -6,6 +6,7 @@ import pytest
 from mycelium.budget import count_message_tokens
 from mycelium.core import Mycelium
 from mycelium.ollama import ChatResponse
+from mycelium.operations import RetrievalRequest
 from server import runtime
 from server.api import memory_curation, sessions
 from server.api.memory_contracts import (
@@ -103,9 +104,10 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     fake = DeterministicProductionModel()
     memory.llm = fake
     memory.encoder.llm = fake
-    memory.dream_process.llm = fake
-    memory.dream_process.fact_resolver.llm = fake
-    memory.dream_process.router.llm = fake
+    memory.retriever.llm = fake
+    memory.consolidator.llm = fake
+    memory.consolidator.fact_resolver.llm = fake
+    memory.consolidator.router.llm = fake
     monkeypatch.setattr(runtime, "get_mem", lambda: memory)
     monkeypatch.setattr(sessions, "get_mem", lambda: memory)
     monkeypatch.setattr(memory_curation, "get_mem", lambda: memory)
@@ -164,16 +166,18 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     assert len(memory.artifacts.list_ingestion_operations()) == 1
 
     fake.context_disposition = "include"
-    recalled = await memory.load_context("When will the Cedar brief be sent?")
+    recalled = list((await memory.retrieve_context(RetrievalRequest(
+        query="When will the Cedar brief be sent?"
+    ))).pages)
     short_term = next(
         page for page in recalled if page.slug == "_short-term-memory"
     )
     assert claim.text in short_term.content
 
     fake.context_disposition = "exclude"
-    assert await memory.load_context(
-        "What kind of cedar tree grows near the coast?"
-    ) == []
+    assert (await memory.retrieve_context(RetrievalRequest(
+        query="What kind of cedar tree grows near the coast?"
+    ))).pages == ()
 
     correction = await memory_curation.correct_claim(
         claim.claim_id,

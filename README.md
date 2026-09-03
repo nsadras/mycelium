@@ -135,7 +135,15 @@ GPU acceleration is detected automatically when available. See [DESIGN.md](DESIG
 
 ## Use Mycelium as a library
 
-The web app is optional. The Python API can load memory into an agent prompt and record the resulting exchange:
+The web app is optional. The Python API exposes the same three-stage lifecycle used by the server:
+
+| Operation | Input | Output |
+| --- | --- | --- |
+| `ingest_source` | `SourceInput` with a transcript, source kind, participants, segments, and idempotency key | `IngestionResult` with the created log, source, episode, claim, and operation IDs |
+| `retrieve_context` | `RetrievalRequest` with a query, budget, and optional query time | `RetrievalResult` with selected pages and their authoritative rendered context |
+| `consolidate` | `ConsolidationRequest` with dry-run and deferred-claim policy | `ConsolidationResult` with the Dream report and retried extraction IDs |
+
+For an ordinary agent turn, retrieve memory before generation and ingest the completed exchange afterward:
 
 ```python
 import asyncio
@@ -150,26 +158,31 @@ async def main():
     )
 
     question = "What did we decide about the project architecture?"
-    async with memory.session(query=question) as session:
-        prompt = session.build_prompt(question)
+    retrieval = await memory.retrieve_context(
+        mycelium.RetrievalRequest(query=question)
+    )
 
-        # Send `prompt` to your agent or model.
-        answer = "We chose a plain-text wiki backed by source logs."
+    # Send retrieval.rendered_context and question to your agent or model.
+    answer = "We chose a plain-text wiki backed by source logs."
 
-        session.record("user", question)
-        session.record("assistant", answer)
-
-    await memory.dream()
+    await memory.ingest_source(mycelium.SourceInput(
+        transcript=f"USER: {question}\nASSISTANT: {answer}",
+        session_id="architecture-chat",
+        idempotency_key="architecture-chat:1",
+    ))
+    consolidation = await memory.consolidate(
+        mycelium.ConsolidationRequest()
+    )
+    print(consolidation.report)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-The context manager retrieves relevant canonical pages and short-term claims on entry and records the
-exchange on exit. Web and library integrations use the same budgeted memory-context renderer; integrations that
-load pages directly can call `mycelium.render_memory_context(pages)`. `dream()` manually consolidates pending and
-deferred claims. Library integrations can call `dream_if_ready()` to apply the configured queue policy. See
+`Mycelium.session()` remains an ergonomic wrapper around retrieval and ingestion for conversational agents. Web and
+library integrations use the same budgeted memory-context renderer. `consolidate_if_ready()` applies the configured
+queue policy when the caller wants conditional consolidation. See
 [`examples/basic_session.py`](examples/basic_session.py) for a runnable example and
 [`examples/langgraph_integration.py`](examples/langgraph_integration.py) for a LangGraph integration pattern.
 

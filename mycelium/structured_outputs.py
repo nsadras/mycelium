@@ -667,6 +667,57 @@ def local_identity_matching_output_model(
     )
 
 
+class PendingIdentityDecisionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+def pending_identity_matching_output_model(
+    pending_decision_ids: Collection[str],
+) -> type[BaseModel]:
+    """Match one current identity group against unresolved review proposals."""
+    pending = tuple(dict.fromkeys(
+        str(value) for value in pending_decision_ids if value
+    ))
+    if not pending:
+        raise ValueError("Pending identity matching requires candidates")
+    pending_type = Literal.__getitem__(pending)
+    same = create_model(
+        "SamePendingIdentityDecision",
+        __base__=PendingIdentityDecisionOutput,
+        resolution=(Literal["same_as_pending"], ...),
+        decision_id=(pending_type, ...),  # type: ignore[valid-type]
+        candidate_decision_ids=(list[str], Field(max_length=0)),
+    )
+    distinct = create_model(
+        "DistinctPendingIdentityDecision",
+        __base__=PendingIdentityDecisionOutput,
+        resolution=(Literal["distinct"], ...),
+        decision_id=(Literal[""], ...),
+        candidate_decision_ids=(list[str], Field(max_length=0)),
+    )
+    review = create_model(
+        "ReviewPendingIdentityDecision",
+        __base__=PendingIdentityDecisionOutput,
+        resolution=(Literal["review_required"], ...),
+        decision_id=(Literal[""], ...),
+        candidate_decision_ids=(
+            list[pending_type],  # type: ignore[valid-type]
+            Field(min_length=1, max_length=len(pending)),
+        ),
+    )
+    decision = Annotated[
+        Union[same, distinct, review],
+        Field(discriminator="resolution"),
+    ]
+    return create_model(
+        "ExactPendingIdentityDecisionPlan",
+        __config__=ConfigDict(extra="forbid"),
+        decision=(decision, ...),
+    )
+
+
 def new_identity_verification_output_model(
     existing_entity_ids: Collection[str],
 ) -> type[BaseModel]:

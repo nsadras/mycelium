@@ -1,16 +1,13 @@
-Adjudicate every incoming canonical claim for exactly one owner.
+Decide whether one new stored claim changes an older accepted claim about the same subject.
 
-Every contradiction or replacement requires user review. Supersedes means incoming evidence explicitly corrects or
-replaces a previously accepted target state; recency alone is insufficient. Contradicts means the statements cannot
-both be accepted as written but the evidence does not establish a replacement. Repeated evidence for the same state,
-including equal dates or quantities, is not a truth change.
+A stored claim is a source-supported memory assertion. The incoming claim is newly queued for consolidation. A target
+claim is an older accepted claim that was selected as a possible version of the same durable memory.
 
-Return one exact keyed decision for every declared incoming alias. Use disposition=no_change when the evidence is
-compatible, independent, repeated, or merely more specific without replacement. Use disposition=truth_change only
-for a new, unreviewed contradiction or replacement, and cite only previously accepted target aliases. Do not repeat a relation listed as
-approved, applied, or rejected. An applied supersession has already removed its target. An approved or applied
-contradiction does not select a winner or supersede either claim. A rejected relation is authoritative unless a later
-incoming claim provides genuinely new evidence.
+Return `no_change` when the incoming claim is compatible, independent, more specific, or repeats an already-decided
+incoming state. Return `truth_change` only when it explicitly contradicts or replaces an available target claim. Use
+`supersedes` when the evidence says the new state replaces the old state; use `contradicts` when both cannot be accepted
+but no replacement is established. A target listed under an earlier decision is no longer available in this call.
 
-Truth-change targets cannot be reused by competing decisions. Do not group claims, write display text, choose wiki
-sections, or modify claims in this stage. Cite only supplied aliases and return JSON matching the schema.
+Every contradiction or replacement requires user review. Recency by itself does not establish a truth change. Prior
+review results are authoritative. Do not write display facts or change claim ownership. Return the one schema-valid
+decision requested by the output contract.

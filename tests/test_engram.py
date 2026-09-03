@@ -12,6 +12,7 @@ from engram.models import MeetingSummary
 from engram.pipeline import EngramService, meeting_response
 from engram.store import EngramStore
 from mycelium.models import LogEntry
+from mycelium.operations import IngestionResult
 from mycelium.store import LogStore
 from server.api import engram as engram_api
 
@@ -232,21 +233,24 @@ async def test_engram_service_processes_then_finalizes_meeting_with_speaker_name
                 segment.status = "diarized"
             return fallback_segments
 
-    class FakeEncoder:
-        async def encode_session(self, transcript, session_id, **kwargs):
+    class FakeMemory:
+        def __init__(self):
+            self.log_store = log_store
+
+        async def ingest_source(self, source_input):
             entry = LogEntry(
                 entry_id="2026-08-28#meeting-test",
-                session_id=session_id,
+                session_id=source_input.session_id,
                 timestamp=datetime.now(),
-                content=transcript,
+                content=source_input.transcript,
             )
             log_store.append(entry)
-            return [entry]
+            return IngestionResult(status="complete", log_entries=(entry,))
 
     service = EngramService(
         config,
         store,
-        lambda: SimpleNamespace(log_store=log_store, encoder=FakeEncoder()),
+        lambda: FakeMemory(),
         transcriber_factory=lambda: FakeTranscriber(),
         diarizer_factory=lambda: FakeDiarizer(),
         summarizer_factory=lambda: FakeSummarizer(),

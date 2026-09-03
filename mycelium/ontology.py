@@ -61,90 +61,49 @@ class SubjectScopeDefinition:
     page_state: str
 
 
-# These policies intentionally preserve the current model-facing language. They live
-# beside the entity ontology so extraction, census, planning, and routing do not each
-# become independent authorities for what enters the subject graph.
-SUBJECT_CENSUS_POLICY = """Create a subject census for this batch of memory claims.
+# These policies live beside the entity ontology so extraction, census, planning,
+# and routing share one authority for what enters the subject graph.
+SUBJECT_CENSUS_POLICY = """Build a complete list of the distinct subjects represented by the supplied candidate mentions.
 
-A subject census is the complete list of distinct people, organizations, projects, series, artifacts, topics,
-places, and events that the supplied claims are about or use as relationship endpoints. It is not limited to new or
-unknown subjects. Each item in the census is a temporary subject node. Later steps will decide whether that node
-matches an existing identity, what type it has, how it relates to other identities, and whether it receives a page.
+A stored claim is a source-supported memory assertion. A subject candidate is a person, organization, continuing
+effort, recurring series, meaningful artifact, abstract topic, place, or bounded event named by extraction. A subject
+node groups candidate mentions that refer to one real-world subject within this batch. The registry lists identities
+already stored, but matching nodes to those identities happens later.
 
-For each distinct subject:
+The input uses short aliases so the output can cite exact records: C... identifies a stored claim, P... identifies a
+source-declared participant, and N... identifies a subject node created in this step. `you` is the reserved identity
+for the configured user.
 
-1. Create one node with an N001-style ID and a clear, source-grounded title.
-2. Cite every supplied C... claim alias and P... participant alias that directly supports that node.
-3. Combine repeated references to the same subject within this batch into one node.
+Use the candidate list as the boundary of this task:
+1. Examine every candidate. Create one N001-style node for each distinct subject and merge repeated mentions only when
+   the evidence shows that they refer to the same subject.
+2. Include every candidate marked `subject`, `owner`, or `source_participant`, except the reserved user identity `you`.
+   Include a `participant` candidate when a claim uses that person as a relationship or interaction endpoint.
+3. Use a supplied candidate name as the title. Cite every C... claim alias and P... participant alias that directly
+   supports the node. For a named human source participant, include its P... alias in both evidence lists.
 
-The ELIGIBLE SUBJECT CANDIDATES section is the authoritative candidate list. Process every C... claim alias. The
-eligible candidates are the referents in extracted_entity_mentions and the named
-people listed under SOURCE-DECLARED PARTICIPANTS. Do not discover additional subject candidates from nouns that
-appear only in the claim text, cited source text, qualifiers, or source metadata; extraction has already decided
-which mentions are semantic routing data. A distinct mention with role=subject or role=owner must be represented by
-a node unless it is the reserved `you` identity. A mention with role=participant belongs in the census when the claim
-uses that participant as a relationship or interaction endpoint. Do not omit a subject because it already appears in
-the entity registry.
+Attributes, preferences, quantities, reasons, and other descriptive details remain information about a subject rather
+than separate nodes. A date, time, duration, deadline, or age is not a subject by itself. Do not choose identity,
+ontology type, containment, or page visibility here. Return schema-valid JSON; use an empty node list only when the
+candidate list contains no representable subject."""
 
-Every candidate line with role=subject or role=owner is mandatory and must be represented by a node. Every
-role=source_participant person is also mandatory. The only exception is the reserved `you` identity. A mandatory
-candidate may share a node with another line only when both lines name the same subject. Do not use one subject's
-node to account for a claim about a different subject.
+EXTRACTION_SUBJECT_POLICY = """The `about` list contains named identities used by later routing. Each entry uses one of
+three roles: `subject` for the primary identity whose action or state the claim asserts; `owner` for a different
+identity whose lasting state, requirement, plan, or decision the claim chiefly updates; or `participant` for another
+named relationship endpoint. Use one primary subject. When a person's decision or requirement changes a named
+Project, use the person as subject and the Project as owner. Every explicitly named durable identity in the claim must
+appear in `about`."""
 
-Every node must correspond to one of those eligible candidate referents. Use one of the candidate's supplied names
-as the node title. The stable_entity_references field records earlier routing state for later stages; it does not add
-subject candidates to this census. Do not create or rename a candidate from any other field.
+ROUTING_SUBJECT_POLICY = """For a general route, `subject_entity` is the identity grammatically described by the claim,
+`object_entities` are explicit relationship endpoints, and `contextual_entities` are useful secondary endpoints.
+Nearby or incidental identities are not endpoints."""
 
-Create a node when the referent needs a stable identity or needs to act as an endpoint in a relationship. This can
-include a person, organization, continuing effort, recurring frame, meaningful component, artifact, abstract topic,
-place, or bounded event.
-
-Do not create a separate node for information that can remain part of another subject's claim, such as an attribute,
-preference, practice, quantity, status, reason, or descriptive detail. Do not create nodes for incidental nouns or
-objects merely because they are mentioned.
-
-A date, time, duration, or other temporal expression is not itself an event. A bounded occurrence described as
-happening at that time may be an event node.
-
-Temporal values are metadata about claims, sources, or events; they are not stable identity endpoints. Never create
-a subject node whose referent is only a date, time, duration, deadline, age, or source occurrence timestamp. This
-applies whether the temporal value appears in claim text, source metadata such as occurred_at, or claim qualifiers.
-
-The entity registry lists identities already known to the memory system. Do not match nodes to registry identities
-in this step. Still create a node for a known subject when this batch contains new evidence about it. This is
-especially important for provisional identities, because later steps may reconsider whether they have enough
-continuity for a page.
-
-The configured user has the reserved registry identity `you`. Do not create a node for that identity.
-
-Participant aliases identify named speakers or participants declared by the source:
-
-- C... aliases identify extracted claims.
-- P... aliases identify source-declared participants.
-
-When a node represents a named human participant, include the relevant P... aliases in both supporting_evidence and
-participant_evidence. Cite a C... alias for that person only when its extracted_entity_mentions identifies the person;
-being a source speaker or source-level participant does not by itself make every claim evidence about that person.
-For every other node, use an empty participant_evidence list.
-
-The registry also includes descriptions of the available entity types. Use those descriptions only to understand
-what kinds of subjects the system can represent. Do not choose or return an entity type in this step.
-
-Before returning, check that you examined every C... alias, represented every eligible subject and owner mention,
-combined repeated mentions correctly, cited every supplied alias that directly supports each node, and used no node
-whose referent came only from a non-candidate field.
-
-Return JSON matching the supplied schema. Return an empty nodes list only when none of the evidence contains a
-subject that needs identity tracking."""
-
-EXTRACTION_SUBJECT_POLICY = """The about list is semantic routing data, not a keyword list. Include the primary subject whose state,
-belief, preference, plan, relationship, or action the claim predicates, with role=subject. Include a
-different durable entity with role=owner when the claim chiefly changes that entity (for example, a
-project requirement). Other named participants may use role=participant. Do not put incidental objects,
-generic activities, or predicate complements in about merely because their words occur in the claim."""
-
-ROUTING_SUBJECT_POLICY = """Resolve explicit subject and object endpoints plus useful context endpoints, but
-do not add endpoints merely because they appear nearby."""
+ROUTING_OWNERSHIP_POLICY = """Every materialized identity type can own claims about its own durable record. Choose the
+identity whose record would be incomplete without the claim. An Organization owns its operations, policies, decisions,
+offerings, obligations, and history. A Project owns its purpose, scope, requirements, decisions, status, deadlines,
+work products, and next steps. A Person owns that person's commitments, actions, views, relationships, and personal
+history. A person speaking about or acting within another identity does not by itself make the person the owner. Keep
+other explicitly involved identities as relationship or context endpoints."""
 
 SUBJECT_SCOPE_ONTOLOGY: tuple[SubjectScopeDefinition, ...] = (
     SubjectScopeDefinition(

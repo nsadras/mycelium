@@ -4,6 +4,7 @@ from engram.models import TranscriptSegment
 from engram.store import EngramStore
 from mycelium.models import LogEntry
 from mycelium.artifacts import SourceSegment
+from mycelium.operations import SourceInput
 
 
 def resolved_speaker_name(speaker: str | None, speaker_names: dict[str, str] | None = None) -> str:
@@ -44,13 +45,15 @@ async def encode_meeting_into_memory(mem, store: EngramStore, meeting_id: str) -
         for segment in transcript_segments
     ]
     transcript = meeting_transcript_text(transcript_segments, meeting.speaker_names)
-    entries = await mem.encoder.encode_session(
-        transcript,
-        f"meeting-{meeting.id}",
+    ingestion = await mem.ingest_source(SourceInput(
+        transcript=transcript,
+        session_id=f"meeting-{meeting.id}",
         source_type="meeting_transcript",
         occurred_at=meeting.started_at,
-        participants=list(dict.fromkeys(segment.speaker for segment in explicit_segments if segment.speaker)),
-        segments=explicit_segments,
+        participants=tuple(dict.fromkeys(
+            segment.speaker for segment in explicit_segments if segment.speaker
+        )),
+        segments=tuple(explicit_segments),
         metadata={
             "meeting_id": meeting.id,
             "title": meeting.title,
@@ -58,11 +61,12 @@ async def encode_meeting_into_memory(mem, store: EngramStore, meeting_id: str) -
             "summary": meeting.summary.summary if meeting.summary else None,
         },
         idempotency_key=f"engram-meeting:{meeting.id}",
-    )
-    if not entries:
+    ))
+    if not ingestion.log_entries:
         raise ValueError("Meeting transcript was empty")
-    store.update_meeting(meeting_id, memory_log_entry_id=entries[0].entry_id)
-    return entries[0]
+    entry = ingestion.log_entries[0]
+    store.update_meeting(meeting_id, memory_log_entry_id=entry.entry_id)
+    return entry
 
 
 def _fmt_time(seconds: float) -> str:

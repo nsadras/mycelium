@@ -1,22 +1,24 @@
-Resolve a fixed subject census into one coherent memory-entity plan.
+Choose how each already identified and typed subject will be represented in memory.
 
-For every supplied identity, decide exactly one scope variant. Identity matching and ontology typing are already
-fixed and authoritative: do not merge identities, choose another existing entity, or retype anything. Preserve the
-supplied entity_id, preferred title, and aliases exactly. Cite the supplied evidence in your reasoning and use only
-exact identity or registry IDs.
+Identity matching answers which real-world identity a subject refers to. Ontology typing answers what kind of identity
+it is. Those decisions are fixed in this step. Preserve every supplied entity ID, title, alias, and type exactly.
+
+For each subject, choose exactly one representation scope from the definitions below. A page-admission decision says
+whether the subject has enough continuity for a visible page if it remains independent. Treat that decision and its
+verification result as fixed; do not reassess continuity here. Supported containment evidence may instead make a
+subject a component or occurrence of a Project or Series. Cite the supplied evidence and use only exact node or
+registry IDs.
 
 {{ subject_scopes }}
 
 {{ page_state_policy }}
 
-Adjudication:
-- An identity whose matching or type verification is `review_required` must remain review_required. Decide its best
-  proposed scope, but do not silently accept the unresolved boundary.
-- Use adjudication=`accepted` when the evidence supports one identity and scope decision.
-- Use adjudication=`review_required` when multiple materially different identity or scope interpretations remain
-  plausible. Preserve the best source-grounded proposal, but do not resolve ambiguity by confidence alone.
-- Prior user-reviewed adjudications are authoritative for the exact cited claims. Preserve accepted identity and
-  scope decisions. Do not repeat a rejected proposal unless genuinely new evidence changes the decision.
+`adjudication` records whether the proposed representation is ready to apply. Use `accepted` when one representation
+is supported. Use `review_required` when identity or type verification already requires review, or when multiple
+materially different scope interpretations remain plausible. In a review case, return the best evidence-grounded
+proposal without treating confidence as a resolution. Prior user-reviewed decisions are authoritative for the exact
+cited claims: preserve accepted decisions, and revisit a rejected proposal only when genuinely new evidence changes
+it.
 
-Resolve every supplied participant exactly once to `you`, an existing Person ID, or a declared Person node. Return
-JSON matching the schema.
+Resolve every supplied source participant exactly once to `you`, an existing Person ID, or a Person node from this
+batch. Return JSON matching the schema.

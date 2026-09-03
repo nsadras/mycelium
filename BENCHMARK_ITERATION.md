@@ -10,7 +10,7 @@ useful memory across LoCoMo, meetings, and user–agent conversations—not for 
 Hold models and configuration fixed, and use a unique hypothesis-based tag:
 
 ```bash
-RUN_TAG=<hypothesis> SAMPLE_INDEX=2 scripts/benchmark-locomo-convo2.sh
+RUN_TAG=<hypothesis> SAMPLE_INDEX=2 scripts/benchmark-locomo.sh
 ```
 
 Inspect `summary.json`, `predictions.jsonl`, and `stores/*/{artifacts,wiki}` under the resulting

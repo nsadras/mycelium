@@ -81,19 +81,22 @@ def fact(item: MemoryClaim) -> ConsolidatedFact:
 
 
 def staged_fact_responses(
-    plan: dict, *, candidate_fact_aliases: list[str] | None = None
+    plan: dict,
+    *,
+    candidate_fact_aliases: list[str] | None = None,
+    incoming_aliases: list[str] | None = None,
 ) -> list[dict]:
     changes_by_incoming = {
         alias: change
         for change in plan["truth_changes"]
         for alias in change["incoming_claim_aliases"]
     }
-    incoming_aliases = (
+    incoming_aliases = incoming_aliases or (
         sorted(changes_by_incoming)
         if changes_by_incoming
         else sorted(plan["assignments"])
     )
-    responses = [
+    truth_responses = [
         {"decisions": {
             alias: (
                 {
@@ -112,8 +115,10 @@ def staged_fact_responses(
                     "confidence": 0.9,
                 }
             )
-            for alias in incoming_aliases
-        }},
+        }}
+        for alias in incoming_aliases
+    ]
+    responses = truth_responses + [
         {"assignments": plan["assignments"]},
         {"facts": {
             item["fact_key"]: {
@@ -130,17 +135,13 @@ def staged_fact_responses(
         }},
     ]
     if candidate_fact_aliases is not None:
-        candidate_incoming_aliases = [
-            f"C{index:03d}"
-            for index in range(1, len(incoming_aliases) + 1)
-        ]
-        responses.insert(0, {"decisions": {
-            alias: {
+        responses[0:0] = [
+            {"decisions": {f"C{index:03d}": {
                 "candidate_fact_ids": candidate_fact_aliases,
                 "reason": "The prior fact may express the same durable state.",
-            }
-            for alias in candidate_incoming_aliases
-        }})
+            }}}
+            for index, _alias in enumerate(incoming_aliases, start=1)
+        ]
     return responses
 
 
@@ -293,7 +294,7 @@ async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_p
             "explanation": "The newer statement explicitly replaces the old preference.",
             "confidence": 0.92,
         }],
-    }, candidate_fact_aliases=["X001"])
+    }, candidate_fact_aliases=["X001"], incoming_aliases=["C002"])
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -308,6 +309,129 @@ async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_p
     assert result.proposals[0].incoming_claim_ids == ["new"]
     assert result.proposals[0].target_claim_ids == ["old"]
     assert next(item for item in result.placements if item.claim_id == "new").section_key == "needs_review"
+
+
+@pytest.mark.asyncio
+async def test_repeated_evidence_joins_and_preserves_the_existing_fact(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    old = claim(
+        "old", "The user prefers written updates.", "2026-08-01T12:00:00"
+    )
+    repeated = claim(
+        "repeated", "Written updates are preferred.", "2026-08-05T12:00:00"
+    )
+    placements = [place(artifacts, item) for item in (old, repeated)]
+    old_fact = fact(old)
+    artifacts.save_consolidated_fact(old_fact)
+    llm = AsyncMock()
+    llm.call_structured.side_effect = staged_fact_responses({
+        "assignments": {
+            "C001": {"fact_key": "F001"},
+            "C002": {"fact_key": "F001"},
+        },
+        "facts": [{
+            "fact_key": "F001",
+            "state": "current",
+            "section_key": "preferences_working_style",
+            "text": old.text,
+            "confidence": 0.95,
+            "reason": "The new claim independently supports the existing state.",
+        }],
+        "truth_changes": [],
+    }, candidate_fact_aliases=["X001"], incoming_aliases=["C002"])
+
+    result = await FactResolver(llm, artifacts).resolve(
+        placements,
+        affected_entity_ids={"you"},
+        incoming_claim_ids={repeated.claim_id},
+        dream_run_id="dream-1",
+    )
+
+    assert result.failures == []
+    assert len(result.facts) == 1
+    assert result.facts[0].fact_id == old_fact.fact_id
+    assert result.facts[0].member_claim_ids == ["old", "repeated"]
+
+
+@pytest.mark.asyncio
+async def test_truth_changes_are_decided_sequentially_and_cannot_compete(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    old = claim("old", "The user's bicycle is blue.", "2026-08-01T12:00:00")
+    first = claim(
+        "first", "The user's bicycle is now green.", "2026-08-05T12:00:00"
+    )
+    support = claim(
+        "support", "The user repainted the bicycle green.", "2026-08-06T12:00:00"
+    )
+    placements = [place(artifacts, item) for item in (old, first, support)]
+    artifacts.save_consolidated_fact(fact(old))
+    llm = AsyncMock()
+    llm.call_structured.side_effect = [
+        {"decisions": {"C001": {
+            "candidate_fact_ids": ["X001"],
+            "reason": "The fact may be the prior bicycle state.",
+        }}},
+        {"decisions": {"C002": {
+            "candidate_fact_ids": ["X001"],
+            "reason": "The fact may be the prior bicycle state.",
+        }}},
+        {"decisions": {"C002": {
+            "disposition": "truth_change",
+            "relation": "supersedes",
+            "target_claim_aliases": ["C001"],
+            "explanation": "The new color replaces the old color.",
+            "confidence": 0.95,
+        }}},
+        {"decisions": {"C003": {
+            "disposition": "no_change",
+            "reason": "The changed target was already claimed by an earlier decision.",
+            "confidence": 0.95,
+        }}},
+        {"assignments": {
+            "C001": {"fact_key": "F001"},
+            "C002": {"fact_key": "F002"},
+            "C003": {"fact_key": "F002"},
+        }},
+        {"facts": {
+            "F001": {
+                "state": "current",
+                "section_key": "preferences_working_style",
+                "text": old.text,
+                "confidence": 0.9,
+                "reason": "Accepted prior state.",
+            },
+            "F002": {
+                "state": "current",
+                "section_key": "preferences_working_style",
+                "text": "The user's bicycle is green.",
+                "confidence": 0.9,
+                "reason": "Proposed replacement with independent support.",
+            },
+        }},
+        {"decisions": {
+            key: {
+                "verdict": "supported",
+                "reason": "The presentation is source-grounded.",
+            }
+            for key in ("F001", "F002")
+        }},
+    ]
+
+    result = await FactResolver(llm, artifacts).resolve(
+        placements,
+        affected_entity_ids={"you"},
+        incoming_claim_ids={"first", "support"},
+        dream_run_id="dream-1",
+    )
+
+    assert result.failures == []
+    assert len(result.proposals) == 1
+    assert result.proposals[0].incoming_claim_ids == ["first"]
+    truth_calls = [
+        call for call in llm.call_structured.await_args_list
+        if call.kwargs.get("debug_label") == "dream-fact-truth"
+    ]
+    assert len(truth_calls) == 2
 
 
 @pytest.mark.asyncio
@@ -456,14 +580,13 @@ async def test_fact_presentations_are_rendered_in_bounded_batches(tmp_path):
 
     llm = AsyncMock()
     llm.call_structured.side_effect = [
-        {"decisions": {
-            alias: {
-                "disposition": "no_change",
-                "reason": "No accepted truth is changed.",
-                "confidence": 0.9,
-            }
-            for alias in assignments
-        }},
+        {"decisions": {alias: {
+                    "disposition": "no_change",
+                    "reason": "No accepted truth is changed.",
+                    "confidence": 0.9,
+        }}}
+        for alias in assignments
+    ] + [
         {"assignments": assignments},
         rendered(1, 13),
         quality(1, 13),
@@ -480,7 +603,7 @@ async def test_fact_presentations_are_rendered_in_bounded_batches(tmp_path):
 
     assert result.failures == []
     assert len(result.facts) == 13
-    assert llm.call_structured.await_count == 6
+    assert llm.call_structured.await_count == 18
 
 
 @pytest.mark.asyncio

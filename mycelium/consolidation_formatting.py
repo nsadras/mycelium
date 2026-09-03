@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from mycelium.artifacts import ArtifactStore, EntityRecord, SourceDocument
+from mycelium.artifacts import (
+    ArtifactStore,
+    EntityRecord,
+    EntityResolutionDecision,
+    SourceDocument,
+)
 from mycelium.consolidation_models import ClaimEvidence
 from mycelium.ontology import (
     entity_type_prompt_catalog,
@@ -193,6 +198,14 @@ class RoutingFormatter:
         return "\n".join(lines) or "none"
 
     @staticmethod
+    def format_identity_evidence(identity: dict) -> str:
+        """Render only source-grounded identity data for later decisions."""
+        return (
+            f"- {identity['node_id']}: title={identity['title']!r}; "
+            f"evidence={','.join(identity['supporting_evidence'])}"
+        )
+
+    @staticmethod
     def format_accumulated_identity_groups(identities: list[dict]) -> str:
         return "\n".join(
             f"- {identity['identity_key']}: "
@@ -204,6 +217,28 @@ class RoutingFormatter:
             for identity in identities
         ) or "none"
 
+    def format_pending_identity_proposals(
+        self, decisions: Iterable[EntityResolutionDecision]
+    ) -> str:
+        """Render unresolved proposals as review candidates, not canonical entities."""
+        blocks = []
+        for decision in decisions:
+            claims = []
+            for claim_id in decision.supporting_claim_ids:
+                try:
+                    claim = self.artifacts.get_claim(claim_id)
+                except FileNotFoundError:
+                    continue
+                claims.append(f"{claim.claim_id}: {claim.text}")
+            blocks.append(
+                f"[{decision.decision_id}] type={decision.proposed_entity_type}; "
+                f"title={decision.proposed_title!r}; "
+                f"aliases={','.join(decision.proposed_aliases) or 'none'}; "
+                f"scope={decision.proposed_scope or 'unspecified'}; "
+                f"evidence={' | '.join(claims) or 'none'}"
+            )
+        return "\n".join(blocks) or "none"
+
     @staticmethod
     def format_type_proposals(proposals: dict[str, dict]) -> str:
         return "\n".join(
@@ -214,7 +249,10 @@ class RoutingFormatter:
         ) or "none"
 
     @staticmethod
-    def format_maturity_decisions(decisions: dict[str, dict]) -> str:
+    def format_maturity_decisions(
+        decisions: dict[str, dict],
+        verdicts: dict[str, dict] | None = None,
+    ) -> str:
         lines = []
         for node_id, decision in decisions.items():
             basis = decision.get("basis") or {}
@@ -225,6 +263,12 @@ class RoutingFormatter:
             if basis:
                 details.extend(
                     f"{key}={value!r}" for key, value in basis.items()
+                )
+            verdict = (verdicts or {}).get(node_id)
+            if verdict:
+                details.append(f"verification={verdict['verdict']}")
+                details.append(
+                    f"verification_reason={verdict['reason']!r}"
                 )
             lines.append(f"- {node_id}: {'; '.join(details)}")
         return "\n".join(lines) or "none"

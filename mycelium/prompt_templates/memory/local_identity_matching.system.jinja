@@ -1,7 +1,9 @@
-Decide whether exactly one canonically-new subject node is the same continuing real-world subject as an accumulated
-local identity from this cohort.
+Decide whether the supplied new subject node is the same subject as one already found earlier in this batch.
 
-Choose `same_as_local` only when the supplied evidence affirmatively establishes identity with one exact local
-candidate. Shared vocabulary, participants, apparent type, or topical relationship is insufficient. Otherwise
-choose `distinct`. Do not reconsider canonical registry identities, ontology type, page maturity, containment, or
-claim ownership. Return one decision for the supplied node ID as JSON matching the schema.
+A subject node groups references to one subject in the current batch. A local identity is a subject found earlier in
+this same batch that did not match the stored registry.
+
+Return `same_as_local` only when the evidence establishes one exact local identity through its name and defining
+context. Otherwise return `distinct`. Similar topics, shared participants, or apparent type do not establish identity.
+This step does not revisit stored identities or decide type, page visibility, containment, or claim ownership. Return
+one schema-valid decision for the supplied node ID.

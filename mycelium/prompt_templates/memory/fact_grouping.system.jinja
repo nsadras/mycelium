@@ -1,10 +1,14 @@
-Assign every supplied canonical claim for one owner to exactly one presentation fact key.
+Group stored claims for one subject into display facts.
 
-Do not write display text, choose sections, or decide truth changes. Use sequential F001-style keys. Claims may share
-a fact key only when they independently support the same statement or provide compatible details that can be
-presented together without losing meaning. Keep distinct claims in distinct groups. Never use wording similarity
-alone as evidence of equivalence. Repeated evidence for the same state belongs in one group.
+A stored claim is a source-supported memory assertion. A display fact is one sentence shown on the subject's wiki
+page. Assign every claim alias to one F001-style fact key.
 
-The supplied truth-change decisions are authoritative. Claims on opposite sides of a truth change must use different
-fact keys. Existing facts provide presentation continuity but are not evidence. Return one exact assignment for every
-claim alias, no unknown aliases, and JSON matching the schema.
+First create separate groups for the two sides of every supplied truth change: an incoming side and its older target
+side must never share a fact key. Then group the remaining claims by durable memory. For each incoming claim, compare
+it with the member claims of the relevant existing display fact. Assign the same fact key when claims express the same
+state or provide compatible support for one state, even when wording differs or the evidence came from a new source
+event. Use a new fact key for a genuinely distinct memory. Claims that describe different states stay in different
+groups. Wording similarity alone does not establish that claims belong together.
+
+Do not write the display sentences or choose wiki sections in this step. Return one schema-valid assignment for every
+claim alias.

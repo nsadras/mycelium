@@ -29,7 +29,7 @@ from server.api.memory_contracts import (
     ProposalReviewRequest,
     SourceRetractionRequest,
 )
-from server.runtime import get_mem, run_dream as run_dream_process
+from server.runtime import get_mem, run_consolidation
 
 router = APIRouter()
 
@@ -38,29 +38,29 @@ def _review_service():
     mem = get_mem()
     return ReconsolidationReviewService(
         mem.artifacts,
-        mem.dream_process.materializer,
-        mem.dream_process.fact_resolver,
+        mem.consolidator.materializer,
+        mem.consolidator.fact_resolver,
     )
 
 
 def _curation_service():
     mem = get_mem()
     return EntityCurationService(
-        mem.artifacts, mem.wiki, mem.dream_process.materializer
+        mem.artifacts, mem.wiki, mem.consolidator.materializer
     )
 
 
 def _fact_curation_service():
     mem = get_mem()
-    return FactCurationService(mem.artifacts, mem.dream_process.materializer)
+    return FactCurationService(mem.artifacts, mem.consolidator.materializer)
 
 
 def _claim_lifecycle_service():
     mem = get_mem()
     return ClaimLifecycleService(
         mem.artifacts,
-        mem.dream_process.materializer,
-        mem.dream_process.fact_resolver,
+        mem.consolidator.materializer,
+        mem.consolidator.fact_resolver,
     )
 
 
@@ -301,7 +301,7 @@ async def review_identity_decision(
             page_state=req.page_state,
             parent_entity_id=req.parent_entity_id,
         )
-        reroute = await run_dream_process()
+        reroute = await run_consolidation()
         return {"decision": asdict(record), "reroute": reroute}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Identity decision not found") from exc

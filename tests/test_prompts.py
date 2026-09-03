@@ -26,13 +26,17 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
         "ontology": "ontology",
         "evidence": "evidence",
         "nodes": "nodes",
+        "maturity_decisions": "maturity decisions",
         "node": "node",
         "identities": "identities",
-        "local_identities": "local identities",
+            "local_identities": "local identities",
+            "identity": "identity",
+            "pending_proposals": "pending proposals",
         "proposals": "proposals",
         "entity_plan": "entity plan",
         "reviewed_adjudications": "none",
-        "subject_policy": "subject policy",
+            "subject_policy": "subject policy",
+            "ownership_policy": "ownership policy",
         "subject_scopes": "subject scopes",
         "page_state_policy": "page-state policy",
         "proposed_identity": "identity",
@@ -47,13 +51,15 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
             "claims": "claims",
             "existing_facts": "existing facts",
             "reviewed_relations": "reviewed relations",
+            "prior_decisions": "prior decisions",
             "prior_facts": "prior facts",
             "rendered_facts": "rendered facts",
             "rejected_facts": "rejected facts",
         "source_type": "agent_conversation",
         "source_policy": "policy",
         "claim_types": CLAIM_TYPES,
-        "source_id": "source-1",
+            "source_id": "source-1",
+            "participants": ["Ava", "Dana"],
         "occurred_at": None,
         "unknown_time": "unknown",
         "segments": "segments",
@@ -84,13 +90,47 @@ def test_extraction_injects_schema_values_and_source_policy() -> None:
         "meeting_transcript",
         "source-1",
         None,
+        ["Ava", "Dana"],
         "[segment-1] A decision was made.",
     )
 
     assert f"claim_type ({'/'.join(CLAIM_TYPES)})" in system
     assert "Capture decisions, proposals, action items" in system
-    assert "SOURCE ID: source-1" in user
-    assert "OCCURRED AT: unknown" in user
+    assert "SOURCE: source-1" in user
+    assert "SOURCE TIME: unknown" in user
+    assert "SOURCE PARTICIPANTS:\n- Ava\n- Dana" in user
+
+
+def test_extraction_explains_structured_memory_terms() -> None:
+    system, _ = prompts.claim_extraction_prompt(
+        "agent_conversation",
+        "source-1",
+        None,
+        ["Dana"],
+        "[segment-1] Dana selected Atlas.",
+    )
+
+    assert "A stored claim is one source-supported assertion" in system
+    assert "`about` lists the named identities" in system
+    assert "`slot` optionally names a replaceable state" in system
+    assert "`facets` stores structured details" in system
+    assert "`evidence_modality` records how the evidence was observed" in system
+    assert "`evidence_type` records whether the assertion was directly stated" in system
+
+
+def test_entity_plan_receives_fixed_page_admission_decisions() -> None:
+    system, user = prompts.entity_plan_prompt(
+        "registry",
+        "nodes",
+        "N001: admission=provisional; verification=not_required",
+        "evidence",
+    )
+
+    assert "A page-admission decision says" in system
+    assert "Treat that decision" in system
+    assert "verification result as fixed" in system
+    assert "FIXED PAGE-ADMISSION DECISIONS:" in user
+    assert "admission=provisional; verification=not_required" in user
 
 
 def test_subject_census_prompt_explains_the_task_and_local_terms() -> None:
@@ -98,12 +138,14 @@ def test_subject_census_prompt_explains_the_task_and_local_terms() -> None:
         "registry", "candidate checklist", "evidence"
     )
 
-    assert system.startswith("Create a subject census for this batch of memory claims.")
-    assert "Each item in the census is a temporary subject node." in system
-    assert "C... aliases identify extracted claims." in system
-    assert "P... aliases identify source-declared participants." in system
-    assert "A date, time, duration, or other temporal expression is not itself" in system
-    assert "Do not choose or return an entity type in this step." in system
+    assert system.startswith("Build a complete list of the distinct subjects")
+    assert "node groups candidate mentions that refer to one real-world subject" in system
+    assert "C... identifies a stored claim" in system
+    assert "P... identifies a" in system
+    assert "source-declared participant" in system
+    assert "A date, time, duration, deadline, or age is not a subject" in system
+    assert "Do not choose identity" in system
+    assert "ontology type" in system
     assert "complete typed census" not in system
     assert user.startswith("KNOWN ENTITY TYPES AND IDENTITIES:\nregistry")
     assert "ELIGIBLE SUBJECT CANDIDATES:\ncandidate checklist" in user

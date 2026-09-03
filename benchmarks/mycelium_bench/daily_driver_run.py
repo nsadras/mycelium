@@ -23,6 +23,7 @@ from benchmarks.mycelium_bench.adapters import OllamaQaClient
 from benchmarks.mycelium_bench.scoring import token_f1
 from mycelium.artifacts import ArtifactStore, MemoryClaim, SourceSegment
 from mycelium.core import Mycelium
+from mycelium.operations import ConsolidationRequest, RetrievalRequest, SourceInput
 from mycelium.reconsolidation import ReconsolidationReviewService
 from mycelium.session import Session
 from mycelium.store import LogStore
@@ -156,16 +157,16 @@ async def _ingest_episode(
             "fixture_source_id": str(episode["source_id"]),
         }
     )
-    await memory.encoder.encode_session(
-        "\n".join(transcript_lines),
-        str(episode["id"]),
+    await memory.ingest_source(SourceInput(
+        transcript="\n".join(transcript_lines),
+        session_id=str(episode["id"]),
         source_type=str(episode["source_type"]),
         occurred_at=str(episode["occurred_at"]),
-        participants=[str(value) for value in episode.get("participants") or []],
+        participants=tuple(str(value) for value in episode.get("participants") or []),
         metadata=metadata,
-        segments=segments,
+        segments=tuple(segments),
         idempotency_key=f"daily-driver:{episode['id']}",
-    )
+    ))
 
 
 def _replay_extracted_episode(
@@ -259,7 +260,7 @@ def _approve_proposal(
             f"Expected one pending proposal for {fixture_proposal_id}, found {len(candidates)}"
         )
     service = ReconsolidationReviewService(
-        memory.artifacts, memory.dream_process.materializer
+        memory.artifacts, memory.consolidator.materializer
     )
     result = service.approve(
         candidates[0].proposal_id,
@@ -570,9 +571,10 @@ async def _run_checkpoint_probes(
     )
     rows: list[dict[str, Any]] = []
     for probe in probes:
-        loaded_pages = await memory.load_context(
-            str(probe["question"]),
-        )
+        retrieval = await memory.retrieve_context(RetrievalRequest(
+            query=str(probe["question"]),
+        ))
+        loaded_pages = list(retrieval.pages)
         retrieved_gold_facts, retrieved_claim_ids = retrieved_generated_ids(
             loaded_pages, snapshot_match
         )
@@ -840,7 +842,8 @@ async def run_daily_driver(
             event: dict[str, Any] = {"episode": episode["id"], "action": action}
             try:
                 if kind == "dream":
-                    event["result"] = _jsonable(await memory.dream())
+                    result = await memory.consolidate(ConsolidationRequest())
+                    event["result"] = _jsonable(result.report)
                 elif kind == "checkpoint":
                     snapshot = _snapshot(memory, value)
                     checkpoint_dir = output_dir / "checkpoints" / value

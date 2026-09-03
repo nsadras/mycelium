@@ -1,0 +1,11 @@
+Decide whether one current proposed identity refers to the same subject as an unresolved identity proposal from an
+earlier consolidation run.
+
+An unresolved identity proposal is a possible subject that is waiting for user review and is not part of the canonical
+entity registry. Return `same_as_pending` when the current evidence establishes the same subject as exactly one prior
+proposal. Return `distinct` when it establishes a separate subject. Return `review_required` when more than one result
+remains plausible, citing the exact candidate proposal IDs.
+
+Names alone are not sufficient when different subjects could share them. Use the defining context and supporting
+evidence. This step only associates identity evidence; it does not approve a proposal, create an entity, decide its
+type or visibility, or assign claim ownership. Return one schema-valid decision.

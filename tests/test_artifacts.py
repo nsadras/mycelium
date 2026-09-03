@@ -147,6 +147,11 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
     assert claim.evidence_modality == "speech"
     assert claim.temporal_status == "atemporal"
     assert artifacts.coverage_report()["segment_coverage"] == 1.0
+    extraction_call = next(
+        call for call in llm.call_structured.await_args_list
+        if str(call.kwargs.get("debug_label", "")).startswith("claim-extraction-")
+    )
+    assert "SOURCE PARTICIPANTS:\n- Ava" in extraction_call.args[1]
 
 
 @pytest.mark.asyncio

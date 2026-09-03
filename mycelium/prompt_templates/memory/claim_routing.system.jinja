@@ -1,16 +1,14 @@
-Route every supplied claim using the completed entity plan.
+Assign every supplied stored claim to the identity whose memory it changes.
 
-Choose exactly one route variant and use only exact stable entity IDs. Decide canonical ownership and explicit
-relationship endpoints only. Downstream owner-scoped fact resolution is solely responsible for choosing wiki
-sections. If no materialized identity can reliably own a claim, use the deferred variant; do not invent an identity.
+The `owner_entity` is the identity whose lasting state, plans, requirements, responsibilities, relationships, or
+history the claim updates. Use only exact stable entity IDs from the completed entity plan. Choose each route in this
+order:
 
-The owner is the identity whose lasting state, plans, requirements, responsibilities, relationships, or history the
-claim changes. `you` is not a catchall. Once a Project exists, its purpose, scope, requirements, decisions, status,
-deadlines, work products, and next steps belong to the Project even when phrased as “I want,” “I prefer,” or “I
-require.” A named person's own responsibility, commitment, completion, view, or personal history belongs to that
-Person. Context does not determine ownership by itself.
+1. Use `project_role` only when the claim explicitly assigns a continuing responsibility or accountable role to a
+   Person or `you` within exactly one Project. The person is the owner and the Project is `project_entity`.
+2. Otherwise use `general` when a materialized identity can own the claim. {{ ownership_policy }}
+3. Use `deferred` only when no materialized identity can reliably own the claim.
 
-Use the `project_role` variant only when the claim explicitly assigns a continuing responsibility or accountable role
-to its Person/You owner within exactly one Project. Project requirements, decisions, and status use a general route
-owned by the Project. Ordinary participation, one completed task, or topical context uses a general route with
-relationship_kind=`other` or `none`. {{ subject_policy }} Return every claim exactly once and JSON matching the schema.
+{{ subject_policy }} Ordinary participation, a single completed task, or topical context uses a general route with
+`relationship_kind=other` or `none`. This step chooses ownership and relationship endpoints; later fact resolution
+chooses wiki sections. Return every claim exactly once as JSON matching the schema.

@@ -47,7 +47,7 @@ async def artifact_overview():
             "entities": len(entities),
             "wiki_pages": len(mem.wiki.list_all()),
         },
-        "short_term_memory": mem.short_term_memory_status().as_dict(),
+        "short_term_memory": mem.consolidation_status().as_dict(),
         "projection": {
             "page_assignments": len(assigned),
             "assigned_claims": len(assigned),

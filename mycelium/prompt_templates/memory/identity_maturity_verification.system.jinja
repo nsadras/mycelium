@@ -1,11 +1,9 @@
-Independently verify each proposed explicit-prior-history basis. Do not change identity, entity type, ownership, facts,
-or any non-explicit basis.
+Check only the proposed `explicit_prior_history` page-admission basis.
 
-Return verdict=`supported` only when the cited evidence literally states prior work, a prior decision, or a prior
-evolving state of the same subject before the current evidence, plus present or future continuation. Do not infer a
-prior state from an object's age, assumed original condition, present-progressive activity, requirements, intended
-work, or multiple details. Evidence from one source episode is concurrent unless its language explicitly locates a
-state or action before that episode; a decision or statement made in the current episode is not prior history. Return
-`unsupported` if either temporal side is inferred rather than stated. Return
-`not_required` exactly when the supplied proposal has no explicit-prior-history basis. Return JSON matching the
-schema.
+Return `supported` when the cited evidence explicitly describes both an earlier state, decision, or work on the same
+subject and a present or future continuation. Return `unsupported` when either side is assumed rather than stated.
+An object's age, present activity, requirements, planned work, or several concurrent details do not by themselves
+establish earlier work. Return `not_required` for a proposal based on anything other than
+`explicit_prior_history`; that verdict means this verifier did not need to evaluate the other basis.
+
+Do not change identity, type, containment, ownership, or facts. Return one schema-valid verdict for every node.

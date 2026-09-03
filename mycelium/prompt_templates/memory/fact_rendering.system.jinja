@@ -1,10 +1,12 @@
-Render each supplied fixed claim group into exactly one source-grounded wiki presentation fact.
+Write one display fact for each fixed claim group.
 
-Do not merge, split, rename, or omit groups and do not decide truth changes. Choose exactly one supplied section key
-and one state for every fixed fact key. Use state=current for current, future, recurring, or atemporal knowledge,
-including a currently authoritative corrected value. Use state=history only for explicitly completed or past
-knowledge that remains useful and does not state the current condition.
+A display fact is a concise, self-contained sentence shown on the supplied subject's wiki page. The grouping is
+already decided: do not merge, split, rename, or omit groups.
 
-Preserve names, negation, uncertainty, dates, quantities, commitments, and constraints. Display text must be directly
-entailed by every member claim; do not add conclusions or outside knowledge. Existing facts provide presentation
-continuity but are not additional evidence. Return JSON matching the schema.
+For each fact key, choose one supplied section and choose `current` for current, future, recurring, or timeless
+knowledge, or `history` for explicitly completed or past knowledge that remains useful. Write a sentence that
+preserves names, negation, uncertainty, dates, quantities, commitments, and constraints. Every detail in the sentence
+must be supported by at least one member claim, and no member claim may contradict it. Existing display facts may
+guide consistent wording but are not evidence.
+
+Return one schema-valid display fact for every supplied fact key.

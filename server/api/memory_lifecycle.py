@@ -9,26 +9,26 @@ from server.runtime import (
     flush_idle_episodes,
     flush_session_episode,
     get_mem,
-    run_dream as run_dream_process,
-    run_dream_if_ready as run_dream_if_ready_process,
+    run_consolidation,
+    run_consolidation_if_ready,
 )
 
 router = APIRouter()
 
 
 @router.post("/dream")
-async def run_dream():
-    return await run_dream_process()
+async def consolidate_memory():
+    return await run_consolidation()
 
 
 @router.get("/dream/readiness")
 async def dream_readiness():
-    return get_mem().short_term_memory_status().as_dict()
+    return get_mem().consolidation_status().as_dict()
 
 
 @router.post("/dream/run-if-ready")
-async def run_dream_if_ready():
-    return await run_dream_if_ready_process()
+async def consolidate_memory_if_ready():
+    return await run_consolidation_if_ready()
 
 
 @router.post("/dev/clear")

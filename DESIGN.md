@@ -18,9 +18,12 @@ Ollama provides the local language-model runtime. The core agent memory is compo
 mycelium/
 ├── engram/             # Meeting upload, transcription, diarization, and ingestion
 ├── mycelium/           # Core memory library
-│   ├── core.py         # Facade, retrieval, sessions, and dream entry point
+│   ├── core.py         # Composition root and public Mycelium facade
+│   ├── pipeline.py     # Authoritative high-level memory lifecycle
+│   ├── operations.py   # Typed lifecycle inputs and outputs
+│   ├── retrieval.py    # Read-only memory retrieval orchestration
 │   ├── encoder.py      # Transcript-to-source/episode/claim encoding
-│   ├── dream.py        # Claim routing and consolidation orchestration
+│   ├── dream.py        # Consolidation preparation, execution, and commit
 │   ├── reconsolidation.py # Evidence-triggered proposal analysis and review
 │   ├── materialization.py # Deterministic claim-to-wiki projection
 │   ├── ollama.py       # Adapter around the official Ollama SDK
@@ -41,6 +44,20 @@ mycelium/
 ```
 
 ## Memory lifecycle
+
+The authoritative library entry point is `MemoryPipeline`, composed by `Mycelium`. Its operations have explicit
+contracts:
+
+```text
+SourceInput          -> ingest_source()    -> IngestionResult
+RetrievalRequest     -> retrieve_context() -> RetrievalResult
+ConsolidationRequest -> consolidate()      -> ConsolidationResult
+```
+
+The FastAPI server, Engram, benchmarks, examples, and direct Python integrations all use these same operations.
+Lower layers implement one concern each: `Encoder` persists sources and extracts claims, `MemoryRetriever` selects
+read-only assistant context, `ConsolidationProcess` coordinates semantic consolidation, and repository/materializer
+classes persist canonical artifacts and generated views.
 
 ### 1. Chat and retrieval
 
@@ -92,9 +109,10 @@ The dream process converts source-grounded claims into semantic wiki pages:
 flowchart TD
     A[Unconsolidated source-grounded claims] --> B[Compile typed source retention]
     B --> C[Declare a typed subject census]
-    C --> D[Plan identity, containment, page state, and participants together]
-    D --> E[Route each claim to an owner, relationship, and section together]
-    E --> K{New entity materialized?}
+    C --> D[Match subject identities sequentially]
+    D --> E[Adjudicate type, identity, maturity, and page scope]
+    E --> F[Route each claim to an owner, relationship, and section]
+    F --> K{New entity materialized?}
     K -->|yes| L[Re-plan explicit persisted scope neighborhood]
     K -->|no| M[Use initial scope]
     L --> M
@@ -116,9 +134,11 @@ Important behavior:
 - `source_only` is not a model-authored scope outcome: every admitted claim is placed or explicitly deferred.
 - Entity identity and page admission are separate. A known identity may remain provisional until supported by
   enough durable evidence; creation and participant-resolution decisions retain support, confidence, and review state.
-- Identity planning starts with a type-neutral subject census. One second model call then decides same-type identity,
-  optional Project or Series containment, page state, and participant resolution for every fixed node. Considering
-  these together avoids contradictory decisions without a chain of corrective calls. Containment records only
+- Identity planning starts with a type-neutral subject census. Each subject is matched against canonical identities
+  sequentially, with canonically new local identities accumulated between calls. Ontology type is proposed and
+  independently verified from neutral source evidence before an identity match is accepted. The verified type bounds
+  final identity candidates, allowing people and organizations to share names without inheriting one another's shape.
+  Maturity is proposed and verified separately before entity scope and participant resolution. Containment records only
   `component_of` and `occurrence_of`; claim-level routing handles other relationships.
   Person and Organization are agents; Project is an intentional continuing effort; Series is a recurring frame;
   Event is one bounded occurrence; Artifact is a made physical or digital object; Topic is an abstract subject; and
@@ -130,8 +150,8 @@ Important behavior:
   occurrences, and context receive no page. Existing materialized pages are never demoted by a thin later cohort.
   Provisional identities return to the census when later evidence adds their own history.
 - One final routing call decides owner, subject/object/context endpoints, relationship kind, and typed page section
-  together for every claim. Ordinary cohorts therefore use three page-structure model calls: census, entity plan,
-  and claim routing. Only unusually large claim sets are split into batches of 24.
+  together for every claim. Exact model-call counts depend on the number of census identities and bounded verifier
+  partitions. Unusually large claim sets are split into bounded work units.
 - A project-role claim has one canonical owner but renders on both the Person/You and Project pages with the same
   provenance. A newly proposed owner must be materialized before its claim can be placed; otherwise the claim remains
   deferred for later evidence or user review.
@@ -150,14 +170,16 @@ A pending proposal is the lability window: both claims remain active and generat
 
 The web app owns long-lived session transcripts and explicit episode flushing in `server/runtime.py`. Ordinary chat content is logged when an episode is flushed, while tool observations are logged immediately.
 
-The direct Python API uses the `Mycelium.session()` async context manager. It retrieves pages on entry and encodes recorded messages on exit. Dream remains an explicit operation.
+The direct Python API can call `retrieve_context`, `ingest_source`, and `consolidate` explicitly with typed contracts.
+`Mycelium.session()` is an ergonomic conversational wrapper: it retrieves pages on entry and ingests recorded messages
+on exit. Consolidation remains an explicit operation.
 
 ## Memory operations
 
 The backend does not start a scheduled memory task. The web UI and API expose explicit operations for current,
 idle, or all episode flushing; Dream consolidation; proposal review; and development resets. **Flush Idle**
-evaluates the idle and size rules only when the user invokes it. The direct Python API leaves Dream invocation
-to its caller. Immediate tool-observation capture and direct session encoding remain part of the explicit chat
+evaluates the idle and size rules only when the user invokes it. The direct Python API leaves consolidation invocation
+to its caller. Immediate tool-observation capture and direct session ingestion remain part of the explicit chat
 or library call that initiated them.
 
 Chat and flush operations for one session are serialized. Session metadata is written atomically, so a flush
@@ -363,7 +385,7 @@ uv run python -m benchmarks.mycelium_bench locomo \
   --max-questions 3
 ```
 
-Quickly run the second LoCoMo conversation with `scripts/benchmark-locomo-convo2.sh`. Change `--system` to `null` for no persistent memory or `full_context` for the full-context baseline.
+Run a selected LoCoMo conversation with `SAMPLE_INDEX=2 scripts/benchmark-locomo.sh`. Change the sample index as needed, or pass `null` or `full_context` instead of `mycelium` to run those baselines.
 
 For a MemoryAgentBench smoke run:
 

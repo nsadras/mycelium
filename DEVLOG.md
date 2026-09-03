@@ -2603,3 +2603,117 @@ one prose-similarity summary.
   census prompt change.
 - Validation: focused prompt/ontology/Dream tests passed **64/64**; the complete maintained suite passed **298/298
   with 2 skipped**; Ruff and `git diff --check` passed.
+
+## 2026-09-02 — Evidence-first type and identity verification
+
+- Canonical identity types may overlap in their names and aliases: a person and an organization can both be valid
+  subjects with the same label. Identity verification now follows the independently proposed and verified ontology
+  type rather than inheriting the type of the initial registry match. A supported type bounds the verifier's
+  registry candidates; ambiguous type evidence enters user review.
+- Type proposal, type verification, and identity verification now receive a neutral subject rendering containing
+  only the census title and cited evidence aliases. The initial match's resolution, entity ID, and inherited aliases
+  are omitted, so those later decisions are grounded in source evidence rather than the earlier hypothesis.
+- The identity-verification prompt was simplified to one affirmative contract: determine whether the evidence
+  identifies exactly one canonical subject, multiple plausible subjects requiring review, or no existing subject.
+  It contains no benchmark-specific language or person/organization example.
+- A proposed full-registry verifier was rejected before integration. Although a two-candidate direct probe handled
+  the intended ambiguity, a frozen pipeline replay produced unrelated candidates across independently evaluated
+  registry chunks. The retained type-bounded design uses the existing division of model labor instead of adding
+  prompt exceptions or deterministic name matching.
+- Direct `gemma4:latest` calls with the production type proposal and verifier schemas classified the neutral
+  “Deborah's mother” evidence as `person` and verified that proposal as supported. A final frozen-census replay at
+  `/tmp/mycelium-neutral-type-verifier-replay.wInGCQ/store` completed in one attempt with no failures: the initial
+  matcher proposed `organization-deborah-s-parents`, while the independent type and identity stages resolved the
+  final canonical identity to `person-deborah-s-mother`.
+- Validation: all Dream routing tests passed **54/54**; the complete maintained suite passed **300/300 with 2
+  skipped**; Ruff and `git diff --check` passed.
+
+## 2026-09-02 — Authoritative typed memory lifecycle
+
+- Added one high-level `MemoryPipeline` with four explicit operations: `ingest_source(SourceInput) ->
+  IngestionResult`, `retrieve_context(RetrievalRequest) -> RetrievalResult`, `consolidation_status() ->
+  ShortTermMemoryStatus`, and `consolidate(ConsolidationRequest) -> ConsolidationResult`. The result contracts expose
+  created artifact IDs, rendered retrieval context, extraction retries, and the consolidation report instead of
+  requiring callers to infer all outcomes from store mutations.
+- Extracted retrieval orchestration from the `Mycelium` composition root into `MemoryRetriever`. `core.py` now wires
+  repositories and services, exposes the typed lifecycle, and retains `session()` only as an ergonomic wrapper around
+  retrieval and ingestion.
+- Renamed the internal `DreamProcess` to `ConsolidationProcess` and introduced typed preparation and commit inputs.
+  Queue/source preparation and durable commit construction are now named boundaries around the existing routing,
+  fact-resolution, and materialization mechanics.
+- Migrated web episode flushes, immediate tool observations, chat retrieval, Engram meeting finalization, benchmark
+  ingestion/retrieval/consolidation, and examples to the same public façade. Removed the public `load_context`,
+  `dream`, `dream_if_ready`, and `short_term_memory_status` aliases; no compatibility path was added.
+- Updated the README with an input/output operation table and explicit integration example. Updated `DESIGN.md` to
+  describe the current lifecycle modules and the actual sequential identity/type/maturity pipeline rather than the
+  superseded combined entity-plan flow.
+- This was an orchestration and contract refactor with no intended semantic or prompt change, so an Ollama semantic
+  probe was not applicable. Validation: the complete maintained suite passed **303/303 with 2 skipped**; Ruff passed
+  across the library, server, Engram, benchmarks, examples, and tests; and the UI lint and production build passed.
+
+## 2026-09-02 — Plain-language memory decision prompts
+
+- Rewrote the active memory prompt family around explicit tasks and locally defined terms. Fact resolution now tells
+  the model how to distinguish an independent claim, a repeated new state, and a genuine replacement; grouping keeps
+  opposing truth states separate; rendering and quality require each detail to be supported by the claim group as a
+  whole rather than by every individual member claim.
+- Identity matching now defines subject nodes and stored identities before stating its decision contract. Type,
+  page-admission, representation, routing, extraction coverage, and extraction prompts similarly define their local
+  concepts and distinguish the decision made in that stage from decisions owned by later stages. The extraction
+  prompt explicitly defines `about`, its allowed roles, `slot`, `facets`, evidence modality, and explicit versus
+  inferred evidence.
+- The entity-planning call now receives the persisted page-admission proposal and verifier verdict for every node.
+  Those results are fixed inputs when the model chooses independent versus contained representation, rather than a
+  hidden upstream decision that the downstream schema alone attempts to enforce.
+- Before integration, direct one-attempt probes against `gemma4:latest` used the proposed prompts and exact production
+  schemas with neutral examples and counterexamples. The fact contract correctly selected one replacement among two
+  compatible incoming claims, left an unrelated budget-review claim independent, kept old and new truth groups
+  separate, and combined complementary supported details. The first routing draft incorrectly treated a Project
+  requirement as a person's continuing role; an explicit positive decision order corrected that result. The first
+  extraction draft used an unsupported `object` role; defining the exact `subject`, `owner`, and `participant` roles
+  and requiring every explicitly named durable identity corrected the output.
+- After integration, a second direct validation rendered prompts through the production entry points and used their
+  exact structured schemas with `max_retries=1`. All calls passed on the first attempt: truth replacement and the
+  independent-claim counterexample, fixed materialized/provisional entity planning, Person-role versus
+  Project-requirement routing, extraction coverage, Person-subject/Project-owner extraction, and complementary fact
+  rendering. No benchmark names, fixture vocabulary, lexical rules, or post-hoc semantic overrides were added.
+- Validation: focused prompt/ontology/Dream tests passed **69/69**; the complete maintained suite passed **309/309
+  with 2 skipped**; Ruff and `git diff --check` passed.
+
+## 2026-09-03 — Partial-run pipeline correctness fixes
+
+- Made a placed-to-deferred routing transition authoritative throughout fact resolution. Every successful route,
+  including a deferred route, now participates in affected-owner discovery and the resolver's placement snapshot, so
+  a claim removed from an owner deletes its stale derived fact and disappears from regenerated page content in the
+  same Dream commit.
+- Replaced the global truth-change comparison with bounded sequential decisions. Prior-fact selection now evaluates
+  one incoming claim against bounded fact partitions and preserves a per-claim candidate map. Truth adjudication then
+  sees one incoming claim and only the older claim members selected for it; accepted target choices accumulate and are
+  unavailable to later calls. This removes the cross-batch uniqueness failure rather than retrying it. An initial
+  in-situ probe exposed that the incoming claim was also rendered under the older-target heading; separating those
+  prompt inputs corrected the contract. The final production-prompt probe classified an explicit bicycle-color
+  replacement as `supersedes`, its later supporting repetition as `no_change`, and an unrelated budget plan as
+  `no_change`, all on first attempts.
+- Added the persisted source-participant roster to every extraction call. The production prompt defines it as an
+  unordered attendance list and combines it with speaker labels and turn context. Direct `gemma4:latest` probes
+  resolved “both of us” in a two-person source to both named participants and selected an explicitly addressed person
+  from a three-person roster. A three-person example without an identified addressee remained ambiguous and the model
+  selected a roster member anyway; no deterministic semantic override was added because the current task was context
+  delivery, not a new ambiguity representation contract.
+- Added a distinct unresolved-proposal matching stage between within-batch identity accumulation and type decisions.
+  It compares each noncanonical identity group with bounded persisted `review_required` creation proposals using exact
+  decision IDs and source-backed proposal evidence. An exact match keeps the proposal unresolved, merges the new
+  source/claim/segment support into the same decision, and blocks the new claim on that existing decision instead of
+  creating a competing proposal. Ambiguous matches cite the existing proposal IDs and remain deferred. A direct prompt
+  probe matched new lease evidence to the correct pending cafe and kept an unrelated bakery distinct. A disposable
+  full `ClaimRouter` run with the real model completed without failures, returned only
+  `identity-northwind-review`, accumulated both claims, and deferred the new claim on that same blocker.
+- Centralized the durable-owner policy with the ontology. Every materialized identity can own its own durable record;
+  the policy now explicitly distinguishes Organization operations and history, Project state and work, and Person
+  commitments and personal history. Production probes routed weekend operating hours to the Organization while
+  routing a person's volunteering commitment to the Person. Fact grouping now treats a new source event as support
+  for an existing display fact when the claims express the same durable state, while distinct memories remain
+  separate. A reused fact keeps its stable fact ID when it absorbs additional supporting claims. Production probes
+  grouped equivalent weekend-hours claims together and kept delivery service separate.
+- Validation: focused consolidation, extraction, prompt, ontology, and artifact suites passed **140/140**; the complete
+  maintained suite passed **314/314 with 2 skipped**; Ruff passed across `mycelium` and `tests`.

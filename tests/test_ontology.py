@@ -10,6 +10,7 @@ from mycelium.ontology import (
     ENTITY_TYPES,
     EXTRACTION_SUBJECT_POLICY,
     INDEPENDENT_SUBJECT_SCOPES,
+    ROUTING_OWNERSHIP_POLICY,
     ROUTING_SUBJECT_POLICY,
     SUBJECT_CENSUS_POLICY,
     SUBJECT_PAGE_STATE_POLICY,
@@ -67,7 +68,7 @@ def test_prompt_catalogs_derive_keys_and_descriptions_from_the_registry() -> Non
             assert f"{section.key}={section.description}" in section_catalog
 
     extraction_system, _ = prompts.claim_extraction_prompt(
-        "agent_conversation", "source-1", None, "[segment-1] Example"
+        "agent_conversation", "source-1", None, ["Ava"], "[segment-1] Example"
     )
     assert f"claim_type ({'/'.join(CLAIM_TYPES)})" in extraction_system
 
@@ -94,10 +95,10 @@ def test_subject_representation_prompts_derive_from_the_global_ontology() -> Non
         "registry", "candidates", "evidence"
     )
     extraction_system, _ = prompts.claim_extraction_prompt(
-        "agent_conversation", "source-1", None, "segments"
+        "agent_conversation", "source-1", None, ["Ava"], "segments"
     )
     entity_plan_system, _ = prompts.entity_plan_prompt(
-        "registry", "nodes", "evidence"
+        "registry", "nodes", "maturity decisions", "evidence"
     )
     routing_system, _ = prompts.claim_routing_prompt(
         "registry", "entity plan", "evidence"
@@ -107,6 +108,7 @@ def test_subject_representation_prompts_derive_from_the_global_ontology() -> Non
     assert EXTRACTION_SUBJECT_POLICY in extraction_system
     assert subject_scope_prompt_catalog() in entity_plan_system
     assert SUBJECT_PAGE_STATE_POLICY in entity_plan_system
+    assert ROUTING_OWNERSHIP_POLICY in routing_system
     assert ROUTING_SUBJECT_POLICY in routing_system
 
 

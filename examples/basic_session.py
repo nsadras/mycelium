@@ -15,8 +15,8 @@ async def main():
         session.record('assistant', "We're using a plain-text wiki backed by a local LLM.")
 
     # Run dream manually
-    report = await mem.dream()
-    print("Dream report:", report)
+    consolidation = await mem.consolidate(mycelium.ConsolidationRequest())
+    print("Dream report:", consolidation.report)
 
     # Session 2: check that memory was encoded
     async with mem.session(query="what did we decide about storage?") as session:

@@ -6,12 +6,12 @@ import uuid
 
 from ollama import web_fetch, web_search
 
-from mycelium.budget import count_message_tokens, truncate_text_tokens
+from mycelium.budget import count_message_tokens, count_tokens, truncate_text_tokens
 from mycelium.memory_tools import MEMORY_TOOL_DEFINITIONS, MemoryToolset
 from mycelium.models import WikiPage
-from mycelium.operations import MemoryEvidence, RetrievalRequest
+from mycelium.operations import MemoryEvidence, MemoryWorkspace, RetrievalRequest
 from mycelium.prompting import render_prompt
-from mycelium.retrieval_context import render_memory_evidence
+from mycelium.retrieval_context import render_memory_workspace
 from server.runtime import (
     append_tool_event_logs,
     append_turn,
@@ -72,7 +72,9 @@ def build_chat_prompt(
     evidence: MemoryEvidence,
     *,
     budget_tokens: int,
-) -> tuple[list[dict[str, str]], list[WikiPage]]:
+    workspace_search_limit: int,
+    workspace_evidence_budget_tokens: int,
+) -> tuple[list[dict[str, str]], list[WikiPage], str]:
     """Fit system, current request, recent transcript, and memory under one budget."""
     if budget_tokens <= 0:
         raise ValueError("Assistant prompt budget must be positive")
@@ -87,9 +89,17 @@ def build_chat_prompt(
         user_content: str,
     ) -> list[dict[str, str]]:
         selected_evidence = _evidence_for_pages(evidence, prompt_pages)
+        workspace = MemoryWorkspace(
+            revision=0,
+            request=user_content,
+            evidence=selected_evidence,
+            operations=(),
+            remaining_searches=workspace_search_limit,
+            remaining_evidence_tokens=workspace_evidence_budget_tokens,
+        )
         request = render_prompt(
             "assistant/memory_request.user.jinja",
-            memory_evidence=render_memory_evidence(selected_evidence),
+            memory_evidence=render_memory_workspace(workspace),
             user_request=user_content,
         )
         return [
@@ -104,12 +114,24 @@ def build_chat_prompt(
         messages = assemble(selected_history, selected_pages, current_message)
 
     if count_message_tokens(messages) > budget_tokens:
-        empty_user = assemble([], [], "")
-        available = budget_tokens - count_message_tokens(empty_user)
-        current_message = truncate_text_tokens(
-            current_message, max(0, available), keep_end=True
-        )
-        messages = assemble([], [], current_message)
+        low = 0
+        high = count_tokens(current_message)
+        fitted_message = ""
+        fitted_messages = assemble([], [], fitted_message)
+        while low <= high:
+            midpoint = (low + high) // 2
+            candidate = truncate_text_tokens(
+                current_message, midpoint, keep_end=True
+            )
+            trial = assemble([], [], candidate)
+            if count_message_tokens(trial) <= budget_tokens:
+                fitted_message = candidate
+                fitted_messages = trial
+                low = midpoint + 1
+            else:
+                high = midpoint - 1
+        current_message = fitted_message
+        messages = fitted_messages
         if count_message_tokens(messages) > budget_tokens:
             raise ValueError(
                 "Assistant prompt budget is smaller than the system prompt"
@@ -130,7 +152,7 @@ def build_chat_prompt(
             selected_history = trial_history
             messages = trial
 
-    return messages, selected_pages
+    return messages, selected_pages, current_message
 
 
 class SessionCreate(BaseModel):
@@ -152,6 +174,7 @@ class Message(BaseModel):
     loaded_pages: Optional[List[dict]] = None
     tool_events: Optional[List[dict]] = None
     retrieval_trace: Optional[dict] = None
+    memory_workspace: Optional[dict] = None
 
 
 class SessionInfo(BaseModel):
@@ -246,19 +269,26 @@ async def chat(session_id: str, req: ChatRequest):
             )
         )
         candidate_pages = list(retrieval.pages)
-        messages, loaded_pages = build_chat_prompt(
+        messages, loaded_pages, fitted_request = build_chat_prompt(
             record,
             req.message,
             candidate_pages,
             retrieval.evidence,
             budget_tokens=initial_prompt_budget,
+            workspace_search_limit=mem.config.retrieval.tool_search_limit,
+            workspace_evidence_budget_tokens=tool_evidence_budget,
         )
+        initial_evidence = _evidence_for_pages(retrieval.evidence, loaded_pages)
         memory_tools = MemoryToolset(
             mem.retriever,
             result_limit=mem.config.retrieval.tool_result_limit,
             search_limit=mem.config.retrieval.tool_search_limit,
             evidence_budget_tokens=tool_evidence_budget,
-            initial_claim_ids=retrieval.evidence.claim_ids,
+            request=fitted_request,
+            initial_evidence=initial_evidence,
+        )
+        current_request = render_prompt(
+            "assistant/current_request.user.jinja", user_request=fitted_request
         )
         chat_response = await mem.llm.call_messages(
             messages,
@@ -266,10 +296,13 @@ async def chat(session_id: str, req: ChatRequest):
             max_tool_rounds=mem.config.retrieval.tool_search_limit,
             tool_definitions=[web_search, web_fetch, *MEMORY_TOOL_DEFINITIONS],
             tool_runner=memory_tools.run,
+            replaceable_context_message_index=len(messages) - 1,
+            replacement_context_content=current_request,
         )
         assistant_timestamp = iso_now()
         response_text = chat_response.content
         tool_events = [asdict(event) for event in chat_response.tool_events]
+        memory_workspace = asdict(memory_tools.workspace.snapshot)
         loaded_page_meta = [
             {
                 "slug": p.slug,
@@ -293,6 +326,7 @@ async def chat(session_id: str, req: ChatRequest):
                 loaded_page_meta,
                 tool_events,
                 retrieval.trace,
+                memory_workspace,
             )
             turn_count = int(meta[session_id]["active_episode"].get("turn_count", 0))
             save_meta(meta)
@@ -312,6 +346,7 @@ async def chat(session_id: str, req: ChatRequest):
             "loaded_pages": loaded_page_meta,
             "retrieval_trace": retrieval.trace,
             "tool_events": tool_events,
+            "memory_workspace": memory_workspace,
             "tool_logs_created": len(tool_log_entries),
             "episode_id": episode_id,
         }

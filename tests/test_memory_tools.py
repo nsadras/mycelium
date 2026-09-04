@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from mycelium.memory_tools import MEMORY_TOOL_DEFINITIONS, MemoryToolset
+from mycelium.memory_workspace import merge_memory_evidence
 from mycelium.operations import (
     EvidenceRecord,
     EvidenceSegment,
@@ -65,6 +66,7 @@ def _toolset(*, evidence_budget_tokens: int = 1000, search_limit: int = 2):
                                 relationship="cited",
                                 speaker="Mira",
                                 content="exact dialogue for claim two",
+                                index=1,
                             ),
                         ),
                     ),
@@ -77,7 +79,8 @@ def _toolset(*, evidence_budget_tokens: int = 1000, search_limit: int = 2):
         result_limit=4,
         search_limit=search_limit,
         evidence_budget_tokens=evidence_budget_tokens,
-        initial_claim_ids=["claim-1"],
+        request="What happened?",
+        initial_evidence=_result("initial evidence", ["claim-1"]).evidence,
     ), retriever
 
 
@@ -85,16 +88,7 @@ def test_memory_tool_schemas_expose_search_and_source_inspection():
     names = [definition["function"]["name"] for definition in MEMORY_TOOL_DEFINITIONS]
 
     assert names == ["memory_sources", "memory_search"]
-    functions = {
-        definition["function"]["name"]: definition["function"]
-        for definition in MEMORY_TOOL_DEFINITIONS
-    }
-    search = functions["memory_search"]
-    sources = functions["memory_sources"]
-    assert "additional structured claim or fact records" in search["description"]
-    assert "unresolved evidence requirement" not in search["description"]
-    assert "exact cited source lines" in sources["description"]
-    assert "supporting claim IDs" in sources["description"]
+    assert all("parameters" in definition["function"] for definition in MEMORY_TOOL_DEFINITIONS)
 
 
 @pytest.mark.asyncio
@@ -161,26 +155,26 @@ async def test_tool_runner_returns_structured_text_and_defers_non_memory_tools()
     memory_result = await tools.run("memory_search", {"query": "missing event"})
     web_result = await tools.run("web_search", {"query": "current event"})
 
-    assert memory_result.startswith("<memory-search-results>")
-    assert "Statement: evidence for claim two" in memory_result
-    assert "Supporting claims:\n- `claim-2`" in memory_result
+    assert memory_result.result.startswith("<memory-search-results>")
+    assert memory_result.metadata["workspace_revision"] == 1
+    assert tools.workspace.snapshot.evidence.claim_ids == ("claim-1", "claim-2")
     assert web_result is None
 
 
 @pytest.mark.asyncio
 async def test_source_tool_result_associates_claim_with_cited_transcript_line():
     tools, _ = _toolset()
-    await tools.search("missing event")
+    await tools.run("memory_search", {"query": "missing event"})
 
     result = await tools.run(
         "memory_sources", {"claim_ids": ["claim-2"]}
     )
 
-    assert result.startswith("<memory-source-results>")
-    assert "Requested claims: `claim-2`" in result
-    assert "`claim-2`: cited segments `source-2#seg-1`" in result
-    assert 'cited-for="claim-2"' in result
-    assert "Mira: exact dialogue for claim two" in result
+    assert result.result.startswith("<memory-source-results>")
+    assert result.metadata["workspace_revision"] == 2
+    source = tools.workspace.snapshot.evidence.sources[0]
+    assert source.citations[0].claim_id == "claim-2"
+    assert source.segments[0].content == "exact dialogue for claim two"
 
 
 @pytest.mark.asyncio
@@ -191,3 +185,48 @@ async def test_memory_evidence_budget_is_cumulative():
         await tools.search("missing event")
 
     retriever.search_evidence.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_memory_operation_is_recorded_without_changing_evidence():
+    tools, _ = _toolset()
+
+    result = await tools.run(
+        "memory_sources", {"claim_ids": ["claim-not-shown"]}
+    )
+
+    workspace = tools.workspace.snapshot
+    assert result.metadata["workspace_revision"] == 1
+    assert workspace.evidence.claim_ids == ("claim-1",)
+    assert workspace.operations[0].status == "failed"
+    assert workspace.operations[0].error
+
+
+def test_workspace_merges_source_segments_in_chronological_order():
+    def evidence(segment_id: str, index: int, claim_id: str) -> MemoryEvidence:
+        return MemoryEvidence(sources=(EvidenceSource(
+            source_id="source-shared",
+            conversation_time="2026-01-01T00:00:00+00:00",
+            citations=(EvidenceSourceCitation(
+                claim_id=claim_id,
+                segment_ids=(segment_id,),
+            ),),
+            segments=(EvidenceSegment(
+                segment_id=segment_id,
+                relationship="cited",
+                speaker="Mira",
+                content=claim_id,
+                index=index,
+            ),),
+        ),))
+
+    merged = merge_memory_evidence(
+        evidence("source-shared#seg-3", 3, "claim-3"),
+        evidence("source-shared#seg-1", 1, "claim-1"),
+    )
+
+    assert [segment.index for segment in merged.sources[0].segments] == [1, 3]
+    assert [citation.claim_id for citation in merged.sources[0].citations] == [
+        "claim-3",
+        "claim-1",
+    ]

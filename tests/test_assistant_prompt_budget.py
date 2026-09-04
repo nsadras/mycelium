@@ -47,32 +47,39 @@ def test_one_budget_bounds_system_recent_transcript_and_memory():
     budget = 650
 
     memory_page = page("The Orchid launch decision is scheduled for Thursday.")
-    messages, selected_pages = build_chat_prompt(
+    messages, selected_pages, fitted_request = build_chat_prompt(
         record,
         "What is the current Orchid decision?",
         [memory_page],
         evidence_for(memory_page),
         budget_tokens=budget,
+        workspace_search_limit=3,
+        workspace_evidence_budget_tokens=6000,
     )
 
     assert count_message_tokens(messages) <= budget
     assert selected_pages[0].slug == "project-orchid"
+    assert fitted_request == "What is the current Orchid decision?"
 
 
 def test_prompt_budget_accepts_an_oversized_current_message():
     current = "discarded beginning " * 200 + "essential final request"
-    budget = 300
+    budget = 400
 
-    messages, selected_pages = build_chat_prompt(
+    messages, selected_pages, fitted_request = build_chat_prompt(
         {"transcript": []},
         current,
         [],
         MemoryEvidence(),
         budget_tokens=budget,
+        workspace_search_limit=3,
+        workspace_evidence_budget_tokens=6000,
     )
 
     assert count_message_tokens(messages) <= budget
     assert selected_pages == []
+    assert fitted_request.endswith("essential final request")
+    assert fitted_request != current
 
 
 def test_prompt_budget_can_drop_memory_that_does_not_fit_after_recent_thread():
@@ -84,13 +91,16 @@ def test_prompt_budget_can_drop_memory_that_does_not_fit_after_recent_thread():
     }
 
     memory_page = page("Large memory " * 300)
-    messages, selected_pages = build_chat_prompt(
+    messages, selected_pages, fitted_request = build_chat_prompt(
         record,
         "Continue.",
         [memory_page],
         evidence_for(memory_page),
-        budget_tokens=300,
+        budget_tokens=400,
+        workspace_search_limit=3,
+        workspace_evidence_budget_tokens=6000,
     )
 
-    assert count_message_tokens(messages) <= 300
+    assert count_message_tokens(messages) <= 400
     assert selected_pages == []
+    assert fitted_request == "Continue."

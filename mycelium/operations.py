@@ -74,6 +74,7 @@ class EvidenceSegment:
     relationship: Literal["cited", "context"]
     speaker: str | None
     content: str
+    index: int = 0
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,28 @@ class MemoryEvidence:
                 claim_id for record in self.records for claim_id in record.claim_ids
             )
         )
+
+
+@dataclass(frozen=True)
+class MemoryWorkspaceOperation:
+    sequence: int
+    tool_name: Literal["memory_search", "memory_sources"]
+    status: Literal["complete", "failed"]
+    query: str | None = None
+    requested_claim_ids: tuple[str, ...] = ()
+    added_record_ids: tuple[str, ...] = ()
+    added_source_ids: tuple[str, ...] = ()
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class MemoryWorkspace:
+    revision: int
+    request: str
+    evidence: MemoryEvidence
+    operations: tuple[MemoryWorkspaceOperation, ...]
+    remaining_searches: int
+    remaining_evidence_tokens: int
 
 
 @dataclass(frozen=True)

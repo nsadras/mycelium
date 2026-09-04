@@ -14,6 +14,8 @@ from mycelium.operations import (
     EvidenceTime,
     IngestionResult,
     MemoryEvidence,
+    MemoryWorkspace,
+    MemoryWorkspaceOperation,
     RetrievalRequest,
     RetrievalResult,
     SourceInput,
@@ -22,7 +24,8 @@ from mycelium.operations import (
 __all__ = [
     'Mycelium', 'WikiPage', 'LogEntry', 'DreamReport', 'Session',
     'render_memory_context', 'SourceInput', 'IngestionResult',
-    'RetrievalRequest', 'RetrievalResult', 'MemoryEvidence',
+    'RetrievalRequest', 'RetrievalResult', 'MemoryEvidence', 'MemoryWorkspace',
+    'MemoryWorkspaceOperation',
     'EvidenceRecord', 'EvidenceCitation', 'EvidenceTime',
     'EvidenceSource', 'EvidenceSourceCitation', 'EvidenceSegment', 'ConsolidationRequest',
     'ConsolidationResult', 'MemoryPipeline',

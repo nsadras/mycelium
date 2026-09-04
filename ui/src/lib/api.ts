@@ -19,6 +19,7 @@ export interface Message {
   loaded_pages?: LoadedPage[];
   tool_events?: ToolEvent[];
   retrieval_trace?: RetrievalTrace;
+  memory_workspace?: MemoryWorkspace;
 }
 
 export interface RetrievalTrace {
@@ -47,6 +48,54 @@ export interface ToolEvent {
   arguments: Record<string, unknown>;
   result: string;
   failed?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MemoryEvidenceRecord {
+  record_id: string;
+  record_type: 'claim' | 'fact';
+  statement: string;
+  subject_entity_id?: string | null;
+  subject_name?: string | null;
+  claim_ids: string[];
+  state?: string | null;
+}
+
+export interface MemoryEvidenceSource {
+  source_id: string;
+  conversation_time: string;
+  citations: Array<{ claim_id: string; segment_ids: string[] }>;
+  segments: Array<{
+    segment_id: string;
+    relationship: 'cited' | 'context';
+    speaker?: string | null;
+    content: string;
+    index: number;
+  }>;
+}
+
+export interface MemoryWorkspaceOperation {
+  sequence: number;
+  tool_name: 'memory_search' | 'memory_sources';
+  status: 'complete' | 'failed';
+  query?: string | null;
+  requested_claim_ids: string[];
+  added_record_ids: string[];
+  added_source_ids: string[];
+  error?: string | null;
+}
+
+export interface MemoryWorkspace {
+  revision: number;
+  request: string;
+  evidence: {
+    records: MemoryEvidenceRecord[];
+    sources: MemoryEvidenceSource[];
+    more_available: boolean;
+  };
+  operations: MemoryWorkspaceOperation[];
+  remaining_searches: number;
+  remaining_evidence_tokens: number;
 }
 
 export interface LoadedPage {

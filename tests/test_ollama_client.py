@@ -6,7 +6,7 @@ import pytest
 from ollama import web_search
 from pydantic import BaseModel, RootModel
 
-from mycelium.ollama import OllamaClient
+from mycelium.ollama import OllamaClient, ToolExecutionResult
 
 
 def snapshot_call(kwargs):
@@ -86,6 +86,31 @@ class FakeToolSdkClient:
 
     async def web_fetch(self, url: str):
         return f"content for {url}"
+
+
+class RepeatedToolSdkClient:
+    def __init__(self):
+        self.chat_calls = []
+
+    async def chat(self, **kwargs):
+        self.chat_calls.append(snapshot_call(kwargs))
+        if len(self.chat_calls) <= 2:
+            return SimpleNamespace(message={
+                "role": "assistant",
+                "content": "",
+                "thinking": f"reasoning-{len(self.chat_calls)}",
+                "tool_calls": [{
+                    "function": {
+                        "name": "memory_search",
+                        "arguments": {"query": f"query-{len(self.chat_calls)}"},
+                    }
+                }],
+            })
+        return SimpleNamespace(message={
+            "role": "assistant",
+            "content": "final answer",
+            "thinking": "reasoning-3",
+        })
 
 
 class FakeWebClient:
@@ -240,6 +265,60 @@ async def test_call_messages_executes_injected_tools_with_custom_runner():
     assert fake_sdk.chat_calls[0]["tools"] == definitions
     assert response.tool_events[0].result == complete_result
     assert fake_sdk.chat_calls[1]["messages"][-1]["content"] == complete_result
+
+
+@pytest.mark.asyncio
+async def test_structured_tool_results_replace_prior_model_context():
+    client = OllamaClient("http://localhost:11434", "test-model")
+    fake_sdk = RepeatedToolSdkClient()
+    client.client = fake_sdk
+    revision = 0
+
+    def run_tool(_name, _arguments):
+        nonlocal revision
+        revision += 1
+        return ToolExecutionResult(
+            result=f"raw-delta-{revision}",
+            model_result=f"workspace-{revision}",
+            supersession_key="memory_workspace",
+            superseded_result="workspace-superseded",
+            metadata={"workspace_revision": revision},
+        )
+
+    response = await client.call_messages(
+        [
+            {"role": "system", "content": "policy"},
+            {"role": "user", "content": "initial-workspace"},
+        ],
+        tool_definitions=[{
+            "type": "function",
+            "function": {
+                "name": "memory_search",
+                "parameters": {"type": "object"},
+            },
+        }],
+        tool_runner=run_tool,
+        replaceable_context_message_index=1,
+        replacement_context_content="request-only",
+    )
+
+    assert [event.result for event in response.tool_events] == [
+        "raw-delta-1",
+        "raw-delta-2",
+    ]
+    assert [event.metadata["workspace_revision"] for event in response.tool_events] == [1, 2]
+    final_messages = fake_sdk.chat_calls[-1]["messages"]
+    assert final_messages[1]["content"] == "request-only"
+    assert [
+        message["content"]
+        for message in final_messages
+        if message["role"] == "tool"
+    ] == ["workspace-superseded", "workspace-2"]
+    assert [step.thinking for step in response.execution_trace] == [
+        "reasoning-1",
+        "reasoning-2",
+        "reasoning-3",
+    ]
 
 
 @pytest.mark.asyncio

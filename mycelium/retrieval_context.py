@@ -26,6 +26,7 @@ from mycelium.operations import (
     EvidenceSourceCitation,
     EvidenceTime,
     MemoryEvidence,
+    MemoryWorkspace,
 )
 from mycelium.store import WikiStore
 
@@ -39,6 +40,43 @@ class _RetrievedRecord:
 def render_memory_evidence(evidence: MemoryEvidence) -> str:
     """Render initial evidence with the shared model-facing representation."""
     return _render_evidence_envelope("memory-evidence", evidence)
+
+
+def render_memory_workspace(workspace: MemoryWorkspace) -> str:
+    """Render the one current accumulated evidence workspace for an agent round."""
+    operation_lines: list[str] = []
+    if workspace.operations:
+        operation_lines.append("Completed memory operations:")
+        for operation in workspace.operations:
+            target = operation.query or ", ".join(operation.requested_claim_ids)
+            additions = [
+                *operation.added_record_ids,
+                *operation.added_source_ids,
+            ]
+            detail = f"; target: {_text(target)}" if target else ""
+            added = (
+                "; added: " + ", ".join(f"`{_text(value)}`" for value in additions)
+                if additions
+                else "; added: none"
+            )
+            error = f"; error: {_text(operation.error)}" if operation.error else ""
+            operation_lines.append(
+                f"{operation.sequence}. {_text(operation.tool_name)} "
+                f"({_text(operation.status)}){detail}{added}{error}"
+            )
+        operation_lines.append("")
+    return _render_evidence_envelope(
+        "memory-workspace",
+        workspace.evidence,
+        attributes={"revision": str(workspace.revision)},
+        preamble=(
+            f"Original request: {_text(workspace.request)}",
+            f"Remaining searches: {workspace.remaining_searches}",
+            f"Remaining evidence tokens: {workspace.remaining_evidence_tokens}",
+            "",
+            *operation_lines,
+        ),
+    )
 
 
 def render_memory_search_result(
@@ -84,8 +122,13 @@ def _render_evidence_envelope(
     evidence: MemoryEvidence,
     *,
     preamble: tuple[str, ...] = (),
+    attributes: dict[str, str] | None = None,
 ) -> str:
-    lines = [f"<{tag}>", *preamble]
+    rendered_attributes = "".join(
+        f' {_attribute(key)}="{_attribute(value)}"'
+        for key, value in (attributes or {}).items()
+    )
+    lines = [f"<{tag}{rendered_attributes}>", *preamble]
     if preamble and (evidence.records or evidence.sources):
         lines.append("")
     lines.extend(_render_records(evidence.records))
@@ -518,6 +561,7 @@ class RetrievedContextBuilder:
             relationship="cited" if segment.segment_id in cited_ids else "context",
             speaker=segment.speaker,
             content=" ".join(segment.content.split()),
+            index=segment.index,
         )
 
     @staticmethod

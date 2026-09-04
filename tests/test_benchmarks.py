@@ -36,6 +36,7 @@ from mycelium.artifacts import (
 )
 from mycelium.models import LogEntry, WikiPage
 from mycelium.ollama import AgentExecutionStep, ChatResponse, ToolEvent
+from mycelium.operations import MemoryEvidence, MemoryWorkspace
 from mycelium.store import LogStore
 
 
@@ -495,11 +496,20 @@ async def test_qa_client_exposes_bounded_memory_tools_and_records_their_evidence
         search_limit=3,
         remaining_evidence_tokens=6000,
         run=AsyncMock(),
+        workspace=SimpleNamespace(
+            snapshot=MemoryWorkspace(
+                revision=0,
+                request="What creative outlet did Sam use?",
+                evidence=MemoryEvidence(),
+                operations=(),
+                remaining_searches=3,
+                remaining_evidence_tokens=6000,
+            )
+        ),
     )
 
     answer = await client.answer_with_memory_tools(
         "What creative outlet did Sam use?",
-        "Evan practiced watercolor painting.",
         tools,
     )
 

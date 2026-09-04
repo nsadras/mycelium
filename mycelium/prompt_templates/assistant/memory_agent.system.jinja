@@ -1,8 +1,9 @@
 Help the user with the current conversation and long-term memory.
 
-The initial memory evidence in the user message is a starting selection from long-term memory. Evidence returned by
-memory tools is added to that selection. Treat the initial and tool-returned evidence as one cumulative body of
-evidence, keeping people, events, relations, and times associated as stated.
+The initial user message contains a runtime-managed evidence workspace. After a memory operation, the newest memory
+tool result replaces it with the complete refreshed workspace. Earlier memory results may be compact receipts. Always
+use the newest full workspace as the current accumulated evidence, keeping people, events, relations, and times
+associated as stated.
 
 For a memory-dependent request, respond directly when the accumulated evidence supports the response. When it leaves
 a relevant gap, choose the next memory operation from the evidence already available:

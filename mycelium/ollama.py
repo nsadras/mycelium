@@ -26,6 +26,18 @@ class ToolEvent:
     arguments: dict[str, Any]
     result: str
     failed: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ToolExecutionResult:
+    """Separate an inspectable tool result from its bounded model presentation."""
+
+    result: str
+    model_result: str
+    supersession_key: str | None = None
+    superseded_result: str = "Tool result superseded by the latest state."
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -110,8 +122,14 @@ class OllamaClient:
         think: bool | None = None,
         tool_definitions: list[Any] | None = None,
         tool_runner: Callable[
-            [str, dict[str, Any]], str | None | Awaitable[str | None]
+            [str, dict[str, Any]],
+            str
+            | ToolExecutionResult
+            | None
+            | Awaitable[str | ToolExecutionResult | None],
         ] | None = None,
+        replaceable_context_message_index: int | None = None,
+        replacement_context_content: str | None = None,
     ) -> ChatResponse:
         """
         Makes a chat completion call using an explicit message history.
@@ -124,7 +142,7 @@ class OllamaClient:
         if num_predict is not None:
             options["num_predict"] = num_predict
         endpoint = f"{self.url}/api/chat"
-        working_messages = list(messages)
+        working_messages = [dict(message) for message in messages]
         tool_events: list[ToolEvent] = []
         execution_trace: list[AgentExecutionStep] = []
 
@@ -153,6 +171,10 @@ class OllamaClient:
                     think=think,
                     tool_definitions=tool_definitions,
                     tool_runner=tool_runner,
+                    replaceable_context_message_index=(
+                        replaceable_context_message_index
+                    ),
+                    replacement_context_content=replacement_context_content,
                 )
                 latency_ms = int((time.time() - start_time) * 1000)
                 self._log_call(
@@ -201,8 +223,14 @@ class OllamaClient:
         think: bool | None,
         tool_definitions: list[Any] | None,
         tool_runner: Callable[
-            [str, dict[str, Any]], str | None | Awaitable[str | None]
+            [str, dict[str, Any]],
+            str
+            | ToolExecutionResult
+            | None
+            | Awaitable[str | ToolExecutionResult | None],
         ] | None,
+        replaceable_context_message_index: int | None,
+        replacement_context_content: str | None,
     ) -> tuple[str, dict[str, Any]]:
         tools = (
             tool_definitions
@@ -210,6 +238,8 @@ class OllamaClient:
             else [web_search, web_fetch] if enable_tools else None
         )
         think_enabled = think if think is not None else bool(enable_tools)
+        current_result_message_by_key: dict[str, int] = {}
+        context_replaced = False
         for round_idx in range(max_tool_rounds + 1):
             response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
                 model=self.model,
@@ -247,13 +277,36 @@ class OllamaClient:
                     if tool_runner is not None
                     else None
                 )
-                result = (
+                executed = (
                     await custom_result
                     if inspect.isawaitable(custom_result)
                     else custom_result
                 )
-                if result is None:
-                    result = await self._run_tool(tool_name, tool_args)
+                if executed is None:
+                    executed = await self._run_tool(tool_name, tool_args)
+                if isinstance(executed, ToolExecutionResult):
+                    result = executed.result
+                    model_result = executed.model_result
+                    result_metadata = dict(executed.metadata)
+                    if executed.supersession_key:
+                        prior_index = current_result_message_by_key.get(
+                            executed.supersession_key
+                        )
+                        if prior_index is not None:
+                            messages[prior_index]["content"] = (
+                                executed.superseded_result
+                            )
+                        if not context_replaced:
+                            self._replace_context_message(
+                                messages,
+                                replaceable_context_message_index,
+                                replacement_context_content,
+                            )
+                            context_replaced = True
+                else:
+                    result = executed
+                    model_result = result
+                    result_metadata = {}
                 failed = (
                     result.startswith(f"Tool {tool_name} failed:")
                     or result == f"Tool {tool_name} not found"
@@ -264,6 +317,7 @@ class OllamaClient:
                     arguments=tool_args,
                     result=result,
                     failed=failed,
+                    metadata=result_metadata,
                 )
                 tool_events.append(tool_event)
                 step.tool_events.append(tool_event)
@@ -280,11 +334,32 @@ class OllamaClient:
                         ensure_ascii=False,
                     ),
                 )
-                messages.append(
-                    {"role": "tool", "content": result, "tool_name": tool_name}
-                )
+                messages.append({
+                    "role": "tool",
+                    "content": model_result,
+                    "tool_name": tool_name,
+                })
+                if (
+                    isinstance(executed, ToolExecutionResult)
+                    and executed.supersession_key
+                ):
+                    current_result_message_by_key[executed.supersession_key] = (
+                        len(messages) - 1
+                    )
             step.outcome = "tools_executed"
         return "", {}
+
+    @staticmethod
+    def _replace_context_message(
+        messages: list[dict[str, Any]],
+        message_index: int | None,
+        replacement_content: str | None,
+    ) -> None:
+        if message_index is None or replacement_content is None:
+            return
+        if message_index < 0 or message_index >= len(messages):
+            raise ValueError("Replaceable context message index is out of range")
+        messages[message_index]["content"] = replacement_content
 
     def _assistant_message_dict(self, response: Any) -> dict[str, Any]:
         message = getattr(response, "message", None)

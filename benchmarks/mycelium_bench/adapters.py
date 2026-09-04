@@ -21,7 +21,7 @@ from mycelium.operations import (
     SourceInput,
 )
 from mycelium.memory_tools import MEMORY_TOOL_DEFINITIONS, MemoryToolset
-from mycelium.retrieval_context import render_memory_evidence
+from mycelium.retrieval_context import render_memory_workspace
 from mycelium.structured_outputs import GroundedAnswerOutput
 
 
@@ -109,7 +109,6 @@ class OllamaQaClient:
     async def answer_with_memory_tools(
         self,
         question: str,
-        memory_evidence: str,
         tools: MemoryToolset,
     ) -> BenchmarkAnswer:
         system = render_prompt(
@@ -120,7 +119,7 @@ class OllamaQaClient:
         )
         user = render_prompt(
             "assistant/memory_request.user.jinja",
-            memory_evidence=memory_evidence,
+            memory_evidence=render_memory_workspace(tools.workspace.snapshot),
             user_request=question,
         )
         messages = [
@@ -135,6 +134,10 @@ class OllamaQaClient:
             think=True,
             tool_definitions=MEMORY_TOOL_DEFINITIONS,
             tool_runner=tools.run,
+            replaceable_context_message_index=1,
+            replacement_context_content=render_prompt(
+                "assistant/current_request.user.jinja", user_request=question
+            ),
         )
         elapsed = time.perf_counter() - start
         output = response.content.strip()
@@ -152,6 +155,7 @@ class OllamaQaClient:
                     asdict(step) for step in response.execution_trace
                 ],
                 "ollama": response.metadata,
+                "memory_workspace": asdict(tools.workspace.snapshot),
             },
         )
 
@@ -392,6 +396,7 @@ class MyceliumMemorySystem:
         metadata = metadata or {}
         start = time.perf_counter()
         retrieval_trace: dict[str, Any] = {}
+        initial_evidence = MemoryEvidence()
         tool_evidence_budget = mem.config.retrieval.tool_evidence_budget_tokens
         if tool_evidence_budget >= self.context_budget_tokens:
             raise ValueError(
@@ -407,6 +412,7 @@ class MyceliumMemorySystem:
             )
             loaded_pages = list(retrieval.pages)
             retrieval_trace = retrieval.trace
+            initial_evidence = retrieval.evidence
         except Exception as exc:
             self._errors.append(
                 {
@@ -417,29 +423,20 @@ class MyceliumMemorySystem:
             )
             loaded_pages = []
         memory_construction_time = time.perf_counter() - start
-        context = (
-            retrieval.rendered_context
-            if loaded_pages
-            else render_memory_evidence(MemoryEvidence())
-        )
         memory_tools = MemoryToolset(
             mem.retriever,
             result_limit=mem.config.retrieval.tool_result_limit,
             search_limit=mem.config.retrieval.tool_search_limit,
             evidence_budget_tokens=tool_evidence_budget,
-            initial_claim_ids=(retrieval.evidence.claim_ids if loaded_pages else ()),
+            request=question,
+            initial_evidence=initial_evidence,
         )
         answer = await self.qa_client.answer_with_memory_tools(
-            question, context, memory_tools
+            question, memory_tools
         )
         answer.memory_construction_time = memory_construction_time
-        tool_context = "\n".join(
-            event["result"]
-            for event in answer.metadata.get("memory_tool_events", [])
-            if event.get("tool_name") in {"memory_search", "memory_sources"}
-        )
-        full_evidence_context = "\n\n".join(
-            part for part in (context, tool_context) if part
+        full_evidence_context = render_memory_workspace(
+            memory_tools.workspace.snapshot
         )
         answer.metadata.update(
             {

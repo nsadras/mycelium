@@ -3183,3 +3183,34 @@ one prose-similarity summary.
   non-terminating LanceDB, Engram, and production-lifecycle test files passed **299 tests with 2 skipped**. Ruff,
   `git diff --check`, UI lint, and the UI production build passed. The LanceDB test hung when run alone, and the full
   suite also stalled in Engram tests; both processes were stopped without producing test failures.
+
+## 2026-09-04 — Runtime-managed evidence workspace
+
+- Added a typed, per-response evidence workspace owned entirely by the runtime. Initial retrieval records, later
+  search records, and explicitly requested source transcripts merge by stable IDs; source segments retain conversation
+  order. The workspace also records each successful or failed memory operation and the remaining search/evidence
+  budgets. No workspace-writing tool or model-authored notes were added.
+- Changed the Ollama tool loop so the newest memory result contains one complete current workspace. After the first
+  memory operation, the initial user message becomes request-only; after later operations, the prior full workspace
+  becomes a compact supersession receipt. Raw incremental tool results remain in persisted tool events, while assistant
+  reasoning and tool-call history remain chronological. The same mechanism is used by web chat and benchmark QA.
+- Before integration, direct `gemma4:latest` probes compared a mutable top-of-prompt workspace with a chronological
+  replacement protocol. The former answered correctly but made an unnecessary source call after briefly treating the
+  refreshed state as empty. The chronological protocol cleanly followed `memory_sources` then `memory_search` and
+  combined the recovered novel title and city. An integrated probe using the production prompt, `MemoryToolset`,
+  renderer, and Ollama client repeated that correct two-operation traversal with a revision-2 workspace.
+- The final workspace is persisted on assistant transcript entries and benchmark predictions. The React chat exposes
+  it in a collapsed inspector grouped by subject, with operation history, budgets, citations, and chronologically
+  rendered source lines.
+- Validation passed: **303 tests with 2 skipped** across the deterministic backend suite excluding the three
+  independently non-terminating LanceDB, Engram, and production-lifecycle files; targeted MyPy; Ruff; UI lint; and the
+  UI production build.
+- A frozen sample-9 replay completed all **25/25** questions without tool, parsing, generation, budget, or result-shape
+  failures at `benchmark_runs/locomo-mycelium-convo-9-evidence-workspace-panel5-20260904`. It scored **0.4252** versus
+  **0.4589** for the earlier separate-tool transition run. Candidate rankings and initially selected claim IDs were
+  identical across all 25 questions. Measured context recall fell from **0.4091 to 0.2841** because the assistant made
+  fewer source expansions: 11 source calls covering 18 claim IDs, versus 15 calls covering 31 IDs previously. Several
+  answers stopped at sufficient compact records instead of loading every benchmark-labeled source segment. The one
+  category-5 scoring regression was a grounded premise correction (the stored evidence says Sam had never visited
+  Jasper) rather than evidence leakage or an agent-loop error. The replay is therefore a runtime validation, not
+  evidence that the workspace improves answer quality by itself.

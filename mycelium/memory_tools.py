@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from mycelium.budget import count_tokens
-from mycelium.operations import MemoryEvidence
+from mycelium.memory_workspace import MemoryWorkspaceAccumulator
+from mycelium.ollama import ToolExecutionResult
+from mycelium.operations import MemoryEvidence, MemoryWorkspace
 from mycelium.retrieval import MemoryRetriever
 from mycelium.retrieval_context import (
     render_memory_search_result,
     render_memory_source_result,
     render_memory_tool_error,
+    render_memory_workspace,
 )
 
 
@@ -97,22 +100,31 @@ class MemoryToolset:
         result_limit: int = 6,
         search_limit: int = 3,
         evidence_budget_tokens: int = 6000,
-        initial_claim_ids: list[str] | tuple[str, ...] = (),
+        request: str,
+        initial_evidence: MemoryEvidence,
     ) -> None:
         self.retriever = retriever
         self.result_limit = max(1, min(6, result_limit))
         self.search_limit = max(1, search_limit)
         self.remaining_evidence_tokens = max(1, evidence_budget_tokens)
-        self.returned_claim_ids = set(initial_claim_ids)
+        self.returned_claim_ids = set(initial_evidence.claim_ids)
         self.search_count = 0
+        self.workspace = MemoryWorkspaceAccumulator(
+            request,
+            initial_evidence,
+            remaining_searches=self.search_limit,
+            remaining_evidence_tokens=self.remaining_evidence_tokens,
+        )
 
-    async def run(self, tool_name: str, arguments: dict[str, Any]) -> str | None:
+    async def run(
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> ToolExecutionResult | None:
         """Run a memory tool, or defer non-memory tools to the Ollama client."""
         if tool_name not in MEMORY_TOOL_NAMES:
             return None
         try:
             if tool_name == "memory_search":
-                result = await self.search(
+                search_result = await self.search(
                     str(arguments.get("query") or ""),
                     limit=_bounded_int(
                         arguments.get("limit"),
@@ -121,19 +133,57 @@ class MemoryToolset:
                         high=self.result_limit,
                     ),
                 )
-                return render_memory_search_result(
-                    result.evidence,
-                    query=result.query,
-                    remaining_searches=result.remaining_searches,
+                rendered = render_memory_search_result(
+                    search_result.evidence,
+                    query=search_result.query,
+                    remaining_searches=search_result.remaining_searches,
                 )
+                result_evidence = search_result.evidence
             else:
-                result = self.sources(_string_list(arguments.get("claim_ids"), limit=6))
-                return render_memory_source_result(
-                    result.evidence,
-                    requested_claim_ids=list(result.claim_ids),
+                source_result = self.sources(
+                    _string_list(arguments.get("claim_ids"), limit=6)
                 )
+                rendered = render_memory_source_result(
+                    source_result.evidence,
+                    requested_claim_ids=list(source_result.claim_ids),
+                )
+                result_evidence = source_result.evidence
+            workspace = self.workspace.record_success(
+                tool_name,
+                arguments,
+                result_evidence,
+                remaining_searches=self.search_limit - self.search_count,
+                remaining_evidence_tokens=self.remaining_evidence_tokens,
+            )
+            return self._execution_result(rendered, workspace)
         except (TypeError, ValueError) as exc:
-            return render_memory_tool_error(str(exc))
+            rendered = render_memory_tool_error(str(exc))
+            workspace = self.workspace.record_failure(
+                tool_name,
+                arguments,
+                str(exc),
+                remaining_searches=self.search_limit - self.search_count,
+                remaining_evidence_tokens=self.remaining_evidence_tokens,
+            )
+            return self._execution_result(rendered, workspace)
+
+    @staticmethod
+    def _execution_result(
+        rendered: str, workspace: MemoryWorkspace
+    ) -> ToolExecutionResult:
+        operation = workspace.operations[-1]
+        return ToolExecutionResult(
+            result=rendered,
+            model_result=render_memory_workspace(workspace),
+            supersession_key="memory_workspace",
+            superseded_result=(
+                f'<memory-workspace-superseded revision="{workspace.revision}" />'
+            ),
+            metadata={
+                "workspace_revision": workspace.revision,
+                "workspace_operation": asdict(operation),
+            },
+        )
 
     async def search(
         self, query: str, *, limit: int | None = None

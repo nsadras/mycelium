@@ -72,19 +72,27 @@ Hybrid similarity only proposes candidates. A structured model decision explicit
 candidate claim using its claim text, normalized timing, and any consolidated representation it contributes to.
 The highest-ranked admitted claims form a small initial evidence result. The stable system prompt contains only the
 assistant's behavior contract; the current request carries runtime-supplied evidence as a separate structured
-Markdown/pseudo-XML document. The assistant can then call `memory_search` with focused follow-up queries when a
+Markdown/pseudo-XML workspace. The assistant can then call `memory_search` with focused follow-up queries when a
 requested person, event,
 relation, or time is still unsupported, and can call `memory_sources` for the exact dialogue behind any claim already
 shown during that response. Search count, result count, and cumulative evidence tokens are bounded per response;
 subsequent searches omit claims already returned.
 
+The workspace is transient state owned by the runtime, not a model-managed notebook. Each successful memory operation
+merges complete typed records or sources into it by ID and appends an inspectable operation entry. The newest memory
+tool message contains the one complete current workspace; the initial workspace is removed from the request and older
+full workspace messages become compact supersession receipts. Assistant reasoning and tool calls remain in the
+chronological message history. This prevents duplicate evidence from accumulating while preserving the evidence found
+across a multi-step traversal. The final workspace is stored on the assistant transcript entry and can be inspected in
+the chat UI.
+
 Included canonical claims are represented through their consolidated facts; claims without a fact are represented
 directly. Initial evidence and tool results share one schema containing explicit subjects, statements, claim IDs,
 normalized timing, and source citations. Initial retrieval and follow-up search return compact records. When an
 existing record is relevant or potentially related, the assistant uses `memory_sources` with its supporting claim IDs
-to retrieve exact cited lines and a bounded structural conversation neighborhood. Cited lines precede the surrounding
-context. Retrieval traces preserve candidate rank, hybrid score, admission decision, selected claim IDs, and the
-claims that fit in the final budget.
+to retrieve exact cited lines and a bounded structural conversation neighborhood. The transcript remains
+chronological, with cited lines marked in place. Retrieval traces preserve candidate rank, hybrid score, admission
+decision, selected claim IDs, and the claims that fit in the final budget.
 
 Retrieval is read-only. It never reinforces, destabilizes, or rewrites a page.
 
@@ -98,7 +106,8 @@ of existing evidence and are not re-ingested as new memories.
 Memory results use one Markdown/pseudo-XML renderer. Search records put their statement and subject before supporting
 IDs and citations. Source results explicitly map each claim to its cited segment IDs, then present the surrounding
 transcript in chronological order. Tools bound their own output by admitting only complete records and segments; the
-agent runtime never slices a serialized tool result.
+agent runtime never slices a serialized tool result. Persisted tool events retain the incremental raw result for
+auditing, while the model receives the full current workspace after each memory operation.
 
 The tool-specific extraction policy for web observations keeps source-grounded project facts while ignoring transport
 metadata, failures, and page furniture.

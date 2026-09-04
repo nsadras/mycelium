@@ -11,7 +11,7 @@ from mycelium.operations import IngestionResult, MemoryEvidence, RetrievalResult
 from mycelium.store import LogStore
 from server import runtime
 from server.api import sessions
-from server.runtime import append_tool_event_logs, ensure_session_record
+from server.runtime import append_tool_event_logs, append_turn, ensure_session_record
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +38,32 @@ def test_timestamp_free_session_messages_are_rejected():
 
     with pytest.raises(ValueError, match="timestamp-free transcript"):
         ensure_session_record(record, "legacy")
+
+
+def test_append_turn_persists_the_final_memory_workspace():
+    meta = {"chat-1": {"query": "Test", "transcript": []}}
+    ensure_session_record(meta["chat-1"], "chat-1")
+    workspace = {
+        "revision": 1,
+        "evidence": {"records": [], "sources": [], "more_available": False},
+        "operations": [],
+    }
+
+    append_turn(
+        meta,
+        "chat-1",
+        "Question",
+        "Answer",
+        "2026-09-04T10:00:00+00:00",
+        "2026-09-04T10:00:01+00:00",
+        memory_workspace=workspace,
+    )
+
+    assert meta["chat-1"]["transcript"][-1]["memory_workspace"] == workspace
+    assert (
+        meta["chat-1"]["active_episode"]["buffer"][-1]["memory_workspace"]
+        == workspace
+    )
 
 
 @pytest.mark.asyncio

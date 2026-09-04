@@ -94,7 +94,6 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         "--system",
         choices=[
             "mycelium",
-            "memory_agent",
             "null",
             "full_context",
             "full_wiki",

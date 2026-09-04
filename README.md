@@ -20,7 +20,7 @@ Most chat assistants either forget everything between sessions or require the en
 ## Features
 
 - Multi-session chat with a local Ollama model
-- Automatic retrieval of relevant long-term memories
+- Hybrid automatic retrieval plus assistant-directed follow-up memory search
 - Durable short-term memory that is retrievable before wiki consolidation
 - Plain-text episodic logs and an Obsidian-compatible Markdown wiki
 - Evidence-triggered, claim-level reconsolidation with human review
@@ -48,10 +48,13 @@ npm install
 cd ..
 ```
 
-Mycelium is currently configured to use `gemma4:12b`. Download that model with Ollama, or change the model under `[llm]` in `mycelium.toml`:
+Mycelium is currently configured to use `gemma4:12b` for language tasks and
+`embeddinggemma` for memory retrieval. Download both models with Ollama, or
+change them in `mycelium.toml`:
 
 ```bash
 ollama pull gemma4:12b
+ollama pull embeddinggemma
 ```
 
 With Ollama running, start the backend and frontend together:
@@ -81,7 +84,8 @@ A typical workflow is simple:
 2. Use **Flush Current**, **Flush Idle**, or **Flush All** when you want chat episodes encoded into
    source-grounded claims and inspectable short-term memory.
 3. Run **Dream Pass** when you want to consolidate pending claims and review deferred memory.
-4. Start another chat about the same subject. Mycelium retrieves relevant pages and includes them in the assistant's context.
+4. Start another chat about the same subject. Mycelium supplies a compact initial set of source-grounded claims, and
+   the assistant can search memory again or inspect exact sources when the question needs more evidence.
 5. Open **Memory** to trace what was remembered and approve or reject proposed contradictions and replacements.
 
 The sidebar provides manual controls for flushing episodes, running Dream, and clearing the development
@@ -140,7 +144,7 @@ The web app is optional. The Python API exposes the same three-stage lifecycle u
 | Operation | Input | Output |
 | --- | --- | --- |
 | `ingest_source` | `SourceInput` with a transcript, source kind, participants, segments, and idempotency key | `IngestionResult` with the created log, source, episode, claim, and operation IDs |
-| `retrieve_context` | `RetrievalRequest` with a query, budget, and optional query time | `RetrievalResult` with selected pages and their authoritative rendered context |
+| `retrieve_context` | `RetrievalRequest` with a query and context budget | `RetrievalResult` with inspectable pages, typed evidence records and sources, authoritative JSON rendering, and a retrieval trace |
 | `consolidate` | `ConsolidationRequest` with dry-run and deferred-claim policy | `ConsolidationResult` with the Dream report and retried extraction IDs |
 
 For an ordinary agent turn, retrieve memory before generation and ingest the completed exchange afterward:
@@ -162,7 +166,8 @@ async def main():
         mycelium.RetrievalRequest(query=question)
     )
 
-    # Send retrieval.rendered_context and question to your agent or model.
+    # Supply retrieval.rendered_context as runtime evidence alongside the
+    # question. Keep behavioral instructions in the model's system prompt.
     answer = "We chose a plain-text wiki backed by source logs."
 
     await memory.ingest_source(mycelium.SourceInput(
@@ -202,6 +207,14 @@ context_window_tokens = 32768
 [session]
 context_budget_tokens = 32768
 
+[retrieval]
+embedding_model = "embeddinggemma:latest"
+candidate_limit = 20
+initial_result_limit = 5
+tool_result_limit = 6
+tool_search_limit = 3
+tool_evidence_budget_tokens = 6000
+
 [dream]
 queue_claim_threshold = 20
 max_pending_hours = 24
@@ -212,7 +225,8 @@ The default memory store is `./mycelium_store`. It consists primarily of Markdow
 inspected with ordinary text tools or opened as a wiki outside the app. Every saved chat message carries its own
 timestamp, allowing one conversation to span multiple days without losing temporal context.
 `session.context_budget_tokens` is the total input budget shared by the assistant system prompt, recent transcript,
-and retrieved memory; it is capped by `llm.context_window_tokens`.
+initial memory, and follow-up memory evidence; it is capped by `llm.context_window_tokens`. Retrieval tool limits are
+per assistant response.
 
 Architecture, storage contracts, retrieval details, migrations, development checks, and benchmark workflows are
 documented in [DESIGN.md](DESIGN.md). The Daily Driver fixture has its own

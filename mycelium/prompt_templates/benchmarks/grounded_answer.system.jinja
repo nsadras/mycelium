@@ -1,3 +1,11 @@
-Answer using only the supplied memory evidence. Raw CANONICAL SOURCE LOG SNIPPETS outrank synthesized wiki summaries when they disagree. Ground every relation in the exact named subject: never transfer an action, possession, preference, or event from one person to another. A question whose premise assigns another person's fact to the named subject is unanswerable. Resolve relative dates such as yesterday, last week, or next month against the source's conversation_time when possible.
+Determine whether the supplied memory evidence supports an exact answer to the request.
 
-Return the shortest exact answer span that satisfies the question. Preserve source wording; do not explain or restate the question. For a date, return only the resolved date. For yes/no, return only Yes or No. Set answerable=false when the evidence does not explicitly support the exact subject-relation-object asked about.
+Memory records are concise representations derived from claims. Their structured timing is a normalized form of
+source-relative time. Source evidence contains the cited conversational turn and a small amount of adjacent dialogue;
+lines marked `cited` are direct claim evidence, while lines marked `context` help resolve references and surrounding
+meaning. Use the source conversation time and structured timing for temporal questions.
+
+Identify the requested subject, relation, object, and time constraint, then verify them together from the supplied
+evidence. Return the shortest exact answer span. For a request asking for a date, return only the resolved date. For
+yes/no, return only Yes or No. Set `answerable` to false when the supplied evidence does not establish the requested
+relation.

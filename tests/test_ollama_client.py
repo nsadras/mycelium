@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from copy import deepcopy
 
 import pytest
+from ollama import web_search
 from pydantic import BaseModel, RootModel
 
 from mycelium.ollama import OllamaClient
@@ -66,6 +67,7 @@ class FakeToolSdkClient:
                 message={
                     "role": "assistant",
                     "content": "",
+                    "thinking": "I need current information, so I should search.",
                     "tool_calls": [
                         {"function": {"name": "web_search", "arguments": {"query": "ollama"}}}
                     ],
@@ -182,7 +184,27 @@ async def test_call_messages_executes_web_tools(monkeypatch):
     assert response.tool_events[0].arguments == {"query": "ollama"}
     assert response.tool_events[0].result == "1. Result One\nhttps://example.com/one\nresult for ollama\nsecond line"
     assert response.tool_events[0].failed is False
+    assert len(response.execution_trace) == 2
+    first_step, final_step = response.execution_trace
+    assert first_step.attempt_index == 1
+    assert first_step.round_index == 1
+    assert first_step.thinking == "I need current information, so I should search."
+    assert first_step.content == ""
+    assert first_step.tool_calls == [
+        {"tool_name": "web_search", "arguments": {"query": "ollama"}}
+    ]
+    assert first_step.tool_events == response.tool_events
+    assert first_step.outcome == "tools_executed"
+    assert final_step.attempt_index == 1
+    assert final_step.round_index == 2
+    assert final_step.content == "final answer"
+    assert final_step.tool_calls == []
+    assert final_step.tool_events == []
+    assert final_step.outcome == "final_response"
     assert len(fake_sdk.chat_calls) == 2
+    assert fake_sdk.chat_calls[1]["messages"][-2]["thinking"] == (
+        "I need current information, so I should search."
+    )
     assert fake_sdk.chat_calls[1]["messages"][-1] == {
         "role": "tool",
         "content": "1. Result One\nhttps://example.com/one\nresult for ollama\nsecond line",
@@ -215,6 +237,26 @@ async def test_call_messages_executes_injected_tools_with_custom_runner():
     assert calls == [("web_search", {"query": "ollama"})]
     assert fake_sdk.chat_calls[0]["tools"] == definitions
     assert response.tool_events[0].result == "canonical memory result"
+
+
+@pytest.mark.asyncio
+async def test_custom_runner_defers_builtin_web_tools_to_client():
+    client = OllamaClient("http://localhost:11434", "test-model")
+    fake_sdk = FakeToolSdkClient()
+    client.client = fake_sdk
+
+    async def run_memory_tool(name, arguments):
+        return None
+
+    response = await client.call_messages(
+        [{"role": "user", "content": "search"}],
+        tool_definitions=[web_search],
+        tool_runner=run_memory_tool,
+    )
+
+    assert response.content == "final answer"
+    assert response.tool_events[0].tool_name == "web_search"
+    assert response.tool_events[0].result.startswith("1. Result One")
 
 
 @pytest.mark.asyncio

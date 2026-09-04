@@ -13,6 +13,7 @@ import mycelium
 from mycelium.artifacts import SourceSegment
 from mycelium.models import LogEntry
 from mycelium.operations import ConsolidationRequest, SourceInput
+from mycelium.memory_tools import MEMORY_TOOL_NAMES
 from engram import EngramConfig, EngramService, EngramStore
 
 SESSIONS_FILE = Path("mycelium_store/sessions_meta.json")
@@ -130,6 +131,7 @@ def append_turn(
     assistant_timestamp: str,
     loaded_pages: list[dict[str, Any]] | None = None,
     tool_events: list[dict[str, Any]] | None = None,
+    retrieval_trace: dict[str, Any] | None = None,
 ) -> None:
     record = ensure_session_record(meta[session_id], session_id)
     user_record = {
@@ -147,6 +149,8 @@ def append_turn(
         assistant_record["loaded_pages"] = loaded_pages
     if tool_events is not None:
         assistant_record["tool_events"] = tool_events
+    if retrieval_trace is not None:
+        assistant_record["retrieval_trace"] = retrieval_trace
     record["transcript"].append(assistant_record)
 
     episode = record["active_episode"]
@@ -204,6 +208,8 @@ async def append_tool_event_logs(
     created_entries = []
 
     for event_index, tool_event in enumerate(tool_events, start=1):
+        if str(tool_event.get("tool_name") or "") in MEMORY_TOOL_NAMES:
+            continue
         content = _format_tool_observation_content(
             chat_session_id=session_id,
             episode_id=episode_id,

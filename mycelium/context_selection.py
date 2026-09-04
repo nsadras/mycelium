@@ -23,6 +23,13 @@ class AssistantContextCandidate:
     content: str
 
 
+@dataclass(frozen=True)
+class AssistantContextSelection:
+    selected_ids: tuple[str, ...]
+    decisions: dict[str, dict]
+    error: str | None = None
+
+
 class AssistantContextSelector:
     """Admit only candidate records that can help with the current request."""
 
@@ -34,8 +41,16 @@ class AssistantContextSelector:
         query: str,
         candidates: list[AssistantContextCandidate],
     ) -> list[str]:
+        result = await self.select_with_trace(query, candidates)
+        return list(result.selected_ids)
+
+    async def select_with_trace(
+        self,
+        query: str,
+        candidates: list[AssistantContextCandidate],
+    ) -> AssistantContextSelection:
         if not candidates:
-            return []
+            return AssistantContextSelection((), {})
         aliases = {
             f"M{index:03d}": candidate
             for index, candidate in enumerate(candidates, start=1)
@@ -68,9 +83,18 @@ class AssistantContextSelector:
                 type(exc).__name__,
                 exc,
             )
-            return []
-        return [
+            return AssistantContextSelection(
+                (), {}, f"{type(exc).__name__}: {exc}"
+            )
+        selected = tuple(
             candidate.candidate_id
             for alias, candidate in aliases.items()
             if decisions[alias]["disposition"] == "include"
-        ]
+        )
+        return AssistantContextSelection(
+            selected,
+            {
+                candidate.candidate_id: dict(decisions[alias])
+                for alias, candidate in aliases.items()
+            },
+        )

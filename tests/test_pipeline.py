@@ -7,6 +7,7 @@ from mycelium.models import DreamReport
 from mycelium.operations import (
     ConsolidationRequest,
     IngestionResult,
+    MemoryEvidence,
     RetrievalRequest,
     RetrievalResult,
     SourceInput,
@@ -21,18 +22,24 @@ def build_pipeline():
         retry_incomplete_extractions=AsyncMock(return_value=["episode-retried"]),
     )
     retriever = SimpleNamespace(
-        retrieve=AsyncMock(return_value=RetrievalResult((), "memory context"))
+        retrieve=AsyncMock(
+            return_value=RetrievalResult((), MemoryEvidence(), "memory context")
+        )
     )
     consolidator = SimpleNamespace(run=AsyncMock(return_value=DreamReport(0, 0, 0)))
-    short_term = SimpleNamespace(status=Mock(return_value=ShortTermMemoryStatus(
-        pending_claims=1,
-        deferred_claims=0,
-        retryable_failures=0,
-        total_claims=1,
-        oldest_pending_at=None,
-        oldest_deferred_at=None,
-        ready=True,
-    )))
+    short_term = SimpleNamespace(
+        status=Mock(
+            return_value=ShortTermMemoryStatus(
+                pending_claims=1,
+                deferred_claims=0,
+                retryable_failures=0,
+                total_claims=1,
+                oldest_pending_at=None,
+                oldest_deferred_at=None,
+                ready=True,
+            )
+        )
+    )
     return MemoryPipeline(encoder, retriever, consolidator, short_term), {
         "encoder": encoder,
         "retriever": retriever,

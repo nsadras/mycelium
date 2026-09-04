@@ -68,6 +68,60 @@ function ToolEvents({ events }: { events: NonNullable<Message['tool_events']> })
   );
 }
 
+function RetrievalTrace({ trace }: { trace: NonNullable<Message['retrieval_trace']> }) {
+  const [open, setOpen] = useState(false);
+  const included = trace.candidates.filter(candidate => candidate.decision?.disposition === 'include');
+
+  return (
+    <div className="mb-3 border-b border-slate-200 pb-2 text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen(value => !value)}
+        className="flex w-full items-center gap-2 rounded-md bg-white px-2 py-1.5 text-left ring-1 ring-slate-200"
+        title="Show memory retrieval decisions"
+      >
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        <Compass size={13} className="text-indigo-500" />
+        <span className="font-semibold text-slate-700">Memory retrieval</span>
+        <span className="ml-auto text-[10px] text-slate-500">
+          {included.length} selected · {trace.rendered_claim_ids.length} rendered
+        </span>
+      </button>
+      {open && (
+        <div className="mt-1.5 max-h-72 space-y-1 overflow-auto rounded-md bg-white p-2 ring-1 ring-slate-200">
+          <div className="mb-2 text-[10px] text-slate-500">
+            {trace.embedding_model} · hybrid candidates: {trace.candidates.length}/{trace.candidate_limit}
+          </div>
+          {trace.selection_error && (
+            <div className="rounded bg-rose-50 p-2 text-rose-700">{trace.selection_error}</div>
+          )}
+          {trace.candidates.map(candidate => (
+            <div key={candidate.claim_id} className="rounded border border-slate-100 px-2 py-1.5">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] text-slate-400">#{candidate.rank}</span>
+                <span className="truncate font-mono text-[10px] text-slate-600">{candidate.claim_id}</span>
+                <span className={cn(
+                  "ml-auto rounded px-1.5 py-0.5 text-[10px] font-semibold",
+                  candidate.decision?.disposition === 'include'
+                    ? "bg-emerald-50 text-emerald-700"
+                    : "bg-slate-100 text-slate-600"
+                )}>
+                  {candidate.decision?.disposition ?? 'undecided'}
+                </span>
+              </div>
+              {candidate.decision?.reason && (
+                <div className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                  {candidate.decision.reason}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const ChatMessageItem = memo(function ChatMessageItem({ m, id }: { m: Message; id?: string }) {
   return (
     <div id={id} className={cn("flex", m.role === 'user' ? "justify-end" : "justify-start")}>
@@ -100,6 +154,9 @@ const ChatMessageItem = memo(function ChatMessageItem({ m, id }: { m: Message; i
             )}
             {m.tool_events && m.tool_events.length > 0 && (
               <ToolEvents events={m.tool_events} />
+            )}
+            {m.retrieval_trace && (
+              <RetrievalTrace trace={m.retrieval_trace} />
             )}
             <div className="prose prose-sm prose-slate max-w-none prose-chat overflow-hidden">
               <ReactMarkdown 
@@ -264,6 +321,7 @@ export default function Chat({
           timestamp: res.data.assistant_timestamp,
           loaded_pages: res.data.loaded_pages,
           tool_events: res.data.tool_events,
+          retrieval_trace: res.data.retrieval_trace,
         },
       ]);
     } catch (err) {

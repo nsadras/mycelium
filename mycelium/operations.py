@@ -36,13 +36,74 @@ class IngestionResult:
 class RetrievalRequest:
     query: str
     budget_tokens: int | None = None
-    query_time: datetime | None = None
+
+
+@dataclass(frozen=True)
+class EvidenceCitation:
+    claim_id: str
+    source_id: str
+    segment_ids: tuple[str, ...]
+    source_time: str | None = None
+
+
+@dataclass(frozen=True)
+class EvidenceTime:
+    claim_id: str
+    role: str
+    start: str
+    end: str | None = None
+    expression: str | None = None
+
+
+@dataclass(frozen=True)
+class EvidenceRecord:
+    record_id: str
+    record_type: Literal["claim", "fact"]
+    statement: str
+    subject_entity_id: str | None
+    subject_name: str | None
+    claim_ids: tuple[str, ...]
+    state: str | None = None
+    temporal: tuple[EvidenceTime, ...] = ()
+    citations: tuple[EvidenceCitation, ...] = ()
+
+
+@dataclass(frozen=True)
+class EvidenceSegment:
+    segment_id: str
+    relationship: Literal["cited", "context"]
+    speaker: str | None
+    content: str
+
+
+@dataclass(frozen=True)
+class EvidenceSource:
+    source_id: str
+    conversation_time: str
+    segments: tuple[EvidenceSegment, ...]
+
+
+@dataclass(frozen=True)
+class MemoryEvidence:
+    records: tuple[EvidenceRecord, ...] = ()
+    sources: tuple[EvidenceSource, ...] = ()
+    truncated: bool = False
+
+    @property
+    def claim_ids(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                claim_id for record in self.records for claim_id in record.claim_ids
+            )
+        )
 
 
 @dataclass(frozen=True)
 class RetrievalResult:
     pages: tuple[WikiPage, ...]
+    evidence: MemoryEvidence
     rendered_context: str
+    trace: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

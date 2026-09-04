@@ -6,6 +6,7 @@ import pytest
 from mycelium.budget import count_message_tokens
 from mycelium.core import Mycelium
 from mycelium.ollama import ChatResponse
+from mycelium.claim_index import ClaimSearchHit
 from mycelium.operations import RetrievalRequest
 from server import runtime
 from server.api import memory_curation, sessions
@@ -92,6 +93,28 @@ class DeterministicProductionModel:
         }}
 
 
+class ArtifactBackedTestIndex:
+    def __init__(self, artifacts) -> None:
+        self.artifacts = artifacts
+        self.embedder = type("Embedder", (), {"model": "test-embedding"})()
+        self.candidate_limit = 20
+
+    async def search(self, _query):
+        return [
+            ClaimSearchHit(
+                claim.claim_id,
+                claim.text,
+                self.artifacts.memory_tier(claim.claim_id),
+                None,
+                None,
+                None,
+                None,
+                1.0,
+            )
+            for claim in self.artifacts.list_claims(status="active")
+        ]
+
+
 @pytest.mark.asyncio
 async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     sessions_file = tmp_path / "sessions_meta.json"
@@ -101,10 +124,12 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "_session_locks", {})
     memory = Mycelium(store_path=store_path)
     memory.config.context_budget_tokens = 260
+    memory.config.retrieval.tool_evidence_budget_tokens = 20
     fake = DeterministicProductionModel()
     memory.llm = fake
     memory.encoder.llm = fake
     memory.retriever.llm = fake
+    memory.retriever.claim_index = ArtifactBackedTestIndex(memory.artifacts)
     memory.consolidator.llm = fake
     memory.consolidator.fact_resolver.llm = fake
     memory.consolidator.router.llm = fake
@@ -146,9 +171,10 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     assert chat_result["response"] == "I will keep that deadline in mind."
     assert flush_result["status"] == "flushed"
     assert count_message_tokens(fake.messages[0]) <= 260
-    assert fake.messages[0][-1]["content"] == (
+    assert fake.messages[0][-1]["content"].endswith(
         "I will send the Cedar brief tomorrow."
     )
+    assert "INITIAL MEMORY EVIDENCE" not in fake.messages[0][0]["content"]
     saved = runtime.load_meta()[session_id]
     assert saved["encoded_episodes"][-1]["id"] == f"{session_id}-ep-1"
     assert saved["active_episode"]["buffer"] == []

@@ -7,6 +7,14 @@ context_window_tokens = 32768
 [session]
 context_budget_tokens = 32768
 
+[retrieval]
+embedding_model = "embeddinggemma:latest"
+candidate_limit = 20
+initial_result_limit = 5
+tool_result_limit = 6
+tool_search_limit = 3
+tool_evidence_budget_tokens = 6000
+
 [dream]
 queue_claim_threshold = 20
 max_pending_hours = 24

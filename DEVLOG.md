@@ -2849,3 +2849,257 @@ one prose-similarity summary.
   Dream sessions often required 10–20+ minutes, so throughput remains a major follow-up even though correctness and
   accounting completed cleanly.
 - Validation: the complete maintained suite passed **330/330 with 2 skipped**. Ruff and `git diff --check` passed.
+
+## 2026-09-04 — Claim-first hybrid retrieval
+
+- Replaced whole-page BM25 retrieval and lexical raw-log windows with a rebuildable LanceDB projection over active
+  canonical and short-term claims. Source-policy exclusions never enter the index. EmbeddingGemma runs through the
+  configured Ollama host, using its documented query/document task formats; LanceDB combines those vectors with its
+  full-text index. Similarity only generates candidates—the structured assistant-context decision still explicitly
+  admits or rejects every claim. The superseded page-search and lexical source-window modules were removed rather
+  than retained as compatibility paths.
+- A direct EmbeddingGemma probe correctly ranked Mira's cello memory over her gardening memory and Jonah's guitar
+  memory for a Mira instrument question (`0.7061`, `0.5976`, `0.3263`), then ranked Jonah's guitar first for the Jonah
+  counterexample (`0.7406`). On the frozen sample-9 store, hybrid claim retrieval found labeled evidence for 56.9%
+  of applicable questions at 10 candidates and 62.0% at 20, versus 48.0% and 50.9% for the former lexical claim
+  search. This established the candidate generator before production integration.
+- Retrieval now renders selected canonical claims through their consolidated facts and renders factless or
+  short-term claims directly. It attaches only the exact source segments cited by those claims, including persisted
+  benchmark labels when present. Candidate rank, hybrid score, model disposition/reason, selected IDs, budgeted IDs,
+  and selection failures are persisted with chat turns, returned by the API, recorded in benchmark answers, and
+  inspectable from an expandable chat control.
+- The production path was validated against a copy of the completed sample-9 store at
+  `/tmp/mycelium-retrieval-validation-20260904`. With the real configured chat model and EmbeddingGemma, it selected
+  and rendered exact cited evidence for Evan's Prius, the family's Jasper road trip, and Sam's prospective hobbies.
+  Final validation passed **322/322 with 2 skipped**. Ruff, `git diff --check`, UI lint, and the UI production build
+  passed; the existing large-chunk warning remains.
+
+## 2026-09-04 — Sample-9 hybrid retrieval QA replay
+
+- Ran all 196 sample-9 questions against the exact completed frozen store using `gemma4:latest` for QA and context
+  admission plus `embeddinggemma:latest` for hybrid retrieval. The run completed without retrieval, structured-output,
+  or answer-call failures at
+  `benchmark_runs/locomo-mycelium-convo-9-lancedb-retrieval-20260904`.
+- Retrieval evidence improved: overall context recall rose from **0.2521** to **0.3358**, and factual-question recall
+  rose from **0.2975** to **0.3834**. Empty factual contexts fell from 73 to 41. Average factual QA input fell from
+  3,767 to 284 tokens, retrieval time from 8.39 to 7.25 seconds, and answer time from 1.96 to 0.37 seconds.
+- The final score nevertheless fell from **0.3805** to **0.3243**. Factual QA abstentions rose from 85 to 100; 25
+  questions with some labeled evidence and 15 questions with all labeled evidence were still marked unanswerable.
+  Replaying the exact Great Gatsby failure reproduced the abstention. Inspection showed that single cited segments
+  often omit an antecedent, neighboring turn, or conversation timestamp needed to ground the question's full
+  relation. The QA prompt also still names the removed `CANONICAL SOURCE LOG SNIPPETS` representation. The candidate
+  stage reached 0.5957 factual evidence recall, which fell to 0.3825 after claim admission. The next retrieval change
+  should therefore repair the evidence/QA contract and add bounded provenance neighborhoods before tuning the vector
+  candidate generator.
+
+## 2026-09-04 — Evidence-to-QA contract repair
+
+- Source evidence now includes each exact cited line plus a bounded structural neighborhood: the cited source turn,
+  two preceding turns, and one following turn. Turn boundaries come from extraction's persisted
+  `parent_segment_index`, with segment order as the fallback; no vocabulary or benchmark labels participate in the
+  decision. Cited lines are presented before optional surrounding context, and each source block states its
+  conversation time. Memory records also expose persisted normalized temporal ranges from their member claims.
+- Replaced the obsolete QA instruction about `CANONICAL SOURCE LOG SNIPPETS` and wiki summaries with the actual
+  claim/fact/source-evidence contract. Context admission now sees the claim text, normalized timing, and consolidated
+  representations that a candidate can contribute. It retains records that supply complementary pieces of a
+  multi-record answer, while continuing to reject merely adjacent records.
+- Direct `gemma4:latest` prompt/schema probes answered the supported Great Gatsby identity chain, rejected the same
+  book for the wrong person, retained two complementary course records while excluding an unrelated preference, and
+  used normalized timing for a supported period while rejecting a wrong period. Integrated frozen sample-9 checks
+  then answered Great Gatsby, mid-August painting classes, and watercolor painting while healing; wrong-person and
+  wrong-period queries remained unanswerable. The initially chronological evidence rendering still caused the
+  temporal case to abstain; placing cited lines before surrounding context corrected it.
+- Replaced the synchronous LanceDB bridge with its native async connection, table, indexing, and query APIs. The
+  maintained suite passed **322/322 with 2 skipped** in an environment where LanceDB's native runtime is permitted;
+  focused retrieval and admission tests, Ruff, and `git diff --check` also passed.
+
+## 2026-09-04 — Assistant-directed memory retrieval
+
+- Added a bounded read-only memory tool loop on top of automatic claim retrieval. Each response receives a small
+  initial context, then may issue focused `memory_search` calls and inspect exact cited dialogue with
+  `memory_sources`. Searches accumulate already-returned claim IDs, share one evidence-token budget, and expose their
+  arguments and results in the existing chat and benchmark diagnostics.
+- Probed the production assistant template and Ollama tool schema directly with `gemma4:12b`. Given evidence only
+  about Evan's watercolor practice, a composed Evan-and-Sam question produced one focused search for Sam's creative
+  outlets before answering. A counterexample asking only which instrument Mira practiced was answered directly from
+  sufficient initial evidence without a tool call.
+- The web chat retains Ollama web search/fetch alongside memory tools. Web observations continue through ingestion;
+  memory reads are deliberately excluded so retrieval cannot manufacture duplicate evidence. The default Mycelium
+  benchmark path now exercises this same agentic retrieval loop and records tool evidence for evidence-survival
+  analysis. The obsolete keyword-based benchmark escalation planner and its templates were removed. After
+  integration, the same two real-model cases reproduced the intended search/no-search behavior. Final validation
+  passed **320/320 with 2 skipped**; Ruff, `git diff --check`, UI lint, and the UI production build passed.
+- The first full frozen sample-9 QA replay completed all 196 questions without retrieval or tool failures and raised
+  context evidence recall to **0.5964**, but 136 responses exhausted a benchmark-only 256-token generation limit while
+  the model was still thinking. This caused 130 fallback refusals and made the **0.1615** score invalid. Removed that
+  override from benchmark QA so Ollama uses its normal generation behavior; regression assertions now protect both
+  the agentic and structured benchmark calls. The full maintained suite again passed **320/320 with 2 skipped**.
+- A balanced five-per-category frozen sample-9 panel at
+  `benchmark_runs/locomo-convo-9-agentic-retrieval-panel5-uncapped-20260904` completed 25/25 without system or tool
+  errors. Retrieval context recall was **0.6823**, with all required evidence present for 60% of questions, but the
+  score was only **0.1313**. Inspection exposed a benchmark wiring mismatch: agentic QA did not pass its configured
+  32K `num_ctx` to `call_messages`, so Ollama used a 4K context. One initial prompt exhausted that context, while
+  follow-up tool evidence could displace the original question and cause dialogue continuations or “I need a
+  question” replies. Tool-using questions averaged **0.0061** despite successful tool execution. No full replay
+  should be interpreted or started until the configured context window reaches the tool loop.
+- Passed the configured 32K context window into benchmark agentic QA, matching the production chat call. On the same
+  balanced panel at `benchmark_runs/locomo-convo-9-agentic-retrieval-panel5-numctx-20260904`, all 25 responses stopped
+  normally, lost-question replies disappeared, runtime fell from 815 to 330 seconds, and score rose from **0.1313**
+  to **0.3855**. Retrieval recall remained **0.6823**, isolating the prior collapse to context-window wiring.
+- Replaced the benchmark answer-style paragraph with a clear injected Jinja contract: fact questions return the
+  requested value, time questions return one natural time phrase, and synthesis questions return one sentence of at
+  most 30 words. Neutral direct probes produced a value-only car answer, a one-sentence shared recommendation, a
+  concise relative time, and a consistent refusal for an unsupported relation. The final identical panel at
+  `benchmark_runs/locomo-convo-9-agentic-retrieval-panel5-concise-v2-20260904` completed without system, tool, length,
+  or truncation failures. Mean output fell from 29.4 to **15.1 tokens** and score reached **0.4078** at the same
+  **0.6400** context recall as the immediately preceding prompt run. The maintained suite passed **320/320 with 2
+  skipped**; Ruff and `git diff --check` passed.
+
+## 2026-09-04 — Exact-segment evidence survival
+
+- Replaced turn-label presence accounting with exact source-segment coverage. LoCoMo evidence labels identify whole
+  dialogue turns, which Mycelium splits into sentence segments; the previous report incorrectly credited an entire
+  turn when any one segment carrying its label appeared in a claim, page, or QA context.
+- Each stage now reports fully present, partially present, and missing labels, plus per-label fractional coverage.
+  Context coverage is determined from persisted segment IDs rather than printed benchmark labels. On the frozen
+  sample-9 fitness-watch case, claim coverage is now **0.2** and context coverage **0.0**, correctly exposing that a
+  different sentence from the five-segment gold turn was encoded while the device caption was not retrieved.
+- Focused benchmark tests passed **23/23**, including regression coverage proving that a printed dialogue label alone
+  does not count as evidence and that one represented sentence from a multi-sentence turn is reported as partial.
+
+## 2026-09-04 — Structured assistant evidence results
+
+- Separated stable assistant policy from request-specific memory. The system prompt now explains the evidence and
+  tool contract without embedding retrieved content; a dedicated user template carries the structured initial
+  evidence followed by the current request. Production chat, benchmark QA, and the library session use the same
+  layout.
+- Added a typed evidence envelope for fact/claim records, explicit subject identities, member claim IDs, normalized
+  timing, citations with conversation time, and structured source excerpts. Initial retrieval includes bounded source
+  neighborhoods in this envelope. `memory_search` returns compact records in the same schema, while
+  `memory_sources` expands previously shown claim IDs into cited and contextual segments. Fact-member claim IDs are
+  all eligible for subsequent source traversal.
+- Before integration, direct `gemma4:12b` probes with the proposed prompt and native Ollama tool schema answered a
+  sufficient new-Prius case and rejected a wrong-person Jasper premise. An incomplete count still answered from one
+  record without searching; a general completeness instruction alone did not change that behavior, so this remains
+  an agent-control limitation rather than being hidden by a fixture-specific rule.
+- The first integrated frozen-store smoke run at
+  `benchmark_runs/retrieval-evidence-structure-smoke-20260904` showed that compact records alone removed useful source
+  context. Structured bounded source excerpts were restored for automatic retrieval, and citations gained explicit
+  conversation times. The final replay at
+  `benchmark_runs/retrieval-evidence-structure-smoke-v2-20260904` improved three of five diagnostic cases: the May
+  road-trip count changed from refusal to **2** after one search, the new-Prius case changed from refusal to **a new
+  Prius**, and the false Sam/Jasper premise changed from attributing Evan's experience to Sam to a supported refusal.
+  The incomplete broken-car set remained partial, and the missing fitness-device extraction remained unavailable.
+- Validation passed **323 tests with 2 skipped** using host access required by LanceDB, plus Ruff and
+  `git diff --check`.
+
+## 2026-09-04 — Product-oriented memory tool language
+
+- Removed the shared prompt rule that singled out totals, complete sets, and comparisons, along with the
+  question-answer framing around required answer parts. Benchmark response shape remains isolated in the benchmark's
+  injected response instructions; production chat retains its natural-response instruction.
+- Reframed the shared assistant contract around fulfilling the current request and using additional remembered
+  information when it would materially improve the response. Reframed context admission around usefulness to the
+  request, and changed `memory_search` from finding an "unresolved evidence requirement" to finding relevant memory
+  for any aspect of the request. No LoCoMo categories, labels, expected answers, or fixture vocabulary appear in these
+  production components.
+- Direct `gemma4:12b` probes with the proposed production prompt used supplied preference memory to draft an outing
+  suggestion, searched once to recall Sam's dietary preference before recommending dinner, and ignored irrelevant
+  memory while rewriting a sentence. The context selector included an Atlas launch-date record and excluded an
+  unrelated notebook preference. Focused prompt, tool, context-selection, benchmark-adapter, budgeting, and production
+  lifecycle tests passed **48/48**. The full suite passed **324 tests with 2 skipped**; Ruff and `git diff --check`
+  passed.
+
+## 2026-09-04 — Assistant execution-trace observability
+
+- Added a per-round execution trace to tool-capable Ollama responses. Each step records the attempt and round, native
+  `thinking` text, visible content, normalized tool calls, corresponding tool observations, round outcome, and Ollama
+  response metadata. Benchmark QA persists the trace in answer metadata; production chat continues to persist only
+  the clean user/assistant transcript and its existing retrieval/tool metadata.
+- Contract tests prove that an assistant message containing `thinking` and a tool call is passed intact into the next
+  Ollama request, and that the resulting tool observation is associated with the originating trace step. Focused
+  Ollama, benchmark, runtime, and production-lifecycle validation passed **50/50**.
+- Real `gemma4:latest` frozen-store probes are recorded under
+  `benchmark_runs/agent-execution-trace-probe-20260904`. The supported Jasper question identified the answer directly
+  in initial evidence and returned `Jasper` without searching. The previously missed May-hobby question explicitly
+  noticed that its evidence did not establish a May hobby but immediately chose the benchmark refusal rather than
+  trying `memory_search`; a direct focused search could retrieve May claims that Sam was considering painting, though
+  those claims do not establish that the planned activity actually began. The new-Prius and fitness-device probes also
+  stopped without searching: the former saw both the old breakdown and a contextual new Prius but treated them as
+  unrelated, while the latter concluded that no device was present in initial evidence. These traces isolate an
+  early-stopping/evidence-interpretation problem rather than loss of Ollama reasoning between tool rounds.
+
+## 2026-09-04 — Cumulative memory-evidence prompt contract
+
+- Clarified that initial retrieval is a starting selection rather than the complete memory store, and that evidence
+  returned by tools joins it in one cumulative body of evidence. The assistant is now explicitly instructed to call
+  `memory_search` before responding when a memory-dependent request is unsupported by the initial selection, then to
+  reconsider the request after every tool result. Response-style instructions follow this exploration policy, and
+  the benchmark refusal phrase now refers to accumulated evidence after memory exploration.
+- Direct `gemma4:latest` probes established the boundary of the change. On a neutral incomplete-evidence case, the
+  model searched for Mira's instrument, retained its reasoning through the tool round, and answered from the returned
+  cello claim; with the cello claim initially present, it answered directly. With the frozen Prius record but no
+  expanded source neighborhood, it searched for the missing replacement and reevaluated six returned records.
+- The integrated frozen-store Prius replay at
+  `benchmark_runs/agent-execution-trace-probe-20260904/integrated-prompt-replay.json` now performs the intended search
+  and second reasoning round, but still refuses because it will not compose the old-Prius breakdown with the returned
+  new-Prius evidence. The May-hobby replay answered "cooking class" without searching by incorrectly connecting a May
+  check-up to a class cited in June and August. Thus the prompt improves the retrieval decision in a real failing case
+  but does not solve evidence interpretation; noisy expanded context can still cause either excessive conservatism or
+  an unsupported relation. Probe variants and complete traces are stored beside the integrated replay.
+- Focused prompt, Ollama, benchmark, memory-tool, and prompt-budget tests passed **63/63**; Ruff and
+  `git diff --check` passed.
+
+## 2026-09-04 — On-demand source expansion A/B
+
+- Probed a product-level tool division in which `memory_sources` expands the exact cited lines and nearby dialogue of
+  an existing relevant claim, while `memory_search` discovers additional records when current records do not point to
+  the missing information. With `memory_search` declared first, `gemma4:latest` repeatedly searched for another claim
+  instead of expanding the claim it had. Declaring `memory_sources` first with the same semantic contract caused it to
+  expand the claim, retain the returned source line, and answer the neutral source-dependent question correctly. A
+  sufficient-record counterexample answered directly without any tool.
+- Ran a controlled six-question frozen sample-9 A/B at
+  `benchmark_runs/initial-source-expansion-ab-20260904`. Both arms received identical initially selected records. The
+  baseline also received expanded sources; the proposed arm received records and citation metadata only, declared
+  `memory_sources` first, and used the explicit operation-routing descriptions.
+- The proposed arm reduced mean initial prompt size from **3,598 to 1,051 tokens** (70.8%). Direct car and Jasper
+  answers remained correct without unnecessary tool calls. On the May-hobby case it expanded the relevant cooking
+  claims instead of searching broadly and correctly found no May support. On the May-road-trip count it searched,
+  expanded the two relevant claims, and reasoned over their exact dialogue. On the missing fitness-device case it
+  searched rather than treating initial absence as final, though the store still lacked the required device evidence.
+- Aggregate score was effectively flat on this small diagnostic panel (**0.3333** baseline versus **0.3485** proposed)
+  and is not a meaningful quality estimate. The proposed arm made five tool calls (three searches, two source
+  expansions) versus three baseline searches and no source expansions. Both arms still refused the new-Prius answer,
+  showing that on-demand sources improve traversal and context cost but do not resolve the separate relationship-
+  composition problem.
+
+## 2026-09-04 — On-demand source expansion integration
+
+- Removed automatic source-neighborhood expansion from initial retrieval. The initial evidence now contains compact
+  claim/fact records, their supporting claim IDs, timing, and citations; exact source text is available only through
+  `memory_sources` for IDs already exposed to the assistant.
+- Integrated the A/B-tested operation contract and declaration order. `memory_sources` is presented first as the way
+  to inspect a relevant or potentially related record, including the member claim IDs of a fact. `memory_search` is
+  the discovery operation for gaps not pointed to by current records. The shared assistant prompt directs the model
+  to choose between those operations from the cumulative evidence after every round.
+- Focused retrieval, tool, prompt, benchmark, prompt-budget, pipeline, session, runtime, and Ollama-client tests passed
+  **75/75**. Ruff and `git diff --check` passed. The heavier production lifecycle acceptance test was not included in
+  that total because it did not complete promptly when run in the broader batch.
+- A production-path, five-category frozen sample-9 replay completed without retrieval, tool, parsing, or generation
+  errors at `benchmark_runs/locomo-convo-9-on-demand-sources-integrated-20260904`. Initial contexts had empty source
+  arrays. The model answered sufficient compact records directly, used `memory_sources` for potentially relevant May
+  hobby evidence, and used source expansion followed by a focused search to answer the May travel question. It used
+  search for both replacement-car questions. The small panel scored **0.6000**; the two misses reflect unresolved
+  evidence meaning/relationship issues rather than a failure of the new traversal contract.
+- Replayed the same five-per-category sample-9 panel as the earlier expanded-source `concise-v2` run at
+  `benchmark_runs/locomo-convo-9-on-demand-sources-panel5-20260904`. All **25/25** questions completed without system,
+  tool, parsing, or generation errors. Mean score increased from **0.4078 to 0.5039**, with 6 questions improving, 4
+  regressing, and 15 unchanged. Mean QA input fell from **2,322 to 1,194 tokens**. The assistant used memory tools on
+  21 questions versus 9: 14 source inspections and 10 searches, compared with 10 searches and no source inspections.
+  Runtime rose from 313 to 359 seconds as a result of the additional reasoning rounds.
+- Context evidence recall fell from **0.6400 to 0.3623** and all-evidence coverage from **0.56 to 0.28**, as expected
+  when source neighborhoods are loaded selectively rather than attached to every initial record. Despite that lower
+  bulk recall, category 3 improved from **0.1026 to 0.3139**, the model recovered the previously missed Canada answer,
+  and all five false-premise questions were handled correctly. Remaining weaknesses are selective source/search
+  coverage and evidence interpretation, especially temporal attribution, counts, and connecting the old-Prius
+  breakdown to the separately recorded new Prius.

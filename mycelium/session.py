@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 from typing import Any, List, TYPE_CHECKING
 
-from mycelium.context import render_memory_context
 from mycelium.models import WikiPage
+from mycelium.operations import MemoryEvidence
 from mycelium.prompting import render_prompt
+from mycelium.retrieval_context import render_memory_evidence
 
 if TYPE_CHECKING:
     from mycelium.core import Mycelium
@@ -19,13 +20,14 @@ class Session:
         self.session_id = session_id
         self.query = query
         self.loaded_pages: List[WikiPage] = []
+        self.memory_evidence = MemoryEvidence()
         self.transcript: List[dict[str, Any]] = []
         self._mycelium = mycelium
 
     @property
     def memory_context(self) -> str:
-        """Return loaded pages in the canonical assistant-context format."""
-        return render_memory_context(self.loaded_pages)
+        """Return the retrieved evidence in the canonical model-facing format."""
+        return render_memory_evidence(self.memory_evidence)
 
     def build_prompt(self, user_message: str) -> str:
         """

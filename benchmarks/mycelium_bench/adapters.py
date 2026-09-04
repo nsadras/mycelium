@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import re
 import shutil
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, Protocol
-
-from pydantic import BaseModel, Field
+from typing import Any, Protocol
 
 from mycelium.context import render_memory_context
 from mycelium.core import Mycelium
@@ -17,8 +14,14 @@ from mycelium.artifacts import ArtifactStore, MemoryClaim
 from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.prompting import render_prompt
-from mycelium.operations import ConsolidationRequest, RetrievalRequest, SourceInput
-from mycelium.memory_tools import MemoryToolset
+from mycelium.operations import (
+    ConsolidationRequest,
+    MemoryEvidence,
+    RetrievalRequest,
+    SourceInput,
+)
+from mycelium.memory_tools import MEMORY_TOOL_DEFINITIONS, MemoryToolset
+from mycelium.retrieval_context import render_memory_evidence
 from mycelium.structured_outputs import GroundedAnswerOutput
 
 
@@ -40,23 +43,6 @@ class BenchmarkAnswer:
     memory_construction_time: float
     query_time_len: float
     metadata: dict[str, Any] = field(default_factory=dict)
-
-
-RetrievalQuery = Annotated[str, Field(min_length=1, max_length=160)]
-MAX_PLANNED_EVIDENCE_CHARS = 12_000
-MAX_PLANNED_SOURCE_SEGMENT_CHARS = 1_400
-
-
-class MemoryRetrievalPlan(BaseModel):
-    """A small executable plan for questions that require composed evidence."""
-
-    searches: list[RetrievalQuery] = Field(
-        min_length=1,
-        max_length=4,
-        description="Distinct complementary searches, never paraphrases of one another.",
-    )
-    expand_top_hits: bool
-    inspect_sources: bool
 
 
 class MemorySystem(Protocol):
@@ -101,7 +87,6 @@ class OllamaQaClient:
             system,
             user,
             GroundedAnswerOutput,
-            num_predict=256,
         )
         elapsed = time.perf_counter() - start
         answerable = isinstance(response, dict) and bool(response.get("answerable"))
@@ -119,6 +104,56 @@ class OllamaQaClient:
             memory_construction_time=0.0,
             query_time_len=elapsed,
             metadata={"grounding": response},
+        )
+
+    async def answer_with_memory_tools(
+        self,
+        question: str,
+        memory_evidence: str,
+        tools: MemoryToolset,
+    ) -> BenchmarkAnswer:
+        system = render_prompt(
+            "assistant/memory_agent.system.jinja",
+            response_instructions=render_prompt(
+                "benchmarks/concise_answer.instructions.jinja"
+            ),
+        )
+        user = render_prompt(
+            "assistant/memory_request.user.jinja",
+            memory_evidence=memory_evidence,
+            user_request=question,
+        )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        start = time.perf_counter()
+        response = await self.llm.call_messages(
+            messages,
+            max_tool_rounds=tools.search_limit,
+            tool_result_chars=max(8000, tools.remaining_evidence_tokens * 6),
+            num_ctx=self.llm.context_window_tokens,
+            think=True,
+            tool_definitions=MEMORY_TOOL_DEFINITIONS,
+            tool_runner=tools.run,
+        )
+        elapsed = time.perf_counter() - start
+        output = response.content.strip()
+        if not output:
+            output = "I do not have enough information to answer this question."
+        return BenchmarkAnswer(
+            output=output,
+            input_len=count_tokens(system + "\n" + user),
+            output_len=count_tokens(output),
+            memory_construction_time=0.0,
+            query_time_len=elapsed,
+            metadata={
+                "memory_tool_events": [asdict(event) for event in response.tool_events],
+                "agent_execution_trace": [
+                    asdict(step) for step in response.execution_trace
+                ],
+                "ollama": response.metadata,
+            },
         )
 
 
@@ -271,7 +306,7 @@ class MyceliumMemorySystem:
         self._memory_construction_seconds = 0.0
         self._errors: list[dict[str, Any]] = []
         self._dream_failures: list[dict[str, Any]] = []
-        self._evidence_stage_labels_cache: dict[str, set[str]] | None = None
+        self._evidence_stage_segments_cache: dict[str, Any] | None = None
 
     async def reset(self, case_id: str) -> None:
         self.case_id = sanitize_path_part(case_id)
@@ -301,7 +336,7 @@ class MyceliumMemorySystem:
         self._memory_construction_seconds = 0.0
         self._errors = []
         self._dream_failures = []
-        self._evidence_stage_labels_cache = None
+        self._evidence_stage_segments_cache = None
 
     async def memorize(
         self, messages: list[BenchmarkMessage], metadata: dict[str, Any] | None = None
@@ -325,16 +360,20 @@ class MyceliumMemorySystem:
                 )
         else:
             transcript = format_messages_for_memory(messages, metadata)
-            await mem.ingest_source(SourceInput(
-                transcript=transcript,
-                session_id=session_id,
-                source_type="multi_party_conversation",
-                occurred_at=metadata.get("timestamp"),
-                metadata={
-                    key: value for key, value in metadata.items() if value is not None
-                },
-                idempotency_key=f"benchmark:{self.case_id}:{session_id}",
-            ))
+            await mem.ingest_source(
+                SourceInput(
+                    transcript=transcript,
+                    session_id=session_id,
+                    source_type="multi_party_conversation",
+                    occurred_at=metadata.get("timestamp"),
+                    metadata={
+                        key: value
+                        for key, value in metadata.items()
+                        if value is not None
+                    },
+                    idempotency_key=f"benchmark:{self.case_id}:{session_id}",
+                )
+            )
         self._encoded_batches += 1
         if self.dream_policy == "per-batch" and not self.replay_assignments:
             try:
@@ -353,12 +392,22 @@ class MyceliumMemorySystem:
         mem = self._require_mem()
         metadata = metadata or {}
         start = time.perf_counter()
+        retrieval_trace: dict[str, Any] = {}
+        tool_evidence_budget = mem.config.retrieval.tool_evidence_budget_tokens
+        if tool_evidence_budget >= self.context_budget_tokens:
+            raise ValueError(
+                "Memory tool evidence budget must be smaller than the benchmark context budget"
+            )
+        initial_budget = self.context_budget_tokens - tool_evidence_budget
         try:
-            retrieval = await mem.retrieve_context(RetrievalRequest(
-                query=question,
-                budget_tokens=self.context_budget_tokens,
-            ))
+            retrieval = await mem.retrieve_context(
+                RetrievalRequest(
+                    query=question,
+                    budget_tokens=initial_budget,
+                )
+            )
             loaded_pages = list(retrieval.pages)
+            retrieval_trace = retrieval.trace
         except Exception as exc:
             self._errors.append(
                 {
@@ -369,9 +418,30 @@ class MyceliumMemorySystem:
             )
             loaded_pages = []
         memory_construction_time = time.perf_counter() - start
-        context = render_memory_context(loaded_pages)
-        answer = await self.qa_client.answer(question, context)
+        context = (
+            retrieval.rendered_context
+            if loaded_pages
+            else render_memory_evidence(MemoryEvidence())
+        )
+        memory_tools = MemoryToolset(
+            mem.retriever,
+            result_limit=mem.config.retrieval.tool_result_limit,
+            search_limit=mem.config.retrieval.tool_search_limit,
+            evidence_budget_tokens=tool_evidence_budget,
+            initial_claim_ids=(retrieval.evidence.claim_ids if loaded_pages else ()),
+        )
+        answer = await self.qa_client.answer_with_memory_tools(
+            question, context, memory_tools
+        )
         answer.memory_construction_time = memory_construction_time
+        tool_context = "\n".join(
+            event["result"]
+            for event in answer.metadata.get("memory_tool_events", [])
+            if event.get("tool_name") in {"memory_search", "memory_sources"}
+        )
+        full_evidence_context = "\n\n".join(
+            part for part in (context, tool_context) if part
+        )
         answer.metadata.update(
             {
                 "loaded_pages": [
@@ -381,15 +451,18 @@ class MyceliumMemorySystem:
                     }
                     for page in loaded_pages
                 ],
-                "_evidence_stage_labels": self._evidence_stage_labels(context),
+                "retrieval_trace": retrieval_trace,
+                "_evidence_stage_segments": self._evidence_stage_segments(
+                    full_evidence_context
+                ),
             }
         )
         if self.include_retrieval_context:
-            answer.metadata["retrieval_context"] = context
+            answer.metadata["retrieval_context"] = full_evidence_context
         return answer
 
-    def _evidence_stage_labels(self, context: str) -> dict[str, list[str]]:
-        if self._evidence_stage_labels_cache is None:
+    def _evidence_stage_segments(self, context: str) -> dict[str, Any]:
+        if self._evidence_stage_segments_cache is None:
             mem = self._require_mem()
             label_by_segment = {
                 segment.segment_id: str(label)
@@ -397,40 +470,53 @@ class MyceliumMemorySystem:
                 for segment in source.segments
                 if (label := segment.metadata.get("source_label"))
             }
-            source_labels = set(label_by_segment.values())
-            claim_labels: set[str] = set()
-            wiki_labels: set[str] = set()
+            segments_by_label: dict[str, set[str]] = {}
+            for segment_id, label in label_by_segment.items():
+                segments_by_label.setdefault(label, set()).add(segment_id)
+
+            source_segments = set(label_by_segment)
+            claim_segments: set[str] = set()
+            wiki_segments: set[str] = set()
             for claim in mem.artifacts.list_claims(status="active"):
-                labels = {
-                    label_by_segment[segment_id]
+                segments = {
+                    segment_id
                     for provenance in claim.provenance
                     for segment_id in provenance.segment_ids
                     if segment_id in label_by_segment
                 }
-                claim_labels.update(labels)
+                claim_segments.update(segments)
                 placement = mem.artifacts.placement_for_claim(claim.claim_id)
                 if placement and placement.owner_entity_id:
                     entity = mem.artifacts.get_entity(placement.owner_entity_id)
                     if mem.wiki.exists(entity.slug):
-                        wiki_labels.update(labels)
-            self._evidence_stage_labels_cache = {
-                "source": source_labels,
-                "claim": claim_labels,
-                "wiki": wiki_labels,
+                        wiki_segments.update(segments)
+            self._evidence_stage_segments_cache = {
+                "segments_by_label": segments_by_label,
+                "stages": {
+                    "source": source_segments,
+                    "claim": claim_segments,
+                    "wiki": wiki_segments,
+                },
             }
-        stage_labels = {
-            stage: sorted(labels)
-            for stage, labels in self._evidence_stage_labels_cache.items()
+
+        segments_by_label = self._evidence_stage_segments_cache["segments_by_label"]
+        source_segments = self._evidence_stage_segments_cache["stages"]["source"]
+        stage_segments = {
+            stage: sorted(segment_ids)
+            for stage, segment_ids in self._evidence_stage_segments_cache[
+                "stages"
+            ].items()
         }
-        stage_labels["context"] = sorted(
-            label
-            for label in self._evidence_stage_labels_cache["source"]
-            if re.search(
-                rf"(?<![A-Za-z0-9]){re.escape(label)}(?![A-Za-z0-9])",
-                context,
-            )
+        stage_segments["context"] = sorted(
+            segment_id for segment_id in source_segments if segment_id in context
         )
-        return stage_labels
+        return {
+            "segments_by_label": {
+                label: sorted(segment_ids)
+                for label, segment_ids in segments_by_label.items()
+            },
+            "stages": stage_segments,
+        }
 
     async def finalize_case(self) -> None:
         if self.frozen_store is not None:
@@ -559,215 +645,6 @@ class MyceliumMemorySystem:
             mem.log_store.mark_consolidated(sorted(raw_ids))
 
 
-class MemoryAgentSystem(MyceliumMemorySystem):
-    """Selectively gather composed evidence before the normal grounded QA call."""
-
-    name = "memory_agent"
-
-    async def reset(self, case_id: str) -> None:
-        await super().reset(case_id)
-        self._memory_tools = MemoryToolset(self._require_mem().artifacts)
-
-    async def answer(
-        self, question: str, metadata: dict[str, Any] | None = None
-    ) -> BenchmarkAnswer:
-        mem = self._require_mem()
-        metadata = metadata or {}
-        started = time.perf_counter()
-        retrieval = await mem.retrieve_context(RetrievalRequest(
-            query=question,
-            budget_tokens=self.context_budget_tokens,
-        ))
-        loaded_pages = list(retrieval.pages)
-        initial_context = render_memory_context(loaded_pages)
-
-        escalation_reason = memory_escalation_reason(question)
-        context = initial_context
-        plan: MemoryRetrievalPlan | None = None
-        plan_trace: dict[str, Any] | None = None
-        planner_input_tokens = 0
-        if escalation_reason:
-            planner_system = render_prompt("benchmarks/retrieval_plan.system.jinja")
-            planner_input = render_prompt(
-                "benchmarks/retrieval_plan.user.jinja",
-                question=question,
-            )
-            planner_input_tokens = count_tokens(planner_system + "\n" + planner_input)
-            raw_plan = await self.qa_client.llm.call_structured(
-                planner_system,
-                planner_input,
-                MemoryRetrievalPlan,
-                num_predict=384,
-            )
-            plan = MemoryRetrievalPlan.model_validate(raw_plan)
-            planned_context, plan_trace = execute_memory_plan(self._memory_tools, plan)
-            context = (
-                f"PLANNED CANONICAL MEMORY EVIDENCE:\n{planned_context}\n\n"
-                f"INITIAL MEMORY EVIDENCE:\n{initial_context}"
-            ).strip()
-
-        exploration_seconds = time.perf_counter() - started
-        answer = await self.qa_client.answer(question, context)
-        answer.memory_construction_time = exploration_seconds
-        answer.query_time_len += exploration_seconds
-        answer.input_len += planner_input_tokens
-        answer.metadata.update(
-            {
-                "loaded_pages": [
-                    {
-                        "slug": page.slug,
-                        "title": page.title,
-                    }
-                    for page in loaded_pages
-                ],
-                "memory_agent": {
-                    "escalated": bool(escalation_reason),
-                    "reason": escalation_reason,
-                    "plan": plan.model_dump() if plan else None,
-                    "trace": plan_trace,
-                },
-                "_evidence_stage_labels": self._evidence_stage_labels(context),
-            }
-        )
-        if self.include_retrieval_context:
-            answer.metadata["retrieval_context"] = context
-        return answer
-
-
-_QUESTION_LEAD_WORDS = {
-    "are",
-    "can",
-    "could",
-    "did",
-    "do",
-    "does",
-    "how",
-    "is",
-    "was",
-    "were",
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "why",
-    "will",
-    "would",
-}
-_COMPOSITION_CUES = re.compile(
-    r"\b(both|common|shared|same|different|difference|between|each|respectively)\b",
-    re.IGNORECASE,
-)
-_CAUSAL_CUES = re.compile(
-    r"^(why\b|how did\b)|\b(what led to|as a result|because of)\b",
-    re.IGNORECASE,
-)
-_MULTI_ATTRIBUTE_CUES = re.compile(
-    r"\b(look like|requirements?|features?|qualities|reasons|ways)\b",
-    re.IGNORECASE,
-)
-
-
-def memory_escalation_reason(question: str) -> str | None:
-    """Return the structural reason a question needs composed memory evidence."""
-    normalized = " ".join(question.split()).strip()
-    if not normalized:
-        return None
-    if _COMPOSITION_CUES.search(normalized):
-        return "composition"
-    if _CAUSAL_CUES.search(normalized):
-        return "causal"
-    if _MULTI_ATTRIBUTE_CUES.search(normalized):
-        return "multi_attribute"
-    names = [
-        value
-        for value in re.findall(r"\b[A-Z][a-z]+\b", normalized)
-        if value.lower() not in _QUESTION_LEAD_WORDS
-    ]
-    if len(set(names)) >= 2 and re.search(r"\band\b", normalized, re.IGNORECASE):
-        return "multiple_subjects"
-    return None
-
-
-def execute_memory_plan(
-    tools: MemoryToolset,
-    plan: MemoryRetrievalPlan,
-) -> tuple[str, dict[str, Any]]:
-    """Execute a validated plan with fixed result and provenance bounds."""
-    selected_claims: dict[str, dict[str, Any]] = {}
-    search_trace: list[dict[str, Any]] = []
-    seed_ids: list[str] = []
-    for query in plan.searches:
-        hits = tools.search(query, limit=5)
-        hit_ids = [str(hit["claim_id"]) for hit in hits]
-        search_trace.append({"query": query, "claim_ids": hit_ids})
-        for hit in hits:
-            selected_claims.setdefault(str(hit["claim_id"]), hit)
-        seed_ids.extend(hit_ids[:2])
-
-    expanded_ids: list[str] = []
-    if plan.expand_top_hits and seed_ids:
-        expansions = tools.expand(list(dict.fromkeys(seed_ids))[:6], limit=8)
-        expanded_ids = [str(hit["claim_id"]) for hit in expansions]
-        for hit in expansions:
-            selected_claims.setdefault(str(hit["claim_id"]), hit)
-
-    source_results: list[dict[str, Any]] = []
-    if plan.inspect_sources and selected_claims:
-        source_results = tools.sources(list(selected_claims)[:4], neighbor_count=1)
-
-    lines = [
-        _format_planned_claim(claim) for claim in list(selected_claims.values())[:24]
-    ]
-    if source_results:
-        lines.append("\nVERIFIED SOURCE SEGMENTS:")
-        for source in source_results:
-            occurred_at = source.get("occurred_at") or "unknown time"
-            for segment in source.get("segments", []):
-                label = segment.get("source_label") or segment.get("segment_id")
-                speaker = segment.get("speaker") or "unknown speaker"
-                content = str(segment.get("content", ""))[
-                    :MAX_PLANNED_SOURCE_SEGMENT_CHARS
-                ]
-                lines.append(f"- [{label}] ({occurred_at}) {speaker}: {content}")
-    rendered, truncated = _bounded_evidence(lines)
-    trace = {
-        "searches": search_trace,
-        "expanded_claim_ids": expanded_ids,
-        "selected_claim_ids": list(selected_claims)[:24],
-        "source_ids": [str(source.get("source_id")) for source in source_results],
-        "evidence_chars": len(rendered),
-        "truncated": truncated,
-    }
-    return rendered, trace
-
-
-def _format_planned_claim(claim: dict[str, Any]) -> str:
-    subjects = ", ".join(str(value) for value in claim.get("subjects", []))
-    temporal = claim.get("temporal") or {}
-    bounds = ""
-    if temporal.get("start") or temporal.get("end"):
-        bounds = f"; time={temporal.get('start') or '?'}..{temporal.get('end') or '?'}"
-    return (
-        f"- [{claim['claim_id']}] {str(claim['text'])[:1000]} "
-        f"(subjects={subjects or 'unknown'}{bounds})"
-    )
-
-
-def _bounded_evidence(lines: list[str]) -> tuple[str, bool]:
-    if not lines:
-        return "No canonical claims matched the retrieval plan.", False
-    selected: list[str] = []
-    used = 0
-    for line in lines:
-        added = len(line) + (1 if selected else 0)
-        if used + added > MAX_PLANNED_EVIDENCE_CHARS:
-            return "\n".join(selected), True
-        selected.append(line)
-        used += added
-    return "\n".join(selected), False
-
-
 class FullWikiMemorySystem(MyceliumMemorySystem):
     name = "full_wiki"
 
@@ -820,12 +697,9 @@ def build_memory_system(
 ) -> MemorySystem:
     if replay_store is not None and system_name not in {
         "mycelium",
-        "memory_agent",
         "full_wiki",
     }:
-        raise ValueError(
-            "--replay-store is only supported by mycelium, memory_agent, and full_wiki"
-        )
+        raise ValueError("--replay-store is only supported by mycelium and full_wiki")
     if replay_store is not None and not replay_store.is_dir():
         raise ValueError(f"Replay store does not exist: {replay_store}")
     if replay_assignments and replay_store is None:
@@ -837,20 +711,6 @@ def build_memory_system(
     qa_client = OllamaQaClient(model=qa_model, url=ollama_url)
     if system_name == "mycelium":
         return MyceliumMemorySystem(
-            run_dir=run_dir,
-            qa_client=qa_client,
-            memory_model=memory_model,
-            ollama_url=ollama_url,
-            config_path=config_path,
-            context_budget_tokens=context_budget_tokens,
-            dream_policy=dream_policy,
-            replay_store=replay_store,
-            replay_assignments=replay_assignments,
-            frozen_store=frozen_store,
-            include_retrieval_context=include_retrieval_context,
-        )
-    if system_name == "memory_agent":
-        return MemoryAgentSystem(
             run_dir=run_dir,
             qa_client=qa_client,
             memory_model=memory_model,

@@ -22,6 +22,8 @@ mycelium/
 │   ├── pipeline.py     # Authoritative high-level memory lifecycle
 │   ├── operations.py   # Typed lifecycle inputs and outputs
 │   ├── retrieval.py    # Read-only memory retrieval orchestration
+│   ├── claim_index.py  # Rebuildable LanceDB hybrid claim index
+│   ├── retrieval_context.py # Budgeted claim/fact/source context rendering
 │   ├── encoder.py      # Transcript-to-source/episode/claim encoding
 │   ├── dream.py        # Consolidation preparation, execution, and commit
 │   ├── reconsolidation.py # Evidence-triggered proposal analysis and review
@@ -62,26 +64,38 @@ classes persist canonical artifacts and generated views.
 ### 1. Chat and retrieval
 
 When a user sends a message, the backend builds a retrieval query from the chat title, recent thread context,
-and current message. A disposable in-memory SQLite FTS5 index ranks complete wiki pages with BM25. Exact
-title/entity mentions and structured temporal matches may add pages before the context budget is applied.
+and current message. A local LanceDB projection performs hybrid vector and full-text search over active canonical
+and short-term claims. EmbeddingGemma supplies normalized semantic embeddings through Ollama. The index is derived
+state: it is synchronized from the JSON claim artifacts and can be deleted and rebuilt without losing memory.
 
-Loaded pages are placed in the chat system prompt along with compact snippets from their backlinked raw logs. One
-authoritative renderer formats and deduplicates this context for both web chats and direct library sessions, and the
-retrieval budget is applied to that exact rendered text. The entire current session transcript is then passed to the
-chat model.
+Hybrid similarity only proposes candidates. A structured model decision explicitly includes or excludes every
+candidate claim using its claim text, normalized timing, and any consolidated representation it contributes to.
+The highest-ranked admitted claims form a small initial evidence result. The stable system prompt contains only the
+assistant's behavior contract; the current request carries runtime-supplied evidence as a separate structured JSON
+value. The assistant can then call `memory_search` with focused follow-up queries when a requested person, event,
+relation, or time is still unsupported, and can call `memory_sources` for the exact dialogue behind any claim already
+shown during that response. Search count, result count, and cumulative evidence tokens are bounded per response;
+subsequent searches omit claims already returned.
+
+Included canonical claims are represented through their consolidated facts; claims without a fact are represented
+directly. Initial evidence and tool results share one schema containing explicit subjects, statements, claim IDs,
+normalized timing, and source citations. Initial retrieval and follow-up search return compact records. When an
+existing record is relevant or potentially related, the assistant uses `memory_sources` with its supporting claim IDs
+to retrieve exact cited lines and a bounded structural conversation neighborhood. Cited lines precede the surrounding
+context. Retrieval traces preserve candidate rank, hybrid score, admission decision, selected claim IDs, and the
+claims that fit in the final budget.
 
 Retrieval is read-only. It never reinforces, destabilizes, or rewrites a page.
 
-### 2. Tool observations
+### 2. Assistant tools
 
-The chat model can call Ollama `web_search` and `web_fetch`. Tool calls are:
+The chat model can call the read-only `memory_search` and `memory_sources` tools alongside Ollama `web_search` and
+`web_fetch`. All tool calls are displayed in the UI and stored on the assistant message. Web results are external
+observations and are encoded immediately through the source pipeline when successful. Memory-tool results are reads
+of existing evidence and are not re-ingested as new memories.
 
-- Executed by the internal Ollama adapter
-- Displayed in the UI with expandable arguments and results
-- Stored on the assistant message in session history
-- Encoded immediately through the same source, episode, and claim pipeline as conversations
-
-The tool-specific extraction policy keeps source-grounded project facts while ignoring transport metadata, failures, and page furniture.
+The tool-specific extraction policy for web observations keeps source-grounded project facts while ignoring transport
+metadata, failures, and page furniture.
 
 ### 3. Episode encoding
 

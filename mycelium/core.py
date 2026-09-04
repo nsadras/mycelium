@@ -20,23 +20,25 @@ from mycelium.operations import (
 )
 from mycelium.pipeline import MemoryPipeline
 from mycelium.retrieval import MemoryRetriever
+from mycelium.claim_index import LanceClaimIndex, OllamaEmbedder
 from mycelium.artifacts import (
     ArtifactStore,
     SourceSegment,
 )
 
+
 class Mycelium:
     def __init__(
         self,
         store_path: str | Path,
-        ollama_model: str = 'gemma3:12b',
-        ollama_url: str = 'http://localhost:11434',
+        ollama_model: str = "gemma3:12b",
+        ollama_url: str = "http://localhost:11434",
         context_budget_tokens: int = 32768,
         config_path: str | Path | None = None,
         memory_profile: Literal["user", "none"] = "user",
     ):
         self.store_path = Path(store_path)
-        
+
         if config_path and Path(config_path).exists():
             self.config = Config.from_toml(Path(config_path))
         else:
@@ -46,7 +48,7 @@ class Mycelium:
             self.config.context_budget_tokens = context_budget_tokens
 
         self._init_store()
-            
+
         self._wiki = WikiStore(self.store_path / "wiki")
         self._log_store = LogStore(self.store_path / "logs")
         self.artifacts = ArtifactStore(self.store_path / "artifacts")
@@ -59,20 +61,29 @@ class Mycelium:
             context_window_tokens=self.config.llm.context_window_tokens,
         )
         self.encoder = Encoder(self.llm, self._log_store, self.config, self.artifacts)
-        self.short_term_memory = ShortTermMemoryQueue(
-            self.artifacts, self.config.dream
-        )
-        
+        self.short_term_memory = ShortTermMemoryQueue(self.artifacts, self.config.dream)
+
         from mycelium.dream import ConsolidationProcess
+
         self.consolidator = ConsolidationProcess(
             self.llm, self._wiki, self._log_store, self.config, self.artifacts
         )
         self.retriever = MemoryRetriever(
             self.llm,
             self._wiki,
-            self._log_store,
             self.artifacts,
             default_budget_tokens=self.config.context_budget_tokens,
+            initial_result_limit=self.config.retrieval.initial_result_limit,
+            claim_index=LanceClaimIndex(
+                self.store_path / "indexes" / "lancedb",
+                self.artifacts,
+                OllamaEmbedder(
+                    self.config.llm.url,
+                    self.config.retrieval.embedding_model,
+                    timeout=self.config.llm.timeout_seconds,
+                ),
+                candidate_limit=self.config.retrieval.candidate_limit,
+            ),
         )
         self.pipeline = MemoryPipeline(
             self.encoder,
@@ -103,7 +114,7 @@ class Mycelium:
         if not self._wiki.exists(slug):
             from mycelium.models import WikiPage
             from datetime import datetime
-            
+
             profile_page = WikiPage(
                 slug=slug,
                 title=title,
@@ -122,7 +133,7 @@ class Mycelium:
                 sections=[],
             )
             self._wiki.save(profile_page)
-            
+
             # Register in the index if not present
             index_content = self._wiki.get_index()
             if f"[[{slug}]]" not in index_content:
@@ -132,7 +143,7 @@ class Mycelium:
                     if line.strip().startswith("## Pages"):
                         pages_header_idx = idx
                         break
-                
+
                 profile_line = f"- [[{slug}]]: {summary}"
                 if pages_header_idx != -1:
                     lines.insert(pages_header_idx + 1, profile_line)
@@ -149,7 +160,7 @@ class Mycelium:
         (self.store_path / "logs").mkdir(exist_ok=True)
         (self.store_path / "artifacts").mkdir(exist_ok=True)
         (self.store_path / "wiki" / "_archive").mkdir(exist_ok=True)
-        
+
         index_path = self.store_path / "wiki" / "_index.md"
         if not index_path.exists():
             with open(index_path, "w", encoding="utf-8") as f:
@@ -163,9 +174,7 @@ class Mycelium:
     def log_store(self) -> LogStore:
         return self._log_store
 
-    async def retrieve_context(
-        self, request: RetrievalRequest
-    ) -> RetrievalResult:
+    async def retrieve_context(self, request: RetrievalRequest) -> RetrievalResult:
         return await self.pipeline.retrieve_context(request)
 
     async def ingest_source(self, source: SourceInput) -> IngestionResult:
@@ -174,11 +183,12 @@ class Mycelium:
     @asynccontextmanager
     async def session(self, query: str, session_id: Optional[str] = None):
         session_id = session_id or str(uuid.uuid4())
-        
+
         sess = Session(mycelium=self, session_id=session_id, query=query)
         retrieval = await self.retrieve_context(RetrievalRequest(query=query))
         sess.loaded_pages = list(retrieval.pages)
-        
+        sess.memory_evidence = retrieval.evidence
+
         try:
             yield sess
         finally:
@@ -198,14 +208,16 @@ class Mycelium:
                     )
                     for index, msg in enumerate(sess.transcript)
                 ]
-                await self.ingest_source(SourceInput(
-                    transcript=transcript_str,
-                    session_id=session_id,
-                    occurred_at=segments[0].timestamp,
-                    segments=tuple(segments),
-                    idempotency_key=f"session-transcript:{session_id}",
-                ))
-            
+                await self.ingest_source(
+                    SourceInput(
+                        transcript=transcript_str,
+                        session_id=session_id,
+                        occurred_at=segments[0].timestamp,
+                        segments=tuple(segments),
+                        idempotency_key=f"session-transcript:{session_id}",
+                    )
+                )
+
     def consolidation_status(
         self, *, now: datetime | None = None
     ) -> ShortTermMemoryStatus:

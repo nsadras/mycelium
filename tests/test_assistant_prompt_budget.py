@@ -2,6 +2,7 @@ from datetime import datetime
 
 from mycelium.budget import count_message_tokens
 from mycelium.models import WikiPage
+from mycelium.operations import EvidenceRecord, MemoryEvidence
 from server.api.sessions import build_chat_prompt
 
 
@@ -19,34 +20,59 @@ def page(content: str) -> WikiPage:
     )
 
 
-def test_one_budget_bounds_system_recent_transcript_and_memory():
-    record = {"transcript": [
-        {"role": "user", "content": f"Old question {index} " * 12}
-        if index % 2 == 0
-        else {"role": "assistant", "content": f"Old answer {index} " * 12}
-        for index in range(12)
-    ]}
-    budget = 400
+def evidence_for(page_value: WikiPage) -> MemoryEvidence:
+    return MemoryEvidence(
+        records=(
+            EvidenceRecord(
+                record_id=f"claim-{page_value.slug}",
+                record_type="claim",
+                statement=page_value.content,
+                subject_entity_id=page_value.entity_id,
+                subject_name=page_value.title,
+                claim_ids=(f"claim-{page_value.slug}",),
+            ),
+        )
+    )
 
+
+def test_one_budget_bounds_system_recent_transcript_and_memory():
+    record = {
+        "transcript": [
+            {"role": "user", "content": f"Old question {index} " * 12}
+            if index % 2 == 0
+            else {"role": "assistant", "content": f"Old answer {index} " * 12}
+            for index in range(12)
+        ]
+    }
+    budget = 650
+
+    memory_page = page("The Orchid launch decision is scheduled for Thursday.")
     messages, selected_pages = build_chat_prompt(
         record,
         "What is the current Orchid decision?",
-        [page("The Orchid launch decision is scheduled for Thursday.")],
+        [memory_page],
+        evidence_for(memory_page),
         budget_tokens=budget,
     )
 
     assert count_message_tokens(messages) <= budget
-    assert messages[-1]["content"] == "What is the current Orchid decision?"
+    assert messages[-1]["content"].endswith("What is the current Orchid decision?")
+    assert "INITIAL MEMORY EVIDENCE" not in messages[0]["content"]
+    assert "Orchid launch decision" in messages[-1]["content"]
     assert selected_pages[0].slug == "project-orchid"
     assert "Old question 0" not in "\n".join(item["content"] for item in messages)
 
 
 def test_prompt_budget_truncates_oversized_current_message_from_the_front():
     current = "discarded beginning " * 200 + "essential final request"
-    budget = 100
+    budget = 300
 
     messages, selected_pages = build_chat_prompt(
-        {"transcript": []}, current, [], budget_tokens=budget
+        {"transcript": []},
+        current,
+        [],
+        MemoryEvidence(),
+        budget_tokens=budget,
     )
 
     assert count_message_tokens(messages) <= budget
@@ -55,17 +81,21 @@ def test_prompt_budget_truncates_oversized_current_message_from_the_front():
 
 
 def test_prompt_budget_can_drop_memory_that_does_not_fit_after_recent_thread():
-    record = {"transcript": [
-        {"role": "user", "content": "Recent context " * 20},
-        {"role": "assistant", "content": "Recent response " * 20},
-    ]}
+    record = {
+        "transcript": [
+            {"role": "user", "content": "Recent context " * 20},
+            {"role": "assistant", "content": "Recent response " * 20},
+        ]
+    }
 
+    memory_page = page("Large memory " * 300)
     messages, selected_pages = build_chat_prompt(
         record,
         "Continue.",
-        [page("Large memory " * 300)],
-        budget_tokens=180,
+        [memory_page],
+        evidence_for(memory_page),
+        budget_tokens=300,
     )
 
-    assert count_message_tokens(messages) <= 180
+    assert count_message_tokens(messages) <= 300
     assert selected_pages == []

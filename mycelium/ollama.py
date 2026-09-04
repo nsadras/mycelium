@@ -30,9 +30,24 @@ class ToolEvent:
 
 
 @dataclass
+class AgentExecutionStep:
+    """One model decision and any tool observations produced from it."""
+
+    attempt_index: int
+    round_index: int
+    thinking: str
+    content: str
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    tool_events: list[ToolEvent] = field(default_factory=list)
+    outcome: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class ChatResponse:
     content: str
     tool_events: list[ToolEvent] = field(default_factory=list)
+    execution_trace: list[AgentExecutionStep] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -97,7 +112,7 @@ class OllamaClient:
         think: bool | None = None,
         tool_definitions: list[Any] | None = None,
         tool_runner: Callable[
-            [str, dict[str, Any]], str | Awaitable[str]
+            [str, dict[str, Any]], str | None | Awaitable[str | None]
         ] | None = None,
     ) -> ChatResponse:
         """
@@ -113,6 +128,7 @@ class OllamaClient:
         endpoint = f"{self.url}/api/chat"
         working_messages = list(messages)
         tool_events: list[ToolEvent] = []
+        execution_trace: list[AgentExecutionStep] = []
 
         for attempt in range(max_retries):
             start_time = time.time()
@@ -129,12 +145,14 @@ class OllamaClient:
             try:
                 content, metadata = await self._chat_with_optional_tools(
                     call_id=call_id,
+                    attempt_index=attempt + 1,
                     messages=working_messages,
                     options=options,
                     enable_tools=enable_tools,
                     max_tool_rounds=max_tool_rounds,
                     tool_result_chars=tool_result_chars,
                     tool_events=tool_events,
+                    execution_trace=execution_trace,
                     think=think,
                     tool_definitions=tool_definitions,
                     tool_runner=tool_runner,
@@ -150,7 +168,12 @@ class OllamaClient:
                     True,
                     metadata,
                 )
-                return ChatResponse(content=content, tool_events=tool_events, metadata=metadata)
+                return ChatResponse(
+                    content=content,
+                    tool_events=tool_events,
+                    execution_trace=execution_trace,
+                    metadata=metadata,
+                )
 
             except (RequestError, ResponseError) as e:
                 latency_ms = int((time.time() - start_time) * 1000)
@@ -171,16 +194,18 @@ class OllamaClient:
     async def _chat_with_optional_tools(
         self,
         call_id: str,
+        attempt_index: int,
         messages: list[dict[str, Any]],
         options: dict[str, Any],
         enable_tools: bool,
         max_tool_rounds: int,
         tool_result_chars: int,
         tool_events: list[ToolEvent],
+        execution_trace: list[AgentExecutionStep],
         think: bool | None,
         tool_definitions: list[Any] | None,
         tool_runner: Callable[
-            [str, dict[str, Any]], str | Awaitable[str]
+            [str, dict[str, Any]], str | None | Awaitable[str | None]
         ] | None,
     ) -> tuple[str, dict[str, Any]]:
         tools = (
@@ -203,34 +228,47 @@ class OllamaClient:
             assistant_message = self._assistant_message_dict(response)
             content = assistant_message.get("content", "").strip()
             tool_calls = assistant_message.get("tool_calls", [])
+            step = AgentExecutionStep(
+                attempt_index=attempt_index,
+                round_index=round_idx + 1,
+                thinking=str(assistant_message.get("thinking", "") or ""),
+                content=content,
+                tool_calls=[self._tool_call_dict(tool_call) for tool_call in tool_calls],
+                metadata=metadata,
+            )
+            execution_trace.append(step)
             messages.append(assistant_message)
             if not tool_calls:
+                step.outcome = "final_response"
                 return content, metadata
             if round_idx >= max_tool_rounds:
+                step.outcome = "tool_round_limit"
                 return content, metadata
             for tool_call in tool_calls:
                 tool_name, tool_args = self._tool_call_name_args(tool_call)
-                raw_result = (
+                custom_result = (
                     tool_runner(tool_name, tool_args)
                     if tool_runner is not None
-                    else self._run_tool(tool_name, tool_args)
+                    else None
                 )
                 result = (
-                    await raw_result
-                    if inspect.isawaitable(raw_result)
-                    else raw_result
+                    await custom_result
+                    if inspect.isawaitable(custom_result)
+                    else custom_result
                 )
+                if result is None:
+                    result = await self._run_tool(tool_name, tool_args)
                 truncated = result[:tool_result_chars]
                 failed = result.startswith(f"Tool {tool_name} failed:") or result == f"Tool {tool_name} not found"
-                tool_events.append(
-                    ToolEvent(
-                        tool_name=tool_name,
-                        arguments=tool_args,
-                        result=truncated,
-                        failed=failed,
-                        truncated=len(result) > len(truncated),
-                    )
+                tool_event = ToolEvent(
+                    tool_name=tool_name,
+                    arguments=tool_args,
+                    result=truncated,
+                    failed=failed,
+                    truncated=len(result) > len(truncated),
                 )
+                tool_events.append(tool_event)
+                step.tool_events.append(tool_event)
                 logger.info(
                     "LLM tool call %s",
                     json.dumps(
@@ -246,6 +284,7 @@ class OllamaClient:
                     ),
                 )
                 messages.append({"role": "tool", "content": truncated, "tool_name": tool_name})
+            step.outcome = "tools_executed"
         return "", {}
 
     def _assistant_message_dict(self, response: Any) -> dict[str, Any]:
@@ -274,6 +313,10 @@ class OllamaClient:
         if function is None:
             return "", {}
         return str(getattr(function, "name", "")), dict(getattr(function, "arguments", {}) or {})
+
+    def _tool_call_dict(self, tool_call: Any) -> dict[str, Any]:
+        tool_name, tool_args = self._tool_call_name_args(tool_call)
+        return {"tool_name": tool_name, "arguments": tool_args}
 
     async def _run_tool(self, tool_name: str, tool_args: dict[str, Any]) -> str:
         try:

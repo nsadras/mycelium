@@ -6,7 +6,13 @@ from mycelium.pipeline import MemoryPipeline
 from mycelium.operations import (
     ConsolidationRequest,
     ConsolidationResult,
+    EvidenceCitation,
+    EvidenceRecord,
+    EvidenceSegment,
+    EvidenceSource,
+    EvidenceTime,
     IngestionResult,
+    MemoryEvidence,
     RetrievalRequest,
     RetrievalResult,
     SourceInput,
@@ -15,7 +21,9 @@ from mycelium.operations import (
 __all__ = [
     'Mycelium', 'WikiPage', 'LogEntry', 'DreamReport', 'Session',
     'render_memory_context', 'SourceInput', 'IngestionResult',
-    'RetrievalRequest', 'RetrievalResult', 'ConsolidationRequest',
+    'RetrievalRequest', 'RetrievalResult', 'MemoryEvidence',
+    'EvidenceRecord', 'EvidenceCitation', 'EvidenceTime',
+    'EvidenceSource', 'EvidenceSegment', 'ConsolidationRequest',
     'ConsolidationResult', 'MemoryPipeline',
 ]
 __version__ = '0.1.0'

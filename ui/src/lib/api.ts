@@ -18,6 +18,28 @@ export interface Message {
   timestamp: string;
   loaded_pages?: LoadedPage[];
   tool_events?: ToolEvent[];
+  retrieval_trace?: RetrievalTrace;
+}
+
+export interface RetrievalTrace {
+  strategy: string;
+  embedding_model: string;
+  candidate_limit: number;
+  candidates: Array<{
+    rank: number;
+    claim_id: string;
+    memory_tier: string;
+    owner_entity_id?: string | null;
+    score?: number | null;
+    decision?: {
+      disposition: 'include' | 'exclude';
+      confidence: number;
+      reason: string;
+    } | null;
+  }>;
+  selected_claim_ids: string[];
+  rendered_claim_ids: string[];
+  selection_error?: string | null;
 }
 
 export interface ToolEvent {

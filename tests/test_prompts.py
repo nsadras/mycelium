@@ -29,39 +29,39 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
         "maturity_decisions": "maturity decisions",
         "node": "node",
         "identities": "identities",
-            "local_identities": "local identities",
-            "identity": "identity",
-            "pending_proposals": "pending proposals",
+        "local_identities": "local identities",
+        "identity": "identity",
+        "pending_proposals": "pending proposals",
         "proposals": "proposals",
         "entity_plan": "entity plan",
         "reviewed_adjudications": "none",
-            "subject_policy": "subject policy",
-            "ownership_policy": "ownership policy",
-            "fact_evidence_policy": "fact evidence policy",
+        "subject_policy": "subject policy",
+        "ownership_policy": "ownership policy",
+        "fact_evidence_policy": "fact evidence policy",
         "subject_scopes": "subject scopes",
         "page_state_policy": "page-state policy",
         "proposed_identity": "identity",
         "incoming_alias": "N001",
         "incoming_claim": "incoming claim",
-            "candidates": "candidates",
-            "owner": "owner",
-            "groups": "groups",
-            "group": "group",
-            "truth_changes": "truth changes",
-            "incoming_claims": "incoming claims",
-            "sections": "sections",
-            "claims": "claims",
-            "existing_facts": "existing facts",
-            "reviewed_relations": "reviewed relations",
-            "prior_decisions": "prior decisions",
-            "prior_facts": "prior facts",
-            "rendered_facts": "rendered facts",
-            "rejected_facts": "rejected facts",
+        "candidates": "candidates",
+        "owner": "owner",
+        "groups": "groups",
+        "group": "group",
+        "truth_changes": "truth changes",
+        "incoming_claims": "incoming claims",
+        "sections": "sections",
+        "claims": "claims",
+        "existing_facts": "existing facts",
+        "reviewed_relations": "reviewed relations",
+        "prior_decisions": "prior decisions",
+        "prior_facts": "prior facts",
+        "rendered_facts": "rendered facts",
+        "rejected_facts": "rejected facts",
         "source_type": "agent_conversation",
         "source_policy": "policy",
         "claim_types": CLAIM_TYPES,
-            "source_id": "source-1",
-            "participants": ["Ava", "Dana"],
+        "source_id": "source-1",
+        "participants": ["Ava", "Dana"],
         "occurred_at": None,
         "unknown_time": "unknown",
         "segments": "segments",
@@ -70,13 +70,16 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
         "no_prior_turns": "none",
         "user_message": "message",
         "memory_context": "context",
+        "memory_evidence": "evidence",
         "no_memory_context": "none",
+        "response_instructions": "answer directly",
+        "user_request": "request",
         "title": "Meeting",
         "transcript": "Transcript",
         "summaries": ["one", "two"],
-            "question": "question",
-            "query": "query",
-            "payload": '{"answer": "value"}',
+        "question": "question",
+        "query": "query",
+        "payload": '{"answer": "value"}',
     }
     for name in templates:
         assert render_prompt(name, **shared_context)
@@ -150,7 +153,9 @@ def test_subject_census_prompt_explains_the_task_and_local_terms() -> None:
     )
 
     assert system.startswith("Build a complete list of the distinct subjects")
-    assert "node groups candidate mentions that refer to one real-world subject" in system
+    assert (
+        "node groups candidate mentions that refer to one real-world subject" in system
+    )
     assert "C... identifies a stored claim" in system
     assert "P... identifies a" in system
     assert "source-declared participant" in system
@@ -185,6 +190,41 @@ def test_prompt_templates_preserve_structured_multiline_inputs() -> None:
 
 def test_templates_are_packaged_inside_the_python_package() -> None:
     assert Path(TEMPLATE_ROOT, "memory", "extraction.system.jinja").is_file()
-    assert Path(TEMPLATE_ROOT, "assistant", "chat.system.jinja").is_file()
+    assert Path(TEMPLATE_ROOT, "assistant", "memory_agent.system.jinja").is_file()
+    assert Path(TEMPLATE_ROOT, "assistant", "memory_request.user.jinja").is_file()
     assert Path(TEMPLATE_ROOT, "engram", "summary.system.jinja").is_file()
     assert Path(TEMPLATE_ROOT, "benchmarks", "grounded_answer.system.jinja").is_file()
+
+
+def test_assistant_policy_and_runtime_memory_are_separate_messages() -> None:
+    system = render_prompt(
+        "assistant/memory_agent.system.jinja",
+        response_instructions="Respond directly.",
+    )
+    user = render_prompt(
+        "assistant/memory_request.user.jinja",
+        memory_evidence='{"records": [{"statement": "Mira plays cello."}]}',
+        user_request="What does Mira play?",
+    )
+
+    assert "Mira plays cello" not in system
+    assert "starting selection from long-term memory" in system
+    assert "initial and tool-returned evidence" in system
+    assert "cumulative body" in system
+    assert "call `memory_search`" in system
+    assert "call `memory_sources`" in system
+    assert "exact cited lines and nearby dialogue" in system
+    assert "After each tool result" in system
+    assert "useful for fulfilling the current request" not in system.lower()
+    assert "total, complete set, or comparison" not in system
+    assert system.index("call `memory_sources`") < system.index("call `memory_search`")
+    assert system.index("call `memory_search`") < system.index("Response style:")
+    assert "Mira plays cello" in user
+    assert user.endswith("What does Mira play?")
+
+
+def test_assistant_context_selection_is_request_oriented() -> None:
+    system = render_prompt("assistant/context_selection.system.jinja")
+
+    assert "useful for fulfilling the current request" in system
+    assert "answering the current request" not in system

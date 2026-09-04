@@ -40,9 +40,15 @@ async def run_locomo(
     for sample_index, sample in enumerate(samples):
         sample_id = str(sample.get("sample_id") or f"sample-{sample_index}")
         if sample_id in completed_sample_ids:
-            print(f"[locomo] sample {sample_index + 1}/{len(samples)} skip completed: {sample_id}", flush=True)
+            print(
+                f"[locomo] sample {sample_index + 1}/{len(samples)} skip completed: {sample_id}",
+                flush=True,
+            )
             continue
-        print(f"[locomo] sample {sample_index + 1}/{len(samples)} reset: {sample_id}", flush=True)
+        print(
+            f"[locomo] sample {sample_index + 1}/{len(samples)} reset: {sample_id}",
+            flush=True,
+        )
         await system.reset(sample_id)
         sessions = iter_locomo_sessions(sample)
         if max_sessions is not None:
@@ -82,8 +88,8 @@ async def run_locomo(
         for panel_index, (question_index, qa) in enumerate(indexed_qas):
             question = str(qa.get("question", ""))
             print(
-                f"[locomo] sample {sample_id} answer question {panel_index + 1}/{len(indexed_qas)} "+
-                f"(source index {question_index})",
+                f"[locomo] sample {sample_id} answer question {panel_index + 1}/{len(indexed_qas)} "
+                + f"(source index {question_index})",
                 flush=True,
             )
             answer_metadata = {
@@ -97,9 +103,11 @@ async def run_locomo(
                 question,
                 answer_metadata,
             )
-            _record_retrieval_evidence(answer, qa.get("evidence"))
             _record_evidence_survival(answer, qa.get("evidence"))
-            score = locomo_score(answer.output, qa.get("answer", ""), int(qa.get("category", 0)))
+            _record_retrieval_evidence(answer, qa.get("evidence"))
+            score = locomo_score(
+                answer.output, qa.get("answer", ""), int(qa.get("category", 0))
+            )
             qa[prediction_key] = answer.output
             qa[f"{prediction_key}_score"] = round(score, 4)
             qa[f"{prediction_key}_metadata"] = answer.metadata
@@ -124,7 +132,10 @@ async def run_locomo(
         completed_sample_ids.add(sample_id)
         write_json(output_dir / "predictions.json", predictions)
         write_jsonl(output_dir / "predictions.jsonl", flat_rows)
-        write_json(output_dir / "summary.json", summarize_locomo_run(flat_rows, started, prediction_key))
+        write_json(
+            output_dir / "summary.json",
+            summarize_locomo_run(flat_rows, started, prediction_key),
+        )
 
     summary = summarize_locomo_run(flat_rows, started, prediction_key)
     write_json(output_dir / "predictions.json", predictions)
@@ -133,7 +144,9 @@ async def run_locomo(
     return summary
 
 
-def iter_locomo_sessions(sample: dict[str, Any]) -> list[tuple[str, str | None, list[BenchmarkMessage]]]:
+def iter_locomo_sessions(
+    sample: dict[str, Any],
+) -> list[tuple[str, str | None, list[BenchmarkMessage]]]:
     conversation = sample.get("conversation", {})
     sessions = []
     for key in sorted(conversation, key=session_sort_key):
@@ -146,7 +159,9 @@ def iter_locomo_sessions(sample: dict[str, Any]) -> list[tuple[str, str | None, 
     return sessions
 
 
-def locomo_turn_to_message(turn: dict[str, Any], timestamp: str | None) -> BenchmarkMessage:
+def locomo_turn_to_message(
+    turn: dict[str, Any], timestamp: str | None
+) -> BenchmarkMessage:
     text = str(turn.get("text", "")).strip()
     if turn.get("blip_caption"):
         text = f"{text}\nImage caption: {turn['blip_caption']}"
@@ -158,7 +173,9 @@ def locomo_turn_to_message(turn: dict[str, Any], timestamp: str | None) -> Bench
         content=text.strip(),
         timestamp=timestamp,
         message_id=str(turn.get("dia_id", "")) or None,
-        metadata={k: v for k, v in turn.items() if k not in {"text", "speaker", "dia_id"}},
+        metadata={
+            k: v for k, v in turn.items() if k not in {"text", "speaker", "dia_id"}
+        },
     )
 
 
@@ -188,7 +205,9 @@ def select_questions_per_category(
     return selected
 
 
-def summarize_locomo_run(rows: list[dict[str, Any]], started: float, prediction_key: str) -> dict[str, Any]:
+def summarize_locomo_run(
+    rows: list[dict[str, Any]], started: float, prediction_key: str
+) -> dict[str, Any]:
     summary = summarize_scores(rows)
     summary.update(
         {
@@ -197,13 +216,14 @@ def summarize_locomo_run(rows: list[dict[str, Any]], started: float, prediction_
             "elapsed_seconds": time.perf_counter() - started,
             "mean_input_len": mean(row["input_len"] for row in rows),
             "mean_output_len": mean(row["output_len"] for row in rows),
-            "mean_memory_construction_time": mean(row["memory_construction_time"] for row in rows),
+            "mean_memory_construction_time": mean(
+                row["memory_construction_time"] for row in rows
+            ),
             "mean_query_time": mean(row["query_time_len"] for row in rows),
         }
     )
     evidence_metrics = [
-        row.get("metadata", {}).get("retrieval_evidence")
-        for row in rows
+        row.get("metadata", {}).get("retrieval_evidence") for row in rows
     ]
     measured = [metric for metric in evidence_metrics if isinstance(metric, dict)]
     if measured:
@@ -215,16 +235,13 @@ def summarize_locomo_run(rows: list[dict[str, Any]], started: float, prediction_
             ),
         }
     survival_reports = [
-        row.get("metadata", {}).get("evidence_survival")
-        for row in rows
+        row.get("metadata", {}).get("evidence_survival") for row in rows
     ]
     measured_survival = [
         report for report in survival_reports if isinstance(report, dict)
     ]
     if measured_survival:
-        stages = sorted({
-            stage for report in measured_survival for stage in report
-        })
+        stages = sorted({stage for report in measured_survival for stage in report})
         summary["evidence_survival"] = {
             stage: {
                 "question_count": len(stage_reports),
@@ -235,17 +252,23 @@ def summarize_locomo_run(rows: list[dict[str, Any]], started: float, prediction_
                 ),
             }
             for stage in stages
-            if (stage_reports := [
-                report[stage]
-                for report in measured_survival
-                if isinstance(report.get(stage), dict)
-            ])
+            if (
+                stage_reports := [
+                    report[stage]
+                    for report in measured_survival
+                    if isinstance(report.get(stage), dict)
+                ]
+            )
         }
     return summary
 
 
 def _record_retrieval_evidence(answer: Any, evidence: Any) -> None:
     """Measure labeled-source recall when a synthetic benchmark context is retained."""
+    exact_context_report = answer.metadata.get("evidence_survival", {}).get("context")
+    if isinstance(exact_context_report, dict):
+        answer.metadata["retrieval_evidence"] = dict(exact_context_report)
+        return
     context = answer.metadata.get("retrieval_context")
     if not isinstance(context, str):
         return
@@ -266,20 +289,44 @@ def _record_retrieval_evidence(answer: Any, evidence: Any) -> None:
 
 
 def _record_evidence_survival(answer: Any, evidence: Any) -> None:
-    stage_labels = answer.metadata.pop("_evidence_stage_labels", None)
-    if not isinstance(stage_labels, dict):
+    evidence_segments = answer.metadata.pop("_evidence_stage_segments", None)
+    if not isinstance(evidence_segments, dict):
         return
     required = [str(label) for label in evidence or [] if str(label)]
     if not required:
         return
+    raw_segments_by_label = evidence_segments.get("segments_by_label")
+    raw_stages = evidence_segments.get("stages")
+    if not isinstance(raw_segments_by_label, dict) or not isinstance(raw_stages, dict):
+        return
+    segments_by_label = {
+        str(label): {str(segment_id) for segment_id in segment_ids or []}
+        for label, segment_ids in raw_segments_by_label.items()
+    }
     report = {}
-    for stage, raw_labels in stage_labels.items():
-        labels = {str(label) for label in raw_labels or []}
-        present = [label for label in required if label in labels]
+    for stage, raw_segment_ids in raw_stages.items():
+        represented = {str(segment_id) for segment_id in raw_segment_ids or []}
+        label_coverage = {
+            label: (
+                len(segments_by_label.get(label, set()) & represented)
+                / len(segments_by_label[label])
+                if segments_by_label.get(label)
+                else 0.0
+            )
+            for label in required
+        }
+        present = [label for label in required if label_coverage[label] == 1.0]
+        partially_present = [
+            label for label in required if 0.0 < label_coverage[label] < 1.0
+        ]
+        missing = [label for label in required if label_coverage[label] == 0.0]
         report[str(stage)] = {
             "required": required,
             "present": present,
-            "recall": len(present) / len(required),
+            "partially_present": partially_present,
+            "missing": missing,
+            "label_coverage": label_coverage,
+            "recall": mean(label_coverage.values()),
             "all_evidence_present": len(present) == len(required),
         }
     answer.metadata["evidence_survival"] = report
@@ -297,7 +344,10 @@ def write_json(path: Path, data: Any) -> None:
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+    path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
 
 
 def read_json_if_exists(path: Path, default: Any) -> Any:

@@ -131,7 +131,6 @@ class OllamaQaClient:
         response = await self.llm.call_messages(
             messages,
             max_tool_rounds=tools.search_limit,
-            tool_result_chars=max(8000, tools.remaining_evidence_tokens * 6),
             num_ctx=self.llm.context_window_tokens,
             think=True,
             tool_definitions=MEMORY_TOOL_DEFINITIONS,

@@ -61,7 +61,7 @@ def _evidence_for_pages(
             or (record.subject_entity_id is None and include_unowned)
         ),
         sources=evidence.sources,
-        truncated=evidence.truncated,
+        more_available=evidence.more_available,
     )
 
 
@@ -266,10 +266,6 @@ async def chat(session_id: str, req: ChatRequest):
             max_tool_rounds=mem.config.retrieval.tool_search_limit,
             tool_definitions=[web_search, web_fetch, *MEMORY_TOOL_DEFINITIONS],
             tool_runner=memory_tools.run,
-            tool_result_chars=max(
-                8000,
-                tool_evidence_budget * 6,
-            ),
         )
         assistant_timestamp = iso_now()
         response_text = chat_response.content

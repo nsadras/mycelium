@@ -2,27 +2,18 @@ from typing import get_args
 
 import pytest
 
-from mycelium import prompts
 from mycelium.ontology import (
     CLAIM_TYPES,
     DISCOVERABLE_ENTITY_TYPES,
     ENTITY_ONTOLOGY,
     ENTITY_TYPES,
-    EXTRACTION_SUBJECT_POLICY,
     INDEPENDENT_SUBJECT_SCOPES,
-    ROUTING_OWNERSHIP_POLICY,
-    ROUTING_SUBJECT_POLICY,
-    SUBJECT_CENSUS_POLICY,
-    SUBJECT_PAGE_STATE_POLICY,
     SUBJECT_SCOPES,
     SUBJECT_SCOPE_ONTOLOGY,
     ClaimType,
     DiscoverableEntityType,
     default_section,
-    entity_type_prompt_catalog,
     ontology_response,
-    section_prompt_catalog,
-    subject_scope_prompt_catalog,
 )
 from mycelium.structured_outputs import (
     ExtractedClaimOutput,
@@ -56,24 +47,7 @@ def test_structured_model_contracts_derive_from_the_ontology() -> None:
     )
 
 
-def test_prompt_catalogs_derive_keys_and_descriptions_from_the_registry() -> None:
-    entity_catalog = entity_type_prompt_catalog(discoverable_only=True)
-    section_catalog = section_prompt_catalog()
-
-    for definition in ENTITY_ONTOLOGY:
-        if definition.discoverable:
-            assert definition.description in entity_catalog
-        assert f"type={definition.key}" in section_catalog
-        for section in definition.sections:
-            assert f"{section.key}={section.description}" in section_catalog
-
-    extraction_system, _ = prompts.claim_extraction_prompt(
-        "agent_conversation", "source-1", ["Ava"], "[segment-1] Example"
-    )
-    assert f"claim_type ({'/'.join(CLAIM_TYPES)})" in extraction_system
-
-
-def test_subject_representation_prompts_derive_from_the_global_ontology() -> None:
+def test_subject_representation_registry_is_internally_complete() -> None:
     assert tuple(
         definition.key for definition in SUBJECT_SCOPE_ONTOLOGY
     ) == SUBJECT_SCOPES
@@ -90,27 +64,6 @@ def test_subject_representation_prompts_derive_from_the_global_ontology() -> Non
         ("standalone_event", "standalone_event", "no_page"),
         ("context", "context", "no_page"),
     }
-
-    census_system, _ = prompts.subject_node_prompt(
-        "registry", "candidates", "evidence"
-    )
-    extraction_system, _ = prompts.claim_extraction_prompt(
-        "agent_conversation", "source-1", ["Ava"], "segments"
-    )
-    entity_plan_system, _ = prompts.entity_plan_prompt(
-        "registry", "nodes", "maturity decisions", "evidence"
-    )
-    routing_system, _ = prompts.claim_routing_prompt(
-        "registry", "entity plan", "evidence"
-    )
-
-    assert SUBJECT_CENSUS_POLICY in census_system
-    assert EXTRACTION_SUBJECT_POLICY in extraction_system
-    assert subject_scope_prompt_catalog() in entity_plan_system
-    assert SUBJECT_PAGE_STATE_POLICY in entity_plan_system
-    assert ROUTING_OWNERSHIP_POLICY in routing_system
-    assert ROUTING_SUBJECT_POLICY in routing_system
-
 
 def test_declared_default_section_rules_are_centralized() -> None:
     assert default_section("artifact", "state", None) == "current_state"

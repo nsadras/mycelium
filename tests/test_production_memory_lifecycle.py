@@ -174,7 +174,6 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     assert fake.messages[0][-1]["content"].endswith(
         "I will send the Cedar brief tomorrow."
     )
-    assert "INITIAL MEMORY EVIDENCE" not in fake.messages[0][0]["content"]
     saved = runtime.load_meta()[session_id]
     assert saved["encoded_episodes"][-1]["id"] == f"{session_id}-ep-1"
     assert saved["active_episode"]["buffer"] == []

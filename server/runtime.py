@@ -170,7 +170,6 @@ def _format_tool_observation_content(
     status = "failed" if tool_event.get("failed") else "succeeded"
     arguments = json.dumps(tool_event.get("arguments", {}), indent=2, sort_keys=True)
     result = str(tool_event.get("result", "")).strip()
-    truncated = "yes" if tool_event.get("truncated") else "no"
 
     return "\n".join(
         [
@@ -181,7 +180,6 @@ def _format_tool_observation_content(
             f"- turn_count: {turn_count}",
             f"- tool_name: {tool_event.get('tool_name', 'unknown')}",
             f"- status: {status}",
-            f"- truncated: {truncated}",
             "",
             "Arguments:",
             "```json",
@@ -230,7 +228,6 @@ async def append_tool_event_logs(
                 "tool_name": tool_name,
                 "arguments": dict(tool_event.get("arguments") or {}),
                 "failed": bool(tool_event.get("failed")),
-                "truncated": bool(tool_event.get("truncated")),
             },
             segments=(SourceSegment(
                 segment_id="",

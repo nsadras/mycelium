@@ -10,6 +10,7 @@ from mycelium.operations import (
     EvidenceRecord,
     EvidenceSegment,
     EvidenceSource,
+    EvidenceSourceCitation,
     EvidenceTime,
     IngestionResult,
     MemoryEvidence,
@@ -23,7 +24,7 @@ __all__ = [
     'render_memory_context', 'SourceInput', 'IngestionResult',
     'RetrievalRequest', 'RetrievalResult', 'MemoryEvidence',
     'EvidenceRecord', 'EvidenceCitation', 'EvidenceTime',
-    'EvidenceSource', 'EvidenceSegment', 'ConsolidationRequest',
+    'EvidenceSource', 'EvidenceSourceCitation', 'EvidenceSegment', 'ConsolidationRequest',
     'ConsolidationResult', 'MemoryPipeline',
 ]
 __version__ = '0.1.0'

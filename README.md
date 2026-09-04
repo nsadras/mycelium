@@ -144,7 +144,7 @@ The web app is optional. The Python API exposes the same three-stage lifecycle u
 | Operation | Input | Output |
 | --- | --- | --- |
 | `ingest_source` | `SourceInput` with a transcript, source kind, participants, segments, and idempotency key | `IngestionResult` with the created log, source, episode, claim, and operation IDs |
-| `retrieve_context` | `RetrievalRequest` with a query and context budget | `RetrievalResult` with inspectable pages, typed evidence records and sources, authoritative JSON rendering, and a retrieval trace |
+| `retrieve_context` | `RetrievalRequest` with a query and context budget | `RetrievalResult` with inspectable pages, typed evidence records and sources, authoritative Markdown/pseudo-XML rendering, and a retrieval trace |
 | `consolidate` | `ConsolidationRequest` with dry-run and deferred-claim policy | `ConsolidationResult` with the Dream report and retried extraction IDs |
 
 For an ordinary agent turn, retrieve memory before generation and ingest the completed exchange afterward:

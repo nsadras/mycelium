@@ -1,4 +1,3 @@
-import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -9,9 +8,14 @@ from mycelium.operations import (
     EvidenceRecord,
     EvidenceSegment,
     EvidenceSource,
+    EvidenceSourceCitation,
     MemoryEvidence,
 )
-from mycelium.retrieval_context import render_memory_evidence
+from mycelium.budget import count_tokens
+from mycelium.retrieval_context import (
+    render_memory_evidence,
+    render_memory_search_result,
+)
 
 
 def _result(context: str, claim_ids: list[str]):
@@ -49,6 +53,12 @@ def _toolset(*, evidence_budget_tokens: int = 1000, search_limit: int = 2):
                     EvidenceSource(
                         source_id="source-2",
                         conversation_time="2026-01-01T00:00:00+00:00",
+                        citations=(
+                            EvidenceSourceCitation(
+                                claim_id="claim-2",
+                                segment_ids=("source-2#seg-1",),
+                            ),
+                        ),
                         segments=(
                             EvidenceSegment(
                                 segment_id="source-2#seg-1",
@@ -96,13 +106,20 @@ async def test_memory_search_uses_ranked_retrieval_and_accumulates_claim_ids():
     retriever.search_evidence.assert_awaited_once_with(
         "Mira's weekend music",
         limit=3,
-        budget_tokens=1000,
+        budget_tokens=(
+            1000
+            - count_tokens(
+                render_memory_search_result(
+                    MemoryEvidence(),
+                    query="Mira's weekend music",
+                    remaining_searches=1,
+                )
+            )
+        ),
         exclude_claim_ids={"claim-1"},
     )
-    assert result["claim_ids"] == ["claim-2"]
-    assert result["memory_evidence"]["records"][0]["statement"] == (
-        "evidence for claim two"
-    )
+    assert result.evidence.claim_ids == ("claim-2",)
+    assert result.evidence.records[0].statement == "evidence for claim two"
     assert tools.returned_claim_ids == {"claim-1", "claim-2"}
 
 
@@ -111,9 +128,9 @@ async def test_memory_search_is_bounded_across_one_response():
     tools, retriever = _toolset(search_limit=1)
 
     await tools.search("first missing relation")
-    result = await tools.search("second missing relation")
+    with pytest.raises(ValueError, match="search limit"):
+        await tools.search("second missing relation")
 
-    assert "limit" in result["error"]
     assert retriever.search_evidence.await_count == 1
 
 
@@ -125,9 +142,9 @@ async def test_memory_sources_only_reads_claims_already_returned():
     result = tools.sources(["claim-2", "unseen-claim"])
 
     retriever.source_evidence.assert_called_once()
-    assert result["claim_ids"] == ["claim-2"]
-    source = result["memory_evidence"]["sources"][0]
-    assert source["segments"][0]["content"] == "exact dialogue for claim two"
+    assert result.claim_ids == ("claim-2",)
+    source = result.evidence.sources[0]
+    assert source.segments[0].content == "exact dialogue for claim two"
 
 
 def test_memory_sources_rejects_unseen_claim_ids():
@@ -138,22 +155,39 @@ def test_memory_sources_rejects_unseen_claim_ids():
 
 
 @pytest.mark.asyncio
-async def test_tool_runner_returns_json_and_defers_non_memory_tools():
+async def test_tool_runner_returns_structured_text_and_defers_non_memory_tools():
     tools, _ = _toolset()
 
     memory_result = await tools.run("memory_search", {"query": "missing event"})
     web_result = await tools.run("web_search", {"query": "current event"})
 
-    assert json.loads(memory_result)["claim_ids"] == ["claim-2"]
+    assert memory_result.startswith("<memory-search-results>")
+    assert "Statement: evidence for claim two" in memory_result
+    assert "Supporting claims:\n- `claim-2`" in memory_result
     assert web_result is None
+
+
+@pytest.mark.asyncio
+async def test_source_tool_result_associates_claim_with_cited_transcript_line():
+    tools, _ = _toolset()
+    await tools.search("missing event")
+
+    result = await tools.run(
+        "memory_sources", {"claim_ids": ["claim-2"]}
+    )
+
+    assert result.startswith("<memory-source-results>")
+    assert "Requested claims: `claim-2`" in result
+    assert "`claim-2`: cited segments `source-2#seg-1`" in result
+    assert 'cited-for="claim-2"' in result
+    assert "Mira: exact dialogue for claim two" in result
 
 
 @pytest.mark.asyncio
 async def test_memory_evidence_budget_is_cumulative():
     tools, retriever = _toolset(evidence_budget_tokens=1)
 
-    await tools.search("missing event")
-    result = await tools.search("another event")
+    with pytest.raises(ValueError, match="budget has been exhausted"):
+        await tools.search("missing event")
 
-    assert result["error"] == "The memory evidence budget has been exhausted."
-    assert retriever.search_evidence.await_count == 1
+    retriever.search_evidence.assert_not_awaited()

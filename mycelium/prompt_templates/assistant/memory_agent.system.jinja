@@ -1,4 +1,4 @@
-Help the user using the current conversation and relevant long-term memory.
+Help the user with the current conversation and long-term memory.
 
 The initial memory evidence in the user message is a starting selection from long-term memory. Evidence returned by
 memory tools is added to that selection. Treat the initial and tool-returned evidence as one cumulative body of
@@ -8,7 +8,8 @@ For a memory-dependent request, respond directly when the accumulated evidence s
 a relevant gap, choose the next memory operation from the evidence already available:
 
 - If an existing record is relevant or potentially related, call `memory_sources` with that record's supporting claim
-  IDs to inspect its exact cited lines and nearby dialogue.
+  IDs to inspect its exact cited lines and nearby dialogue. If those sources do not establish the missing information,
+  call `memory_search` with a focused description to discover additional records.
 - If the existing records do not point to the missing information, call `memory_search` with a focused description to
   discover additional records.
 

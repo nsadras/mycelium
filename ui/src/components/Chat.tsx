@@ -53,7 +53,6 @@ function ToolEvents({ events }: { events: NonNullable<Message['tool_events']> })
                 <div>
                   <div className="mb-1 flex items-center gap-2 font-semibold uppercase tracking-wide text-slate-400">
                     Result
-                    {event.truncated && <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">truncated</span>}
                   </div>
                   <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-700">
                     {event.result || "(empty result)"}

@@ -77,9 +77,16 @@ class EvidenceSegment:
 
 
 @dataclass(frozen=True)
+class EvidenceSourceCitation:
+    claim_id: str
+    segment_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class EvidenceSource:
     source_id: str
     conversation_time: str
+    citations: tuple[EvidenceSourceCitation, ...]
     segments: tuple[EvidenceSegment, ...]
 
 
@@ -87,7 +94,7 @@ class EvidenceSource:
 class MemoryEvidence:
     records: tuple[EvidenceRecord, ...] = ()
     sources: tuple[EvidenceSource, ...] = ()
-    truncated: bool = False
+    more_available: bool = False
 
     @property
     def claim_ids(self) -> tuple[str, ...]:

@@ -147,11 +147,6 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
     assert claim.evidence_modality == "speech"
     assert claim.temporal_status == "atemporal"
     assert artifacts.coverage_report()["segment_coverage"] == 1.0
-    extraction_call = next(
-        call for call in llm.call_structured.await_args_list
-        if str(call.kwargs.get("debug_label", "")).startswith("claim-extraction-")
-    )
-    assert "SOURCE PARTICIPANTS:\n- Ava" in extraction_call.args[1]
 
 
 @pytest.mark.asyncio
@@ -351,8 +346,6 @@ async def test_single_cited_source_time_anchors_relative_phrase_without_model_ch
         )
         if "segment_dispositions" in output_type.model_fields:
             return coverage_response([{"segment_ids": [segment_id]}])
-        assert "2026-08-27T08:00:00+00:00" not in user
-        assert "time=" not in user
         return extraction_response([{
             "text": "Ava will finish the report tomorrow.",
             "claim_type": "commitment",

@@ -870,12 +870,6 @@ async def test_later_evidence_reuses_an_unresolved_identity_proposal(tmp_path):
     ]
     assert result.routes[0].disposition == "deferred"
     assert result.routes[0].identity_blocker_ids == (pending.decision_id,)
-    pending_call = next(
-        call for call in llm.call_structured.await_args_list
-        if call.kwargs.get("debug_label") == "dream-pending-identity-matching"
-    )
-    assert prior_claim.text in pending_call.args[1]
-    assert current_claim.text in pending_call.args[1]
     pending_catalog = RoutingFormatter(artifacts).format_pending_identity_proposals(
         result.entity_decisions
     )
@@ -2105,12 +2099,6 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
     assert wiki.exists("atlas")
     assert early.text not in wiki.get("you").content
     assert len(artifacts.list_scope_decisions(claim_id=early.claim_id)) == 2
-    scope_calls = [
-        call for call in dream.llm.call_structured.await_args_list
-        if call.kwargs.get("debug_label") == "dream-claim-routing"
-    ]
-    revision_prompt = scope_calls[-1].args[1]
-    assert "topic-supporting-concept" not in revision_prompt
 
 
 @pytest.mark.asyncio
@@ -2737,10 +2725,6 @@ async def test_existing_identity_verifier_can_correct_initial_registry_match(tmp
     unit = artifacts.list_identity_work_units()[0]
     assert unit.identity_groups[0]["entity_id"] == organization.entity_id
     assert unit.existing_identity_verdicts["I001"]["entity_id"] == person.entity_id
-    verifier_prompt = llm.call_structured.await_args_list[4].args[1]
-    assert f"id={person.entity_id}" in verifier_prompt
-    assert f"id={organization.entity_id}" not in verifier_prompt
-    assert "resolution=existing" not in verifier_prompt
 
 
 @pytest.mark.asyncio

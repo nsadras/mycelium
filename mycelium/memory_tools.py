@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict
+from dataclasses import dataclass
 from typing import Any
 
 from mycelium.budget import count_tokens
+from mycelium.operations import MemoryEvidence
 from mycelium.retrieval import MemoryRetriever
+from mycelium.retrieval_context import (
+    render_memory_search_result,
+    render_memory_source_result,
+    render_memory_tool_error,
+)
 
 
 MEMORY_TOOL_NAMES = frozenset({"memory_search", "memory_sources"})
@@ -69,6 +74,19 @@ MEMORY_TOOL_DEFINITIONS: list[dict[str, Any]] = [
 ]
 
 
+@dataclass(frozen=True)
+class MemorySearchToolResult:
+    query: str
+    evidence: MemoryEvidence
+    remaining_searches: int
+
+
+@dataclass(frozen=True)
+class MemorySourceToolResult:
+    claim_ids: tuple[str, ...]
+    evidence: MemoryEvidence
+
+
 class MemoryToolset:
     """Execute one request's bounded, cumulative memory exploration."""
 
@@ -103,46 +121,67 @@ class MemoryToolset:
                         high=self.result_limit,
                     ),
                 )
+                return render_memory_search_result(
+                    result.evidence,
+                    query=result.query,
+                    remaining_searches=result.remaining_searches,
+                )
             else:
                 result = self.sources(_string_list(arguments.get("claim_ids"), limit=6))
-            return json.dumps(result, ensure_ascii=False, sort_keys=True)
+                return render_memory_source_result(
+                    result.evidence,
+                    requested_claim_ids=list(result.claim_ids),
+                )
         except (TypeError, ValueError) as exc:
-            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+            return render_memory_tool_error(str(exc))
 
-    async def search(self, query: str, *, limit: int | None = None) -> dict[str, Any]:
+    async def search(
+        self, query: str, *, limit: int | None = None
+    ) -> MemorySearchToolResult:
         query = " ".join(query.split()).strip()
         if not query:
             raise ValueError("memory_search requires a nonempty query")
         if self.search_count >= self.search_limit:
-            return {
-                "error": "The memory search limit for this response has been reached.",
-                "search_limit": self.search_limit,
-            }
+            raise ValueError("The memory search limit for this response has been reached.")
         if self.remaining_evidence_tokens <= 0:
-            return {"error": "The memory evidence budget has been exhausted."}
+            raise ValueError("The memory evidence budget has been exhausted.")
 
+        remaining_searches = self.search_limit - (self.search_count + 1)
+        envelope_tokens = count_tokens(
+            render_memory_search_result(
+                MemoryEvidence(),
+                query=query,
+                remaining_searches=remaining_searches,
+            )
+        )
+        evidence_budget = self.remaining_evidence_tokens - envelope_tokens
+        if evidence_budget <= 0:
+            raise ValueError("The memory evidence budget has been exhausted.")
         self.search_count += 1
         result = await self.retriever.search_evidence(
             query,
             limit=limit or self.result_limit,
-            budget_tokens=self.remaining_evidence_tokens,
+            budget_tokens=evidence_budget,
             exclude_claim_ids=set(self.returned_claim_ids),
         )
         returned_ids = list(result.evidence.claim_ids)
         self.returned_claim_ids.update(returned_ids)
-        used_tokens = count_tokens(result.rendered_context)
+        rendered_result = render_memory_search_result(
+            result.evidence,
+            query=query,
+            remaining_searches=remaining_searches,
+        )
+        used_tokens = count_tokens(rendered_result)
         self.remaining_evidence_tokens = max(
             0, self.remaining_evidence_tokens - used_tokens
         )
-        return {
-            "query": query,
-            "claim_ids": returned_ids,
-            "memory_evidence": asdict(result.evidence),
-            "remaining_searches": self.search_limit - self.search_count,
-            "remaining_evidence_tokens": self.remaining_evidence_tokens,
-        }
+        return MemorySearchToolResult(
+            query=query,
+            evidence=result.evidence,
+            remaining_searches=remaining_searches,
+        )
 
-    def sources(self, claim_ids: list[str]) -> dict[str, Any]:
+    def sources(self, claim_ids: list[str]) -> MemorySourceToolResult:
         if not claim_ids:
             raise ValueError("memory_sources requires at least one claim ID")
         permitted = [
@@ -155,21 +194,27 @@ class MemoryToolset:
                 "memory_sources requires claim IDs already shown in this response"
             )
         if self.remaining_evidence_tokens <= 0:
-            return {"error": "The memory evidence budget has been exhausted."}
+            raise ValueError("The memory evidence budget has been exhausted.")
 
-        evidence = self.retriever.source_evidence(
-            permitted, budget_tokens=self.remaining_evidence_tokens
+        envelope_tokens = count_tokens(
+            render_memory_source_result(
+                MemoryEvidence(), requested_claim_ids=permitted
+            )
         )
-        rendered_evidence = json.dumps(asdict(evidence), ensure_ascii=False)
+        evidence_budget = self.remaining_evidence_tokens - envelope_tokens
+        if evidence_budget <= 0:
+            raise ValueError("The memory evidence budget has been exhausted.")
+        evidence = self.retriever.source_evidence(
+            permitted, budget_tokens=evidence_budget
+        )
+        rendered_evidence = render_memory_source_result(
+            evidence, requested_claim_ids=permitted
+        )
         used_tokens = count_tokens(rendered_evidence)
         self.remaining_evidence_tokens = max(
             0, self.remaining_evidence_tokens - used_tokens
         )
-        return {
-            "claim_ids": permitted,
-            "memory_evidence": asdict(evidence),
-            "remaining_evidence_tokens": self.remaining_evidence_tokens,
-        }
+        return MemorySourceToolResult(tuple(permitted), evidence)
 
 
 def _bounded_int(value: Any, *, default: int, low: int, high: int) -> int:

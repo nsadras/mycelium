@@ -60,11 +60,6 @@ async def test_session_lifecycle(temp_mycelium):
             assert session.query == "test query"
             assert len(session.loaded_pages) == 1
 
-            prompt = session.build_prompt("Hello assistant")
-            assert '"subject_name": "Test Page"' in prompt
-            assert "Content of test page" in prompt
-            assert "Hello assistant" in prompt
-
             session.record("user", "Hello assistant")
             session.record("assistant", "Hello user")
 

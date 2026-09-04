@@ -467,8 +467,9 @@ async def test_qa_client_exposes_bounded_memory_tools_and_records_their_evidence
                     tool_name="memory_search",
                     arguments={"query": "Sam creative outlet"},
                     result=(
-                        '{"claim_ids": ["claim-sam"], "memory_evidence": '
-                        '{"records": []}}'
+                        "<memory-search-results>\n"
+                        "Statement: Sam practiced watercolor painting.\n"
+                        "</memory-search-results>"
                     ),
                 )
             ],
@@ -512,14 +513,6 @@ async def test_qa_client_exposes_bounded_memory_tools_and_records_their_evidence
     assert call.kwargs["max_tool_rounds"] == 3
     assert "num_predict" not in call.kwargs
     assert call.kwargs["num_ctx"] == client.llm.context_window_tokens
-    assert "Evan practiced watercolor painting." not in call.args[0][0]["content"]
-    assert "INITIAL MEMORY EVIDENCE" in call.args[0][1]["content"]
-    assert "Evan practiced watercolor painting." in call.args[0][1]["content"]
-    assert call.args[0][1]["content"].endswith("What creative outlet did Sam use?")
-    assert (
-        "For a synthesis or recommendation, return one sentence"
-        in (call.args[0][0]["content"])
-    )
     assert answer.output == "watercolor painting"
     assert answer.metadata["memory_tool_events"][0]["tool_name"] == "memory_search"
     assert answer.metadata["agent_execution_trace"][0]["thinking"] == (

@@ -26,7 +26,6 @@ class ToolEvent:
     arguments: dict[str, Any]
     result: str
     failed: bool = False
-    truncated: bool = False
 
 
 @dataclass
@@ -106,7 +105,6 @@ class OllamaClient:
         temperature: Optional[float] = None,
         enable_tools: bool = True,
         max_tool_rounds: int = 5,
-        tool_result_chars: int = 8000,
         num_ctx: int | None = None,
         num_predict: int | None = None,
         think: bool | None = None,
@@ -150,7 +148,6 @@ class OllamaClient:
                     options=options,
                     enable_tools=enable_tools,
                     max_tool_rounds=max_tool_rounds,
-                    tool_result_chars=tool_result_chars,
                     tool_events=tool_events,
                     execution_trace=execution_trace,
                     think=think,
@@ -199,7 +196,6 @@ class OllamaClient:
         options: dict[str, Any],
         enable_tools: bool,
         max_tool_rounds: int,
-        tool_result_chars: int,
         tool_events: list[ToolEvent],
         execution_trace: list[AgentExecutionStep],
         think: bool | None,
@@ -258,14 +254,16 @@ class OllamaClient:
                 )
                 if result is None:
                     result = await self._run_tool(tool_name, tool_args)
-                truncated = result[:tool_result_chars]
-                failed = result.startswith(f"Tool {tool_name} failed:") or result == f"Tool {tool_name} not found"
+                failed = (
+                    result.startswith(f"Tool {tool_name} failed:")
+                    or result == f"Tool {tool_name} not found"
+                    or result.startswith("<memory-tool-error>")
+                )
                 tool_event = ToolEvent(
                     tool_name=tool_name,
                     arguments=tool_args,
-                    result=truncated,
+                    result=result,
                     failed=failed,
-                    truncated=len(result) > len(truncated),
                 )
                 tool_events.append(tool_event)
                 step.tool_events.append(tool_event)
@@ -278,12 +276,13 @@ class OllamaClient:
                             "argument_keys": sorted(tool_args),
                             "result_chars": len(result),
                             "failed": failed,
-                            "truncated": len(result) > len(truncated),
                         },
                         ensure_ascii=False,
                     ),
                 )
-                messages.append({"role": "tool", "content": truncated, "tool_name": tool_name})
+                messages.append(
+                    {"role": "tool", "content": result, "tool_name": tool_name}
+                )
             step.outcome = "tools_executed"
         return "", {}
 

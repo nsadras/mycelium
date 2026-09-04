@@ -47,7 +47,6 @@ export interface ToolEvent {
   arguments: Record<string, unknown>;
   result: string;
   failed?: boolean;
-  truncated?: boolean;
 }
 
 export interface LoadedPage {

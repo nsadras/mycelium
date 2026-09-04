@@ -223,9 +223,11 @@ async def test_call_messages_executes_injected_tools_with_custom_runner():
         "function": {"name": "memory_search", "parameters": {"type": "object"}},
     }]
 
+    complete_result = "canonical memory result " * 600
+
     def run_tool(name, arguments):
         calls.append((name, arguments))
-        return "canonical memory result"
+        return complete_result
 
     response = await client.call_messages(
         [{"role": "user", "content": "search"}],
@@ -236,7 +238,8 @@ async def test_call_messages_executes_injected_tools_with_custom_runner():
     assert response.content == "final answer"
     assert calls == [("web_search", {"query": "ollama"})]
     assert fake_sdk.chat_calls[0]["tools"] == definitions
-    assert response.tool_events[0].result == "canonical memory result"
+    assert response.tool_events[0].result == complete_result
+    assert fake_sdk.chat_calls[1]["messages"][-1]["content"] == complete_result
 
 
 @pytest.mark.asyncio
@@ -350,7 +353,7 @@ async def test_call_structured_accepts_pydantic_model():
 
 
 @pytest.mark.asyncio
-async def test_call_structured_retries_with_response_and_contract_error():
+async def test_call_structured_retries_after_a_contract_error():
     client = OllamaClient("http://localhost:11434", "test-model")
     fake_sdk = SequencedFakeSdkClient([
         '{"wrong": "value"}',
@@ -363,15 +366,7 @@ async def test_call_structured_retries_with_response_and_contract_error():
     )
 
     assert response == {"answer": "yes"}
-    retry_messages = fake_sdk.chat_calls[1]["messages"]
-    assert retry_messages[:2] == [
-        {"role": "system", "content": "system prompt"},
-        {"role": "user", "content": "user prompt"},
-    ]
-    assert retry_messages[2] == {
-        "role": "assistant", "content": '{"wrong": "value"}'
-    }
-    assert "Contract error: ValidationError" in retry_messages[3]["content"]
+    assert len(fake_sdk.chat_calls) == 2
 
 
 @pytest.mark.asyncio

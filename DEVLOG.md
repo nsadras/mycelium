@@ -3103,3 +3103,83 @@ one prose-similarity summary.
   and all five false-premise questions were handled correctly. Remaining weaknesses are selective source/search
   coverage and evidence interpretation, especially temporal attribution, counts, and connecting the old-Prius
   breakdown to the separately recorded new Prius.
+
+## 2026-09-04 — Deliberate memory-result representation
+
+- Replaced model-facing JSON evidence with one Markdown/pseudo-XML renderer shared by initial retrieval,
+  `memory_search`, and `memory_sources`. Records now lead with their statement and subject. Source results explicitly
+  map each supporting claim to its cited segment IDs and render the selected transcript in source order, marking cited
+  lines in place. Free text is escaped before entering the markup.
+- Removed generic character slicing from the Ollama tool loop and removed the obsolete truncation field from tool
+  events, server persistence, and the UI. Search and source tools reserve their envelope cost before retrieval, admit
+  only complete evidence units under their cumulative token budget, and report when more evidence remains available.
+- Before integration, a direct `gemma4:latest` probe using the production prompt and tool definitions inspected a
+  related claim through the proposed source format, followed the explicit claim-to-segment association, and answered
+  that Jordan recommended Mira's novel. A sufficient cello counterexample answered directly without calling a tool.
+- The focused representation/runtime suite passed **76/76**. The complete deterministic backend suite passed **324
+  tests with 2 skipped**; Ruff, `git diff --check`, UI lint, and the UI production build passed.
+- The identical frozen sample-9 five-per-category replay completed **25/25** without tool, parsing, generation, or
+  result-shape errors at `benchmark_runs/locomo-convo-9-markup-evidence-panel5-20260904`. All tool-result documents
+  were complete; the largest cumulative result for one question was **2,990 tokens** against the 6,000-token budget.
+  Mean QA input fell from **1,194 to 929 tokens** compared with compact JSON, while context evidence recall rose from
+  **0.3623 to 0.3741**.
+- Mean score was **0.4865**, versus **0.5039** for compact JSON and **0.4078** for automatically expanded JSON. Four
+  questions improved, six regressed, and fifteen were unchanged. The format corrected the Prius count to **Two** and
+  selected the earlier May doctor visit rather than the later October warning; all five false-premise questions
+  remained correct. Two measured regressions were token-overlap artifacts on semantically equivalent answers. One
+  substantive regression exposed the next agent-control issue: after source inspection failed to establish the May
+  24 family destination, the model stopped instead of using `memory_search` for the remaining gap.
+
+## 2026-09-04 — Search/source result strategy comparison
+
+- Directly probed the production assistant prompt and tool schemas with a neutral incomplete-memory example before
+  running the comparison. After `memory_sources` showed that a known claim did not establish the requested travel
+  detail, an explicit operation result saying that unresolved information should be discovered with a focused
+  `memory_search` caused `gemma4:latest` to search, retain the intermediate reasoning, and answer from the newly
+  returned record.
+- Replayed the same frozen sample-9 store and the same five questions from each category through three isolated arms
+  at `benchmark_runs/memory-search-source-strategies-20260904`: separate search/source tools with that transition
+  guidance, search results with automatic exact cited lines, and search results with automatic chronological source
+  neighborhoods. All **75/75** question runs completed without API, tool, parsing, generation, or markup-shape errors.
+  No tool result exceeded its cumulative 6,000-token evidence budget; the largest per-question totals were **3,027**,
+  **3,027**, and **4,717** tokens respectively.
+- The separate arm scored **0.4589** with context evidence recall **0.4091**. Automatic exact citations scored
+  **0.4355** with recall **0.4583**. Automatic full neighborhoods scored **0.4156** with recall **0.6083**. Thus the
+  additional source text improved bulk evidence coverage monotonically but answer quality moved in the opposite
+  direction. Mean initial input remained approximately **929 tokens** in all three arms because source text was added
+  only after a search.
+- The transition guidance produced one genuine `memory_sources` -> `memory_search` continuation in the exact-citation
+  arm, on the replacement-Prius question. The returned source had already said Evan had just returned in his **new
+  Prius**, and the subsequent search returned the same fact, but the model still refused because it interpreted the
+  question as asking for a different car after the new Prius failed. This is an evidence-composition failure, not an
+  evidence-availability failure.
+- Automatic source inclusion introduced a concrete precision risk on false-premise questions. Exact citations caused
+  one response to substitute Evan's Jasper trip for a nonexistent Sam trip; full neighborhoods caused another to
+  answer what Evan found relaxing after correctly observing that Sam had never taken the trip. The separate arm
+  correctly refused all five false-premise questions. Conversely, the exact and full arms recovered Jasper on one
+  ordinary question because those runs chose `memory_search` first while the separate run chose `memory_sources`;
+  that gain occurred before their result-format difference and demonstrates remaining tool-choice variance rather
+  than a benefit from automatic source attachment.
+- The result supports retaining the explicit two-step graph: compact records for discovery, then source expansion when
+  exact wording or context is needed. Source text should not be attached automatically to every search hit. The next
+  improvement should make the post-source decision more reliable and improve relationship/temporal composition,
+  while preserving the distinct operations and their inspectable claim-to-source edge.
+
+## 2026-09-04 — Production source-to-search transition
+
+- Kept `memory_search` and `memory_sources` as distinct production operations. The production assistant system prompt
+  now states the tested transition explicitly: inspect an existing relevant record with `memory_sources`, then use a
+  focused `memory_search` when those sources do not establish the remaining information. Search results remain compact
+  records with citation pointers; neither exact cited lines nor full source neighborhoods are attached automatically.
+- Validated the actual production prompt and tool definitions against `gemma4:latest`. In a neutral case where no
+  existing record pointed to the requested city, the model called `memory_search` directly and answered from the new
+  record. In a compound counterexample, it called `memory_sources` to recover the title of Jordan's recommendation,
+  recognized that the city was still missing, called `memory_search`, and combined both results correctly in the final
+  answer while retaining the intermediate reasoning across all three rounds.
+- Removed tests that pin prompt wording or inspect prompt strings. Template tests now cover external template
+  discovery, strict variable handling, and package inclusion; semantic prompt behavior is established with direct
+  configured-model probes and persisted pipeline runs rather than copy assertions.
+- The focused retrieval/runtime suite passed **73/73**. The deterministic backend suite excluding the independently
+  non-terminating LanceDB, Engram, and production-lifecycle test files passed **299 tests with 2 skipped**. Ruff,
+  `git diff --check`, UI lint, and the UI production build passed. The LanceDB test hung when run alone, and the full
+  suite also stalled in Engram tests; both processes were stopped without producing test failures.

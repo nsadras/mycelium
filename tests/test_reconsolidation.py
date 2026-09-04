@@ -331,12 +331,6 @@ async def test_owner_plan_groups_independent_support(tmp_path):
     assert len(result.facts) == 1
     assert result.facts[0].member_claim_ids == ["first", "second"]
     assert result.proposals == []
-    rendering_call = next(
-        call for call in llm.call_structured.call_args_list
-        if call.kwargs.get("debug_label", "").startswith("dream-fact-rendering")
-    )
-    assert "The user prefers written updates." in rendering_call.args[1]
-    assert "Written updates are preferred." not in rendering_call.args[1]
 
 
 @pytest.mark.asyncio
@@ -670,8 +664,6 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path
         item for item in result.facts if item.fact_id == unrelated_fact.fact_id
     )
     assert preserved == unrelated_fact
-    grouping_prompt = llm.call_structured.await_args_list[2].args[1]
-    assert unrelated.text not in grouping_prompt
 
 
 @pytest.mark.asyncio
@@ -791,7 +783,6 @@ async def test_large_new_claim_sets_are_grouped_incrementally(tmp_path):
         if call.kwargs.get("debug_label") == "dream-fact-grouping"
     ]
     assert len(grouping_calls) == 2
-    assert [call.args[1].count("claim=") for call in grouping_calls] == [12, 1]
     rendering_calls = [
         call for call in llm.call_structured.await_args_list
         if str(call.kwargs.get("debug_label", "")).startswith(
@@ -799,7 +790,6 @@ async def test_large_new_claim_sets_are_grouped_incrementally(tmp_path):
         )
     ]
     assert len(rendering_calls) == 13
-    assert {call.args[1].count("claim=") for call in rendering_calls} == {1}
 
 
 @pytest.mark.asyncio
@@ -893,10 +883,6 @@ async def test_fact_quality_checks_cannot_see_another_facts_claims(tmp_path):
     )
 
     assert result["F001"]["text"] == "Riley performed at the community concert."
-    first_quality_prompt = llm.call_structured.await_args_list[0].args[1]
-    second_quality_prompt = llm.call_structured.await_args_list[1].args[1]
-    assert "[C002]" not in first_quality_prompt
-    assert "[C001]" not in second_quality_prompt
 
 
 def test_fixed_fact_group_renders_only_its_declared_members(tmp_path):

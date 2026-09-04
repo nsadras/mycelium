@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
-import json
+from html import escape
 from typing import Any, Literal
 
 from mycelium.artifacts import (
@@ -23,6 +23,7 @@ from mycelium.operations import (
     EvidenceRecord,
     EvidenceSegment,
     EvidenceSource,
+    EvidenceSourceCitation,
     EvidenceTime,
     MemoryEvidence,
 )
@@ -36,8 +37,172 @@ class _RetrievedRecord:
 
 
 def render_memory_evidence(evidence: MemoryEvidence) -> str:
-    """Render the shared model-facing evidence contract as valid JSON."""
-    return json.dumps(asdict(evidence), indent=2, ensure_ascii=False)
+    """Render initial evidence with the shared model-facing representation."""
+    return _render_evidence_envelope("memory-evidence", evidence)
+
+
+def render_memory_search_result(
+    evidence: MemoryEvidence,
+    *,
+    query: str,
+    remaining_searches: int,
+) -> str:
+    """Render a complete, bounded memory-search result."""
+    return _render_evidence_envelope(
+        "memory-search-results",
+        evidence,
+        preamble=(
+            f"Query: {_text(query)}",
+            f"Remaining searches: {remaining_searches}",
+        ),
+    )
+
+
+def render_memory_source_result(
+    evidence: MemoryEvidence,
+    *,
+    requested_claim_ids: list[str],
+) -> str:
+    """Render complete source excerpts with explicit claim ownership."""
+    requested = ", ".join(f"`{_text(value)}`" for value in requested_claim_ids)
+    return _render_evidence_envelope(
+        "memory-source-results",
+        evidence,
+        preamble=(f"Requested claims: {requested}",),
+    )
+
+
+def render_memory_tool_error(message: str) -> str:
+    """Render a model-visible memory-tool failure without an ambiguous partial result."""
+    return "\n".join(
+        ["<memory-tool-error>", _text(message), "</memory-tool-error>"]
+    )
+
+
+def _render_evidence_envelope(
+    tag: str,
+    evidence: MemoryEvidence,
+    *,
+    preamble: tuple[str, ...] = (),
+) -> str:
+    lines = [f"<{tag}>", *preamble]
+    if preamble and (evidence.records or evidence.sources):
+        lines.append("")
+    lines.extend(_render_records(evidence.records))
+    if evidence.records and evidence.sources:
+        lines.append("")
+    lines.extend(_render_sources(evidence.sources))
+    if not evidence.records and not evidence.sources:
+        lines.append("No memory evidence found.")
+    if evidence.more_available:
+        lines.extend(["", "More evidence available: yes"])
+    lines.append(f"</{tag}>")
+    return "\n".join(lines)
+
+
+def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
+    lines: list[str] = []
+    for index, record in enumerate(records):
+        if index:
+            lines.append("")
+        lines.extend(
+            [
+                f"## Record `{_text(record.record_id)}`",
+                f"Statement: {_text(record.statement)}",
+                f"Type: {_text(record.record_type)}",
+            ]
+        )
+        if record.subject_name or record.subject_entity_id:
+            subject = _text(record.subject_name or "Unnamed subject")
+            if record.subject_entity_id:
+                subject += f" (`{_text(record.subject_entity_id)}`)"
+            lines.append(f"Subject: {subject}")
+        if record.state:
+            lines.append(f"State: {_text(record.state)}")
+        lines.append("Supporting claims:")
+        lines.extend(f"- `{_text(value)}`" for value in record.claim_ids)
+        if record.temporal:
+            lines.append("Timing:")
+            for value in record.temporal:
+                interval = _text(value.start)
+                if value.end and value.end != value.start:
+                    interval += f" through {_text(value.end)}"
+                expression = (
+                    f"; source expression: {_text(value.expression)}"
+                    if value.expression
+                    else ""
+                )
+                lines.append(
+                    f"- Claim `{_text(value.claim_id)}`: {_text(value.role)} "
+                    f"{interval}{expression}"
+                )
+        if record.citations:
+            lines.append("Evidence references:")
+            for citation in record.citations:
+                segments = ", ".join(
+                    f"`{_text(value)}`" for value in citation.segment_ids
+                )
+                source_time = (
+                    f"; conversation time: {_text(citation.source_time)}"
+                    if citation.source_time
+                    else ""
+                )
+                lines.append(
+                    f"- Claim `{_text(citation.claim_id)}` → source "
+                    f"`{_text(citation.source_id)}`{source_time}; cited segments: "
+                    f"{segments or '(none)'}"
+                )
+    return lines
+
+
+def _render_sources(sources: tuple[EvidenceSource, ...]) -> list[str]:
+    lines: list[str] = []
+    for index, source in enumerate(sources):
+        if index:
+            lines.append("")
+        lines.extend(
+            [
+                f"## Source `{_text(source.source_id)}`",
+                f"Conversation time: {_text(source.conversation_time)}",
+                "Supports claims:",
+            ]
+        )
+        cited_claims_by_segment: dict[str, list[str]] = defaultdict(list)
+        for citation in source.citations:
+            segments = ", ".join(
+                f"`{_text(value)}`" for value in citation.segment_ids
+            )
+            lines.append(
+                f"- `{_text(citation.claim_id)}`: cited segments "
+                f"{segments or '(none)'}"
+            )
+            for segment_id in citation.segment_ids:
+                cited_claims_by_segment[segment_id].append(citation.claim_id)
+        lines.append("<transcript>")
+        for segment in source.segments:
+            claim_ids = cited_claims_by_segment.get(segment.segment_id, [])
+            cited = (
+                " cited-for=\""
+                + " ".join(_attribute(value) for value in claim_ids)
+                + "\""
+                if claim_ids
+                else ""
+            )
+            speaker = f"{_text(segment.speaker)}: " if segment.speaker else ""
+            lines.append(
+                f"[segment `{_text(segment.segment_id)}`{cited}] "
+                f"{speaker}{_text(segment.content)}"
+            )
+        lines.append("</transcript>")
+    return lines
+
+
+def _text(value: object) -> str:
+    return escape(str(value), quote=False)
+
+
+def _attribute(value: object) -> str:
+    return escape(str(value), quote=True)
 
 
 class RetrievedContextBuilder:
@@ -190,7 +355,10 @@ class RetrievedContextBuilder:
                 )
             )
             seen_record_ids.add(claim.claim_id)
-        return MemoryEvidence(records=tuple(records))
+        return MemoryEvidence(
+            records=tuple(records),
+            more_available=any(hit.claim_id not in rendered for hit in hits),
+        )
 
     def _structured_record(
         self,
@@ -270,58 +438,106 @@ class RetrievedContextBuilder:
     def _structured_source_evidence(
         self, claims: list[MemoryClaim], *, budget_tokens: int
     ) -> MemoryEvidence:
-        cited_by_source: dict[str, set[str]] = defaultdict(set)
+        cited_by_source: dict[str, dict[str, set[str]]] = defaultdict(
+            lambda: defaultdict(set)
+        )
         for claim in claims:
             for provenance in claim.provenance:
-                cited_by_source[provenance.source_id].update(provenance.segment_ids)
+                cited_by_source[provenance.source_id][claim.claim_id].update(
+                    provenance.segment_ids
+                )
 
         sources: list[EvidenceSource] = []
-        truncated = False
-        for source_id, cited_ids in cited_by_source.items():
+        more_available = False
+        for source_id, cited_by_claim in cited_by_source.items():
             try:
                 source = self.artifacts.get_source(source_id)
             except FileNotFoundError:
                 continue
+            cited_ids = {
+                segment_id
+                for segment_ids in cited_by_claim.values()
+                for segment_id in segment_ids
+            }
             selected_ids = self._neighbor_segment_ids(source.segments, cited_ids)
-            ordered = [
+            cited_segments = [
                 segment
                 for segment in source.segments
                 if segment.segment_id in cited_ids
-            ] + [
+            ]
+            context_segments = [
                 segment
                 for segment in source.segments
                 if segment.segment_id in selected_ids
                 and segment.segment_id not in cited_ids
             ]
-            accepted: list[EvidenceSegment] = []
-            for segment in ordered:
-                candidate = EvidenceSegment(
-                    segment_id=segment.segment_id,
-                    relationship=(
-                        "cited" if segment.segment_id in cited_ids else "context"
-                    ),
-                    speaker=segment.speaker,
-                    content=" ".join(segment.content.split()),
+            accepted_ids: set[str] = set()
+            for segment in [*cited_segments, *context_segments]:
+                trial_ids = {*accepted_ids, segment.segment_id}
+                trial_segments = tuple(
+                    self._evidence_segment(value, cited_ids)
+                    for value in source.segments
+                    if value.segment_id in trial_ids
                 )
                 trial_source = EvidenceSource(
                     source_id=source.source_id,
                     conversation_time=source.occurred_at or source.recorded_at,
-                    segments=tuple([*accepted, candidate]),
+                    citations=self._source_citations(cited_by_claim, trial_ids),
+                    segments=trial_segments,
                 )
                 trial = MemoryEvidence(sources=tuple([*sources, trial_source]))
                 if count_tokens(render_memory_evidence(trial)) > budget_tokens:
-                    truncated = True
+                    more_available = True
                     continue
-                accepted.append(candidate)
-            if accepted:
+                accepted_ids.add(segment.segment_id)
+            if accepted_ids:
                 sources.append(
                     EvidenceSource(
                         source_id=source.source_id,
                         conversation_time=source.occurred_at or source.recorded_at,
-                        segments=tuple(accepted),
+                        citations=self._source_citations(
+                            cited_by_claim, accepted_ids
+                        ),
+                        segments=tuple(
+                            self._evidence_segment(value, cited_ids)
+                            for value in source.segments
+                            if value.segment_id in accepted_ids
+                        ),
                     )
                 )
-        return MemoryEvidence(sources=tuple(sources), truncated=truncated)
+        return MemoryEvidence(
+            sources=tuple(sources), more_available=more_available
+        )
+
+    @staticmethod
+    def _evidence_segment(
+        segment: SourceSegment, cited_ids: set[str]
+    ) -> EvidenceSegment:
+        return EvidenceSegment(
+            segment_id=segment.segment_id,
+            relationship="cited" if segment.segment_id in cited_ids else "context",
+            speaker=segment.speaker,
+            content=" ".join(segment.content.split()),
+        )
+
+    @staticmethod
+    def _source_citations(
+        cited_by_claim: dict[str, set[str]], accepted_ids: set[str]
+    ) -> tuple[EvidenceSourceCitation, ...]:
+        return tuple(
+            EvidenceSourceCitation(
+                claim_id=claim_id,
+                segment_ids=tuple(
+                    sorted(
+                        segment_id
+                        for segment_id in segment_ids
+                        if segment_id in accepted_ids
+                    )
+                ),
+            )
+            for claim_id, segment_ids in cited_by_claim.items()
+            if any(segment_id in accepted_ids for segment_id in segment_ids)
+        )
 
     def _pages(self, groups: dict[str, dict[str, Any]]) -> list[WikiPage]:
         now = datetime.now().astimezone()

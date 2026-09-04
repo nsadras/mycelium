@@ -95,7 +95,6 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
                 "arguments": {"query": "local llm news"},
                 "result": "1. Result\nhttps://example.com\nUseful new information.",
                 "failed": False,
-                "truncated": True,
             }
         ],
         turn_count=2,
@@ -138,7 +137,6 @@ async def test_append_tool_event_logs_does_not_reingest_memory_reads(monkeypatch
                 "arguments": {"query": "prior project"},
                 "result": "existing canonical memory",
                 "failed": False,
-                "truncated": False,
             }
         ],
         turn_count=2,

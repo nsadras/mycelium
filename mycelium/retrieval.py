@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from mycelium.artifacts import ArtifactStore
 from mycelium.claim_index import LanceClaimIndex
 from mycelium.context_selection import (
@@ -89,10 +91,13 @@ class MemoryRetriever:
         """Return additional ranked evidence without a separate model gate."""
         excluded = exclude_claim_ids or set()
         hits = await self.claim_index.search(query, limit=limit + len(excluded))
-        selected_hits = [hit for hit in hits if hit.claim_id not in excluded][:limit]
+        available_hits = [hit for hit in hits if hit.claim_id not in excluded]
+        selected_hits = available_hits[:limit]
         pages, rendered_claim_ids, evidence = self.context_builder.build(
             selected_hits, budget_tokens=budget_tokens
         )
+        if len(available_hits) > len(selected_hits):
+            evidence = replace(evidence, more_available=True)
         return RetrievalResult(
             tuple(pages),
             evidence,

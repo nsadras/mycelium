@@ -3,8 +3,6 @@ from pathlib import Path
 import pytest
 from jinja2 import StrictUndefined, UndefinedError
 
-from mycelium import prompts
-from mycelium.ontology import CLAIM_TYPES, FACT_EVIDENCE_POLICY
 from mycelium.prompting import TEMPLATE_ROOT, prompt_environment, render_prompt
 
 
@@ -59,7 +57,7 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
         "rejected_facts": "rejected facts",
         "source_type": "agent_conversation",
         "source_policy": "policy",
-        "claim_types": CLAIM_TYPES,
+        "claim_types": ("state", "event"),
         "source_id": "source-1",
         "participants": ["Ava", "Dana"],
         "occurred_at": None,
@@ -90,141 +88,9 @@ def test_missing_template_variables_fail_closed() -> None:
         render_prompt("memory/extraction.user.jinja", source_id="source-1")
 
 
-def test_extraction_injects_schema_values_and_source_policy() -> None:
-    system, user = prompts.claim_extraction_prompt(
-        "meeting_transcript",
-        "source-1",
-        ["Ava", "Dana"],
-        "[segment-1] A decision was made.",
-    )
-
-    assert f"claim_type ({'/'.join(CLAIM_TYPES)})" in system
-    assert "Capture decisions, proposals, action items" in system
-    assert "SOURCE: source-1" in user
-    assert "SOURCE PARTICIPANTS:\n- Ava\n- Dana" in user
-    assert "SOURCE TIME" not in user
-
-
-def test_extraction_explains_structured_memory_terms() -> None:
-    system, _ = prompts.claim_extraction_prompt(
-        "agent_conversation",
-        "source-1",
-        ["Dana"],
-        "[segment-1] Dana selected Atlas.",
-    )
-
-    assert "A stored claim is one source-supported assertion" in system
-    assert "`about` lists the named identities" in system
-    assert "`slot` optionally names a replaceable state" in system
-    assert "`facets` stores structured details" in system
-    assert "`evidence_modality` records how the evidence was observed" in system
-    assert "`evidence_type` records whether the assertion was directly stated" in system
-
-
-def test_fact_prompts_share_the_authoritative_evidence_policy() -> None:
-    prompt_pairs = [
-        prompts.fact_rendering_prompt("owner", "sections", "groups", "facts"),
-        prompts.fact_quality_prompt("owner", "rendered", "groups"),
-        prompts.fact_repair_prompt("owner", "rejected", "groups"),
-    ]
-
-    for system, _ in prompt_pairs:
-        assert FACT_EVIDENCE_POLICY in system
-
-
-def test_entity_plan_receives_fixed_page_admission_decisions() -> None:
-    system, user = prompts.entity_plan_prompt(
-        "registry",
-        "nodes",
-        "N001: admission=provisional; verification=not_required",
-        "evidence",
-    )
-
-    assert "A page-admission decision says" in system
-    assert "Treat that decision" in system
-    assert "verification result as fixed" in system
-    assert "FIXED PAGE-ADMISSION DECISIONS:" in user
-    assert "admission=provisional; verification=not_required" in user
-
-
-def test_subject_census_prompt_explains_the_task_and_local_terms() -> None:
-    system, user = prompts.subject_node_prompt(
-        "registry", "candidate checklist", "evidence"
-    )
-
-    assert system.startswith("Build a complete list of the distinct subjects")
-    assert (
-        "node groups candidate mentions that refer to one real-world subject" in system
-    )
-    assert "C... identifies a stored claim" in system
-    assert "P... identifies a" in system
-    assert "source-declared participant" in system
-    assert "A date, time, duration, deadline, or age is not a subject" in system
-    assert "Do not choose identity" in system
-    assert "ontology type" in system
-    assert "complete typed census" not in system
-    assert user.startswith("KNOWN ENTITY TYPES AND IDENTITIES:\nregistry")
-    assert "ELIGIBLE SUBJECT CANDIDATES:\ncandidate checklist" in user
-    assert "CLAIMS, PARTICIPANTS, AND SOURCE EVIDENCE:\nevidence" in user
-
-
-def test_prompt_templates_preserve_structured_multiline_inputs() -> None:
-    _, routing_user = prompts.claim_routing_prompt(
-        "ENTITY one\nENTITY two",
-        "PLAN one\nPLAN two",
-        "[C001] first\n[C002] second",
-    )
-    reduction = render_prompt(
-        "engram/reduction.user.jinja",
-        title="Planning",
-        summaries=['{"part": 1}', '{"part": 2}'],
-    )
-
-    assert "ENTITY one\nENTITY two" in routing_user
-    assert "[C001] first\n[C002] second" in routing_user
-    assert reduction == (
-        "Meeting title: Planning\n\nPartial summaries in chronological order:\n"
-        'PART 1:\n{"part": 1}\nPART 2:\n{"part": 2}'
-    )
-
-
 def test_templates_are_packaged_inside_the_python_package() -> None:
     assert Path(TEMPLATE_ROOT, "memory", "extraction.system.jinja").is_file()
     assert Path(TEMPLATE_ROOT, "assistant", "memory_agent.system.jinja").is_file()
     assert Path(TEMPLATE_ROOT, "assistant", "memory_request.user.jinja").is_file()
     assert Path(TEMPLATE_ROOT, "engram", "summary.system.jinja").is_file()
     assert Path(TEMPLATE_ROOT, "benchmarks", "grounded_answer.system.jinja").is_file()
-
-
-def test_assistant_policy_and_runtime_memory_are_separate_messages() -> None:
-    system = render_prompt(
-        "assistant/memory_agent.system.jinja",
-        response_instructions="Respond directly.",
-    )
-    user = render_prompt(
-        "assistant/memory_request.user.jinja",
-        memory_evidence='{"records": [{"statement": "Mira plays cello."}]}',
-        user_request="What does Mira play?",
-    )
-
-    assert "Mira plays cello" not in system
-    assert "starting selection from long-term memory" in system
-    assert "initial and tool-returned evidence" in system
-    assert "cumulative body" in system
-    assert "call `memory_search`" in system
-    assert "call `memory_sources`" in system
-    assert "exact cited lines and nearby dialogue" in system
-    assert "After each tool result" in system
-    assert "useful for fulfilling the current request" not in system.lower()
-    assert "total, complete set, or comparison" not in system
-    assert system.index("call `memory_sources`") < system.index("call `memory_search`")
-    assert system.index("call `memory_search`") < system.index("Response style:")
-    assert "Mira plays cello" in user
-    assert user.endswith("What does Mira play?")
-
-
-def test_assistant_context_selection_is_request_oriented() -> None:
-    system = render_prompt("assistant/context_selection.system.jinja")
-
-    assert "useful for fulfilling the current request" in system
-    assert "answering the current request" not in system

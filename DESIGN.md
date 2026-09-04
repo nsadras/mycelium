@@ -71,8 +71,9 @@ state: it is synchronized from the JSON claim artifacts and can be deleted and r
 Hybrid similarity only proposes candidates. A structured model decision explicitly includes or excludes every
 candidate claim using its claim text, normalized timing, and any consolidated representation it contributes to.
 The highest-ranked admitted claims form a small initial evidence result. The stable system prompt contains only the
-assistant's behavior contract; the current request carries runtime-supplied evidence as a separate structured JSON
-value. The assistant can then call `memory_search` with focused follow-up queries when a requested person, event,
+assistant's behavior contract; the current request carries runtime-supplied evidence as a separate structured
+Markdown/pseudo-XML document. The assistant can then call `memory_search` with focused follow-up queries when a
+requested person, event,
 relation, or time is still unsupported, and can call `memory_sources` for the exact dialogue behind any claim already
 shown during that response. Search count, result count, and cumulative evidence tokens are bounded per response;
 subsequent searches omit claims already returned.
@@ -93,6 +94,11 @@ The chat model can call the read-only `memory_search` and `memory_sources` tools
 `web_fetch`. All tool calls are displayed in the UI and stored on the assistant message. Web results are external
 observations and are encoded immediately through the source pipeline when successful. Memory-tool results are reads
 of existing evidence and are not re-ingested as new memories.
+
+Memory results use one Markdown/pseudo-XML renderer. Search records put their statement and subject before supporting
+IDs and citations. Source results explicitly map each claim to its cited segment IDs, then present the surrounding
+transcript in chronological order. Tools bound their own output by admitting only complete records and segments; the
+agent runtime never slices a serialized tool result.
 
 The tool-specific extraction policy for web observations keeps source-grounded project facts while ignoring transport
 metadata, failures, and page furniture.

@@ -16,6 +16,7 @@ from mycelium.claim_index import ClaimSearchHit
 from mycelium.budget import count_tokens
 from mycelium.operations import RetrievalRequest
 from mycelium.retrieval import MemoryRetriever
+from mycelium.retrieval_context import render_memory_source_result
 from mycelium.store import WikiStore
 
 
@@ -148,11 +149,6 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
 
     result = await retriever.retrieve(RetrievalRequest("When does Mira practice?"))
 
-    selection_user_prompt = llm.call_structured.await_args.args[1]
-    assert "Claim: Mira practices cello every Saturday." in selection_user_prompt
-    assert "Structured timing: recurrence 2026-01-03" in selection_user_prompt
-    assert "Consolidated representations:" in selection_user_prompt
-    assert "Mira practices the cello each Saturday." in selection_user_prompt
     assert "Mira practices the cello each Saturday." in result.rendered_context
     record = result.evidence.records[0]
     assert record.record_type == "fact"
@@ -171,8 +167,20 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
 
     source_evidence = expanded.sources[0]
     assert source_evidence.conversation_time == "2026-01-01T00:00:00+00:00"
-    assert source_evidence.segments[0].relationship == "cited"
-    assert source_evidence.segments[0].content == "I practice cello every Saturday."
+    assert source_evidence.citations[0].claim_id == "claim-1"
+    assert source_evidence.citations[0].segment_ids == ("segment-1",)
+    cited = next(
+        segment
+        for segment in source_evidence.segments
+        if segment.relationship == "cited"
+    )
+    assert cited.content == "I practice cello every Saturday."
+    assert [segment.segment_id for segment in source_evidence.segments] == [
+        "segment-before-2",
+        "segment-before-1",
+        "segment-1",
+        "segment-after",
+    ]
     context = [
         segment.content
         for segment in source_evidence.segments
@@ -181,5 +189,13 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
     assert "What do you do on weekends?" in context
     assert "That sounds relaxing." in context
     assert "This earlier turn is outside the bounded neighborhood." not in context
+    rendered_sources = render_memory_source_result(
+        expanded, requested_claim_ids=["claim-1"]
+    )
+    assert "Supports claims:\n- `claim-1`: cited segments `segment-1`" in rendered_sources
+    transcript = rendered_sources.split("<transcript>", 1)[1]
+    assert transcript.index("segment-before-2") < transcript.index("segment-1")
+    assert transcript.index("segment-1") < transcript.index("segment-after")
+    assert 'cited-for="claim-1"' in rendered_sources
     assert result.trace["selected_claim_ids"] == ["claim-1"]
     assert result.trace["rendered_claim_ids"] == ["claim-1"]

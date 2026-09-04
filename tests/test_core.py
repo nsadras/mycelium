@@ -1,5 +1,4 @@
 import pytest
-import json
 
 from mycelium.claim_index import LanceClaimIndex
 from mycelium.core import Mycelium
@@ -23,9 +22,7 @@ async def test_empty_memory_retrieval_does_not_call_embedding_or_chat_models(tmp
     result = await memory.retrieve_context(RetrievalRequest("Any remembered plans?"))
 
     assert result.pages == ()
-    assert json.loads(result.rendered_context) == {
-        "records": [],
-        "sources": [],
-        "truncated": False,
-    }
+    assert result.rendered_context == (
+        "<memory-evidence>\nNo memory evidence found.\n</memory-evidence>"
+    )
     assert result.trace["candidates"] == []

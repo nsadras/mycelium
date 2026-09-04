@@ -4,7 +4,7 @@ import pytest
 from jinja2 import StrictUndefined, UndefinedError
 
 from mycelium import prompts
-from mycelium.ontology import CLAIM_TYPES
+from mycelium.ontology import CLAIM_TYPES, FACT_EVIDENCE_POLICY
 from mycelium.prompting import TEMPLATE_ROOT, prompt_environment, render_prompt
 
 
@@ -46,6 +46,7 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
             "candidates": "candidates",
             "owner": "owner",
             "groups": "groups",
+            "group": "group",
             "truth_changes": "truth changes",
             "incoming_claims": "incoming claims",
             "sections": "sections",
@@ -125,10 +126,7 @@ def test_fact_prompts_share_the_authoritative_evidence_policy() -> None:
     ]
 
     for system, _ in prompt_pairs:
-        assert "Linked entities and the linked" in system
-        assert "registry are navigation context" in system
-        assert "does not assert involvement" in system
-        assert "expression itself remains supported exactly as stated" in system
+        assert FACT_EVIDENCE_POLICY in system
 
 
 def test_entity_plan_receives_fixed_page_admission_decisions() -> None:

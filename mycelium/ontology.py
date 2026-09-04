@@ -22,6 +22,8 @@ CLAIM_TYPES = (
 )
 ClaimType = Literal.__getitem__(CLAIM_TYPES)
 
+EXISTING_MATERIALIZED_BASIS = "existing_materialized"
+
 
 @dataclass(frozen=True)
 class SectionDefinition:
@@ -107,11 +109,20 @@ work products, and next steps. A Person owns that person's commitments, actions,
 history. A person speaking about or acting within another identity does not by itself make the person the owner. Keep
 other explicitly involved identities as relationship or context endpoints."""
 
-FACT_EVIDENCE_POLICY = """Use the claim sentence, cited evidence, and structured temporal record as truth-bearing
-content. A resolved temporal start or end may be rendered as its absolute date. Linked entities and the linked
-registry are navigation context; their presence alone does not assert involvement or require mention in the display
-sentence. An unresolved temporal status means that a relative expression has not been mapped to an absolute calendar
-interval; the expression itself remains supported exactly as stated."""
+FACT_EVIDENCE_POLICY = """A display fact represents its stored member claims. The claim text and structured temporal
+record support and constrain details included in the display fact. Supporting source evidence has already been
+evaluated when the canonical claim was created. A resolved absolute date is available as an optional clearer rendering
+of a source-relative time expression; the supported source expression itself remains valid. An unresolved temporal
+status means that a relative expression has not been mapped to an absolute calendar interval; the expression itself
+remains supported exactly as stated. A temporal status of `unknown` means no structured temporal classification was
+stored; it does not cancel tense or timing directly stated in the claim. Present-tense claim wording supports a
+present-tense display fact even when that status is `unknown`.
+
+Treat the supplied claim group as compatible. Independently supported details from different member claims may appear
+as coordinate clauses in one sentence; each clause stands on its own. When compatible member claims use alternative
+wording for the same detail, choose one supported formulation for the display sentence. Do not enumerate alternative
+wording as though it names separate facts, events, or objects. Linked entities and the linked registry are navigation
+context; their presence alone does not assert involvement or require mention in the display sentence."""
 
 SUBJECT_SCOPE_ONTOLOGY: tuple[SubjectScopeDefinition, ...] = (
     SubjectScopeDefinition(

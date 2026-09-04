@@ -22,7 +22,7 @@ from mycelium.artifacts import (
     IdentityMaturityAssessment,
 )
 from mycelium.ollama import OllamaClient
-from mycelium.ontology import subject_scope_definition
+from mycelium.ontology import EXISTING_MATERIALIZED_BASIS, subject_scope_definition
 from mycelium.structured_outputs import (
     claim_routing_output_model,
     entity_plan_output_model,
@@ -645,6 +645,13 @@ class ClaimRouter:
             node_id: str(node["entity_type"])
             for node_id, node in graph_nodes.items()
         }
+        existing_materialized_nodes = {
+            node_id
+            for node_id, node in graph_nodes.items()
+            if node["identity_resolution"] == "existing"
+            and (entity := planned.get(str(node["entity_id"]))) is not None
+            and entity.materialization_state == "materialized"
+        }
         multi_episode_nodes = {
             node_id
             for node_id, node in graph_nodes.items()
@@ -670,28 +677,50 @@ class ClaimRouter:
                 )
             )
             for node_id in graph_nodes
+            if node_id not in existing_materialized_nodes
         }
-        maturity_model = identity_maturity_output_model(
-            allowed_maturity_bases, aliases
-        )
-        system, user = prompts.identity_maturity_prompt(
-            self.formatter.format_subject_graph(graph_nodes, []),
-            self.formatter.format_evidence(aliases, participants),
-        )
+        fixed_maturity_decisions = {
+            node_id: {
+                "admission": "materialized",
+                "basis": {"continuity_basis": EXISTING_MATERIALIZED_BASIS},
+                "confidence": 1.0,
+                "reason": "The matched canonical identity already has a visible page.",
+            }
+            for node_id in existing_materialized_nodes
+        }
         try:
             if work_unit.maturity_decisions:
                 maturity_decisions = work_unit.maturity_decisions
             else:
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    maturity_model,
-                    num_predict=4096,
-                    debug_label="dream-identity-maturity",
-                )
-                maturity_decisions = maturity_model.model_validate(
-                    response
-                ).model_dump()["decisions"]
+                proposed_maturity = {}
+                if allowed_maturity_bases or not existing_materialized_nodes:
+                    maturity_model = identity_maturity_output_model(
+                        allowed_maturity_bases, aliases
+                    )
+                    system, user = prompts.identity_maturity_prompt(
+                        self.formatter.format_subject_graph(
+                            {
+                                node_id: graph_nodes[node_id]
+                                for node_id in allowed_maturity_bases
+                            },
+                            [],
+                        ),
+                        self.formatter.format_evidence(aliases, participants),
+                    )
+                    response = await self.llm.call_structured(
+                        system,
+                        user,
+                        maturity_model,
+                        num_predict=4096,
+                        debug_label="dream-identity-maturity",
+                    )
+                    proposed_maturity = maturity_model.model_validate(
+                        response
+                    ).model_dump()["decisions"]
+                maturity_decisions = {
+                    **fixed_maturity_decisions,
+                    **proposed_maturity,
+                }
             work_unit.maturity_decisions = maturity_decisions
             work_unit.stage = "identity_maturity_verification"
             self.artifacts.save_identity_work_unit(work_unit)
@@ -710,27 +739,47 @@ class ClaimRouter:
             and decision["basis"]["continuity_basis"]
             == "explicit_prior_history"
         }
-        verification_model = identity_maturity_verification_output_model(
-            explicit_nodes, graph_nodes
-        )
-        system, user = prompts.identity_maturity_verification_prompt(
-            self.formatter.format_maturity_decisions(maturity_decisions),
-            self.formatter.format_evidence(aliases, participants),
-        )
+        maturity_verification_nodes = {
+            node_id: graph_nodes[node_id]
+            for node_id in allowed_maturity_bases
+        }
+        fixed_maturity_verdicts = {
+            node_id: {
+                "verdict": "not_required",
+                "reason": "Existing materialized state is authoritative.",
+            }
+            for node_id in existing_materialized_nodes
+        }
         try:
             if work_unit.maturity_verdicts:
                 maturity_verdicts = work_unit.maturity_verdicts
             else:
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    verification_model,
-                    num_predict=4096,
-                    debug_label="dream-identity-maturity-verification",
-                )
-                maturity_verdicts = verification_model.model_validate(
-                    response
-                ).model_dump()["decisions"]
+                proposed_verdicts = {}
+                if maturity_verification_nodes or not existing_materialized_nodes:
+                    verification_model = identity_maturity_verification_output_model(
+                        explicit_nodes, maturity_verification_nodes
+                    )
+                    system, user = prompts.identity_maturity_verification_prompt(
+                        self.formatter.format_maturity_decisions({
+                            node_id: maturity_decisions[node_id]
+                            for node_id in maturity_verification_nodes
+                        }),
+                        self.formatter.format_evidence(aliases, participants),
+                    )
+                    response = await self.llm.call_structured(
+                        system,
+                        user,
+                        verification_model,
+                        num_predict=4096,
+                        debug_label="dream-identity-maturity-verification",
+                    )
+                    proposed_verdicts = verification_model.model_validate(
+                        response
+                    ).model_dump()["decisions"]
+                maturity_verdicts = {
+                    **fixed_maturity_verdicts,
+                    **proposed_verdicts,
+                }
             work_unit.maturity_verdicts = maturity_verdicts
             work_unit.stage = "entity_plan"
             self.artifacts.save_identity_work_unit(work_unit)

@@ -2815,3 +2815,37 @@ one prose-similarity summary.
 - Final replay integrity is healthy. All 148 source segments are accounted for: 22 claimed and 126 explicitly
   `source_only`, with no pending or unaccounted segments. The complete maintained suite passed **325/325 with 2
   skipped**; Ruff and `git diff --check` passed.
+
+## 2026-09-03 — Complete LoCoMo sample-9 validation
+
+- Monitored a fresh 25-session sample-9 build and corrected five contract failures as they appeared. An identity
+  already materialized in the registry now remains materialized when matched by later evidence instead of being
+  re-admitted from the current cohort alone. Direct production prompt/schema probes retained an existing entity and
+  still classified a genuinely new, weakly supported identity as provisional.
+- Truth-change sides now receive distinct fact keys in the grouping schema. The central temporal evidence policy also
+  permits a canonical present-tense claim with unknown temporal status to remain present tense. The exact production
+  grouping prompt separated both sides of a transition on its first valid real-model response.
+- Added a structured fact-group quality decision before presentation rendering. It distinguishes equivalent claims,
+  composable details, and groups that must be split. Direct production probes treated two names for the same mountain
+  range as equivalent, split an unrelated cooking-class/routine group, and conservatively split a broad health bundle.
+  Equivalent claims retain complete membership but give rendering one representative, preventing synonym lists from
+  being presented as multiple objects.
+- Rendering and its verifier now treat canonical claims—not raw extraction evidence—as the representation contract;
+  extraction evidence has already been adjudicated upstream. A direct production probe preserved a canonical
+  qualified therapy claim. Singleton facts and equivalent-group representatives are structurally constrained to the
+  canonical display claim and skip synthesis verification, because they perform no semantic synthesis. Replaying the
+  exact previously failing beach claim and the accumulated final store completed without failures.
+- The completed run is
+  `benchmark_runs/locomo-mycelium-convo-9-pipeline-validation-complete-20260903`. Its final store has 25 sources and
+  episodes, 210 active claims, 159 facts, five entities, and no unconsolidated logs. Of 1,671 source segments, 196 are
+  claimed and 1,475 are explicitly `source_only`; none are pending, unaccounted, or tied to failed/partial episodes.
+  Two hundred claims are placed and ten are conservatively deferred for review. Historical failed Dream records from
+  the monitored iterations remain in the audit trail, while the newest Dream completed with no failures or pending
+  sources.
+- All 196 QA queries completed without retrieval or answer errors. Mean answer score was **0.3805**; retrieval-context
+  evidence recall was **0.2521**, compared with **0.7344** at claims, **0.6723** at wiki pages, and **0.9847** at raw
+  sources. This identifies retrieval/context selection as the principal quality loss after a now-complete pipeline.
+  The summary's 1,922-second elapsed time covers the QA continuation only, not the full memory-build runtime. Later
+  Dream sessions often required 10–20+ minutes, so throughput remains a major follow-up even though correctness and
+  accounting completed cleanly.
+- Validation: the complete maintained suite passed **330/330 with 2 skipped**. Ruff and `git diff --check` passed.

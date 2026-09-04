@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from mycelium.ontology import (
+    EXISTING_MATERIALIZED_BASIS,
     INDEPENDENT_SUBJECT_SCOPES,
     ClaimType,
     DiscoverableEntityType,
@@ -300,6 +301,14 @@ class FactQualityVerdictOutput(BaseModel):
     reason: str = Field(min_length=1, max_length=800)
 
 
+class FactGroupQualityVerdictOutput(BaseModel):
+    """Whether one proposed claim group can be represented by one display fact."""
+
+    model_config = ConfigDict(extra="forbid")
+    verdict: Literal["equivalent", "composable", "split_required"]
+    reason: str = Field(min_length=1, max_length=800)
+
+
 class FactTruthNoChangeOutput(BaseModel):
     """An incoming claim that does not change an accepted truth."""
 
@@ -433,10 +442,36 @@ def fact_grouping_output_model(
     claims = tuple(dict.fromkeys(str(value) for value in claim_aliases if value))
     if not claims:
         raise ValueError("Fact grouping requires claim aliases")
+    protected_fact_keys: dict[str, str] = {}
+    next_fact_index = 1
+    for change in truth_changes:
+        target_key = f"F{next_fact_index:03d}"
+        next_fact_index += 1
+        incoming_key = f"F{next_fact_index:03d}"
+        next_fact_index += 1
+        protected_fact_keys.update({
+            str(alias): target_key
+            for alias in change["target_claim_aliases"]
+        })
+        protected_fact_keys.update({
+            str(alias): incoming_key
+            for alias in change["incoming_claim_aliases"]
+        })
+    assignment_fields: dict[str, Any] = {}
+    for alias in claims:
+        protected_key = protected_fact_keys.get(alias)
+        assignment = FactClaimAssignmentOutput
+        if protected_key is not None:
+            assignment = create_model(
+                f"{alias}ProtectedFactAssignment",
+                __base__=FactClaimAssignmentOutput,
+                fact_key=(Literal.__getitem__((protected_key,)), ...),
+            )
+        assignment_fields[alias] = (assignment, ...)
     assignments_model = create_model(
         "ExactFactClaimAssignments",
         __config__=ConfigDict(extra="forbid"),
-        **{alias: (FactClaimAssignmentOutput, ...) for alias in claims},
+        **assignment_fields,
     )
     base_model = create_model(
         "ExactFactGroupingPlan",
@@ -468,6 +503,7 @@ def fact_grouping_output_model(
 def fact_rendering_output_model(
     fact_keys: Collection[str],
     allowed_sections: Collection[str],
+    fixed_text_by_key: Mapping[str, str] | None = None,
 ) -> type[BaseModel]:
     """Build exact presentation definitions for one bounded group batch."""
     keys = tuple(dict.fromkeys(str(value) for value in fact_keys if value))
@@ -475,20 +511,48 @@ def fact_rendering_output_model(
     if not keys or not sections:
         raise ValueError("Fact rendering requires fact keys and allowed sections")
     section_type = Literal.__getitem__(sections)
-    presentation = create_model(
-        "ExactFactPresentation",
-        __base__=FactPresentationOutput,
-        section_key=(section_type, ...),  # type: ignore[valid-type]
-    )
+    fixed_text_by_key = fixed_text_by_key or {}
+    presentations = {}
+    for key in keys:
+        fields: dict[str, Any] = {
+            "section_key": (section_type, ...),  # type: ignore[valid-type]
+        }
+        if key in fixed_text_by_key:
+            text_type = Literal.__getitem__((fixed_text_by_key[key],))
+            fields["text"] = (text_type, ...)
+        presentations[key] = create_model(
+            f"{key}ExactFactPresentation",
+            __base__=FactPresentationOutput,
+            **fields,
+        )
     facts_model = create_model(
         "ExactFactPresentations",
         __config__=ConfigDict(extra="forbid"),
-        **{key: (presentation, ...) for key in keys},
+        **{key: (presentations[key], ...) for key in keys},
     )
     return create_model(
         "ExactFactRenderingPlan",
         __config__=ConfigDict(extra="forbid"),
         facts=(facts_model, ...),
+    )
+
+
+def fact_group_quality_output_model(
+    fact_keys: Collection[str],
+) -> type[BaseModel]:
+    """Build exact compatibility verdicts for proposed multi-claim groups."""
+    keys = tuple(dict.fromkeys(str(value) for value in fact_keys if value))
+    if not keys:
+        raise ValueError("Fact group verification requires fact keys")
+    decisions = create_model(
+        "ExactFactGroupQualityDecisions",
+        __config__=ConfigDict(extra="forbid"),
+        **{key: (FactGroupQualityVerdictOutput, ...) for key in keys},
+    )
+    return create_model(
+        "ExactFactGroupQualityPlan",
+        __config__=ConfigDict(extra="forbid"),
+        decisions=(decisions, ...),
     )
 
 
@@ -989,8 +1053,11 @@ def entity_plan_output_model(
             parent_entity=(Literal[""], ...),
             adjudication=(adjudication_type, ...),  # type: ignore[valid-type]
         )
-        variants: list[type[BaseModel]] = [provisional_model, context_model]
         continuity_values = tuple(materialization_bases.get(node_id, ()))
+        fixed_materialized = EXISTING_MATERIALIZED_BASIS in continuity_values
+        variants: list[type[BaseModel]] = (
+            [] if fixed_materialized else [provisional_model, context_model]
+        )
         if continuity_values:
             continuity_type = Literal.__getitem__(continuity_values)
             variants.insert(0, create_model(

@@ -22,6 +22,7 @@ from mycelium.ontology import default_section, entity_type_definition
 from mycelium.projection import display_claim_text
 from mycelium.structured_outputs import (
     fact_candidate_selection_output_model,
+    fact_group_quality_output_model,
     fact_grouping_output_model,
     fact_quality_output_model,
     fact_repair_output_model,
@@ -431,6 +432,22 @@ class FactResolver:
         for alias, assignment in assignments.items():
             members_by_key.setdefault(assignment["fact_key"], []).append(alias)
 
+        assignments, members_by_key, equivalent_fact_keys = (
+            await self._verify_fact_groups(
+                owner_text,
+                assignments,
+                members_by_key,
+                aliases,
+                placements,
+                alias_for_entity,
+                entities,
+            )
+        )
+        presentation_members_by_key = {
+            fact_key: ([members[0]] if fact_key in equivalent_fact_keys else members)
+            for fact_key, members in members_by_key.items()
+        }
+
         rendered_facts: dict[str, dict] = {}
         fact_keys = sorted(members_by_key)
         for batch_index, batch_keys in enumerate(
@@ -439,7 +456,7 @@ class FactResolver:
             batch_aliases = {
                 alias: aliases[alias]
                 for key in batch_keys
-                for alias in members_by_key[key]
+                for alias in presentation_members_by_key[key]
             }
             batch_claim_ids = {
                 claim.claim_id for claim in batch_aliases.values()
@@ -451,7 +468,7 @@ class FactResolver:
             groups_by_key = {
                 key: self._fact_groups_text(
                     [key],
-                    members_by_key,
+                    presentation_members_by_key,
                     batch_aliases,
                     placements,
                     alias_for_entity,
@@ -470,7 +487,15 @@ class FactResolver:
                 self._existing_facts_text(batch_existing, alias_for_claim),
             )
             rendering_schema = fact_rendering_output_model(
-                batch_keys, definition.section_keys()
+                batch_keys,
+                definition.section_keys(),
+                fixed_text_by_key={
+                    key: display_claim_text(
+                        aliases[presentation_members_by_key[key][0]]
+                    )
+                    for key in batch_keys
+                    if len(presentation_members_by_key[key]) == 1
+                },
             )
             response = await self.llm.call_structured(
                 system,
@@ -482,11 +507,17 @@ class FactResolver:
             batch_rendered = rendering_schema.model_validate(response).model_dump()[
                 "facts"
             ]
-            batch_rendered = await self._verify_and_repair_facts(
-                owner_text,
-                groups_by_key,
-                batch_rendered,
-            )
+            synthesis_keys = [
+                key for key in batch_keys
+                if len(presentation_members_by_key[key]) > 1
+            ]
+            if synthesis_keys:
+                verified = await self._verify_and_repair_facts(
+                    owner_text,
+                    {key: groups_by_key[key] for key in synthesis_keys},
+                    {key: batch_rendered[key] for key in synthesis_keys},
+                )
+                batch_rendered.update(verified)
             rendered_facts.update(batch_rendered)
         plan = {
             "assignments": assignments,
@@ -788,6 +819,8 @@ class FactResolver:
         placements: dict[str, ClaimPlacement],
         alias_for_entity: dict[str, str],
         entities: dict[str, EntityRecord],
+        *,
+        include_evidence: bool = True,
     ) -> str:
         blocks = []
         for alias, claim in aliases.items():
@@ -797,29 +830,35 @@ class FactResolver:
                 for entity_id in placement.linked_entity_ids
                 if entity_id in alias_for_entity
             ]
-            evidence = []
-            for provenance in claim.provenance:
-                try:
-                    source = self.artifacts.get_source(provenance.source_id)
-                    segments = {segment.segment_id: segment for segment in source.segments}
-                except FileNotFoundError:
-                    segments = {}
-                for segment_id in provenance.segment_ids:
-                    segment = segments.get(segment_id)
-                    evidence.append({
-                        "source_id": provenance.source_id,
-                        "segment_id": segment_id,
-                        "speaker": provenance.speaker,
-                        "evidence_type": provenance.evidence_type,
-                        "text": segment.content if segment else None,
-                    })
-            blocks.append(
+            block = (
                 f"[{alias}] id={claim.claim_id}; type={claim.claim_type}; "
                 f"predicate={claim.predicate or 'unknown'}; temporal_status={claim.temporal_status}; "
                 f"temporal={json.dumps(temporal_record(claim.facets), sort_keys=True)}; "
-                f"linked_entities={json.dumps(linked)}\nclaim={claim.text}\n"
-                f"evidence={json.dumps(evidence, ensure_ascii=False, sort_keys=True)}"
+                f"linked_entities={json.dumps(linked)}\nclaim={claim.text}"
             )
+            if include_evidence:
+                evidence = []
+                for provenance in claim.provenance:
+                    try:
+                        source = self.artifacts.get_source(provenance.source_id)
+                        segments = {
+                            segment.segment_id: segment for segment in source.segments
+                        }
+                    except FileNotFoundError:
+                        segments = {}
+                    for segment_id in provenance.segment_ids:
+                        segment = segments.get(segment_id)
+                        evidence.append({
+                            "source_id": provenance.source_id,
+                            "segment_id": segment_id,
+                            "speaker": provenance.speaker,
+                            "evidence_type": provenance.evidence_type,
+                            "text": segment.content if segment else None,
+                        })
+                block += "\nevidence=" + json.dumps(
+                    evidence, ensure_ascii=False, sort_keys=True
+                )
+            blocks.append(block)
         linked_registry = []
         used_entity_ids = {
             entity_id
@@ -869,8 +908,64 @@ class FactResolver:
             for fact_key in fact_keys
         )
         return membership + "\n\n" + self._claims_text(
-            member_aliases, placements, alias_for_entity, entities
+            member_aliases,
+            placements,
+            alias_for_entity,
+            entities,
+            include_evidence=False,
         )
+
+    async def _verify_fact_groups(
+        self,
+        owner_text: str,
+        assignments: dict[str, dict],
+        members_by_key: dict[str, list[str]],
+        aliases: dict[str, MemoryClaim],
+        placements: dict[str, ClaimPlacement],
+        alias_for_entity: dict[str, str],
+        entities: dict[str, EntityRecord],
+    ) -> tuple[dict[str, dict], dict[str, list[str]], set[str]]:
+        """Split multi-claim groups that cannot support one faithful sentence."""
+        equivalent_fact_keys: set[str] = set()
+        next_fact_index = max(
+            int(fact_key[1:]) for fact_key in members_by_key
+        ) + 1
+        for fact_key in sorted(tuple(members_by_key)):
+            members = members_by_key[fact_key]
+            if len(members) < 2:
+                continue
+            group = self._fact_groups_text(
+                [fact_key],
+                members_by_key,
+                aliases,
+                placements,
+                alias_for_entity,
+                entities,
+            )
+            system, user = prompts.fact_group_quality_prompt(owner_text, group)
+            schema = fact_group_quality_output_model([fact_key])
+            response = await self.llm.call_structured(
+                system,
+                user,
+                schema,
+                num_predict=1024,
+                debug_label="dream-fact-group-quality",
+            )
+            verdict = schema.model_validate(response).model_dump()["decisions"][
+                fact_key
+            ]["verdict"]
+            if verdict == "equivalent":
+                equivalent_fact_keys.add(fact_key)
+                continue
+            if verdict == "composable":
+                continue
+            members_by_key[fact_key] = [members[0]]
+            for alias in members[1:]:
+                new_key = f"F{next_fact_index:03d}"
+                next_fact_index += 1
+                assignments[alias]["fact_key"] = new_key
+                members_by_key[new_key] = [alias]
+        return assignments, members_by_key, equivalent_fact_keys
 
     @staticmethod
     def _fact_key_batches(

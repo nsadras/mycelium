@@ -237,6 +237,17 @@ def fact_rendering_prompt(
     )
 
 
+def fact_group_quality_prompt(
+    owner: str,
+    group: str,
+) -> tuple[str, str]:
+    return render_prompt_pair(
+        "memory/fact_group_quality",
+        owner=owner,
+        group=group,
+    )
+
+
 def fact_quality_prompt(
     owner: str,
     rendered_facts: str,

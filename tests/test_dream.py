@@ -371,7 +371,12 @@ def use_existing_identity(
         "confidence": 0.95,
         "reason": "The evidence identifies the existing canonical entity.",
     })
-    responses[6]["decisions"]["I001"]["entity_id"] = entity_id
+    entity_plan = responses[6]
+    entity_plan["decisions"]["I001"].update({
+        "entity_id": entity_id,
+        "scope": "materialized",
+        "continuity_basis": "existing_materialized",
+    })
     verification = {"decision": {
         "verdict": "existing",
         "entity_id": entity_id,
@@ -380,7 +385,12 @@ def use_existing_identity(
         "reason": "Independent evidence confirms the canonical identity.",
     }}
     return [
-        responses[0], responses[1], *responses[2:4], verification, *responses[4:]
+        responses[0],
+        responses[1],
+        *responses[2:4],
+        verification,
+        entity_plan,
+        responses[7],
     ]
 
 
@@ -497,10 +507,21 @@ def fact_resolution_plan(
     truth_changes: list[dict] | None = None,
     incoming_aliases: list[str] | None = None,
 ) -> list[dict]:
-    keyed = {
-        fact_key: f"F{index:03d}"
-        for index, fact_key in enumerate(facts, start=1)
-    }
+    keyed: dict[str, str] = {}
+    next_fact_index = 1
+    for change in truth_changes or []:
+        for side in ("target_claim_aliases", "incoming_claim_aliases"):
+            aliases = set(change[side])
+            fact_key = next(
+                key for key, (members, _, _) in facts.items()
+                if aliases <= set(members)
+            )
+            keyed[fact_key] = f"F{next_fact_index:03d}"
+            next_fact_index += 1
+    for fact_key in facts:
+        if fact_key not in keyed:
+            keyed[fact_key] = f"F{next_fact_index:03d}"
+            next_fact_index += 1
     presentations = {
         keyed[fact_key]: {
             "state": "current",
@@ -521,15 +542,26 @@ def fact_resolution_plan(
         if changes_by_incoming
         else sorted({alias for aliases, _, _ in facts.values() for alias in aliases})
     )
+    group_quality_responses = [
+        {"decisions": {keyed[fact_key]: {
+            "verdict": "composable",
+            "reason": "The member claims can share one faithful display fact.",
+        }}}
+        for fact_key, (aliases, _, _) in facts.items()
+        if len(aliases) > 1
+    ]
+    member_count_by_key = {
+        keyed[fact_key]: len(aliases)
+        for fact_key, (aliases, _, _) in facts.items()
+    }
     fact_responses = []
-    for key, presentation in presentations.items():
-        fact_responses.extend([
-            {"facts": {key: presentation}},
-            {"decisions": {key: {
+    for key, presentation in sorted(presentations.items()):
+        fact_responses.append({"facts": {key: presentation}})
+        if member_count_by_key[key] > 1:
+            fact_responses.append({"decisions": {key: {
                 "verdict": "supported",
                 "reason": "The presentation is self-contained and source-grounded.",
-            }}},
-        ])
+            }}})
     return [
         {"decisions": {
             alias: (
@@ -569,6 +601,7 @@ def fact_resolution_plan(
             for fact_key, (aliases, _, _) in facts.items()
             for alias in aliases
         }},
+        *group_quality_responses,
         *fact_responses,
     ]
 
@@ -1434,6 +1467,40 @@ def test_entity_plan_contract_rejects_containment_under_nonindependent_graph_par
     }
     with pytest.raises(ValidationError, match="accepted independent parent"):
         output_model.model_validate(invalid)
+
+
+def test_entity_plan_cannot_demote_an_existing_materialized_identity():
+    output_model = entity_plan_output_model(
+        {"N001": "person"},
+        {},
+        {"person-sam": "person"},
+        {"N001": "person-sam"},
+        {"N001": ["existing_materialized"]},
+    )
+    materialized = {
+        "decisions": {"N001": {
+            "entity_id": "person-sam",
+            "scope": "materialized",
+            "parent_entity": "",
+            "continuity_basis": "existing_materialized",
+            "adjudication": "accepted",
+            "confidence": 1.0,
+            "reason": "The existing visible identity remains materialized.",
+        }},
+        "participants": {},
+    }
+
+    assert output_model.model_validate(materialized).decisions.N001.scope == (
+        "materialized"
+    )
+    with pytest.raises(ValidationError):
+        output_model.model_validate({
+            "decisions": {"N001": {
+                **materialized["decisions"]["N001"],
+                "scope": "provisional",
+            }},
+            "participants": {},
+        })
 
 
 def test_scope_evidence_preserves_extracted_roles_and_stable_references(tmp_path):
@@ -2642,7 +2709,11 @@ async def test_existing_identity_verifier_can_correct_initial_registry_match(tmp
         "candidate_entity_ids": [],
         "reason": "The initial matcher proposed the organization.",
     })
-    responses[6]["decisions"]["I001"]["entity_id"] = person.entity_id
+    responses[6]["decisions"]["I001"].update({
+        "entity_id": person.entity_id,
+        "scope": "materialized",
+        "continuity_basis": "existing_materialized",
+    })
     verification = {"decision": {
         "verdict": "existing",
         "entity_id": person.entity_id,
@@ -2651,7 +2722,12 @@ async def test_existing_identity_verifier_can_correct_initial_registry_match(tmp
         "reason": "The evidence uniquely identifies the canonical person.",
     }}
     llm.call_structured.side_effect = [
-        responses[0], responses[1], *responses[2:4], verification, *responses[4:]
+        responses[0],
+        responses[1],
+        *responses[2:4],
+        verification,
+        responses[6],
+        responses[7],
     ]
 
     result = await dream.router.route([ClaimEvidence(claim, source)])
@@ -2690,8 +2766,12 @@ async def test_new_identity_verifier_matches_cross_run_duplicate_to_registry(tmp
         "confidence": 0.95,
         "reason": "The specific continuing history identifies canonical Ada.",
     }})
-    responses[7]["decisions"]["I001"]["entity_id"] = existing.entity_id
-    llm.call_structured.side_effect = responses
+    responses[7]["decisions"]["I001"].update({
+        "entity_id": existing.entity_id,
+        "scope": "materialized",
+        "continuity_basis": "existing_materialized",
+    })
+    llm.call_structured.side_effect = [*responses[:5], responses[7], responses[8]]
 
     result = await dream.router.route([ClaimEvidence(claim, source)])
 

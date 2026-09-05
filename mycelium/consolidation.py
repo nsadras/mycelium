@@ -191,10 +191,7 @@ class ClaimRouter:
                 for node_id, node in census_nodes.items():
                     match_model = identity_node_matching_output_model(
                         node_id,
-                        [
-                            entity_id for entity_id in registry_types
-                            if entity_id != "you"
-                        ],
+                        list(registry_types),
                     )
                     supporting = set(node["supporting_evidence"])
                     node_aliases = {
@@ -358,13 +355,18 @@ class ClaimRouter:
         identity_type_evidence = {
             identity_key: node["supporting_evidence"]
             for identity_key, node in graph_nodes.items()
+            if not (
+                node["identity_resolution"] == "existing"
+                and node["entity_id"] == "you"
+            )
         }
         type_proposals: dict[str, dict] = {}
         type_verdicts: dict[str, dict] = {}
         if identity_type_evidence:
             neutral_identities = "\n".join(
                 self.formatter.format_identity_evidence(node)
-                for node in graph_nodes.values()
+                for identity_key, node in graph_nodes.items()
+                if identity_key in identity_type_evidence
             )
             try:
                 if work_unit.type_proposals:
@@ -435,6 +437,16 @@ class ClaimRouter:
                 )
 
         for identity_key, node in graph_nodes.items():
+            # The configured user's type is part of its stored identity, not a
+            # discoverable category. Semantic identity matching above selected it.
+            if (
+                node["identity_resolution"] == "existing"
+                and node["entity_id"] == "you"
+            ):
+                node["entity_type"] = planned["you"].entity_type
+                node["type_adjudication"] = "accepted"
+                node["type_reason"] = "Retained the configured user's registered type."
+                continue
             proposal = type_proposals[identity_key]
             verdict = type_verdicts[identity_key]
             node["entity_type"] = proposal["entity_type"]
@@ -538,8 +550,11 @@ class ClaimRouter:
                         (
                             entity for entity in planned.values()
                             if entity.status == "active"
-                            and entity.entity_id != "you"
-                            and entity.entity_type == node["entity_type"]
+                            and entity.entity_type in (
+                                {"person", "you"}
+                                if node["entity_type"] in {"person", "you"}
+                                else {node["entity_type"]}
+                            )
                         ),
                         key=lambda entity: entity.entity_id,
                     )
@@ -557,6 +572,7 @@ class ClaimRouter:
                 if identity_verdict["verdict"] == "existing":
                     node["identity_resolution"] = "existing"
                     node["entity_id"] = identity_verdict["entity_id"]
+                    node["entity_type"] = planned[node["entity_id"]].entity_type
                     node["candidate_entity_ids"] = []
                     node["identity_reason"] = identity_verdict["reason"]
                     continue
@@ -607,8 +623,11 @@ class ClaimRouter:
                     candidates = [
                         entity for entity in planned.values()
                         if entity.status == "active"
-                        and entity.entity_id != "you"
-                        and entity.entity_type == node["entity_type"]
+                        and entity.entity_type in (
+                            {"person", "you"}
+                            if node["entity_type"] in {"person", "you"}
+                            else {node["entity_type"]}
+                        )
                         and entity.entity_id != rejected_existing_ids.get(identity_key)
                     ]
                     identity_verdict = await self._verify_identity(
@@ -623,6 +642,7 @@ class ClaimRouter:
                 if identity_verdict["verdict"] == "existing":
                     node["identity_resolution"] = "existing"
                     node["entity_id"] = identity_verdict["entity_id"]
+                    node["entity_type"] = planned[node["entity_id"]].entity_type
                     node["candidate_entity_ids"] = []
                 elif identity_verdict["verdict"] == "review_required":
                     node["identity_resolution"] = "review_required"

@@ -3311,3 +3311,55 @@ one prose-similarity summary.
 - Remaining user smoke check: capture a new chat, inspect saved/pending status, Build Memory, then retrieve it in
   another chat and follow its citation/wiki page. Check reviewed meeting finalization separately. Do not advance
   to combined coverage/extraction until this lifecycle is reviewed.
+
+## 2026-09-04 — Preserve configured-user identity during Build Memory
+
+- User confirmed the capture/build/recall smoke check, then reported an empty canonical You page alongside a
+  populated person-you page. Read-only inspection of identity-work-598b4fe07d618e3e showed that the matcher
+  recognized the user in its explanation but returned new. Code excluded you from the allowed matching IDs
+  and both verification candidate lists; with no candidates, code declared distinct without a model call.
+- Fixed the identity contract, not page naming: expose active you as an identity candidate, retain its registered
+  type after matching (you is not a discoverable type), and compare proposed people against both person and you
+  identities. A verified existing match retains the selected registry type. Other ontology candidate filters remain.
+  No lexical matching or post-hoc ownership overrides were added. Source roles now accompany cited segments;
+  identity prompts explain the configured chat-speaker binding and distinguish mentioned/quoted people.
+- Direct configured-host probes: /tmp/mycelium_identity_probe.py, gemma4:12b from mycelium.toml, host /api/tags
+  verified with escalation. Merely exposing you failed: the original prompt returned review_required because
+  no personal name/history was supplied. Adding explicit source-role guidance passed user and colleague cases
+  for both matching and duplicate verification before production integration.
+- In-situ probe: /tmp/mycelium_identity_in_situ.py. Initial store
+  /tmp/mycelium-identity-in-situ-bz0fxfr7 routed the self statement correctly directly to you with no subject node;
+  the probe's assumption that a node must exist failed, not routing. Replayed a persisted neutral census node
+  to exercise the reported entry condition, using real model calls for every subsequent decision. Store
+  /tmp/mycelium-identity-in-situ-wrb7eibu: self matched you and routed to you, with no second person; colleague
+  remained a distinct provisional person with its claim deferred under existing page-admission policy.
+  This validates identity routing, not extraction or general retrieval quality.
+- Regression tests cover initial existing-user matching and recovery of an initial new-person proposal through
+  duplicate verification, exact selectable IDs, source-role presentation, retained ownership, and skipped user
+  rediscovery typing. Meeting participant mocks now explicitly answer the newly required user duplicate checks.
+  Validation: 332 passed, 2 skipped; focused lint and git diff --check passed.
+- Existing user data, including the duplicate, was not changed. No migration, server operation, or git commit.
+  Empty startup-page removal and repair of already-built duplicate identities remain separate follow-ups.
+
+## 2026-09-04 — Replayable real-chat memory regression
+
+- Added tests/fixtures/chat_memory_replay.json with user-authorized verbatim exports of the three fried-rice
+  turns and two alignment turns from live sessions 31a5add9 and 51276085. Verified all ten role/content/timestamp
+  records exactly match the saved transcripts. Excluded derived claims, old retrieval results, capture cursors,
+  and the third assistant answer. The original third-chat question is the recall input.
+- Added opt-in tests/test_chat_memory_replay.py. Starts from default Mycelium initialization in a fresh pytest
+  temporary store, persists completed turns chronologically through production chat capture, and checks stored
+  source segments against the fixture before Build Memory. Runs the production build with real extraction,
+  identity resolution, synthesis, and materialization; asserts no build failures, complete extraction, a single
+  You page, and canonical user-owned facts supported by both input conversations.
+- Opens an empty third chat through the actual chat handler with real hybrid retrieval, admission, generation,
+  and memory tools. Only web tools are removed from this local test. Checks fried-rice source IDs in the final
+  evidence workspace and validates citation segment IDs, rather than using answer keywords or search candidates
+  as a proxy for recalled memory. Both runtime and route memory providers, metadata paths, and locks are isolated.
+- Run: MYCELIUM_RUN_CHAT_REPLAY=1 .venv/bin/pytest -q -s tests/test_chat_memory_replay.py (host escalation).
+  Passed in 109.62 seconds using the configured gemma4:12b and embeddinggemma:latest. Artifacts:
+  /tmp/pytest-of-nitin/pytest-533/test_two_conversations_build_o0, including store/, build_report.json,
+  pages.json, and recall_response.json. Default suite: 332 passed, 3 skipped; replay lint and diff checks passed.
+- README documents execution, model variability, diagnostics, and the personal-text fixture sharing caveat.
+  No production prompts or algorithms were changed for this fixture. No live data changed, no server operations,
+  and no commit. This is a reproducible regression scenario, not a general memory-quality benchmark.

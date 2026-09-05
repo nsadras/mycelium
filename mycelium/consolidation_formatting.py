@@ -289,6 +289,7 @@ class RoutingFormatter:
             source_evidence = (
                 "\n".join(
                     f"[{segment.segment_id}] "
+                    f"role={segment.role or 'unknown'}; "
                     f"{f'{segment.speaker}: ' if segment.speaker else ''}{segment.content}"
                     for segment in item.source.segments
                     if segment.segment_id in cited_segment_ids

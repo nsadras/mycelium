@@ -2267,7 +2267,7 @@ async def test_partial_extraction_without_claims_stays_pending(tmp_path):
 
 @pytest.mark.asyncio
 async def test_named_participants_receive_encounter_pages_and_claim_ownership(tmp_path):
-    dream, _, wiki, logs, artifacts = build_dream(
+    dream, llm, wiki, logs, artifacts = build_dream(
         tmp_path,
         llm_response=scope_plan(
             {"C001": assignment("N001", supporting=["C001"])},
@@ -2284,6 +2284,13 @@ async def test_named_participants_receive_encounter_pages_and_claim_ownership(tm
             {"P001": participant("N001"), "P002": participant("N002")},
         ),
     )
+    responses = list(llm.call_structured.side_effect)
+    for _ in range(2):
+        responses.insert(6, {"decision": {
+            "verdict": "distinct", "entity_id": "", "candidate_entity_ids": [],
+            "confidence": 0.9, "reason": "This meeting participant is not the configured user.",
+        }})
+    llm.call_structured.side_effect = responses
     entry, source = add_source(
         logs,
         artifacts,
@@ -2764,6 +2771,56 @@ async def test_new_identity_verifier_matches_cross_run_duplicate_to_registry(tmp
     assert result.routes[0].owner_entity_id == existing.entity_id
     unit = artifacts.list_identity_work_units()[0]
     assert unit.new_identity_verdicts["I001"]["verdict"] == "existing"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_resolution", ["existing", "new"])
+async def test_chat_user_identity_survives_matching_and_duplicate_verification(
+    tmp_path, initial_resolution,
+):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, source = add_source(logs, artifacts)
+    source.segments[0].content = "I prefer morning walks."
+    artifacts.save_source(source)
+    claim = add_claim(artifacts, source, text="The user prefers morning walks.")
+    responses = split_scope_plan(scope_plan(
+        {"C001": assignment("you", supporting=["C001"])},
+        [scope_candidate("N001", "You", "person", ["C001"])],
+    ))
+    responses[1]["decision"].update({
+        "resolution": initial_resolution,
+        "entity_id": "you" if initial_resolution == "existing" else "",
+    })
+    verification = {"decision": {
+        "verdict": "existing", "entity_id": "you", "candidate_entity_ids": [],
+        "confidence": 1.0, "reason": "The subject is the configured chat speaker.",
+    }}
+    responses[6]["decisions"]["I001"].update({
+        "entity_id": "you", "scope": "materialized",
+        "continuity_basis": "existing_materialized",
+    })
+    llm.call_structured.side_effect = [
+        *responses[:2],
+        *(responses[2:4] if initial_resolution == "new" else []),
+        verification, responses[6], responses[7],
+    ]
+
+    result = await dream.router.route([ClaimEvidence(claim, source)])
+
+    assert result.failures == []
+    assert result.new_entities == []
+    assert result.routes[0].owner_entity_id == "you"
+    assert result.routes[0].claim_id == claim.claim_id
+    assert [entity.entity_id for entity in artifacts.list_entities()] == ["you"]
+    calls = llm.call_structured.call_args_list
+    match_call = next(c for c in calls if c.kwargs.get("debug_label") == "dream-identity-matching-N001")
+    match_call.args[2].model_validate(responses[1])
+    assert "role=user" in match_call.args[1]
+    verifier_call = next(c for c in calls if c.kwargs.get("debug_label") == "dream-new-identity-verification")
+    assert "id=you; type=you" in verifier_call.args[1]
+    verifier_call.args[2].model_validate(verification)
+    if initial_resolution == "existing":
+        assert all(c.kwargs.get("debug_label") != "dream-identity-types" for c in calls)
 
 
 def test_new_identity_verifier_contract_constrains_registry_ids():

@@ -12,3 +12,9 @@ identity.
 Preserve a title and aliases found in the evidence. Explain the decision from the supplied evidence. This step does
 not decide entity type, page visibility, containment, or claim ownership. Return one schema-valid decision for the
 supplied node ID.
+
+The registry ID you denotes the configured user. In an agent_conversation, a source segment with role=user is
+spoken by that configured user; this explicit source role can establish identity without a name or prior history.
+Determine whether the subject is that speaker or someone mentioned by them. Do not assign mentioned people or
+quoted speakers to you merely because the user supplied the text. In meetings, only an explicitly identified user
+speaker establishes this binding.

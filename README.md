@@ -227,6 +227,25 @@ Architecture, storage contracts, retrieval details, migrations, development chec
 documented in [DESIGN.md](DESIGN.md). The Daily Driver fixture has its own
 [benchmark guide](benchmarks/fixtures/daily_driver_v1/README.md).
 
+## Replay the chat-to-memory smoke test
+
+With the models configured in `mycelium.toml` available in your running Ollama instance:
+
+```bash
+MYCELIUM_RUN_CHAT_REPLAY=1 .venv/bin/pytest -q -s tests/test_chat_memory_replay.py
+```
+
+This opt-in integration test starts a fresh temporary store, captures the saved fried-rice and alignment
+conversations verbatim, runs Build Memory, checks that the single You page owns facts from both conversations,
+and asks the original cooking question in an empty third chat. It checks actual retrieved source citations, not
+answer keywords. Model calls and embeddings are real; the third chat has memory tools but no web tools.
+It may take several minutes and model outputs can vary. The normal test suite skips it.
+
+The printed temporary directory contains the store, build report, rendered pages, and third-chat response for
+inspection (including on failure, up to the stage reached). Your live store is untouched. The fixture at
+`tests/fixtures/chat_memory_replay.json` contains personal conversation text saved with permission; review it
+before publishing or sharing the repository.
+
 ## License
 
 Mycelium is available under the MIT License. See [LICENSE](LICENSE).

@@ -18,10 +18,8 @@ def coverage_report(store) -> dict[str, Any]:
         if disposition.disposition == "source_only"
     }
     pending_segments = {
-        disposition.segment_id
-        for episode in episodes
-        for disposition in episode.segment_dispositions
-        if disposition.disposition == "claim_pending"
+        segment_id for episode in episodes for batch in episode.extraction_batches
+        if batch.status != "complete" for segment_id in batch.segment_ids
     }
     unresolved = claimed_segments - all_segments
     accounted_segments = (claimed_segments | source_only_segments) & all_segments

@@ -13,10 +13,7 @@ from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.config import Config
 from mycelium import prompts
-from mycelium.structured_outputs import (
-    claim_extraction_output_model,
-    extraction_coverage_output_model,
-)
+from mycelium.structured_outputs import extraction_output_model
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimProvenance,
@@ -393,120 +390,54 @@ class Encoder:
 
             for batch_index, batch in enumerate(batches, start=1):
                 state = batch_by_index[batch_index]
-                if state.claim_status in {"complete", "not_required"}:
+                if state.status == "complete":
                     continue
                 state.attempt_count += 1
                 state.last_error = None
                 batch_ids = {segment.segment_id for segment in batch}
                 try:
-                    if state.coverage_status != "complete":
-                        coverage_model = extraction_coverage_output_model(batch_ids)
-                        system, user = prompts.extraction_coverage_prompt(
-                            source.source_type,
-                            source.source_id,
-                            source.occurred_at,
-                            self._render_segments(batch),
-                            context=context,
+                    claim_model = extraction_output_model(batch_ids, [s.segment_id for s in context_segments])
+                    if state.response is None:
+                        system, user = prompts.claim_extraction_prompt(
+                            source.source_type, source.source_id, list(source.participants),
+                            self._render_claim_segments(batch), context=context,
                         )
-                        coverage = await self.llm.call_structured(
-                            system,
-                            user,
-                            coverage_model,
-                            num_predict=4096,
-                            debug_label=(
-                                f"extraction-coverage-{source.source_id}-batch-{batch_index}"
-                            ),
+                        response = await self.llm.call_structured(
+                            system, user, claim_model, num_predict=8192,
+                            debug_label=f"claim-extraction-{source.source_id}-batch-{batch_index}",
                         )
-                        if not isinstance(coverage, dict):
-                            raise ValueError("extraction coverage did not return an object")
-                        coverage = coverage_model.model_validate(coverage).model_dump(
-                            exclude_none=True
-                        )
-                        coverage_by_id = {
-                            item["segment_id"]: item
-                            for item in coverage["segment_dispositions"]
-                        }
-                        state.claim_bearing_segment_ids = [
-                            segment.segment_id for segment in batch
-                            if coverage_by_id[segment.segment_id]["disposition"]
-                            == "claim_bearing"
-                        ]
-                        state.coverage_status = "complete"
-                        for item in coverage["segment_dispositions"]:
-                            disposition = (
-                                "source_only"
-                                if item["disposition"] == "source_only"
-                                else "claim_pending"
-                            )
-                            dispositions[item["segment_id"]] = (
-                                ExtractionSegmentDisposition(
-                                    segment_id=item["segment_id"],
-                                    disposition=disposition,
-                                    reason=item["reason"],
-                                )
-                            )
-                        episode.segment_dispositions = list(dispositions.values())
-                        self.artifacts.save_episode(episode)
-
-                    claim_bearing = [
-                        segment for segment in batch
-                        if segment.segment_id in state.claim_bearing_segment_ids
-                    ]
-                    if not claim_bearing:
-                        state.claim_status = "not_required"
-                        self.artifacts.save_episode(episode)
-                        continue
-
-                    admitted_ids = set(state.claim_bearing_segment_ids)
-                    claim_model = claim_extraction_output_model(admitted_ids, [s.segment_id for s in context_segments])
-                    system, user = prompts.claim_extraction_prompt(
-                        source.source_type,
-                        source.source_id,
-                        list(source.participants),
-                        self._render_claim_segments(claim_bearing),
-                        context=context,
-                    )
-                    response = await self.llm.call_structured(
-                        system,
-                        user,
-                        claim_model,
-                        num_predict=8192,
-                        debug_label=(
-                            f"claim-extraction-{source.source_id}-batch-{batch_index}"
-                        )
-                    )
-                    if not isinstance(response, dict):
-                        raise ValueError("claim extraction did not return an object")
-                    response = claim_model.model_validate(response).model_dump(
-                        exclude_none=True
-                    )
+                    else:
+                        response = state.response
+                    response = claim_model.model_validate(response).model_dump(exclude_none=True)
                     staged_claims = self._build_extracted_claims(
                         source, response, state.batch_id, context_sources=context_sources
                     )
+                    # Persist validated output before publishing claims so a write
+                    # interruption replays the same decision without a new model call.
+                    state.response = response
+                    self.artifacts.save_episode(episode)
                     for claim in staged_claims:
-                        self.artifacts.save_claim(claim)
+                        # Stable batch IDs make publication insert-only. Retrying
+                        # must not overwrite a user correction to a published claim.
+                        try:
+                            self.artifacts.get_claim(claim.claim_id)
+                        except FileNotFoundError:
+                            self.artifacts.save_claim(claim)
                         claim_ids.append(claim.claim_id)
-                    claims_by_segment = {
-                        segment_id: [
-                            claim.claim_id for claim in staged_claims
-                            if segment_id in claim.provenance[0].segment_ids
-                        ]
-                        for segment_id in admitted_ids
-                    }
-                    for segment_id, linked_claim_ids in claims_by_segment.items():
-                        dispositions[segment_id] = ExtractionSegmentDisposition(
-                            segment_id=segment_id,
-                            disposition="claimed",
-                            claim_ids=linked_claim_ids,
-                            reason=dispositions[segment_id].reason,
+                    for item in response["segment_dispositions"]:
+                        dispositions[item["segment_id"]] = ExtractionSegmentDisposition(
+                            segment_id=item["segment_id"],
+                            disposition=item["disposition"],
+                            reason=item["reason"],
+                            claim_ids=[
+                                claim.claim_id for claim in staged_claims
+                                if item["segment_id"] in claim.provenance[0].segment_ids
+                            ],
                         )
-                    state.claim_status = "complete"
+                    state.status = "complete"
                     state.last_error = None
                 except Exception as exc:
-                    if state.coverage_status != "complete":
-                        state.coverage_status = "failed"
-                    else:
-                        state.claim_status = "failed"
+                    state.status = "failed"
                     state.last_error = str(exc)
                     extraction_errors.append(f"batch {batch_index}: {exc}")
                 finally:
@@ -517,9 +448,12 @@ class Encoder:
                     self.artifacts.save_episode(episode)
 
             episode.claim_ids = list(dict.fromkeys(claim_ids))
+            for state in episode.extraction_batches:
+                if state.status == "complete":
+                    state.response = None
             terminal_batches = {
                 state.batch_id for state in episode.extraction_batches
-                if state.claim_status in {"complete", "not_required"}
+                if state.status == "complete"
             }
             incomplete = len(terminal_batches) != len(episode.extraction_batches)
             episode.segment_dispositions = [

@@ -3363,3 +3363,60 @@ one prose-similarity summary.
 - README documents execution, model variability, diagnostics, and the personal-text fixture sharing caveat.
   No production prompts or algorithms were changed for this fixture. No live data changed, no server operations,
   and no commit. This is a reproducible regression scenario, not a general memory-quality benchmark.
+
+## 2026-09-04 — Repair live duplicate user page
+
+- User explicitly requested live repair. Backed up the complete store to
+  /tmp/mycelium-before-user-merge-sA05KP/store before mutation.
+- Allowed the existing manual merge service to accept person -> canonical you; automatic identity decisions
+  and other cross-type merge restrictions are unchanged. Extended reference-redirection/history regression
+  coverage to this case: 20 entity/wiki tests passed, lint and diff checks passed.
+- Ran the service to merge person-you into you. Six facts now belong to the canonical user; only wiki/you.md
+  remains visible. The duplicate page was archived and its entity retained as a merged redirect so old links
+  still resolve. Verified source documents, extracted claims, and session transcripts are unchanged against
+  the backup. No server operations or git commit.
+
+## 2026-09-04 — Combined extraction and coverage accounting
+
+- Replaced separate coverage and claim-extraction model calls with extraction_output_model: one response contains
+  claims plus one claimed/source_only disposition and reason per new segment. Deterministic validation requires
+  exact segment accounting, exact allowed citation IDs, and equality between claimed segments and claim citations.
+  Empty claim output is valid only with all segments source-only. Context citations remain on their original sources.
+- Removed the coverage prompt pair/factory/schema, separate coverage/claim statuses, and claim_pending state.
+  ExtractionBatchState now has one pending/failed/complete status and a temporary validated response. Persisting
+  the response before claim writes lets restart replay identical output after an interrupted write; completed
+  batches discard it. Insert-only publication cannot overwrite a claim superseded by a user correction.
+  Existing temporal normalization, batching size, identity/page organization, and synthesis were not redesigned.
+- Direct host model: gemma4:12b, verified through escalated /api/tags. Prototype /tmp/probe_combined_extraction.py
+  first passed source-only and unaccepted suggestions but failed cross-turn citations: it resolved a reference
+  while omitting the earlier source IDs. Required context citation fields and explicit general guidance fixed it;
+  acceptance/refusal then passed both structural checks and evaluation-only meaning judgments.
+- New tests/test_extraction_replays.py and tests/fixtures/extraction_replays.json run the production prompt/schema
+  directly and the real capture/build/restart/session-retrieval path for six neutral cases. No source-specific
+  words, expected answers, or evaluator logic enter product prompts. Exact accounting and provenance are tested
+  structurally; model judgments assess paraphrased expected meaning and forbidden assertions, not independent truth.
+- Important integration failure: the original chat replay initially extracted no claims, explaining self-reported
+  experiences and goals within questions as non-facts. /tmp/probe_question_admission.py proved general guidance
+  with a neutral roles/experience/goal question and a purely informational counterexample before integration.
+  Final combined prompt preserves assertions inside questions without inferring personal facts from bare questions.
+  These counterexamples were added to the permanent probes and full-system replays.
+- Test-harness failures corrected: SourceInput segment dictionaries initially omitted required segment_id; the
+  restart test compared mutable organization bookkeeping as though it were immutable extraction content.
+  It now checks extracted fields/provenance and no processed episodes, allowing existing deferred-work bookkeeping.
+  Old staged mocks/call counts were replaced, not retained as compatibility helpers. Added interrupted claim-write
+  recovery and preservation of a superseded claim between partial publication and restart.
+- Final validation: 334 backend tests passed, 15 skipped; Ruff and diff checks passed. With both
+  MYCELIUM_RUN_EXTRACTION_REPLAYS=1 and MYCELIUM_RUN_CHAT_REPLAY=1, all 13 real-model checks passed in 231.44 seconds.
+  Artifacts: /tmp/pytest-of-nitin/pytest-544, including per-case model outputs/judgments/build/retrieval artifacts
+  and test_two_conversations_build_o0 with the original verbatim chat replay. That replay passed its single
+  populated You page, both conversations' user-owned facts, and third-chat cooking-source citation assertions.
+- User explicitly approved backing up/rebuilding the live test store instead of adding schema compatibility.
+  Backup: /tmp/mycelium-before-combined-extraction-mRPuyX/store; untouched pre-swap directory also retained at
+  /tmp/mycelium-before-combined-extraction-mRPuyX/original-live. First staged build reflected the omission regression
+  and was NOT installed. The second build passed populated-page checks and preserved all six source IDs and every
+  original segment's text/role/timestamp. After checking live session metadata was unchanged, swapped it into place.
+  Live store now has one You page, four extracted claims, six sources, and zero pending sources. Historical derived
+  chat retrieval/tool snapshots were reset rather than relinked to changed claim IDs; original messages and Engram
+  data were preserved. No server started/stopped and no git commit. Backend restart is user-run for the new schema.
+- Post-swap live retrieval smoke check passed: the original cooking query returned citations to
+  source-6c522d36c58ec125 through the real hybrid index and model admission path.

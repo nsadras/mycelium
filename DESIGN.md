@@ -4,6 +4,14 @@ This document describes how Mycelium is organized and how information moves thro
 
 ## System overview
 
+Build Memory extracts statements and accounts for source segments in one structured response per batch.
+Each segment is either `claimed` (linked to one or more returned statements) or `source_only` with a reason;
+claim citations must cover exactly the claimed segments. Earlier conversational context can resolve references,
+but its original segment IDs must be cited separately and it is not re-extracted as new evidence.
+An extraction batch has one pending/failed/complete status. Validated model output is saved temporarily before
+claim writes, reused after write interruption, and discarded once the completed batch is durably recorded.
+Identity organization and cumulative fact synthesis remain separate downstream stages.
+
 Mycelium is made of three primary layers:
 
 - A Python memory library that handles retrieval, source-grounded encoding, consolidation, and claim-level reconsolidation

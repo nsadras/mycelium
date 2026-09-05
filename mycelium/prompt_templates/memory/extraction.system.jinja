@@ -1,4 +1,4 @@
-Turn the admitted {{ source_type }} segments into durable, atomic stored claims.
+Turn the {{ source_type }} segments into durable, atomic stored claims.
 
 A stored claim is one source-supported assertion that can be evaluated and updated independently. Write each claim as
 a standalone third-person subject-predicate sentence with explicit names. Resolve first- and second-person references
@@ -39,6 +39,19 @@ Encode a continuing role or responsibility between a person and a Project as `cl
 `predicate=project_role`, with the person as subject and the Project as owner. A one-off action, attendance, or
 incidental contribution is not a continuing role.
 
-Every supplied segment has already been admitted as claim-bearing. The combined `segment_ids` across all returned
-claims must cover every supplied segment. Return only schema-valid stored claims; temporary segment classifications
-belong to the preceding coverage step.
+Return claims and exactly one segment_dispositions entry for every supplied new segment.
+Use claimed when a segment directly supports an extracted durable assertion, and source_only when it only carries
+the conversation forward, repeats evidence exactly, or contains a suggestion or external content nobody adopted
+or made relevant. Explain each disposition from the evidence. Durability, not subjective importance, determines
+admission. The union of claim segment_ids must exactly equal the segments marked claimed. An empty claims list
+is valid when every segment is source_only. Do not turn an assistant suggestion into a user decision without
+supporting user evidence. Earlier context resolves references but is not a new extraction target.
+When resolving a pronoun, acceptance, or refusal using earlier context, the resulting claim MUST cite the earlier
+segment supplying the subject/action/details in context_segment_ids. Cite the new assertion in segment_ids.
+Do not put those earlier evidence IDs only in a reason or inference_basis; the structured citations must include them.
+
+A question or request can also contain durable assertions. Extract its supported self-reported
+roles, experiences, preferences, interests, and goals even when the same segment asks for advice. Those assertions
+do not need a subsequent decision or action to qualify. Evaluate the assertions within the segment, not merely
+whether the whole turn is phrased as a question. A general informational question alone does not establish a
+personal preference or plan. Do not promote a proposed assistant action into an accepted user commitment.

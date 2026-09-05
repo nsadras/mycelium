@@ -246,6 +246,17 @@ inspection (including on failure, up to the stage reached). Your live store is u
 `tests/fixtures/chat_memory_replay.json` contains personal conversation text saved with permission; review it
 before publishing or sharing the repository.
 
+Additional focused real-model probes and capture/build/retrieval replays:
+
+```bash
+MYCELIUM_RUN_EXTRACTION_REPLAYS=1 .venv/bin/pytest -q -s tests/test_extraction_replays.py
+```
+
+These cover source-only conversation, unaccepted assistant suggestions, cross-turn acceptance/refusal with
+original-context citations, and facts embedded in questions versus purely informational questions.
+Exact accounting and provenance are checked deterministically; an evaluation-only
+model judge checks meaning without requiring exact output wording. The judge is not an independent quality oracle.
+
 ## License
 
 Mycelium is available under the MIT License. See [LICENSE](LICENSE).

@@ -241,7 +241,11 @@ class EntityCurationService:
         target = self.artifacts.get_entity(target_entity_id)
         if source.entity_id == "you" or target.status != "active" or source.status != "active":
             raise ValueError("Merge requires an active non-You source and active target")
-        if source.entity_type != target.entity_type:
+        # Explicit user correction may identify a discovered person as the
+        # configured user. This does not authorize automatic identity matching.
+        if source.entity_type != target.entity_type and not (
+            source.entity_type == "person" and target.entity_id == "you"
+        ):
             raise ValueError("Entities must have the same type to merge")
         for placement in self.artifacts.list_placements():
             changed = False

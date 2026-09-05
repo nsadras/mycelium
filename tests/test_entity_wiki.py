@@ -350,10 +350,11 @@ def test_merge_reassigns_claims_and_keeps_redirect_identity(tmp_path):
     assert not wiki.exists(duplicate.slug)
 
 
-def test_merge_redirects_every_live_entity_reference_and_preserves_history(tmp_path):
-    artifacts, wiki, materializer, _, _ = setup_store(tmp_path)
+@pytest.mark.parametrize("merge_into_user", [False, True])
+def test_merge_redirects_every_live_entity_reference_and_preserves_history(tmp_path, merge_into_user):
+    artifacts, wiki, materializer, you, _ = setup_store(tmp_path)
     source = artifacts.create_entity("person", "Ava Duplicate")
-    target = artifacts.create_entity("person", "Ava")
+    target = you if merge_into_user else artifacts.create_entity("person", "Ava")
     item = claim("claim-merge", "Ava coordinates the launch.")
     other = claim("claim-other", "The launch begins next week.")
     section = default_section("person", item.claim_type, item.predicate)

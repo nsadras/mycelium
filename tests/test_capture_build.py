@@ -78,6 +78,53 @@ def test_only_build_routes_exist():
 
 
 @pytest.mark.asyncio
+async def test_combined_batch_replays_validated_output_after_interrupted_claim_write(tmp_path, monkeypatch):
+    memory = Mycelium(tmp_path / "store")
+    captured = await memory.ingest_source(SourceInput("USER: Two assertions.", "chat"))
+    source = memory.artifacts.get_source(captured.source_ids[0])
+    segment_id = source.segments[0].segment_id
+    response = {
+        "segment_dispositions": [{"segment_id": segment_id, "disposition": "claimed", "reason": "Two assertions."}],
+        "claims": [
+            {"text": text, "about": [{"entity": "user"}], "segment_ids": [segment_id]}
+            for text in ("The user prefers tea.", "The user avoids coffee.")
+        ],
+    }
+    model = AsyncMock(return_value=response)
+    memory.encoder.llm = SimpleNamespace(call_structured=model)
+    save_claim = memory.artifacts.save_claim
+    writes = 0
+
+    def interrupted_save(claim):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("Interrupted second claim write")
+        save_claim(claim)
+
+    monkeypatch.setattr(memory.artifacts, "save_claim", interrupted_save)
+    assert await memory.encoder.extract_pending() == []
+    episode = memory.artifacts.list_episodes()[0]
+    assert episode.extraction_batches[0].status == "failed"
+    assert episode.extraction_batches[0].response is not None
+    assert len(memory.artifacts.list_claims()) == 1
+    published = memory.artifacts.list_claims()[0]
+    published.status = "superseded"  # A user correction between publication and retry.
+    save_claim(published)
+    restarted = Mycelium(tmp_path / "store")
+    restarted.encoder.llm = AsyncMock()
+    assert await restarted.encoder.extract_pending() == [episode.episode_id]
+    restarted.encoder.llm.call_structured.assert_not_awaited()
+    assert model.await_count == 1
+    assert len(restarted.artifacts.list_claims()) == 2
+    assert restarted.artifacts.get_claim(published.claim_id).status == "superseded"
+    complete = restarted.artifacts.list_episodes()[0]
+    assert complete.extraction_batches[0].response is None
+    assert len(complete.claim_ids) == 2
+    assert set(complete.segment_dispositions[0].claim_ids) == set(complete.claim_ids)
+
+
+@pytest.mark.asyncio
 async def test_cross_turn_context_citations_keep_original_source_identity(tmp_path):
     memory = Mycelium(tmp_path / "store")
     previous = await memory.ingest_source(
@@ -98,17 +145,10 @@ async def test_cross_turn_context_citations_keep_original_source_identity(tmp_pa
     )
 
     async def response(_system, _user, output_type, **kwargs):
-        if "segment_dispositions" in output_type.model_fields:
-            return {
-                "segment_dispositions": [
-                    {
-                        "segment_id": new_segment,
-                        "disposition": "claim_bearing",
-                        "reason": "Explicit commitment.",
-                    }
-                ]
-            }
         return {
+            "segment_dispositions": [{
+                "segment_id": new_segment, "disposition": "claimed", "reason": "Explicit commitment.",
+            }],
             "claims": [
                 {
                     "text": "The user will lead the workshop.",

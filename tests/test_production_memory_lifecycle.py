@@ -42,15 +42,14 @@ class DeterministicProductionModel:
         return get_args(annotation)
 
     async def call_structured(self, _system, user, output_type, **_kwargs):
-        if "segment_dispositions" in output_type.model_fields:
-            segment_ids = self._declared_segment_ids(
-                output_type, "segment_dispositions", "segment_id"
-            )
+        if "claims" in output_type.model_fields:
+            segment_ids = self._declared_segment_ids(output_type, "claims", "segment_ids")
+            segment_id = segment_ids[0]
             return {"segment_dispositions": [
                 {
                     "segment_id": segment_id,
                     "disposition": (
-                        "claim_bearing" if index == 0 else "source_only"
+                        "claimed" if index == 0 else "source_only"
                     ),
                     "reason": (
                         "The user states a durable future commitment."
@@ -59,25 +58,18 @@ class DeterministicProductionModel:
                     ),
                 }
                 for index, segment_id in enumerate(segment_ids)
-            ]}
-        if "claims" in output_type.model_fields:
-            segment_id = self._declared_segment_ids(
-                output_type, "claims", "segment_ids"
-            )[0]
-            return {"claims": [{
-                "text": "The user will send the Cedar brief tomorrow.",
-                "claim_type": "commitment",
-                "predicate": "send_brief",
-                "evidence_modality": "speech",
-                "temporal_status": "future",
-                "temporal_anchor_segment_id": segment_id,
-                "about": [{"entity": "user", "role": "subject"}],
-                "segment_ids": [segment_id],
-                "speaker": "user",
-                "evidence_type": "explicit",
-                "confidence": 0.95,
-                "facets": {"when": "tomorrow"},
-            }]}
+            ],
+                "claims": [{
+                    "text": "The user will send the Cedar brief tomorrow.",
+                    "claim_type": "commitment", "predicate": "send_brief",
+                    "evidence_modality": "speech", "temporal_status": "future",
+                    "temporal_anchor_segment_id": segment_id,
+                    "about": [{"entity": "user", "role": "subject"}],
+                    "segment_ids": [segment_id], "speaker": "user",
+                    "evidence_type": "explicit", "confidence": 0.95,
+                    "facets": {"when": "tomorrow"},
+                }],
+            }
         decisions_model = output_type.model_fields["decisions"].annotation
         return {"decisions": {
             alias: {

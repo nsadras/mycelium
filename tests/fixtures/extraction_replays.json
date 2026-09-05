@@ -1,0 +1,122 @@
+[
+  {
+    "name": "source_only",
+    "context": [],
+    "messages": [
+      {
+        "role": "user",
+        "content": "Thanks!"
+      },
+      {
+        "role": "assistant",
+        "content": "You're welcome."
+      }
+    ],
+    "expected": null,
+    "forbidden": null,
+    "query": "What do you know about my plans?"
+  },
+  {
+    "name": "unaccepted_suggestion",
+    "context": [],
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello."
+      },
+      {
+        "role": "assistant",
+        "content": "You could volunteer to lead a pottery workshop next month."
+      }
+    ],
+    "expected": null,
+    "forbidden": "The user has committed to leading a pottery workshop.",
+    "query": "What have I committed to leading?"
+  },
+  {
+    "name": "accepted_reference",
+    "context": [
+      {
+        "role": "user",
+        "content": "I am considering volunteering."
+      },
+      {
+        "role": "assistant",
+        "content": "Would you lead a pottery workshop next month?"
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": "Yes, I will lead it."
+      },
+      {
+        "role": "assistant",
+        "content": "Understood."
+      }
+    ],
+    "expected": "The user has agreed to lead a pottery workshop next month.",
+    "forbidden": "The user declined to lead the pottery workshop.",
+    "query": "What did I agree to lead?"
+  },
+  {
+    "name": "declined_reference",
+    "context": [
+      {
+        "role": "user",
+        "content": "I am considering volunteering."
+      },
+      {
+        "role": "assistant",
+        "content": "Would you lead a pottery workshop next month?"
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": "No, I won't lead it."
+      },
+      {
+        "role": "assistant",
+        "content": "Understood."
+      }
+    ],
+    "expected": "The user declined to lead a pottery workshop next month.",
+    "forbidden": "The user has agreed to lead the pottery workshop.",
+    "query": "What did I decline to lead?"
+  },
+  {
+    "name": "facts_inside_question",
+    "context": [],
+    "messages": [
+      {
+        "role": "user",
+        "content": "I am a librarian, and I enjoyed a watercolor class yesterday. I want to learn landscape painting. What could I practice next?"
+      },
+      {
+        "role": "assistant",
+        "content": "You could try painting a tree."
+      }
+    ],
+    "expected": "The user is a librarian, enjoyed a watercolor class, and wants to learn landscape painting.",
+    "forbidden": "The user has committed to painting a tree.",
+    "query": "What do you know about my work and art interests?"
+  },
+  {
+    "name": "question_without_personal_facts",
+    "context": [],
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is watercolor painting?"
+      },
+      {
+        "role": "assistant",
+        "content": "It is painting with pigments suspended in water."
+      }
+    ],
+    "expected": null,
+    "forbidden": null,
+    "query": "What are my art interests?"
+  }
+]

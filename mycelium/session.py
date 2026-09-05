@@ -1,8 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, List, TYPE_CHECKING
 
-from mycelium.models import WikiPage
-from mycelium.operations import MemoryEvidence
+from mycelium.operations import MemoryEvidence, WikiPageReference
 from mycelium.prompting import render_prompt
 from mycelium.retrieval_context import render_memory_evidence
 
@@ -19,7 +18,7 @@ class Session:
     ):
         self.session_id = session_id
         self.query = query
-        self.loaded_pages: List[WikiPage] = []
+        self.page_references: tuple[WikiPageReference, ...] = ()
         self.memory_evidence = MemoryEvidence()
         self.transcript: List[dict[str, Any]] = []
         self._mycelium = mycelium

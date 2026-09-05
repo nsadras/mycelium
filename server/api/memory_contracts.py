@@ -5,16 +5,6 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 
-class FlushRequest(BaseModel):
-    session_id: str | None = None
-
-
-class IdleFlushRequest(BaseModel):
-    idle_minutes: int = 20
-    max_turns: int = 25
-    force: bool = False
-
-
 class ProposalReviewRequest(BaseModel):
     reviewer_note: str | None = None
 

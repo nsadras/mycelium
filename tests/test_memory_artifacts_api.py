@@ -220,9 +220,7 @@ def artifact_memory(tmp_path, monkeypatch):
         "chat-1": {
             "query": "Tea",
             "transcript": [{"role": "user", "content": "Remember tea."}],
-            "episode_seq": 2,
-            "active_episode": {"id": "chat-1-ep-2", "buffer": [], "turn_count": 0},
-            "encoded_episodes": [{"id": "chat-1-ep-1", "reason": "manual"}],
+            "captured_turns": 0,
         }
     })
     return mem
@@ -303,9 +301,7 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
         "session_id": "chat-1",
         "query": "Tea",
         "transcript_turns": 1,
-        "episode_seq": 2,
-        "active_episode": {"id": "chat-1-ep-2", "buffer": [], "turn_count": 0},
-        "encoded_episodes": [{"id": "chat-1-ep-1", "reason": "manual"}],
+        "captured_turns": 0,
     }]
     assert sources[0]["segment_count"] == 1
     assert sources[0]["status"] == "active"

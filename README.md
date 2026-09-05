@@ -81,22 +81,19 @@ The UI is organized around five main areas:
 A typical workflow is simple:
 
 1. Start a chat and use the assistant normally.
-2. Use **Flush Current**, **Flush Idle**, or **Flush All** when you want chat episodes encoded into
-   source-grounded claims and inspectable short-term memory.
-3. Run **Dream Pass** when you want to consolidate pending claims and review deferred memory.
-4. Start another chat about the same subject. Mycelium supplies a compact initial set of source-grounded claims, and
-   the assistant can search memory again or inspect exact sources when the question needs more evidence.
-5. Open **Memory** to trace what was remembered and approve or reject proposed contradictions and replacements.
+2. Completed turns are saved automatically as sources, without extraction or embedding calls.
+3. Click **Build Memory** to extract statements from pending sources and organize the wiki.
+4. Start another chat to retrieve built memories and inspect their exact cited sources.
+5. Open **Memory** to inspect processing status and review proposed changes.
 
-The sidebar provides manual controls for flushing episodes, running Dream, and clearing the development
-store. The server does not schedule memory work in the background. **Flush Idle** checks idle and episode-size
-conditions only when selected; elapsed time and queue thresholds do not trigger work by themselves.
+Capture alone does not make information searchable across sessions. Current-chat context works normally;
+unbuilt sources remain browsable and await Build Memory. There is no Flush control or scheduled build.
 
 ### How memory works
 
-Flushing a conversation preserves the original transcript and extracts source-linked claims into inspectable
-short-term memory. Running Dream organizes useful claims into the Markdown wiki. Both operations happen only when
-you request them through the UI or API.
+Build Memory uses a stable snapshot of captured sources, resumes unfinished extraction, then runs the current
+organizer. New arrivals remain pending for the next build. Saved transcripts are durable retry inputs; repeated
+capture does not duplicate source records. A failed meeting summary does not prevent source admission.
 
 The wiki distinguishes people, organizations, ongoing projects, recurring series, individual events, artifacts,
 places, and abstract topics. A meeting, tool, or deliverable can remain part of its larger context without creating
@@ -143,9 +140,9 @@ The web app is optional. The Python API exposes the same three-stage lifecycle u
 
 | Operation | Input | Output |
 | --- | --- | --- |
-| `ingest_source` | `SourceInput` with a transcript, source kind, participants, segments, and idempotency key | `IngestionResult` with the created log, source, episode, claim, and operation IDs |
-| `retrieve_context` | `RetrievalRequest` with a query and context budget | `RetrievalResult` with inspectable pages, typed evidence records and sources, authoritative Markdown/pseudo-XML rendering, and a retrieval trace |
-| `consolidate` | `ConsolidationRequest` with dry-run and deferred-claim policy | `ConsolidationResult` with the Dream report and retried extraction IDs |
+| `ingest_source` | `SourceInput` with a transcript, source kind, participants, segments, and idempotency key | `IngestionResult` with `captured` (or `empty`) status and durable source/log/episode/operation IDs; capture does not extract claims |
+| `retrieve_context` | `RetrievalRequest` with a query and context budget | `RetrievalResult` with real wiki page references (`page_references`), typed evidence records and sources, authoritative Markdown/pseudo-XML rendering, and a retrieval trace |
+| `consolidate` | `ConsolidationRequest` with dry-run and deferred-claim policy | `ConsolidationResult` with the build report and processed extraction episode IDs |
 
 For an ordinary agent turn, retrieve memory before generation and ingest the completed exchange afterward:
 
@@ -186,8 +183,8 @@ if __name__ == "__main__":
 ```
 
 `Mycelium.session()` remains an ergonomic wrapper around retrieval and ingestion for conversational agents. Web and
-library integrations use the same budgeted memory-context renderer. `consolidate_if_ready()` applies the configured
-queue policy when the caller wants conditional consolidation. See
+library integrations use the same budgeted memory-context renderer. Call `consolidate()` explicitly to build captured
+sources into searchable memories and wiki pages. See
 [`examples/basic_session.py`](examples/basic_session.py) for a runnable example and
 [`examples/langgraph_integration.py`](examples/langgraph_integration.py) for a LangGraph integration pattern.
 
@@ -214,11 +211,6 @@ initial_result_limit = 5
 tool_result_limit = 6
 tool_search_limit = 3
 tool_evidence_budget_tokens = 6000
-
-[dream]
-queue_claim_threshold = 20
-max_pending_hours = 24
-deferred_revisit_hours = 168
 ```
 
 The default memory store is `./mycelium_store`. It consists primarily of Markdown and JSON, so it can be

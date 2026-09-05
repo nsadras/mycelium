@@ -279,8 +279,10 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     setIsFinalizing(true);
     setAssistantStatus({ activity: 'thinking', label: 'Finalizing meeting', detail: meeting.title });
     try {
-      const saved = await saveSpeakerNames();
-      if (!saved) return;
+      if (meeting.status === 'reviewing') {
+        const saved = await saveSpeakerNames();
+        if (!saved) return;
+      }
       const res = await api.post(`/engram/meetings/${meeting.id}/finalize`);
       applyMeeting(res.data);
       setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
@@ -503,14 +505,14 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                     {meeting.status === 'ready' ? 'Process' : 'Retry'}
                   </button>
                 )}
-                {meeting.status === 'reviewing' && (
+                {(meeting.status === 'reviewing' || (meeting.status === 'completed' && !meeting.summary)) && (
                   <button
                     onClick={finalizeMeeting}
                     disabled={isFinalizing || isSavingSpeakers || Boolean(editingTranscriptTurn) || Boolean(savingTranscriptTurn)}
                     className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                   >
                     {isFinalizing ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-                    Finalize
+                    {meeting.status === 'completed' ? 'Retry Summary' : 'Finalize'}
                   </button>
                 )}
               </div>
@@ -584,7 +586,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                       <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">Speakers</h2>
                       <button
                         onClick={saveSpeakerNames}
-                        disabled={isSavingSpeakers || isFinalizing}
+                        disabled={meeting.status !== 'reviewing' || isSavingSpeakers || isFinalizing}
                         title="Save speaker names"
                         className="inline-flex items-center justify-center rounded-md border border-slate-200 p-1.5 text-indigo-600 hover:bg-slate-50 disabled:opacity-50"
                       >
@@ -602,6 +604,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                             <span>{speaker.count} lines · {formatTime(speaker.seconds)}</span>
                           </div>
                           <input
+                            disabled={meeting.status !== 'reviewing'}
                             value={speakerNames[speaker.label] ?? ''}
                             onChange={(event) => setSpeakerNames(prev => ({ ...prev, [speaker.label]: event.target.value }))}
                             placeholder={speaker.label}
@@ -615,7 +618,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                 <section>
                   <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Summary</h2>
                   <p className="text-sm leading-relaxed text-slate-200">
-                    {meeting.summary?.summary || (meeting.status === 'ready' ? 'This raw recording has not been processed yet.' : meeting.status === 'reviewing' ? 'Finalize this meeting to generate a summary.' : meeting.status === 'completed' ? 'No summary generated.' : 'Summary appears after processing.')}
+                    {meeting.summary?.summary || (meeting.status === 'ready' ? 'This raw recording has not been processed yet.' : meeting.status === 'reviewing' ? 'Finalize this meeting to generate a summary.' : meeting.status === 'completed' ? 'Source saved, awaiting Build Memory. Retry Summary if needed.' : 'Summary appears after processing.')}
                   </p>
                 </section>
                 <section>

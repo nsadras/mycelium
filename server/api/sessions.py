@@ -8,12 +8,11 @@ from ollama import web_fetch, web_search
 
 from mycelium.budget import count_message_tokens, count_tokens, truncate_text_tokens
 from mycelium.memory_tools import MEMORY_TOOL_DEFINITIONS, MemoryToolset
-from mycelium.models import WikiPage
 from mycelium.operations import MemoryEvidence, MemoryWorkspace, RetrievalRequest
 from mycelium.prompting import render_prompt
-from mycelium.retrieval_context import render_memory_workspace
+from mycelium.retrieval_context import fit_memory_evidence, render_memory_workspace
 from server.runtime import (
-    append_tool_event_logs,
+    capture_saved_turns,
     append_turn,
     ensure_session_record,
     get_meta_lock,
@@ -48,51 +47,35 @@ def _assistant_system_prompt() -> str:
     )
 
 
-def _evidence_for_pages(
-    evidence: MemoryEvidence, pages: list[WikiPage]
-) -> MemoryEvidence:
-    entity_ids = {page.entity_id for page in pages}
-    include_unowned = "_short-term-memory" in entity_ids
-    return MemoryEvidence(
-        records=tuple(
-            record
-            for record in evidence.records
-            if record.subject_entity_id in entity_ids
-            or (record.subject_entity_id is None and include_unowned)
-        ),
-        sources=evidence.sources,
-        more_available=evidence.more_available,
-    )
-
-
 def build_chat_prompt(
     record: dict,
     current_message: str,
-    pages: list[WikiPage],
     evidence: MemoryEvidence,
     *,
     budget_tokens: int,
     workspace_search_limit: int,
     workspace_evidence_budget_tokens: int,
-) -> tuple[list[dict[str, str]], list[WikiPage], str]:
+) -> tuple[list[dict[str, str]], MemoryEvidence, str]:
     """Fit system, current request, recent transcript, and memory under one budget."""
     if budget_tokens <= 0:
         raise ValueError("Assistant prompt budget must be positive")
     history = chat_history_messages(record, current_message)[:-1]
     recent_start = max(0, len(history) - 4)
     selected_history = history[recent_start:]
-    selected_pages: list[WikiPage] = []
+    selected_evidence = MemoryEvidence(
+        more_available=evidence.more_available
+        or bool(evidence.records or evidence.sources)
+    )
 
     def assemble(
         prompt_history: list[dict[str, str]],
-        prompt_pages: list[WikiPage],
+        prompt_evidence: MemoryEvidence,
         user_content: str,
     ) -> list[dict[str, str]]:
-        selected_evidence = _evidence_for_pages(evidence, prompt_pages)
         workspace = MemoryWorkspace(
             revision=0,
             request=user_content,
-            evidence=selected_evidence,
+            evidence=prompt_evidence,
             operations=(),
             remaining_searches=workspace_search_limit,
             remaining_evidence_tokens=workspace_evidence_budget_tokens,
@@ -108,22 +91,20 @@ def build_chat_prompt(
             {"role": "user", "content": request},
         ]
 
-    messages = assemble(selected_history, selected_pages, current_message)
+    messages = assemble(selected_history, selected_evidence, current_message)
     while selected_history and count_message_tokens(messages) > budget_tokens:
         selected_history.pop(0)
-        messages = assemble(selected_history, selected_pages, current_message)
+        messages = assemble(selected_history, selected_evidence, current_message)
 
     if count_message_tokens(messages) > budget_tokens:
         low = 0
         high = count_tokens(current_message)
         fitted_message = ""
-        fitted_messages = assemble([], [], fitted_message)
+        fitted_messages = assemble([], selected_evidence, fitted_message)
         while low <= high:
             midpoint = (low + high) // 2
-            candidate = truncate_text_tokens(
-                current_message, midpoint, keep_end=True
-            )
-            trial = assemble([], [], candidate)
+            candidate = truncate_text_tokens(current_message, midpoint, keep_end=True)
+            trial = assemble([], selected_evidence, candidate)
             if count_message_tokens(trial) <= budget_tokens:
                 fitted_message = candidate
                 fitted_messages = trial
@@ -138,21 +119,23 @@ def build_chat_prompt(
             )
         selected_history = []
 
-    for page in pages:
-        trial_pages = [*selected_pages, page]
-        trial = assemble(selected_history, trial_pages, current_message)
-        if count_message_tokens(trial) <= budget_tokens:
-            selected_pages = trial_pages
-            messages = trial
+    selected_evidence = fit_memory_evidence(
+        evidence,
+        lambda trial: (
+            count_message_tokens(assemble(selected_history, trial, current_message))
+            <= budget_tokens
+        ),
+    )
+    messages = assemble(selected_history, selected_evidence, current_message)
 
     for item in reversed(history[:recent_start]):
         trial_history = [item, *selected_history]
-        trial = assemble(trial_history, selected_pages, current_message)
+        trial = assemble(trial_history, selected_evidence, current_message)
         if count_message_tokens(trial) <= budget_tokens:
             selected_history = trial_history
             messages = trial
 
-    return messages, selected_pages, current_message
+    return messages, selected_evidence, current_message
 
 
 class SessionCreate(BaseModel):
@@ -240,7 +223,6 @@ async def chat(session_id: str, req: ChatRequest):
             if session_id not in meta:
                 raise HTTPException(status_code=404, detail="Session not found")
             record = ensure_session_record(meta[session_id], session_id)
-            episode_id = record["active_episode"]["id"]
 
         mem = get_mem()
         thread_context = recent_thread_context(record)
@@ -268,17 +250,14 @@ async def chat(session_id: str, req: ChatRequest):
                 budget_tokens=initial_prompt_budget,
             )
         )
-        candidate_pages = list(retrieval.pages)
-        messages, loaded_pages, fitted_request = build_chat_prompt(
+        messages, initial_evidence, fitted_request = build_chat_prompt(
             record,
             req.message,
-            candidate_pages,
             retrieval.evidence,
             budget_tokens=initial_prompt_budget,
             workspace_search_limit=mem.config.retrieval.tool_search_limit,
             workspace_evidence_budget_tokens=tool_evidence_budget,
         )
-        initial_evidence = _evidence_for_pages(retrieval.evidence, loaded_pages)
         memory_tools = MemoryToolset(
             mem.retriever,
             result_limit=mem.config.retrieval.tool_result_limit,
@@ -309,7 +288,9 @@ async def chat(session_id: str, req: ChatRequest):
                 "title": p.title,
                 "version": p.version,
             }
-            for p in loaded_pages
+            for p in retrieval.page_references
+            if p.entity_id
+            in {record.subject_entity_id for record in initial_evidence.records}
         ]
 
         async with get_meta_lock():
@@ -328,16 +309,14 @@ async def chat(session_id: str, req: ChatRequest):
                 retrieval.trace,
                 memory_workspace,
             )
-            turn_count = int(meta[session_id]["active_episode"].get("turn_count", 0))
             save_meta(meta)
 
-        tool_log_entries = await append_tool_event_logs(
-            session_id,
-            episode_id,
-            tool_events,
-            turn_count,
-            assistant_timestamp,
-        )
+        capture_error = None
+        try:
+            await capture_saved_turns(session_id)
+        except Exception as exc:
+            # The reply is already durable. Build Memory or the next turn retries capture.
+            capture_error = str(exc)
 
         return {
             "response": response_text,
@@ -347,6 +326,6 @@ async def chat(session_id: str, req: ChatRequest):
             "retrieval_trace": retrieval.trace,
             "tool_events": tool_events,
             "memory_workspace": memory_workspace,
-            "tool_logs_created": len(tool_log_entries),
-            "episode_id": episode_id,
+            "capture_status": "pending" if capture_error else "captured",
+            "capture_error": capture_error,
         }

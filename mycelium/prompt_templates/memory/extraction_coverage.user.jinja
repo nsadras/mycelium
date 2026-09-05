@@ -3,3 +3,9 @@ SOURCE TIME: {{ occurred_at or unknown_time }}
 
 SEGMENTS TO CLASSIFY:
 {{ segments }}
+{% if context %}
+
+EARLIER CONVERSATION CONTEXT (not new evidence occurrences):
+{{ context }}
+Classify only SEGMENTS TO CLASSIFY, not earlier context.
+{% endif %}

@@ -96,11 +96,19 @@ decision, selected claim IDs, and the claims that fit in the final budget.
 
 Retrieval is read-only. It never reinforces, destabilizes, or rewrites a page.
 
+Typed evidence is also the budgeted retrieval unit: complete records are fitted against their actual rendered
+envelope, and chat fits those same records against the complete prompt using the shared token estimator.
+Source excerpts are expanded separately on demand. Synthetic `WikiPage` objects no longer participate in retrieval
+or chat admission. `RetrievalResult.page_references` and `Session.page_references` contain only navigation metadata
+for real wiki pages associated with admitted evidence. Chat's `loaded_pages` metadata describes those references
+after prompt fitting, not page bodies supplied to the model. Unowned claims do not require a page to be admitted.
+Budgets too small even for the empty evidence envelope raise an explicit error.
+
 ### 2. Assistant tools
 
 The chat model can call the read-only `memory_search` and `memory_sources` tools alongside Ollama `web_search` and
 `web_fetch`. All tool calls are displayed in the UI and stored on the assistant message. Web results are external
-observations and are encoded immediately through the source pipeline when successful. Memory-tool results are reads
+observations and are captured immediately as sources; their extraction waits for Build Memory. Memory-tool results are reads
 of existing evidence and are not re-ingested as new memories.
 
 Memory results use one Markdown/pseudo-XML renderer. Search records put their statement and subject before supporting
@@ -112,25 +120,31 @@ auditing, while the model receives the full current workspace after each memory 
 The tool-specific extraction policy for web observations keeps source-grounded project facts while ignoring transport
 metadata, failures, and page furniture.
 
-### 3. Episode encoding
+### 3. Automatic source capture and explicit extraction
 
-Each saved chat message carries its own server-recorded UTC timestamp. This lets one active episode span
-multiple days without treating every message as if it happened when the episode began or was flushed.
+Each completed web chat turn is persisted in the session transcript, then captured as a source with stable
+idempotency keys, exact segment timestamps, and speaker roles. A captured-turn cursor advances only after the
+turn and its non-memory tool observations are saved. If capture fails, the reply remains saved, the UI reports
+pending capture, and the next turn or Build Memory retries. There is no duplicate active-episode buffer.
 
-Each web chat keeps an active episode buffer. An episode is flushed only through an explicit API or web UI
-operation:
+Capture writes a raw log, SourceDocument, EpisodeManifest, and IngestionOperation without model calls or indexing.
+Library ingest_source has the same capture-only contract. Reviewed meeting transcripts are admitted before optional
+summary generation; a failed summary is retryable without recapturing or reopening the retained source for edits.
 
-- Manually through **Flush Current** or **Flush All**
-- Through **Flush Idle** when the caller wants idle or large episodes processed
+Build Memory snapshots source IDs, extracts unfinished batches, and runs the existing organizer on that snapshot.
+New sources arriving during the build remain pending. The library serializes builds; web capture recovery happens
+under per-session locks before the build snapshot. Existing extraction stages and persisted batch recovery remain.
 
-The encoder writes the complete conversation episode into a durable raw log, a structured source document, an episode manifest, and atomic claims. Extraction makes one logical pass and records claimed, ignored, partial, and failed segment coverage.
-Each extracted occurrence remains a distinct source-grounded claim with its own provenance. Semantic grouping and
-conflict handling happen later through Dream fact consolidation and reviewable reconsolidation, not through fuzzy
-text matching during ingestion.
+Web turn sources point to up to four preceding captured turns for extraction context rather than duplicating their
+text. Earlier context is capped at one quarter of the model context window using complete source groups. Coverage
+classifies only new segments; extracted statements can separately cite exact context segment IDs. These citations
+are persisted against their original sources. Earlier context is not re-extracted as new evidence occurrences.
+This preserves bounded cross-turn interpretation; it does not promise unlimited conversation context.
 
-Encoded episode IDs are tracked in `mycelium_store/sessions_meta.json`, preventing an already-flushed episode from being encoded repeatedly unless the memory store is cleared.
+Memory search still discovers extracted statements, not unbuilt transcripts or rendered wiki pages.
+Source inspection follows citations. The UI distinguishes captured sources awaiting a build from built memories.
 
-### 4. Dream consolidation
+### 4. Build Memory organization
 
 The dream process converts source-grounded claims into semantic wiki pages:
 
@@ -197,24 +211,22 @@ A pending proposal is the lability window: both claims remain active and generat
 
 ## Web sessions and direct library sessions
 
-The web app owns long-lived session transcripts and explicit episode flushing in `server/runtime.py`. Ordinary chat content is logged when an episode is flushed, while tool observations are logged immediately.
+The web app owns long-lived session transcripts and automatic completed-turn capture in `server/runtime.py`. Ordinary chat content and non-memory tool observations are saved as sources after the reply, without running extraction.
 
 The direct Python API can call `retrieve_context`, `ingest_source`, and `consolidate` explicitly with typed contracts.
-`Mycelium.session()` is an ergonomic conversational wrapper: it retrieves pages on entry and ingests recorded messages
+`Mycelium.session()` is an ergonomic conversational wrapper: it retrieves typed evidence and real wiki page references on entry and ingests recorded messages
 on exit. Consolidation remains an explicit operation.
 
 ## Memory operations
 
-The backend does not start a scheduled memory task. The web UI and API expose explicit operations for current,
-idle, or all episode flushing; Dream consolidation; proposal review; and development resets. **Flush Idle**
-evaluates the idle and size rules only when the user invokes it. The direct Python API leaves consolidation invocation
-to its caller. Immediate tool-observation capture and direct session ingestion remain part of the explicit chat
-or library call that initiated them.
+The backend does not schedule memory builds. POST /api/memory/build captures any pending saved turns and invokes
+the library's explicit consolidate operation. GET /api/memory/build/status exposes pending-source and statement
+counts, not age or size readiness thresholds. Flush and run-if-ready endpoints have been removed.
 
-Chat and flush operations for one session are serialized. Session metadata is written atomically, so a flush
-cannot overwrite a turn that arrived while model work was in progress. Relative dates in chat are anchored to
-the timestamp of their exact supporting message segment. Sources without per-segment wall-clock timestamps use
-their declared source occurrence time.
+The UI exposes Build Memory, proposal review, and development resets. Relative dates remain anchored to their
+supporting segment timestamps (or declared source occurrence time where per-segment wall-clock time is absent).
+Corrections remain immediately applicable independently of a build. Internal Dream artifact names still describe
+the retained organizer and audit records; this increment does not redesign those semantic stages.
 
 ## Architecture authority and validation
 
@@ -263,7 +275,7 @@ The default store is `./mycelium_store`:
 
 ```text
 mycelium_store/
-├── sessions_meta.json  # Chats, transcripts, active episodes, and flush markers
+├── sessions_meta.json  # Chats, transcripts, and durable capture cursors
 ├── logs/               # Daily raw episodic logs
 ├── wiki/               # Semantic memory pages and _index.md
 │   └── _archive/       # Archived wiki pages

@@ -1,12 +1,12 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 from mycelium.core import Mycelium
-from mycelium.models import WikiPage
 from mycelium.operations import (
     EvidenceRecord,
     IngestionResult,
     MemoryEvidence,
     RetrievalResult,
+    WikiPageReference,
 )
 
 
@@ -28,12 +28,10 @@ async def test_session_lifecycle(temp_mycelium):
             temp_mycelium, "ingest_source", new_callable=AsyncMock
         ) as mock_ingest,
     ):
-        mock_page = WikiPage(
+        mock_page = WikiPageReference(
             slug="test-page",
             title="Test Page",
-            content="Content of test page",
-            created=None,
-            last_updated=None,
+            entity_id="test-page",
             version=1,
         )
         evidence = MemoryEvidence(
@@ -49,16 +47,16 @@ async def test_session_lifecycle(temp_mycelium):
             )
         )
         mock_retrieve.return_value = RetrievalResult(
-            pages=(mock_page,), evidence=evidence, rendered_context=""
+            page_references=(mock_page,), evidence=evidence, rendered_context=""
         )
-        mock_ingest.return_value = IngestionResult(status="complete")
+        mock_ingest.return_value = IngestionResult(status="captured")
 
         async with temp_mycelium.session(
             query="test query", session_id="ses-123"
         ) as session:
             assert session.session_id == "ses-123"
             assert session.query == "test query"
-            assert len(session.loaded_pages) == 1
+            assert len(session.page_references) == 1
 
             session.record("user", "Hello assistant")
             session.record("assistant", "Hello user")
@@ -72,71 +70,12 @@ async def test_session_lifecycle(temp_mycelium):
         assert all(segment.timestamp for segment in source_input.segments)
 
 
-def test_memory_context_renders_shared_project_role_once_across_endpoint_pages(
+def test_memory_context_renders_typed_records_without_wiki_pages(
     temp_mycelium,
 ):
-    role = {
-        "kind": "fact",
-        "text": "Priya leads pilot evaluation.",
-        "claim_ids": ["claim-role"],
-        "relationship_kind": "project_role",
-        "qualifiers": [],
-        "links": [],
-    }
-    project = WikiPage(
-        slug="lantern",
-        title="Lantern",
-        content="unused",
-        created=None,
-        last_updated=None,
-        version=1,
-        sections=[
-            {
-                "key": "people_organizations",
-                "title": "People & Organizations",
-                "items": [
-                    role,
-                    {
-                        "kind": "fact",
-                        "text": "Lantern is ready.",
-                        "claim_ids": ["claim-ready"],
-                        "relationship_kind": None,
-                        "qualifiers": [],
-                        "links": [],
-                    },
-                ],
-            }
-        ],
-    )
-    person = WikiPage(
-        slug="priya",
-        title="Priya",
-        content="unused",
-        created=None,
-        last_updated=None,
-        version=1,
-        sections=[
-            {
-                "key": "shared_projects",
-                "title": "Shared Projects",
-                "items": [
-                    role,
-                    {
-                        "kind": "fact",
-                        "text": "Priya completed the rubric.",
-                        "claim_ids": ["claim-rubric"],
-                        "relationship_kind": None,
-                        "qualifiers": [],
-                        "links": [],
-                    },
-                ],
-            }
-        ],
-    )
     from mycelium.session import Session
 
     session = Session(temp_mycelium, "test", "question")
-    session.loaded_pages = [project, person]
     session.memory_evidence = MemoryEvidence(
         records=(
             EvidenceRecord(

@@ -123,7 +123,9 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "_meta_lock", None)
     monkeypatch.setattr(runtime, "_session_locks", {})
     memory = Mycelium(store_path=store_path)
-    memory.config.context_budget_tokens = 260
+    # Fit the production system/evidence envelope while still forcing the long
+    # transcript below to be trimmed.
+    memory.config.context_budget_tokens = 1024
     memory.config.retrieval.tool_evidence_budget_tokens = 20
     fake = DeterministicProductionModel()
     memory.llm = fake
@@ -149,6 +151,7 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
         }
         for index in range(12)
     ]
+    record["captured_turns"] = 6  # Older turns belong to the already captured history fixture.
     runtime.save_meta(meta)
     timestamps = iter([
         "2026-08-31T23:55:00+00:00",
@@ -156,27 +159,30 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     ])
     monkeypatch.setattr(sessions, "iso_now", lambda: next(timestamps))
 
-    chat_task = asyncio.create_task(sessions.chat(
-        session_id,
-        sessions.ChatRequest(message="I will send the Cedar brief tomorrow."),
-    ))
-    await fake.generation_started.wait()
-    flush_task = asyncio.create_task(runtime.flush_session_episode(session_id))
-    await asyncio.sleep(0)
-    assert not flush_task.done()
-    fake.finish_generation.set()
-    chat_result = await chat_task
-    flush_result = await flush_task
+    # Surface a chat failure even if generation never starts, and bound a real
+    # deadlock. TaskGroup also cleans up sibling tasks when an assertion fails.
+    async with asyncio.timeout(10), asyncio.TaskGroup() as tasks:
+        chat_task = tasks.create_task(sessions.chat(
+            session_id,
+            sessions.ChatRequest(message="I will send the Cedar brief tomorrow."),
+        ))
+        await fake.generation_started.wait()
+        fake.finish_generation.set()
+        chat_result = await chat_task
 
     assert chat_result["response"] == "I will keep that deadline in mind."
-    assert flush_result["status"] == "flushed"
-    assert count_message_tokens(fake.messages[0]) <= 260
+    assert chat_result["capture_status"] == "captured"
+    assert memory.artifacts.list_claims() == []
+    assert (await memory.retrieve_context(RetrievalRequest("Cedar"))).evidence.records == ()
+    await memory.encoder.extract_pending()
+    assert count_message_tokens(fake.messages[0]) <= memory.config.context_budget_tokens
+    assert len(fake.messages[0]) < len(record["transcript"]) + 2
     assert fake.messages[0][-1]["content"].endswith(
         "I will send the Cedar brief tomorrow."
     )
     saved = runtime.load_meta()[session_id]
-    assert saved["encoded_episodes"][-1]["id"] == f"{session_id}-ep-1"
-    assert saved["active_episode"]["buffer"] == []
+    assert saved["captured_turns"] == 7
+    assert "active_episode" not in saved
 
     active_claims = memory.artifacts.list_claims(status="active")
     assert active_claims, [
@@ -191,18 +197,16 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     assert len(memory.artifacts.list_ingestion_operations()) == 1
 
     fake.context_disposition = "include"
-    recalled = list((await memory.retrieve_context(RetrievalRequest(
+    recalled = await memory.retrieve_context(RetrievalRequest(
         query="When will the Cedar brief be sent?"
-    ))).pages)
-    short_term = next(
-        page for page in recalled if page.slug == "_short-term-memory"
-    )
-    assert claim.text in short_term.content
+    ))
+    assert recalled.page_references == ()
+    assert claim.text in [record.statement for record in recalled.evidence.records]
 
     fake.context_disposition = "exclude"
     assert (await memory.retrieve_context(RetrievalRequest(
         query="What kind of cedar tree grows near the coast?"
-    ))).pages == ()
+    ))).evidence.records == ()
 
     correction = await memory_curation.correct_claim(
         claim.claim_id,

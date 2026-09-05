@@ -21,7 +21,7 @@ async def test_empty_memory_retrieval_does_not_call_embedding_or_chat_models(tmp
 
     result = await memory.retrieve_context(RetrievalRequest("Any remembered plans?"))
 
-    assert result.pages == ()
+    assert result.page_references == ()
     assert result.rendered_context == (
         "<memory-evidence>\nNo memory evidence found.\n</memory-evidence>"
     )

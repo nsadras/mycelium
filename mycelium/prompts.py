@@ -281,6 +281,7 @@ def claim_extraction_prompt(
     source_id: str,
     participants: list[str],
     segments: str,
+    context: str = "",
 ) -> tuple[str, str]:
     policy_template = _EXTRACTION_POLICY_TEMPLATES.get(
         source_type,
@@ -295,6 +296,7 @@ def claim_extraction_prompt(
         source_id=source_id,
         participants=participants,
         segments=segments,
+        context=context,
     )
 
 
@@ -303,6 +305,7 @@ def extraction_coverage_prompt(
     source_id: str,
     occurred_at: str | None,
     segments: str,
+    context: str = "",
 ) -> tuple[str, str]:
     policy_template = _EXTRACTION_POLICY_TEMPLATES.get(
         source_type,
@@ -316,4 +319,5 @@ def extraction_coverage_prompt(
         occurred_at=occurred_at,
         unknown_time="unknown",
         segments=segments,
+        context=context,
     )

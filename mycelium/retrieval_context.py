@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import replace
 from html import escape
-from typing import Any, Literal
+from typing import Callable, Literal
 
 from mycelium.artifacts import (
     ArtifactStore,
@@ -16,8 +15,6 @@ from mycelium.artifacts import (
 )
 from mycelium.budget import count_tokens
 from mycelium.claim_index import ClaimSearchHit
-from mycelium.context import render_memory_context
-from mycelium.models import WikiPage
 from mycelium.operations import (
     EvidenceCitation,
     EvidenceRecord,
@@ -27,14 +24,30 @@ from mycelium.operations import (
     EvidenceTime,
     MemoryEvidence,
     MemoryWorkspace,
+    WikiPageReference,
 )
 from mycelium.store import WikiStore
 
 
-@dataclass(frozen=True)
-class _RetrievedRecord:
-    text: str
-    claims: tuple[MemoryClaim, ...]
+def fit_memory_evidence(
+    evidence: MemoryEvidence, fits: Callable[[MemoryEvidence], bool]
+) -> MemoryEvidence:
+    """Admit complete records and source groups in order under the caller's budget."""
+    if fits(evidence):
+        return evidence
+    # Reserve the omission notice so adding it cannot overflow the budget.
+    selected = MemoryEvidence(more_available=True)
+    if not fits(selected):
+        raise ValueError("Evidence budget is smaller than the empty evidence envelope")
+    for record in evidence.records:
+        trial = replace(selected, records=(*selected.records, record))
+        if fits(trial):
+            selected = trial
+    for source in evidence.sources:
+        trial = replace(selected, sources=(*selected.sources, source))
+        if fits(trial):
+            selected = trial
+    return selected
 
 
 def render_memory_evidence(evidence: MemoryEvidence) -> str:
@@ -112,9 +125,7 @@ def render_memory_source_result(
 
 def render_memory_tool_error(message: str) -> str:
     """Render a model-visible memory-tool failure without an ambiguous partial result."""
-    return "\n".join(
-        ["<memory-tool-error>", _text(message), "</memory-tool-error>"]
-    )
+    return "\n".join(["<memory-tool-error>", _text(message), "</memory-tool-error>"])
 
 
 def _render_evidence_envelope(
@@ -212,12 +223,9 @@ def _render_sources(sources: tuple[EvidenceSource, ...]) -> list[str]:
         )
         cited_claims_by_segment: dict[str, list[str]] = defaultdict(list)
         for citation in source.citations:
-            segments = ", ".join(
-                f"`{_text(value)}`" for value in citation.segment_ids
-            )
+            segments = ", ".join(f"`{_text(value)}`" for value in citation.segment_ids)
             lines.append(
-                f"- `{_text(citation.claim_id)}`: cited segments "
-                f"{segments or '(none)'}"
+                f"- `{_text(citation.claim_id)}`: cited segments {segments or '(none)'}"
             )
             for segment_id in citation.segment_ids:
                 cited_claims_by_segment[segment_id].append(citation.claim_id)
@@ -225,9 +233,9 @@ def _render_sources(sources: tuple[EvidenceSource, ...]) -> list[str]:
         for segment in source.segments:
             claim_ids = cited_claims_by_segment.get(segment.segment_id, [])
             cited = (
-                " cited-for=\""
+                ' cited-for="'
                 + " ".join(_attribute(value) for value in claim_ids)
-                + "\""
+                + '"'
                 if claim_ids
                 else ""
             )
@@ -254,54 +262,43 @@ class RetrievedContextBuilder:
         self.artifacts = artifacts
 
     def build(
-        self, hits: list[ClaimSearchHit], *, budget_tokens: int
-    ) -> tuple[list[WikiPage], list[str], MemoryEvidence]:
-        claims = {claim.claim_id: claim for claim in self.artifacts.list_claims()}
-        facts_by_claim: dict[str, list[ConsolidatedFact]] = defaultdict(list)
-        for fact in self.artifacts.list_consolidated_facts():
-            for claim_id in fact.member_claim_ids:
-                facts_by_claim[claim_id].append(fact)
+        self,
+        hits: list[ClaimSearchHit],
+        *,
+        budget_tokens: int,
+        more_available: bool = False,
+    ) -> MemoryEvidence:
+        evidence = replace(self._memory_evidence(hits), more_available=more_available)
+        return fit_memory_evidence(
+            evidence,
+            lambda trial: count_tokens(render_memory_evidence(trial)) <= budget_tokens,
+        )
 
-        grouped: dict[str, dict[str, Any]] = {}
-        rendered_claim_ids: list[str] = []
-        rendered_fact_ids: set[str] = set()
-        for hit in hits:
-            claim = claims.get(hit.claim_id)
-            if claim is None:
+    def page_references(
+        self, evidence: MemoryEvidence
+    ) -> tuple[WikiPageReference, ...]:
+        references = []
+        entity_ids = dict.fromkeys(
+            record.subject_entity_id
+            for record in evidence.records
+            if record.subject_entity_id is not None
+        )
+        for entity_id in entity_ids:
+            try:
+                entity = self.artifacts.get_entity(entity_id)
+            except FileNotFoundError:
                 continue
-            all_facts = facts_by_claim.get(hit.claim_id, [])
-            facts = [
-                fact for fact in all_facts if fact.fact_id not in rendered_fact_ids
-            ]
-            if all_facts and not facts:
-                rendered_claim_ids.append(hit.claim_id)
-                continue
-            group_key = hit.owner_entity_id or "_short-term-memory"
-            group = grouped.setdefault(group_key, {"hit": hit, "records": []})
-            records: list[_RetrievedRecord] = (
-                [
-                    self._fact_record(fact, claims)
-                    for fact in sorted(facts, key=lambda item: item.fact_id)
-                ]
-                if facts
-                else [self._claim_record(claim, hit.memory_tier)]
-            )
-            old_length = len(group["records"])
-            group["records"].extend(records)
-            if (
-                count_tokens(render_memory_context(self._pages(grouped)))
-                > budget_tokens
-            ):
-                del group["records"][old_length:]
-                if not group["records"]:
-                    grouped.pop(group_key)
-                continue
-            rendered_claim_ids.append(hit.claim_id)
-            rendered_fact_ids.update(fact.fact_id for fact in facts)
-
-        pages = self._pages(grouped)
-        evidence = self._memory_evidence(hits, rendered_claim_ids)
-        return pages, rendered_claim_ids, evidence
+            if self.wiki.exists(entity.slug):
+                page = self.wiki.get(entity.slug)
+                references.append(
+                    WikiPageReference(
+                        entity_id=entity_id,
+                        slug=page.slug,
+                        title=page.title,
+                        version=page.version,
+                    )
+                )
+        return tuple(references)
 
     def admission_content(self, hit: ClaimSearchHit) -> str:
         """Describe the evidence a hit can contribute before admission."""
@@ -341,10 +338,7 @@ class RetrievedContextBuilder:
             budget_tokens=budget_tokens,
         )
 
-    def _memory_evidence(
-        self, hits: list[ClaimSearchHit], rendered_claim_ids: list[str]
-    ) -> MemoryEvidence:
-        rendered = set(rendered_claim_ids)
+    def _memory_evidence(self, hits: list[ClaimSearchHit]) -> MemoryEvidence:
         claims = {claim.claim_id: claim for claim in self.artifacts.list_claims()}
         facts_by_claim: dict[str, list[ConsolidatedFact]] = defaultdict(list)
         for fact in self.artifacts.list_consolidated_facts():
@@ -354,8 +348,6 @@ class RetrievedContextBuilder:
         records: list[EvidenceRecord] = []
         seen_record_ids: set[str] = set()
         for hit in hits:
-            if hit.claim_id not in rendered:
-                continue
             claim = claims.get(hit.claim_id)
             if claim is None:
                 continue
@@ -400,7 +392,6 @@ class RetrievedContextBuilder:
             seen_record_ids.add(claim.claim_id)
         return MemoryEvidence(
             records=tuple(records),
-            more_available=any(hit.claim_id not in rendered for hit in hits),
         )
 
     def _structured_record(
@@ -538,9 +529,7 @@ class RetrievedContextBuilder:
                     EvidenceSource(
                         source_id=source.source_id,
                         conversation_time=source.occurred_at or source.recorded_at,
-                        citations=self._source_citations(
-                            cited_by_claim, accepted_ids
-                        ),
+                        citations=self._source_citations(cited_by_claim, accepted_ids),
                         segments=tuple(
                             self._evidence_segment(value, cited_ids)
                             for value in source.segments
@@ -548,9 +537,7 @@ class RetrievedContextBuilder:
                         ),
                     )
                 )
-        return MemoryEvidence(
-            sources=tuple(sources), more_available=more_available
-        )
+        return MemoryEvidence(sources=tuple(sources), more_available=more_available)
 
     @staticmethod
     def _evidence_segment(
@@ -583,85 +570,6 @@ class RetrievedContextBuilder:
             if any(segment_id in accepted_ids for segment_id in segment_ids)
         )
 
-    def _pages(self, groups: dict[str, dict[str, Any]]) -> list[WikiPage]:
-        now = datetime.now().astimezone()
-        pages: list[WikiPage] = []
-        for key, group in groups.items():
-            hit: ClaimSearchHit = group["hit"]
-            original = (
-                self.wiki.get(hit.page_slug)
-                if hit.page_slug and self.wiki.exists(hit.page_slug)
-                else None
-            )
-            intro = (
-                "The following records were selected for this request from canonical memory."
-                if hit.owner_entity_id
-                else "The following records are recent claims that have not entered the canonical wiki."
-            )
-            pages.append(
-                WikiPage(
-                    slug=(
-                        original.slug
-                        if original
-                        else key
-                        if key.startswith("_")
-                        else f"_retrieved-{key}"
-                    ),
-                    title=original.title
-                    if original
-                    else (hit.owner_title or "Recent, unconsolidated memory"),
-                    content="\n\n".join(
-                        [
-                            intro,
-                            *(record.text for record in group["records"]),
-                            self._source_evidence(
-                                [
-                                    claim
-                                    for record in group["records"]
-                                    for claim in record.claims
-                                ]
-                            ),
-                        ]
-                    ).strip(),
-                    created=original.created if original else now,
-                    last_updated=original.last_updated if original else now,
-                    version=original.version if original else 1,
-                    page_type=original.page_type if original else None,
-                    tags=list(original.tags) if original else ["retrieved-memory"],
-                    entity_id=hit.owner_entity_id or "_short-term-memory",
-                )
-            )
-        return pages
-
-    def _fact_record(
-        self, fact: ConsolidatedFact, claims: dict[str, MemoryClaim]
-    ) -> _RetrievedRecord:
-        members = [claims[value] for value in fact.member_claim_ids if value in claims]
-        header = f"- [{fact.state} fact] {fact.text} (fact: `{fact.fact_id}`)"
-        return _RetrievedRecord(
-            "\n".join(
-                [
-                    header,
-                    *self._timing_lines(members),
-                    *self._citation_lines(members),
-                ]
-            ),
-            tuple(members),
-        )
-
-    def _claim_record(self, claim: MemoryClaim, tier: str) -> _RetrievedRecord:
-        header = f"- [{tier} claim] {claim.text} (claim: `{claim.claim_id}`)"
-        return _RetrievedRecord(
-            "\n".join(
-                [
-                    header,
-                    *self._timing_lines([claim]),
-                    *self._citation_lines([claim]),
-                ]
-            ),
-            (claim,),
-        )
-
     @staticmethod
     def _timing_lines(claims: list[MemoryClaim]) -> list[str]:
         lines: list[str] = []
@@ -684,80 +592,6 @@ class RetrievedContextBuilder:
             source_phrase = f"; source expression: {expression}" if expression else ""
             lines.append(f"  - Structured timing: {role} {interval}{source_phrase}")
         return lines
-
-    @staticmethod
-    def _citation_lines(claims: list[MemoryClaim]) -> list[str]:
-        lines: list[str] = []
-        seen: set[tuple[str, tuple[str, ...]]] = set()
-        for claim in claims:
-            for provenance in claim.provenance:
-                key = (provenance.source_id, tuple(provenance.segment_ids))
-                if key in seen:
-                    continue
-                seen.add(key)
-                segments = ", ".join(f"`{value}`" for value in provenance.segment_ids)
-                lines.append(
-                    f"  - Cites `{provenance.source_id}`"
-                    + (f" / {segments}" if segments else "")
-                )
-        return lines
-
-    def _source_evidence(self, claims: list[MemoryClaim]) -> str:
-        cited_by_source: dict[str, set[str]] = defaultdict(set)
-        for claim in claims:
-            for provenance in claim.provenance:
-                cited_by_source[provenance.source_id].update(provenance.segment_ids)
-
-        blocks: list[str] = []
-        for source_id, cited_ids in cited_by_source.items():
-            try:
-                source = self.artifacts.get_source(source_id)
-            except FileNotFoundError:
-                continue
-            selected_ids = self._neighbor_segment_ids(source.segments, cited_ids)
-            if not selected_ids:
-                continue
-            lines = [
-                f"### Source `{source.source_id}`",
-                f"Conversation time: {source.occurred_at or source.recorded_at}",
-                "Cited lines:",
-            ]
-            cited_segments = [
-                segment
-                for segment in source.segments
-                if segment.segment_id in cited_ids
-            ]
-            context_segments = [
-                segment
-                for segment in source.segments
-                if segment.segment_id in selected_ids
-                and segment.segment_id not in cited_ids
-            ]
-            for marker, selected_segments in (
-                ("cited", cited_segments),
-                ("context", context_segments),
-            ):
-                if marker == "context" and selected_segments:
-                    lines.append("Surrounding context (chronological):")
-                for segment in selected_segments:
-                    lines.append(self._source_segment_line(segment, marker))
-            blocks.append("\n".join(lines))
-        if not blocks:
-            return ""
-        return "\n\n".join(["## Source evidence", *blocks])
-
-    @staticmethod
-    def _source_segment_line(segment: SourceSegment, marker: str) -> str:
-        label = segment.metadata.get("source_label")
-        label_text = f"; label={label}" if label else ""
-        speaker = f"{segment.speaker}: " if segment.speaker else ""
-        content = " ".join(segment.content.split())
-        if len(content) > 700:
-            content = content[:697].rstrip() + "..."
-        return (
-            f"- [{marker}] {speaker}{content} "
-            f"(segment=`{segment.segment_id}`{label_text})"
-        )
 
     @staticmethod
     def _neighbor_segment_ids(

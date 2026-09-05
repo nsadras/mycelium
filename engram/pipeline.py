@@ -129,6 +129,8 @@ class EngramService:
             return meeting
 
     async def update_speaker_names(self, meeting_id: str, speaker_names: dict[str, str]) -> Meeting:
+        if self.store.get_meeting(meeting_id).memory_log_entry_id:
+            raise ValueError("Speaker labels cannot change after source admission.")
         meeting = self.store.save_speaker_names(meeting_id, speaker_names)
         return meeting
 
@@ -157,32 +159,30 @@ class EngramService:
 
     async def finalize_meeting(self, meeting_id: str) -> Meeting:
         meeting = self.store.get_meeting(meeting_id)
-        if meeting.status == "completed":
+        if meeting.status == "completed" and meeting.summary is not None:
             return meeting
-        if meeting.status != "reviewing":
+        if meeting.status not in {"reviewing", "completed"}:
             raise ValueError("Meeting must be ready for review before finalization.")
-
         segments = self.store.list_segments(meeting_id)
         if not segments:
             raise ValueError("Meeting has no transcript segments to finalize.")
-
-        meeting = self.store.update_meeting(meeting_id, status="processing", error=None)
-
+        try:
+            entry = await encode_meeting_into_memory(self.get_mem(), self.store, meeting_id)
+        except Exception as exc:
+            self.store.update_meeting(meeting_id, status="reviewing", error=str(exc))
+            raise
+        # Source admission is durable before optional summary generation.
+        meeting = self.store.update_meeting(
+            meeting_id, status="completed", memory_log_entry_id=entry.entry_id, error=None,
+        )
         try:
             transcript = meeting_transcript_text(segments, meeting.speaker_names)
             summary = await self.summarizer_factory().summarize(meeting.title, transcript)
-            meeting = self.store.save_summary(meeting_id, summary)
-            entry = await encode_meeting_into_memory(self.get_mem(), self.store, meeting_id)
-            meeting = self.store.update_meeting(
-                meeting_id,
-                status="completed",
-                memory_log_entry_id=entry.entry_id,
-                error=None,
-            )
-            return meeting
+            return self.store.save_summary(meeting_id, summary)
         except Exception as exc:
-            meeting = self.store.update_meeting(meeting_id, status="reviewing", error=str(exc))
-            raise
+            return self.store.update_meeting(
+                meeting_id, status="completed", error=f"Source saved; summary failed: {exc}",
+            )
 
     async def create_uploaded_meeting(
         self,

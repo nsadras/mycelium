@@ -15,8 +15,13 @@ from mycelium.artifacts import (
 from mycelium.claim_index import ClaimSearchHit
 from mycelium.budget import count_tokens
 from mycelium.operations import RetrievalRequest
+from mycelium.models import WikiPage
 from mycelium.retrieval import MemoryRetriever
-from mycelium.retrieval_context import render_memory_source_result
+from mycelium.retrieval_context import (
+    RetrievedContextBuilder,
+    render_memory_evidence,
+    render_memory_source_result,
+)
 from mycelium.store import WikiStore
 
 
@@ -192,10 +197,105 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
     rendered_sources = render_memory_source_result(
         expanded, requested_claim_ids=["claim-1"]
     )
-    assert "Supports claims:\n- `claim-1`: cited segments `segment-1`" in rendered_sources
+    assert (
+        "Supports claims:\n- `claim-1`: cited segments `segment-1`" in rendered_sources
+    )
     transcript = rendered_sources.split("<transcript>", 1)[1]
     assert transcript.index("segment-before-2") < transcript.index("segment-1")
     assert transcript.index("segment-1") < transcript.index("segment-after")
     assert 'cited-for="claim-1"' in rendered_sources
     assert result.trace["selected_claim_ids"] == ["claim-1"]
     assert result.trace["rendered_claim_ids"] == ["claim-1"]
+
+    # Two index hits for one consolidated fact must not duplicate its evidence.
+    index.search.return_value *= 2
+    duplicate = await retriever.search_evidence("music", limit=5, budget_tokens=2000)
+    assert duplicate.evidence.records == result.evidence.records
+
+
+@pytest.fixture
+def compact_claim(tmp_path):
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    wiki = WikiStore(tmp_path / "wiki")
+    entity = artifacts.create_entity("person", "Nora")
+    artifacts.save_source(
+        SourceDocument(
+            source_id="source-note",
+            source_type="conversation",
+            session_id="session-note",
+            recorded_at="2026-09-01T12:00:00+00:00",
+            occurred_at=None,
+            participants=["Nora"],
+            segments=[
+                SourceSegment("segment-note", 0, "Long surrounding discussion. " * 200)
+            ],
+        )
+    )
+    claim = MemoryClaim(
+        claim_id="claim-note",
+        text="Nora prefers morning meetings.",
+        about=[],
+        provenance=[ClaimProvenance("source-note", ["segment-note"])],
+        recorded_at="2026-09-01T12:00:00+00:00",
+    )
+    artifacts.save_claim(claim)
+    hit = ClaimSearchHit(
+        claim.claim_id,
+        claim.text,
+        "short_term",
+        entity.entity_id,
+        entity.title,
+        entity.slug,
+        None,
+        0.9,
+    )
+    return RetrievedContextBuilder(wiki, artifacts), hit, entity
+
+
+def test_compact_record_fits_exact_budget_without_expanding_transcript(compact_claim):
+    builder, hit, _ = compact_claim
+    full = builder.build([hit], budget_tokens=2000)
+    budget = count_tokens(render_memory_evidence(full))
+
+    fitted = builder.build([hit], budget_tokens=budget)
+
+    assert fitted == full
+    assert fitted.records[0].citations[0].segment_ids == ("segment-note",)
+    assert fitted.sources == ()
+    omitted = builder.build([hit], budget_tokens=budget - 1)
+    assert omitted.records == ()
+    assert omitted.more_available
+    assert count_tokens(render_memory_evidence(omitted)) <= budget - 1
+
+
+def test_retrieval_page_references_only_describe_real_pages(compact_claim):
+    builder, hit, entity = compact_claim
+    evidence = builder.build([hit, hit], budget_tokens=2000)
+    assert len(evidence.records) == 1
+    assert builder.page_references(evidence) == ()
+    builder.wiki.save(
+        WikiPage(
+            slug=entity.slug,
+            title=entity.title,
+            entity_id=entity.entity_id,
+            page_type="person",
+            content="Human-facing briefing",
+            created=None,
+            last_updated=None,
+            version=3,
+        )
+    )
+
+    references = builder.page_references(evidence)
+
+    assert len(references) == 1
+    assert references[0].slug == entity.slug
+    assert references[0].version == 3
+    assert not hasattr(references[0], "content")
+    assert builder.build([hit], budget_tokens=2000) == evidence
+
+
+def test_retrieval_rejects_budget_smaller_than_evidence_envelope(compact_claim):
+    builder, hit, _ = compact_claim
+    with pytest.raises(ValueError, match="empty evidence envelope"):
+        builder.build([hit], budget_tokens=0)

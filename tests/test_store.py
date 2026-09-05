@@ -343,5 +343,4 @@ def test_clear_memory_store_removes_artifacts_and_preserves_conversations(tmp_pa
     assert myc.artifacts.list_claims() == []
     session = runtime.load_meta()["session-1"]
     assert session["transcript"] == transcript
-    assert session["encoded_episodes"] == []
-    assert session["active_episode"]["buffer"] == transcript
+    assert session["captured_turns"] == 0

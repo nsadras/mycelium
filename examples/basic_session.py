@@ -9,20 +9,20 @@ async def main():
 
     # Session 1: record some experience
     async with mem.session(query="what's the system architecture?") as session:
-        print("Loaded pages:", [p.slug for p in session.loaded_pages])
+        print("Referenced wiki pages:", [p.slug for p in session.page_references])
         print("Memory context (first 300 chars):", session.memory_context[:300])
         session.record('user', "what's the system architecture?")
         session.record('assistant', "We're using a plain-text wiki backed by a local LLM.")
 
-    # Run dream manually
+    # Build captured sources into memory explicitly
     consolidation = await mem.consolidate(mycelium.ConsolidationRequest())
-    print("Dream report:", consolidation.report)
+    print("Build Memory report:", consolidation.report)
 
     # Session 2: check that memory was encoded
     async with mem.session(query="what did we decide about storage?") as session:
-        print("Loaded pages:", [p.slug for p in session.loaded_pages])
-        for p in session.loaded_pages:
-            print(f"  loaded {p.slug} at confidence {p.confidence:.2f}")
+        print("Referenced wiki pages:", [p.slug for p in session.page_references])
+        for p in session.page_references:
+            print(f"  {p.title}: {p.slug} (version {p.version})")
 
 if __name__ == "__main__":
     asyncio.run(main())

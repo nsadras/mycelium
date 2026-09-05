@@ -725,7 +725,7 @@ class IngestionOperation:
     error: str | None = None
 
     def __post_init__(self) -> None:
-        if self.status not in {"planned", "extracting", "complete", "failed"}:
+        if self.status not in {"planned", "captured", "extracting", "complete", "failed"}:
             raise ValueError(f"Unsupported ingestion operation status: {self.status}")
         if not all((
             self.operation_id,

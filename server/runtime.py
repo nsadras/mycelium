@@ -4,8 +4,7 @@ import asyncio
 import json
 import os
 import tempfile
-from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +16,6 @@ from mycelium.memory_tools import MEMORY_TOOL_NAMES
 from engram import EngramConfig, EngramService, EngramStore
 
 SESSIONS_FILE = Path("mycelium_store/sessions_meta.json")
-DEFAULT_IDLE_MINUTES = 20
-DEFAULT_MAX_TURNS = 25
 
 _mem: mycelium.Mycelium | None = None
 _engram: EngramService | None = None
@@ -98,27 +95,9 @@ def get_session_lock(session_id: str) -> asyncio.Lock:
 def ensure_session_record(record: dict[str, Any], session_id: str) -> dict[str, Any]:
     record.setdefault("query", "New session")
     record.setdefault("transcript", [])
-    record.setdefault("episode_seq", 1)
-    record.setdefault("encoded_episodes", [])
-    if "active_episode" not in record:
-        record["active_episode"] = {
-            "id": f"{session_id}-ep-1",
-            "started_at": iso_now(),
-            "last_activity_at": iso_now(),
-            "buffer": [],
-            "turn_count": 0,
-        }
-    for collection_name in ("transcript", "buffer"):
-        messages = (
-            record["active_episode"].get("buffer", [])
-            if collection_name == "buffer"
-            else record.get("transcript", [])
-        )
-        if any(not str(message.get("timestamp") or "").strip() for message in messages):
-            raise ValueError(
-                f"Session {session_id} contains timestamp-free {collection_name} messages; "
-                "reset the incompatible session store before continuing"
-            )
+    record.setdefault("captured_turns", 0)
+    if any(not str(m.get("timestamp") or "").strip() for m in record["transcript"]):
+        raise ValueError(f"Session {session_id} contains timestamp-free transcript messages")
     return record
 
 
@@ -155,13 +134,6 @@ def append_turn(
     if memory_workspace is not None:
         assistant_record["memory_workspace"] = memory_workspace
     record["transcript"].append(assistant_record)
-
-    episode = record["active_episode"]
-    episode["buffer"].append(dict(user_record))
-    episode["buffer"].append(deepcopy(assistant_record))
-    episode["turn_count"] = int(episode.get("turn_count", 0)) + 1
-    episode["last_activity_at"] = assistant_timestamp
-
 
 def _format_tool_observation_content(
     *,
@@ -255,146 +227,48 @@ def recent_thread_context(record: dict[str, Any], limit: int = 8) -> str:
     return "\n".join(f"{m.get('role', '').upper()}: {m.get('content', '')}" for m in transcript)
 
 
-def episode_transcript(record: dict[str, Any]) -> str:
-    episode = record.get("active_episode", {})
-    return "\n".join(
-        f"[{message['timestamp']}] {message.get('role', '').upper()}: "
-        f"{message.get('content', '')}"
-        for message in episode.get("buffer", [])
-    )
+async def capture_saved_turns(session_id: str) -> None:
+    """Capture uncaptured completed turns. Caller holds this session's lock.
 
-
-def episode_segments(record: dict[str, Any]) -> list[SourceSegment]:
-    episode = record.get("active_episode", {})
-    return [
-        SourceSegment(
-            segment_id="",
-            index=index,
-            speaker=str(message.get("role") or "unknown"),
-            role=str(message.get("role") or "unknown"),
-            content=str(message.get("content") or ""),
-            timestamp=str(message["timestamp"]),
-        )
-        for index, message in enumerate(episode.get("buffer", []))
-    ]
-
-
-def start_new_episode(record: dict[str, Any], session_id: str) -> dict[str, Any]:
-    record["episode_seq"] = int(record.get("episode_seq", 1)) + 1
-    episode_id = f"{session_id}-ep-{record['episode_seq']}"
-    record["active_episode"] = {
-        "id": episode_id,
-        "started_at": iso_now(),
-        "last_activity_at": iso_now(),
-        "buffer": [],
-        "turn_count": 0,
-    }
-    return record["active_episode"]
-
-
-async def flush_session_episode(session_id: str, reason: str = "manual") -> dict[str, Any]:
-    async with get_session_lock(session_id):
-        async with get_meta_lock():
-            meta = load_meta()
-            if session_id not in meta:
-                return {"session_id": session_id, "status": "missing", "entries_encoded": 0}
-            record = ensure_session_record(meta[session_id], session_id)
-            episode = deepcopy(record["active_episode"])
-            record_snapshot = {"active_episode": episode}
-
-        transcript = episode_transcript(record_snapshot)
-        segments = episode_segments(record_snapshot)
-        turn_count = int(episode.get("turn_count", 0))
-        transcript_chars = len(transcript)
-        if not transcript.strip():
-            return {
-                "session_id": session_id,
-                "episode_id": episode["id"],
-                "status": "empty",
-                "entries_encoded": 0,
-                "turn_count": turn_count,
-                "transcript_chars": transcript_chars,
-            }
-
-        try:
-            ingestion = await get_mem().ingest_source(SourceInput(
-                transcript=transcript,
-                session_id=episode["id"],
-                occurred_at=segments[0].timestamp,
-                segments=tuple(segments),
-                idempotency_key=f"chat-episode:{episode['id']}",
-            ))
-        except Exception as exc:
-            return {
-                "session_id": session_id,
-                "episode_id": episode["id"],
-                "status": "encode_error",
-                "error": str(exc),
-                "entries_encoded": 0,
-                "turn_count": turn_count,
-                "transcript_chars": transcript_chars,
-            }
-        if not ingestion.log_entries:
-            return {
-                "session_id": session_id,
-                "episode_id": episode["id"],
-                "status": "no_entries",
-                "entries_encoded": 0,
-                "turn_count": turn_count,
-                "transcript_chars": transcript_chars,
-            }
-
-        async with get_meta_lock():
-            meta = load_meta()
-            record = ensure_session_record(meta[session_id], session_id)
-            if record["active_episode"]["id"] != episode["id"]:
-                raise RuntimeError("Active episode changed while its session lock was held")
-            record["encoded_episodes"].append(
-                {
-                    "id": episode["id"],
-                    "encoded_at": iso_now(),
-                    "reason": reason,
-                    "turn_count": turn_count,
-                    "entries_encoded": len(ingestion.log_entries),
-                }
-            )
-            start_new_episode(record, session_id)
-            save_meta(meta)
-        return {
-            "session_id": session_id,
-            "episode_id": episode["id"],
-            "status": "flushed",
-            "entries_encoded": len(ingestion.log_entries),
-            "turn_count": turn_count,
-            "transcript_chars": transcript_chars,
-        }
-
-
-async def flush_idle_episodes(
-    idle_minutes: int = DEFAULT_IDLE_MINUTES,
-    max_turns: int = DEFAULT_MAX_TURNS,
-    force: bool = False,
-) -> dict[str, Any]:
+    The transcript is the durable retry input; the cursor advances only after
+    all source writes for the turn succeed. Stable keys make replay safe.
+    """
     async with get_meta_lock():
         meta = load_meta()
-    now = utc_now()
-    candidates: list[str] = []
-
-    for session_id, record in meta.items():
-        ensure_session_record(record, session_id)
-        episode = record["active_episode"]
-        if not episode.get("buffer"):
-            continue
-        last_activity = datetime.fromisoformat(episode["last_activity_at"])
-        if last_activity.tzinfo is None:
-            last_activity = last_activity.replace(tzinfo=timezone.utc)
-        is_idle = now - last_activity >= timedelta(minutes=idle_minutes)
-        is_large = int(episode.get("turn_count", 0)) >= max_turns
-        if force or is_idle or is_large:
-            candidates.append(session_id)
-
-    results = [await flush_session_episode(session_id, "manual") for session_id in candidates]
-    return {"flushed": len([r for r in results if r["status"] == "flushed"]), "results": results}
+        record = ensure_session_record(meta[session_id], session_id)
+        transcript = list(record["transcript"])
+        captured = int(record["captured_turns"])
+    for turn_index in range(captured, len(transcript) // 2):
+        messages = transcript[turn_index * 2:turn_index * 2 + 2]
+        if [m["role"] for m in messages] != ["user", "assistant"]:
+            raise ValueError("Captured chat turns must contain a user message and assistant reply")
+        turn_id = f"{session_id}-turn-{turn_index + 1}"
+        previous_ids = [
+            m["source_id"] for m in transcript[max(0, turn_index * 2 - 8):turn_index * 2]
+            if m.get("source_id")
+        ]
+        ingestion = await get_mem().ingest_source(SourceInput(
+            transcript="\\n".join(f"[{m['timestamp']}] {m['role'].upper()}: {m['content']}" for m in messages),
+            session_id=session_id,
+            occurred_at=messages[0]["timestamp"],
+            segments=tuple(SourceSegment(
+                segment_id="", index=i, role=m["role"], speaker=m["role"],
+                content=m["content"], timestamp=m["timestamp"],
+            ) for i, m in enumerate(messages)),
+            metadata={"turn_index": turn_index, "context_source_ids": previous_ids},
+            idempotency_key=f"chat-turn:{turn_id}",
+        ))
+        await append_tool_event_logs(
+            session_id, turn_id, messages[1].get("tool_events", []),
+            turn_index + 1, messages[1]["timestamp"],
+        )
+        async with get_meta_lock():
+            meta = load_meta()
+            record = meta[session_id]
+            record["captured_turns"] = turn_index + 1
+            record["transcript"][turn_index * 2 + 1]["source_id"] = ingestion.source_ids[0]
+            save_meta(meta)
+        transcript[turn_index * 2 + 1]["source_id"] = ingestion.source_ids[0]
 
 
 def _get_dream_lock() -> asyncio.Lock:
@@ -418,31 +292,13 @@ def _dream_report_response(report) -> dict[str, Any]:
 
 async def run_consolidation() -> dict[str, Any]:
     async with _get_dream_lock():
+        for session_id in list(load_meta()):
+            async with get_session_lock(session_id):
+                await capture_saved_turns(session_id)
         result = await get_mem().consolidate(ConsolidationRequest(
             include_deferred=True
         ))
     return _dream_report_response(result.report)
-
-
-async def run_consolidation_if_ready() -> dict[str, Any]:
-    mem = get_mem()
-    status = mem.consolidation_status()
-    if not status.ready:
-        return {"status": "not_ready", "queue": status.as_dict(), "report": None}
-    async with _get_dream_lock():
-        # Recheck after acquiring the lock because another request may have
-        # consolidated the queue while this task was waiting.
-        status = mem.consolidation_status()
-        if not status.ready:
-            return {"status": "not_ready", "queue": status.as_dict(), "report": None}
-        result = await mem.consolidate_if_ready()
-    return {
-        "status": "consolidated" if result is not None else "not_ready",
-        "queue": status.as_dict(),
-        "report": (
-            _dream_report_response(result.report) if result is not None else None
-        ),
-    }
 
 
 def clear_memory_store() -> dict[str, int]:
@@ -488,15 +344,9 @@ def clear_memory_store() -> dict[str, int]:
     meta = load_meta()
     for session_id, record in meta.items():
         ensure_session_record(record, session_id)
-        record["episode_seq"] = 1
-        record["encoded_episodes"] = []
-        record["active_episode"] = {
-            "id": f"{session_id}-ep-1",
-            "started_at": iso_now(),
-            "last_activity_at": iso_now(),
-            "buffer": record.get("transcript", []),
-            "turn_count": len([m for m in record.get("transcript", []) if m.get("role") == "user"]),
-        }
+        record["captured_turns"] = 0
+        for message in record["transcript"]:
+            message.pop("source_id", None)
         counts["sessions_reset"] += 1
     save_meta(meta)
     mem._ensure_user_profile()

@@ -36,7 +36,7 @@ const tabs: { id: InspectorTab; label: string; icon: typeof Database }[] = [
   { id: 'identity', label: 'Identity review', icon: GitCompareArrows },
   { id: 'organization', label: 'Organization', icon: Network },
   { id: 'reconsolidation', label: 'Reconciliation', icon: GitCompareArrows },
-  { id: 'dream-runs', label: 'Dream runs', icon: FileJson },
+  { id: 'dream-runs', label: 'Build runs', icon: FileJson },
   { id: 'files', label: 'Stored files', icon: FileArchive },
 ];
 
@@ -179,7 +179,7 @@ export default function MemoryInspector({ refreshKey = 0, target = null }: { ref
               {activeTab === 'chat' && filteredChatEpisodes.map((session) => (
                 <button key={session.session_id} onClick={() => setSelectedChatId(session.session_id)} className={`w-full rounded-lg p-3 text-left ${selectedChatId === session.session_id ? 'bg-indigo-100 text-indigo-900' : 'hover:bg-white'}`}>
                   <div className="truncate text-sm font-semibold">{session.query}</div>
-                  <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span>{session.session_id}</span><span>{session.encoded_episodes.length} encoded</span></div>
+                  <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span>{session.session_id}</span><span>{session.captured_turns} captured</span></div>
                 </button>
               ))}
               {activeTab === 'sources' && filteredSources.map((source) => (
@@ -256,11 +256,8 @@ export default function MemoryInspector({ refreshKey = 0, target = null }: { ref
                 </div>
                 <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-3">
                   <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Transcript records</div><strong>{selectedChatEpisode.transcript_turns}</strong></div>
-                  <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Episode sequence</div><strong>{selectedChatEpisode.episode_seq ?? 'Unknown'}</strong></div>
-                  <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Encoded episodes</div><strong>{selectedChatEpisode.encoded_episodes.length}</strong></div>
+                  <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Captured turns</div><strong>{selectedChatEpisode.captured_turns}</strong></div>
                 </div>
-                <section><h3 className="mb-2 text-sm font-bold">Active episode and unflushed buffer</h3><JsonBlock value={selectedChatEpisode.active_episode} /></section>
-                <section><h3 className="mb-2 text-sm font-bold">Encoded episode history</h3><JsonBlock value={selectedChatEpisode.encoded_episodes} /></section>
               </div>
             ) : <EmptyState>Select a chat session.</EmptyState>)}
 

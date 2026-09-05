@@ -11,12 +11,6 @@ class LLMConfig:
     context_window_tokens: int = 32768
 
 @dataclass
-class DreamConfig:
-    queue_claim_threshold: int = 20
-    max_pending_hours: float = 24.0
-    deferred_revisit_hours: float = 168.0
-
-@dataclass
 class RetrievalConfig:
     embedding_model: str = 'embeddinggemma:latest'
     candidate_limit: int = 20
@@ -29,7 +23,6 @@ class RetrievalConfig:
 class Config:
     context_budget_tokens: int = 32768
     llm: LLMConfig = field(default_factory=LLMConfig)
-    dream: DreamConfig = field(default_factory=DreamConfig)
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
 
     @classmethod
@@ -52,15 +45,6 @@ class Config:
             context_window_tokens=int(llm_data.get('context_window_tokens', 32768)),
         )
         
-        dream_data = data.get('dream', {})
-        dream = DreamConfig(
-            queue_claim_threshold=max(1, int(dream_data.get('queue_claim_threshold', 20))),
-            max_pending_hours=max(0.0, float(dream_data.get('max_pending_hours', 24.0))),
-            deferred_revisit_hours=max(
-                0.0, float(dream_data.get('deferred_revisit_hours', 168.0))
-            ),
-        )
-
         retrieval_data = data.get('retrieval', {})
         retrieval = RetrievalConfig(
             embedding_model=str(
@@ -84,7 +68,6 @@ class Config:
         return cls(
             context_budget_tokens=context_budget_tokens,
             llm=llm,
-            dream=dream,
             retrieval=retrieval,
         )
 

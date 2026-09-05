@@ -1,34 +1,24 @@
-"""Dream, reset, and episode lifecycle endpoints."""
+"""Explicit memory build and development reset endpoints."""
 
-from fastapi import APIRouter, HTTPException
-
-from server.api.memory_contracts import FlushRequest, IdleFlushRequest
+from fastapi import APIRouter
 from server.runtime import (
     clear_memory_store,
     clear_wiki_store,
-    flush_idle_episodes,
-    flush_session_episode,
     get_mem,
     run_consolidation,
-    run_consolidation_if_ready,
 )
 
 router = APIRouter()
 
 
-@router.post("/dream")
-async def consolidate_memory():
+@router.post("/build")
+async def build_memory():
     return await run_consolidation()
 
 
-@router.get("/dream/readiness")
-async def dream_readiness():
+@router.get("/build/status")
+async def build_status():
     return get_mem().consolidation_status().as_dict()
-
-
-@router.post("/dream/run-if-ready")
-async def consolidate_memory_if_ready():
-    return await run_consolidation_if_ready()
 
 
 @router.post("/dev/clear")
@@ -39,27 +29,3 @@ async def clear_memory():
 @router.post("/dev/clear-wiki")
 async def clear_wiki():
     return clear_wiki_store()
-
-
-@router.post("/episodes/flush")
-async def flush_episode(req: FlushRequest):
-    if not req.session_id:
-        raise HTTPException(status_code=400, detail="session_id is required")
-    result = await flush_session_episode(req.session_id, reason="manual")
-    if result["status"] == "missing":
-        raise HTTPException(status_code=404, detail="Session not found")
-    return result
-
-
-@router.post("/episodes/flush-idle")
-async def flush_idle(req: IdleFlushRequest):
-    return await flush_idle_episodes(
-        idle_minutes=req.idle_minutes,
-        max_turns=req.max_turns,
-        force=req.force,
-    )
-
-
-@router.post("/episodes/flush-all")
-async def flush_all():
-    return await flush_idle_episodes(force=True)

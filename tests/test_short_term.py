@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
 from mycelium.artifacts import ArtifactStore, ClaimPlacement, ClaimProvenance, MemoryClaim
-from mycelium.config import DreamConfig
 from mycelium.short_term import ShortTermMemoryQueue
 
 
@@ -17,25 +16,18 @@ def _claim(claim_id: str, recorded_at: datetime, *, disposition: str = "pending"
     )
 
 
-def test_queue_readiness_uses_size_and_age_without_counting_placed_claims(tmp_path):
+def test_queue_counts_pending_without_counting_placed_claims(tmp_path):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     now = datetime(2026, 8, 12, 12, tzinfo=timezone.utc)
-    config = DreamConfig(
-        queue_claim_threshold=2,
-        max_pending_hours=24,
-        deferred_revisit_hours=168,
-    )
-    queue = ShortTermMemoryQueue(artifacts, config)
+    queue = ShortTermMemoryQueue(artifacts)
     artifacts.save_claim(_claim("recent", now - timedelta(hours=1)))
 
-    assert queue.status(now=now).ready is False
+    assert queue.status().pending_claims == 1
 
     artifacts.save_claim(_claim("old", now - timedelta(hours=25)))
-    status = queue.status(now=now)
+    status = queue.status()
 
-    assert status.ready is True
     assert status.pending_claims == 2
-    assert status.reasons == ["claim_threshold", "max_pending_age"]
 
     entity = artifacts.create_entity("person", "Ava")
     artifacts.save_placement(ClaimPlacement(
@@ -49,10 +41,10 @@ def test_queue_readiness_uses_size_and_age_without_counting_placed_claims(tmp_pa
         updated_at=now.isoformat(),
     ))
 
-    assert queue.status(now=now).pending_claims == 1
+    assert queue.status().pending_claims == 1
 
 
-def test_deferred_claim_becomes_due_for_weekly_reconsideration(tmp_path):
+def test_deferred_claim_remains_available_for_manual_build(tmp_path):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     now = datetime(2026, 8, 12, 12, tzinfo=timezone.utc)
     claim = _claim("deferred", now - timedelta(days=8), disposition="deferred")
@@ -67,11 +59,9 @@ def test_deferred_claim_becomes_due_for_weekly_reconsideration(tmp_path):
         created_at=claim.recorded_at,
         updated_at=claim.recorded_at,
     ))
-    queue = ShortTermMemoryQueue(artifacts, DreamConfig())
+    queue = ShortTermMemoryQueue(artifacts)
 
-    status = queue.status(now=now)
+    status = queue.status()
 
-    assert status.ready is True
-    assert status.include_deferred is True
-    assert status.reasons == ["deferred_review_due"]
+    assert status.deferred_claims == 1
     assert artifacts.memory_tier(claim.claim_id) == "short_term"

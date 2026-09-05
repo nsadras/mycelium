@@ -2,7 +2,7 @@ import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 
 import type { ArtifactOverview } from '../../lib/api';
 import { Badge } from './presentation';
-import { formatDate, humanize, percentage } from './utils';
+import { humanize, percentage } from './utils';
 
 export function OverviewPanel({ overview }: { overview: ArtifactOverview }) {
   return (
@@ -73,17 +73,17 @@ export function OverviewPanel({ overview }: { overview: ArtifactOverview }) {
             <section className="rounded-xl border border-slate-200 p-5">
               <div className="mb-3 flex items-center gap-2">
                 <h2 className="font-bold">Short-term memory</h2>
-                <Badge tone={overview.short_term_memory.ready ? 'amber' : 'slate'}>{overview.short_term_memory.ready ? 'Dream ready' : 'Accumulating'}</Badge>
+                <Badge tone="slate">Build Memory runs manually</Badge>
               </div>
               <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                 {[
-                  ['Pending', overview.short_term_memory.pending_claims],
+                  ['Sources awaiting build', overview.short_term_memory.pending_sources],
+                  ['Unorganized statements', overview.short_term_memory.pending_claims],
                   ['Deferred', overview.short_term_memory.deferred_claims],
                   ['Retryable failures', overview.short_term_memory.retryable_failures],
                   ['Total queued', overview.short_term_memory.total_claims],
                 ].map(([label, value]) => <div key={label} className="rounded-lg bg-slate-50 p-3"><div className="text-lg font-bold">{value}</div><div className="text-xs text-slate-500">{label}</div></div>)}
               </div>
-              <div className="mt-3 text-xs text-slate-500">Triggers: {overview.short_term_memory.reasons.map(humanize).join(', ') || 'none'} · oldest pending {formatDate(overview.short_term_memory.oldest_pending_at)}</div>
             </section>
 
             <section className="rounded-xl border border-slate-200 p-5">

@@ -15,11 +15,6 @@ tool_result_limit = 6
 tool_search_limit = 3
 tool_evidence_budget_tokens = 6000
 
-[dream]
-queue_claim_threshold = 20
-max_pending_hours = 24
-deferred_revisit_hours = 168
-
 [engram]
 store_path = "./mycelium_store/engram"
 audio_dir = "./mycelium_store/engram/audio"

@@ -24,8 +24,8 @@ def encoder(tmp_path, mock_llm, mock_log_store):
     )
 
 @pytest.mark.asyncio
-async def test_encode_session_skips_empty_transcript(encoder, mock_llm, mock_log_store):
-    entries = await encoder.encode_session("   ", "ses-123")
+async def test_capture_session_skips_empty_transcript(encoder, mock_llm, mock_log_store):
+    entries = await encoder.capture_session("   ", "ses-123")
 
     assert entries == []
     mock_llm.call_structured.assert_not_called()
@@ -66,7 +66,8 @@ async def test_ingest_source_derives_segments_when_the_caller_omits_them(
 
     source = encoder.artifacts.get_source(result.source_ids[0])
     assert [segment.content for segment in source.segments] == ["Keep this memory."]
-    extract_claims.assert_awaited_once()
+    extract_claims.assert_not_awaited()
+    assert result.status == 'captured'
     mock_llm.call_structured.assert_not_called()
 
 

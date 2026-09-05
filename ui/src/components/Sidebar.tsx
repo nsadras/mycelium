@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Archive, Book, Database, FileText, Loader2, MessageSquare, Mic, Moon, RefreshCw, Save, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Book, Database, FileText, Loader2, MessageSquare, Mic, Hammer, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import Avatar from './Avatar';
@@ -12,11 +12,10 @@ function cn(...inputs: ClassValue[]) {
 interface SidebarProps {
   activeTab: 'chat' | 'engram' | 'memory' | 'wiki' | 'logs';
   setActiveTab: (tab: 'chat' | 'engram' | 'memory' | 'wiki' | 'logs') => void;
-  onDream: () => void;
+  onBuildMemory: () => void;
   onMemoryOperation: (
-    operation: 'flush-current' | 'flush-idle' | 'flush-all' | 'dream' | 'clear-memory' | 'clear-wiki'
+    operation: 'build' | 'clear-memory' | 'clear-wiki'
   ) => void;
-  hasSelectedSession: boolean;
   runningMemoryOperation: string | null;
   assistantStatus: AssistantStatus;
   isOpenMobile?: boolean;
@@ -26,9 +25,8 @@ interface SidebarProps {
 export default function Sidebar({
   activeTab,
   setActiveTab,
-  onDream,
+  onBuildMemory,
   onMemoryOperation,
-  hasSelectedSession,
   runningMemoryOperation,
   assistantStatus,
   isOpenMobile = false,
@@ -46,38 +44,15 @@ export default function Sidebar({
 
   const memoryOps = [
     {
-      id: 'flush-current',
-      label: 'Flush Current',
-      icon: Save,
-      needsSession: true,
-      tooltip: 'Encode the selected chat episode into episodic memory.',
-    },
-    {
-      id: 'flush-idle',
-      label: 'Flush Idle',
-      icon: RefreshCw,
-      needsSession: false,
-      tooltip: 'Encode episodes that are idle or have grown large.',
-    },
-    {
-      id: 'flush-all',
-      label: 'Flush All',
-      icon: Archive,
-      needsSession: false,
-      tooltip: 'Encode every active chat episode now.',
-    },
-    {
       id: 'clear-wiki',
       label: 'Clear Wiki Pages',
       icon: Trash2,
-      needsSession: false,
       tooltip: 'Delete all wiki pages but keep all episodic logs and sessions intact.',
     },
     {
       id: 'clear-memory',
       label: 'Clear Memory',
       icon: Trash2,
-      needsSession: false,
       tooltip: 'Delete all wiki pages and episodic logs for development.',
     },
   ] as const;
@@ -155,7 +130,7 @@ export default function Sidebar({
               const Icon = op.icon;
               const isRunning = runningMemoryOperation === op.id;
               const anyRunning = runningMemoryOperation !== null;
-              const disabled = (op.needsSession && !hasSelectedSession) || anyRunning;
+              const disabled = anyRunning;
               return (
                 <button
                   key={op.id}
@@ -177,7 +152,7 @@ export default function Sidebar({
               );
             })}
             <button
-              onClick={onDream}
+              onClick={onBuildMemory}
               disabled={runningMemoryOperation !== null}
               title="Consolidate encoded episodic logs into wiki memory."
               className={cn(
@@ -187,8 +162,8 @@ export default function Sidebar({
                   : "bg-indigo-600 hover:bg-indigo-700 text-white"
               )}
             >
-              {runningMemoryOperation === 'dream' ? <Loader2 size={18} className="animate-spin" /> : <Moon size={18} />}
-              Dream
+              {runningMemoryOperation === 'build' ? <Loader2 size={18} className="animate-spin" /> : <Hammer size={18} />}
+              Build Memory
             </button>
           </div>
         )}

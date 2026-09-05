@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from mycelium.artifacts import SourceSegment
-from mycelium.models import DreamReport, LogEntry, WikiPage
+from mycelium.models import DreamReport, LogEntry
 
 
 @dataclass(frozen=True)
@@ -24,7 +24,7 @@ class SourceInput:
 
 @dataclass(frozen=True)
 class IngestionResult:
-    status: Literal["empty", "complete", "incomplete"]
+    status: Literal["empty", "captured"]
     log_entries: tuple[LogEntry, ...] = ()
     source_ids: tuple[str, ...] = ()
     episode_ids: tuple[str, ...] = ()
@@ -129,8 +129,18 @@ class MemoryWorkspace:
 
 
 @dataclass(frozen=True)
+class WikiPageReference:
+    """Navigation metadata for a real wiki page, never model-facing evidence."""
+
+    entity_id: str
+    slug: str
+    title: str
+    version: int
+
+
+@dataclass(frozen=True)
 class RetrievalResult:
-    pages: tuple[WikiPage, ...]
+    page_references: tuple[WikiPageReference, ...]
     evidence: MemoryEvidence
     rendered_context: str
     trace: dict[str, Any] = field(default_factory=dict)
@@ -145,4 +155,4 @@ class ConsolidationRequest:
 @dataclass(frozen=True)
 class ConsolidationResult:
     report: DreamReport
-    retried_episode_ids: tuple[str, ...] = ()
+    processed_episode_ids: tuple[str, ...] = ()

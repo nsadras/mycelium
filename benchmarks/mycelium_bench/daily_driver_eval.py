@@ -16,6 +16,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from benchmarks.mycelium_bench.scoring import token_f1
+from mycelium.operations import MemoryEvidence
 from mycelium.ollama import OllamaClient
 from mycelium.prompting import render_prompt
 
@@ -419,17 +420,12 @@ def proposition_completeness(
 
 
 def retrieved_generated_ids(
-    loaded_pages: list[Any], snapshot_match: dict[str, Any]
+    evidence: MemoryEvidence, snapshot_match: dict[str, Any]
 ) -> tuple[set[str], set[str]]:
-    claim_ids: set[str] = set()
-    fact_ids: set[str] = set()
-    for page in loaded_pages:
-        claim_ids.update(re.findall(r"\(claim: ([^)]+)\)", page.content or ""))
-        for section in page.sections or []:
-            for item in section.get("items") or []:
-                claim_ids.update(map(str, item.get("claim_ids") or []))
-                if item.get("fact_id"):
-                    fact_ids.add(str(item["fact_id"]))
+    claim_ids = set(evidence.claim_ids)
+    fact_ids = {
+        record.record_id for record in evidence.records if record.record_type == "fact"
+    }
     gold_fact_ids: set[str] = set()
     for row in snapshot_match["fact_rows"]:
         if row.get("generated_fact_id") in fact_ids:

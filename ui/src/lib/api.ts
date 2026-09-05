@@ -16,6 +16,7 @@ export interface Message {
   role: string;
   content: string;
   timestamp: string;
+  // Real wiki pages associated with admitted initial evidence, not loaded page text.
   loaded_pages?: LoadedPage[];
   tool_events?: ToolEvent[];
   retrieval_trace?: RetrievalTrace;
@@ -263,9 +264,7 @@ export interface ChatEpisodeState {
   session_id: string;
   query: string;
   transcript_turns: number;
-  episode_seq?: number | null;
-  active_episode?: Record<string, unknown> | null;
-  encoded_episodes: Record<string, unknown>[];
+  captured_turns: number;
 }
 
 export interface ArtifactSourceSegment {
@@ -594,11 +593,7 @@ export interface ArtifactOverview {
     deferred_claims: number;
     retryable_failures: number;
     total_claims: number;
-    oldest_pending_at?: string | null;
-    oldest_deferred_at?: string | null;
-    ready: boolean;
-    reasons: string[];
-    include_deferred: boolean;
+    pending_sources: number;
   };
   projection: {
     page_assignments: number;

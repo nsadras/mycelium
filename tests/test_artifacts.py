@@ -25,6 +25,13 @@ from mycelium.structured_outputs import (
 )
 
 
+async def capture_and_extract(encoder, *args, **kwargs):
+    """Exercise capture followed by explicit extraction in extractor contract tests."""
+    entries = await encoder.capture_session(*args, **kwargs)
+    await encoder.extract_pending()
+    return entries
+
+
 def extraction_response(claims, source_only_segment_ids=()):
     return {"claims": claims}
 
@@ -131,7 +138,7 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
         return staged_response(output_type, [claim])
     llm.call_structured.side_effect = response
 
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "[D1:1] (2024-01-10) Ava: I prefer tea.", "session-1",
         source_type="multi_party_conversation", occurred_at="2024-01-10",
     )
@@ -167,7 +174,7 @@ async def test_encoder_preserves_repeated_claims_as_separate_source_events(tmp_p
 
     llm.call_structured.side_effect = response
     for session_id in ("session-1", "session-2"):
-        await encoder.encode_session(
+        await capture_and_extract(encoder,
             "Ava: I prefer tea.",
             session_id,
             source_type="multi_party_conversation",
@@ -225,7 +232,7 @@ async def test_encoder_persists_general_semantics_across_source_types(
             }])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         transcript, "session-1", source_type=source_type, occurred_at="2024-01-10"
     )
 
@@ -260,7 +267,7 @@ async def test_meeting_encoder_anchors_deadline_to_meeting_time(tmp_path):
             }])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "[M1] Ava: I will send the report by Friday.",
         "meeting-1",
         source_type="meeting_transcript",
@@ -305,7 +312,7 @@ async def test_chat_claim_uses_its_cited_message_as_temporal_anchor(tmp_path):
             }])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "A multi-day chat",
         "chat-1-ep-1",
         source_type="agent_conversation",
@@ -356,7 +363,7 @@ async def test_single_cited_source_time_anchors_relative_phrase_without_model_ch
         }])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "A multi-day chat",
         "chat-1-ep-1",
         source_type="agent_conversation",
@@ -407,7 +414,7 @@ async def test_chat_relative_time_stays_unresolved_with_wrong_anchor_segment(tmp
             }])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "A multi-day chat",
         "chat-1-ep-1",
         source_type="agent_conversation",
@@ -461,7 +468,7 @@ async def test_encoder_rejects_claim_without_explicit_about_entity(tmp_path):
             }])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "[D1:1] (2024-01-10) Ava: Teaching dance is something I enjoy.",
         "session-1",
         source_type="multi_party_conversation",
@@ -505,7 +512,7 @@ async def test_encoder_retries_only_failed_claim_stage_after_persisted_coverage(
         }])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "Ava: I prefer tea.",
         "session-1",
         source_type="multi_party_conversation",
@@ -521,7 +528,7 @@ async def test_encoder_retries_only_failed_claim_stage_after_persisted_coverage(
     assert report["unaccounted_segment_ids"] == []
     assert len(report["pending_extraction_segment_ids"]) == 1
 
-    completed = await encoder.retry_incomplete_extractions()
+    completed = await encoder.extract_pending()
 
     assert completed == [partial.episode_id]
     episode = artifacts.list_episodes()[0]
@@ -559,7 +566,7 @@ async def test_encoder_records_inference_only_on_provenance(tmp_path):
             }])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "Ava: My son Ben has a daughter named Clara.",
         "session-1",
         source_type="agent_conversation",
@@ -591,7 +598,7 @@ async def test_encoder_records_uncovered_segments_without_repair(tmp_path):
             }])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "[D1:1] (2024-01-10) Ava: I like tea.\n"
         "[D1:2] (2024-01-10) Ava: I visited Paris yesterday.",
         "session-1",
@@ -625,7 +632,7 @@ async def test_encoder_rejects_duplicate_segment_dispositions(tmp_path):
         return value
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "[D1:1] (2024-01-10) Ava: I prefer tea.",
         "session-1",
         source_type="multi_party_conversation",
@@ -685,7 +692,7 @@ async def test_encoder_does_not_lexically_reject_model_valid_claim_text(tmp_path
             }])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "[D1:1] (2024-01-10) Ava: I prefer tea.",
         "session-1",
         source_type="multi_party_conversation",
@@ -718,7 +725,7 @@ async def test_encoder_persists_contract_output_without_final_normalization(tmp_
             }])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "[D1:1] (2024-01-10) Ava: My store is doing great!",
         "session-1",
         source_type="multi_party_conversation",
@@ -746,7 +753,7 @@ async def test_encoder_honors_explicit_source_only_scaffolding(tmp_path):
         return staged_response(output_type, [], [segment_id])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "[D1:1] (2024-01-10) Ava: Thanks for the encouragement!",
         "session-1",
         source_type="multi_party_conversation",
@@ -790,7 +797,7 @@ async def test_encoder_routes_image_urls_through_semantic_coverage(tmp_path):
         return staged_response(output_type, [claim], target_ids[1:])
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "[D1:1] (2024-01-10) Ava: Ava shared a painting.\n"
         "Image URL: ['https://example.test/painting.jpg']",
         "session-1",
@@ -836,7 +843,7 @@ async def test_encoder_batches_large_initial_extractions(tmp_path):
         return staged_response(output_type, [], segment_ids)
 
     llm.call_structured.side_effect = response
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "A large meeting transcript.",
         "session-1",
         source_type="meeting_transcript",
@@ -1145,12 +1152,12 @@ async def test_ingestion_idempotency_key_reuses_one_source_episode_claim_and_log
         }])
 
     llm.call_structured.side_effect = response
-    first = await encoder.encode_session(
+    first = await capture_and_extract(encoder,
         "Ava: I prefer tea.",
         "session-1",
         idempotency_key="chat-episode:session-1-ep-1",
     )
-    second = await encoder.encode_session(
+    second = await capture_and_extract(encoder,
         "Ava: I prefer tea.",
         "session-1",
         idempotency_key="chat-episode:session-1-ep-1",
@@ -1196,7 +1203,7 @@ async def test_ingestion_retry_repairs_claim_saved_before_episode_checkpoint(
             raise OSError("simulated interruption after claim write")
 
     monkeypatch.setattr(artifacts, "save_claim", interrupt_after_claim_write)
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "Ava: I prefer tea.",
         "session-1",
         idempotency_key="chat-episode:session-1-ep-1",
@@ -1205,7 +1212,7 @@ async def test_ingestion_retry_repairs_claim_saved_before_episode_checkpoint(
     assert len(artifacts.list_claims()) == 1
 
     monkeypatch.setattr(artifacts, "save_claim", original_save_claim)
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "Ava: I prefer tea.",
         "session-1",
         idempotency_key="chat-episode:session-1-ep-1",
@@ -1233,11 +1240,11 @@ async def test_ingestion_key_rejects_different_input(tmp_path):
             "reason": "No durable claim.",
         }]},
     ]
-    await encoder.encode_session(
+    await capture_and_extract(encoder,
         "First transcript", "session-1", idempotency_key="stable-key"
     )
 
     with pytest.raises(ValueError, match="different input"):
-        await encoder.encode_session(
+        await capture_and_extract(encoder,
             "Different transcript", "session-1", idempotency_key="stable-key"
         )

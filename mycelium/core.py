@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import Optional, Literal, cast
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
 
 from mycelium.store import WikiStore, LogStore
 from mycelium.config import Config
@@ -61,7 +60,7 @@ class Mycelium:
             context_window_tokens=self.config.llm.context_window_tokens,
         )
         self.encoder = Encoder(self.llm, self._log_store, self.config, self.artifacts)
-        self.short_term_memory = ShortTermMemoryQueue(self.artifacts, self.config.dream)
+        self.short_term_memory = ShortTermMemoryQueue(self.artifacts)
 
         from mycelium.dream import ConsolidationProcess
 
@@ -89,7 +88,6 @@ class Mycelium:
             self.encoder,
             self.retriever,
             self.consolidator,
-            self.short_term_memory,
         )
 
     def _ensure_seed_profile(self, memory_profile: Literal["user", "none"]) -> None:
@@ -186,7 +184,7 @@ class Mycelium:
 
         sess = Session(mycelium=self, session_id=session_id, query=query)
         retrieval = await self.retrieve_context(RetrievalRequest(query=query))
-        sess.loaded_pages = list(retrieval.pages)
+        sess.page_references = retrieval.page_references
         sess.memory_evidence = retrieval.evidence
 
         try:
@@ -218,17 +216,10 @@ class Mycelium:
                     )
                 )
 
-    def consolidation_status(
-        self, *, now: datetime | None = None
-    ) -> ShortTermMemoryStatus:
-        return self.pipeline.consolidation_status(now=now)
+    def consolidation_status(self) -> ShortTermMemoryStatus:
+        return self.short_term_memory.status()
 
     async def consolidate(
         self, request: ConsolidationRequest = ConsolidationRequest()
     ) -> ConsolidationResult:
         return await self.pipeline.consolidate(request)
-
-    async def consolidate_if_ready(
-        self, *, now: datetime | None = None, dry_run: bool = False
-    ) -> ConsolidationResult | None:
-        return await self.pipeline.consolidate_if_ready(now=now, dry_run=dry_run)

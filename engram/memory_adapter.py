@@ -58,7 +58,6 @@ async def encode_meeting_into_memory(mem, store: EngramStore, meeting_id: str) -
             "meeting_id": meeting.id,
             "title": meeting.title,
             "ended_at": meeting.ended_at.isoformat() if meeting.ended_at else None,
-            "summary": meeting.summary.summary if meeting.summary else None,
         },
         idempotency_key=f"engram-meeting:{meeting.id}",
     ))

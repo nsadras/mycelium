@@ -37,9 +37,4 @@
   expected answers, and fixture-specific vocabulary out of prompts and production code.
 - Integrate the smallest proven mechanism in situ only after the direct output has the intended meaning and shape.
   Add focused contract and pipeline tests for structural invariants; mocked tests do not establish model behavior.
-- After integration, run the named behavioral fixture with the real configured Ollama model. For downstream semantic
-  changes, prefer a frozen-extraction replay so extraction variance does not obscure the result. Inspect persisted
-  entities, decisions, ownership, and failure reasons instead of relying only on an aggregate score.
-- Treat timeouts, malformed contracts, and sandbox connectivity as invalid experimental evidence. Fix or remove the
-  environmental or structural problem and rerun before judging the semantic approach.
 - Record direct-probe findings, in-situ run paths, meaningful failures, and validation results in `DEVLOG.md`.

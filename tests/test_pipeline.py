@@ -13,13 +13,12 @@ from mycelium.operations import (
     SourceInput,
 )
 from mycelium.pipeline import MemoryPipeline
-from mycelium.short_term import ShortTermMemoryStatus
 
 
 def build_pipeline():
     encoder = SimpleNamespace(
-        ingest_source=AsyncMock(return_value=IngestionResult(status="complete")),
-        retry_incomplete_extractions=AsyncMock(return_value=["episode-retried"]),
+        ingest_source=AsyncMock(return_value=IngestionResult(status="captured")),
+        extract_pending=AsyncMock(return_value=["episode-retried"]),
     )
     retriever = SimpleNamespace(
         retrieve=AsyncMock(
@@ -27,20 +26,8 @@ def build_pipeline():
         )
     )
     consolidator = SimpleNamespace(run=AsyncMock(return_value=DreamReport(0, 0, 0)))
-    short_term = SimpleNamespace(
-        status=Mock(
-            return_value=ShortTermMemoryStatus(
-                pending_claims=1,
-                deferred_claims=0,
-                retryable_failures=0,
-                total_claims=1,
-                oldest_pending_at=None,
-                oldest_deferred_at=None,
-                ready=True,
-            )
-        )
-    )
-    return MemoryPipeline(encoder, retriever, consolidator, short_term), {
+    encoder.artifacts = SimpleNamespace(list_sources=Mock(return_value=[]))
+    return MemoryPipeline(encoder, retriever, consolidator), {
         "encoder": encoder,
         "retriever": retriever,
         "consolidator": consolidator,
@@ -56,7 +43,7 @@ async def test_pipeline_exposes_typed_ingestion_and_retrieval_operations():
     ingestion = await pipeline.ingest_source(source)
     retrieval = await pipeline.retrieve_context(retrieval_request)
 
-    assert ingestion.status == "complete"
+    assert ingestion.status == "captured"
     assert retrieval.rendered_context == "memory context"
     services["encoder"].ingest_source.assert_awaited_once_with(source)
     services["retriever"].retrieve.assert_awaited_once_with(retrieval_request)
@@ -70,8 +57,8 @@ async def test_pipeline_consolidation_reports_retried_extraction_ids():
     result = await pipeline.consolidate(request)
 
     assert result.report == DreamReport(0, 0, 0)
-    assert result.retried_episode_ids == ("episode-retried",)
-    services["encoder"].retry_incomplete_extractions.assert_awaited_once()
+    assert result.processed_episode_ids == ("episode-retried",)
+    services["encoder"].extract_pending.assert_awaited_once()
     services["consolidator"].run.assert_awaited_once_with(
-        dry_run=False, include_deferred=True
+        dry_run=False, include_deferred=True, source_ids=set()
     )

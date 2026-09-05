@@ -245,7 +245,7 @@ async def test_engram_service_processes_then_finalizes_meeting_with_speaker_name
                 content=source_input.transcript,
             )
             log_store.append(entry)
-            return IngestionResult(status="complete", log_entries=(entry,))
+            return IngestionResult(status="captured", log_entries=(entry,))
 
     service = EngramService(
         config,

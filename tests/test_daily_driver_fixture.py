@@ -18,6 +18,8 @@ from mycelium.artifacts import (
 from mycelium.core import Mycelium
 from mycelium.models import LogEntry
 from mycelium.store import LogStore
+from mycelium.operations import EvidenceRecord, MemoryEvidence
+from benchmarks.mycelium_bench.daily_driver_eval import retrieved_generated_ids
 
 
 FIXTURE_DIR = Path("benchmarks/fixtures/daily_driver_v1")
@@ -25,6 +27,21 @@ TRANSFER_FIXTURES = (
     Path("benchmarks/fixtures/daily_driver_paraphrased_v1"),
     Path("benchmarks/fixtures/daily_driver_unrelated_v1"),
 )
+
+
+def test_retrieved_ids_use_typed_evidence_without_parsing_page_prose():
+    evidence = MemoryEvidence(records=(EvidenceRecord(
+        record_id="fact-joined", record_type="fact", statement="A supported statement.",
+        subject_entity_id=None, subject_name=None, claim_ids=("claim-a", "claim-b"),
+    ),))
+    snapshot_match = {
+        "fact_rows": [{"generated_fact_id": "fact-joined", "gold_fact_id": "gold-a"}],
+        "claim_rows": [],
+    }
+
+    assert retrieved_generated_ids(evidence, snapshot_match) == (
+        {"gold-a"}, {"claim-a", "claim-b"},
+    )
 
 
 def test_daily_driver_fixture_is_internally_consistent():

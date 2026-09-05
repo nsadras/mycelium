@@ -257,7 +257,7 @@ const ChatMessageItem = memo(function ChatMessageItem({ m, id }: { m: Message; i
                 {m.loaded_pages.map((page) => (
                   <span
                     key={page.slug}
-                    title={`${page.slug} v${page.version}`}
+                    title={`Wiki page associated with the initial evidence: ${page.slug} v${page.version}`}
                     className="inline-flex items-center gap-1 rounded bg-white px-2 py-1 text-[10px] font-semibold text-indigo-600 ring-1 ring-indigo-100"
                   >
                     <BookOpen size={11} />
@@ -421,6 +421,9 @@ export default function Chat({
 
     try {
       const res = await api.post(`/sessions/${selectedId}/chat`, { message: input });
+      if (res.data.capture_error) {
+        alert('Your reply was saved, but memory capture is pending. Build Memory will retry. ' + res.data.capture_error);
+      }
       if (res.data.tool_events?.length > 0) {
         setAssistantStatus({ activity: 'tool_calling', label: 'Tool calls complete', detail: `${res.data.tool_events.length} result${res.data.tool_events.length === 1 ? '' : 's'}` });
       } else {
@@ -653,7 +656,7 @@ export default function Chat({
                   });
                 }
               }}
-              placeholder={selectedId ? "Send a message..." : "Select a session first"}
+              placeholder={selectedId ? "Send a message (saved automatically; use Build Memory for recall)..." : "Select a session first"}
               disabled={!selectedId || isLoading}
               className="w-full bg-slate-100 border-none rounded-xl pl-4 pr-12 py-3 focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 transition-all shadow-inner"
             />

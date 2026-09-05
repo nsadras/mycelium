@@ -12,19 +12,16 @@ import type { InspectorTarget } from './components/memory-inspector/types';
 import { idleStatus, type AssistantActivity, type AssistantStatus } from './lib/assistantStatus';
 
 const memoryOperationStatus: Record<
-  'flush-current' | 'flush-idle' | 'flush-all' | 'dream' | 'clear-memory' | 'clear-wiki',
+  'build' | 'clear-memory' | 'clear-wiki',
   AssistantStatus
 > = {
-  'flush-current': { activity: 'flushing', label: 'Flushing', detail: 'Encoding selected episode' },
-  'flush-idle': { activity: 'flushing', label: 'Flushing', detail: 'Encoding idle episodes' },
-  'flush-all': { activity: 'flushing', label: 'Flushing', detail: 'Encoding all episodes' },
-  dream: { activity: 'dreaming', label: 'Dreaming', detail: 'Consolidating logs' },
-  'clear-memory': { activity: 'flushing', label: 'Clearing', detail: 'Resetting memory store' },
-  'clear-wiki': { activity: 'flushing', label: 'Clearing Wiki', detail: 'Resetting wiki index' },
+  build: { activity: 'building', label: 'Building Memory', detail: 'Extracting statements and updating wiki' },
+  'clear-memory': { activity: 'building', label: 'Clearing', detail: 'Resetting memory store' },
+  'clear-wiki': { activity: 'building', label: 'Clearing Wiki', detail: 'Resetting wiki index' },
 };
 
 function isMemoryActivity(activity: AssistantActivity) {
-  return activity === 'flushing' || activity === 'dreaming';
+  return activity === 'building';
 }
 
 function App() {
@@ -83,12 +80,12 @@ function App() {
     }
   };
 
-  const handleDream = async () => {
-    await handleMemoryOperation('dream');
+  const handleBuildMemory = async () => {
+    await handleMemoryOperation('build');
   };
 
   const handleMemoryOperation = async (
-    operation: 'flush-current' | 'flush-idle' | 'flush-all' | 'dream' | 'clear-memory' | 'clear-wiki'
+    operation: 'build' | 'clear-memory' | 'clear-wiki'
   ) => {
     let shouldResetStatus = true;
     try {
@@ -104,28 +101,15 @@ function App() {
         if (!confirmed) return;
       }
       let res;
-      if (operation === 'flush-current') {
-        if (!selectedSessionId) {
-          alert('Select a chat session first.');
-          return;
-        }
-      }
-
       setRunningMemoryOperation(operation);
       setAssistantStatus(memoryOperationStatus[operation]);
 
-      if (operation === 'flush-current') {
-        res = await api.post('/memory/episodes/flush', { session_id: selectedSessionId! });
-      } else if (operation === 'flush-idle') {
-        res = await api.post('/memory/episodes/flush-idle', { idle_minutes: 20, max_turns: 25 });
-      } else if (operation === 'flush-all') {
-        res = await api.post('/memory/episodes/flush-all');
-      } else if (operation === 'clear-memory') {
+      if (operation === 'clear-memory') {
         res = await api.post('/memory/dev/clear');
       } else if (operation === 'clear-wiki') {
         res = await api.post('/memory/dev/clear-wiki');
       } else {
-        res = await api.post('/memory/dream');
+        res = await api.post('/memory/build');
       }
       setMemoryRevision((revision) => revision + 1);
       alert(`${operation.replaceAll('-', ' ')} complete:\n${JSON.stringify(res.data, null, 2)}`);
@@ -149,9 +133,8 @@ function App() {
       <Sidebar 
         activeTab={activeTab} 
         setActiveTab={selectPrimaryTab}
-        onDream={handleDream}
+        onBuildMemory={handleBuildMemory}
         onMemoryOperation={handleMemoryOperation}
-        hasSelectedSession={Boolean(selectedSessionId)}
         runningMemoryOperation={runningMemoryOperation}
         assistantStatus={assistantStatus}
         isOpenMobile={sidebarOpen}

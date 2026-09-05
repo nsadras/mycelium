@@ -7,3 +7,9 @@ SOURCE PARTICIPANTS:
 
 ADMITTED CLAIM-BEARING SEGMENTS:
 {{ segments }}
+{% if context %}
+
+EARLIER CONVERSATION CONTEXT (not new evidence occurrences):
+{{ context }}
+Extract only assertions supported by the admitted new segments. Do not re-extract earlier context. If earlier context is needed to resolve a reference, cite its exact IDs in context_segment_ids in addition to the new segment_ids. An assistant suggestion is not an accepted user decision without supporting user evidence.
+{% endif %}

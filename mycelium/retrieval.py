@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 from mycelium.artifacts import ArtifactStore
 from mycelium.claim_index import LanceClaimIndex
 from mycelium.context_selection import (
@@ -35,7 +33,11 @@ class MemoryRetriever:
         self.context_builder = RetrievedContextBuilder(wiki, artifacts)
 
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
-        budget_tokens = request.budget_tokens or self.default_budget_tokens
+        budget_tokens = (
+            request.budget_tokens
+            if request.budget_tokens is not None
+            else self.default_budget_tokens
+        )
         hits = await self.claim_index.search(request.query)
         candidates = [
             AssistantContextCandidate(
@@ -54,8 +56,10 @@ class MemoryRetriever:
         }
         admitted_hits = [hit for hit in hits if hit.claim_id in selected_ids]
         selected_hits = admitted_hits[: self.initial_result_limit]
-        pages, rendered_claim_ids, evidence = self.context_builder.build(
-            selected_hits, budget_tokens=budget_tokens
+        evidence = self.context_builder.build(
+            selected_hits,
+            budget_tokens=budget_tokens,
+            more_available=len(admitted_hits) > len(selected_hits),
         )
         rendered = render_memory_evidence(evidence)
         trace = {
@@ -75,10 +79,16 @@ class MemoryRetriever:
             ],
             "selected_claim_ids": [hit.claim_id for hit in selected_hits],
             "admitted_claim_ids": [hit.claim_id for hit in admitted_hits],
-            "rendered_claim_ids": rendered_claim_ids,
+            "rendered_claim_ids": [
+                hit.claim_id
+                for hit in selected_hits
+                if hit.claim_id in evidence.claim_ids
+            ],
             "selection_error": selection.error,
         }
-        return RetrievalResult(tuple(pages), evidence, rendered, trace)
+        return RetrievalResult(
+            self.context_builder.page_references(evidence), evidence, rendered, trace
+        )
 
     async def search_evidence(
         self,
@@ -93,20 +103,24 @@ class MemoryRetriever:
         hits = await self.claim_index.search(query, limit=limit + len(excluded))
         available_hits = [hit for hit in hits if hit.claim_id not in excluded]
         selected_hits = available_hits[:limit]
-        pages, rendered_claim_ids, evidence = self.context_builder.build(
-            selected_hits, budget_tokens=budget_tokens
+        evidence = self.context_builder.build(
+            selected_hits,
+            budget_tokens=budget_tokens,
+            more_available=len(available_hits) > len(selected_hits),
         )
-        if len(available_hits) > len(selected_hits):
-            evidence = replace(evidence, more_available=True)
         return RetrievalResult(
-            tuple(pages),
+            self.context_builder.page_references(evidence),
             evidence,
             render_memory_evidence(evidence),
             {
                 "strategy": "agent_memory_search",
                 "query": query,
                 "candidate_claim_ids": [hit.claim_id for hit in hits],
-                "returned_claim_ids": rendered_claim_ids,
+                "returned_claim_ids": [
+                    hit.claim_id
+                    for hit in selected_hits
+                    if hit.claim_id in evidence.claim_ids
+                ],
             },
         )
 

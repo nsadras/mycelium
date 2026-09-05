@@ -85,15 +85,16 @@ class ConsolidationProcess:
         self.router = ClaimRouter(llm, artifacts)
         self.materializer = PageMaterializer(wiki, artifacts, config)
         self.fact_resolver = FactResolver(llm, artifacts)
-        self.short_term = ShortTermMemoryQueue(artifacts, config.dream)
+        self.short_term = ShortTermMemoryQueue(artifacts)
         self.committer = DreamCommitService(artifacts, logs, self.materializer)
 
     async def run(
-        self, *, dry_run: bool = False, include_deferred: bool = False
+        self, *, dry_run: bool = False, include_deferred: bool = False,
+        source_ids: set[str] | None = None
     ) -> DreamReport:
         if not dry_run:
             self.committer.recover_pending()
-        prepared = self.prepare(include_deferred=include_deferred)
+        prepared = self.prepare(include_deferred=include_deferred, source_ids=source_ids)
         run_id = prepared.run_id
         started_at = prepared.started_at
         queued_claims = prepared.queued_claims
@@ -421,7 +422,7 @@ class ConsolidationProcess:
         )
         self.committer.apply(commit)
 
-    def prepare(self, *, include_deferred: bool) -> DreamPreparation:
+    def prepare(self, *, include_deferred: bool, source_ids: set[str] | None = None) -> DreamPreparation:
         started_at = datetime.now().astimezone().isoformat()
         run_id = (
             f"dream-{datetime.now().strftime('%Y%m%dT%H%M%S')}-"
@@ -430,6 +431,11 @@ class ConsolidationProcess:
         queued_claims = self.short_term.claims_for_dream(
             include_deferred=include_deferred
         )
+        if source_ids is not None:
+            queued_claims = [
+                claim for claim in queued_claims
+                if any(p.source_id in source_ids for p in claim.provenance)
+            ]
         incoming_claim_ids = {claim.claim_id for claim in queued_claims}
         queued_claims = self.policy.initial_scope_claims(queued_claims)
         queued_claim_ids = {claim.claim_id for claim in queued_claims}
@@ -443,6 +449,12 @@ class ConsolidationProcess:
             for entry in self.logs.get_unconsolidated(days=None)
             if entry.durability == "durable" and entry.content.strip()
         ]
+        if source_ids is not None:
+            snapshot_log_ids = {
+                source.raw_log_entry_id for source in self.artifacts.list_sources()
+                if source.source_id in source_ids
+            }
+            raw_entries = [entry for entry in raw_entries if entry.entry_id in snapshot_log_ids]
         raw_ids = {entry.entry_id for entry in raw_entries}
         sources = [
             source

@@ -410,7 +410,7 @@ class MyceliumMemorySystem:
                     budget_tokens=initial_budget,
                 )
             )
-            loaded_pages = list(retrieval.pages)
+            loaded_pages = list(retrieval.page_references)
             retrieval_trace = retrieval.trace
             initial_evidence = retrieval.evidence
         except Exception as exc:

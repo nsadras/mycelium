@@ -103,9 +103,7 @@ async def list_chat_episode_state():
             "session_id": session_id,
             "query": record.get("query", "New session"),
             "transcript_turns": len(record.get("transcript", [])),
-            "episode_seq": record.get("episode_seq"),
-            "active_episode": record.get("active_episode"),
-            "encoded_episodes": record.get("encoded_episodes", []),
+            "captured_turns": record.get("captured_turns", 0),
         }
         for session_id, record in load_meta().items()
     ]

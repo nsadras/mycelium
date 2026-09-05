@@ -85,6 +85,7 @@ def extraction_coverage_output_model(
 
 def claim_extraction_output_model(
     claim_bearing_segment_ids: Collection[str],
+    context_segment_ids: Collection[str] = (),
 ) -> type[BaseModel]:
     """Require extracted claims to cover every admitted segment with exact evidence IDs."""
     segment_ids = tuple(sorted({
@@ -105,6 +106,12 @@ def claim_extraction_output_model(
             None,
         ),
     )
+    if context_segment_ids:
+        context_id_type = Literal.__getitem__(tuple(sorted(set(context_segment_ids))))
+        claim_model = create_model(
+            "ContextualClaim", __base__=claim_model,
+            context_segment_ids=(list[context_id_type], Field(default_factory=list)),
+        )
     base_model = create_model(
         "BatchClaimExtractionOutput",
         __config__=ConfigDict(extra="forbid"),

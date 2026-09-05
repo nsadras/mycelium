@@ -19,12 +19,13 @@ from mycelium.operations import (
     RetrievalRequest,
     RetrievalResult,
     SourceInput,
+    WikiPageReference,
 )
 
 __all__ = [
     'Mycelium', 'WikiPage', 'LogEntry', 'DreamReport', 'Session',
     'render_memory_context', 'SourceInput', 'IngestionResult',
-    'RetrievalRequest', 'RetrievalResult', 'MemoryEvidence', 'MemoryWorkspace',
+    'RetrievalRequest', 'RetrievalResult', 'WikiPageReference', 'MemoryEvidence', 'MemoryWorkspace',
     'MemoryWorkspaceOperation',
     'EvidenceRecord', 'EvidenceCitation', 'EvidenceTime',
     'EvidenceSource', 'EvidenceSourceCitation', 'EvidenceSegment', 'ConsolidationRequest',

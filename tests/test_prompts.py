@@ -63,6 +63,7 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
         "occurred_at": None,
         "unknown_time": "unknown",
         "segments": "segments",
+        "context": "",
         "chat_topic": "topic",
         "recent_thread": "thread",
         "no_prior_turns": "none",

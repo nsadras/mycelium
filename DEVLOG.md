@@ -3214,3 +3214,100 @@ one prose-similarity summary.
   category-5 scoring regression was a grounded premise correction (the stored evidence says Sam had never visited
   Jasper) rather than evidence leakage or an agent-loop error. The replay is therefore a runtime validation, not
   evidence that the workspace improves answer quality by itself.
+
+## 2026-09-04 — Reset comparison and restored test baseline
+
+- Compared the agreed reset with live capture, retrieval, organization, correction, storage, and UI callers.
+  Recorded proposed keep/replace/remove boundaries and incremental acceptance checkpoints in
+  `planning/reset_incremental_plan_2026_09_04.md`. Product refactors remain for joint review; no production
+  code or live store was changed, and no server was started or stopped.
+- Reproduced the previously reported test hangs with bounded sandboxed runs. Outside the sandbox, the
+  LanceDB claim-index test and all 15 Engram tests completed; the production lifecycle test still hung.
+  Its 260-token input budget was smaller than the current 262-token system prompt alone. Prompt assembly
+  raised before the fake model signaled generation, leaving the test waiting on an event indefinitely.
+- Repaired only the lifecycle test: a 1,024-token budget admits the production envelope while a new
+  assertion verifies that the long transcript is still trimmed. A bounded TaskGroup surfaces chat-task
+  exceptions and cleans up concurrent tasks. Existing chat/flush serialization, source timing,
+  correction, retraction, and restart assertions remain in place.
+- Validation: lifecycle test **1 passed**; complete backend suite outside the sandbox **320 passed,
+  2 skipped in 11.45 seconds**. Ruff, UI lint, UI build, and diff whitespace checks passed. The UI retains
+  its existing large-bundle warning. No live-model semantic probes or real-audio transcription runs were
+  performed; this change does not modify model contracts. Interactive app validation remains user-run.
+
+## 2026-09-04 — Reset increment 1: evidence-first retrieval and prompt budgeting
+
+- Implemented the approved first increment without changing extraction, organization, ranking, model admission
+  prompts, source retention, or ingestion behavior. No live-store migration, server operation, or commit.
+- Removed synthetic retrieved WikiPage construction, duplicate fact/claim/source formatting, and page-owner-based
+  chat admission. Complete typed evidence now determines retrieval and complete chat-prompt budgets through one
+  fitting helper. Accounting uses the existing token estimator on actual rendered envelopes, including omission
+  notices; impossible envelope budgets fail explicitly.
+- RetrievalResult and Session expose page_references containing WikiPageReference metadata instead of page bodies.
+  Chat JSON loaded_pages describes only real pages associated with initial evidence surviving prompt fitting.
+  Actual wiki pages, source inspection, and the full-wiki benchmark renderer remain available.
+- Updated library/session callers, examples, benchmark adapters, UI metadata explanation, and documentation.
+  Daily Driver now reads exact claim/fact IDs from typed evidence and assigns that evidence to its answer session;
+  removed its obsolete page-source-context scan. This fixes evaluation plumbing, not a demonstrated score gain.
+- Added coverage for exact compact-record budgets with long transcripts, whole-record omission, duplicate hits,
+  real-page metadata, impossible budgets, unowned/same-subject chat records, persisted post-fitting chat metadata,
+  and typed benchmark IDs. Removed obsolete synthetic-page test setup.
+- Validation: full backend suite **326 passed, 2 skipped in 9.36 seconds**, outside the sandbox due to the established
+  database-test limitation. Ruff, UI lint/build, and diff whitespace checks passed. The existing ~880 KB UI bundle
+  warning remains. Intermediate runs caught new-test setup errors (missing source fields and a mistyped session-file
+  constant), both corrected before the final run.
+- In-situ automated coverage includes the isolated production lifecycle (chat/flush, retrieval, correction,
+  retraction, restart) and chat route with budgeted evidence and persisted page metadata. These use controlled
+  model doubles. No prompt, ontology, or model-labor contract changed; no direct Ollama probes were performed.
+  Real-model answer quality and interactive UI behavior remain unverified.
+- User smoke checkpoint: ask about existing memory, inspect evidence/citations, reopen the chat, and browse the
+  relevant wiki page. Agree increment 2 separately; do not advance automatically.
+
+## 2026-09-04 — Automatic capture and explicit Build Memory
+
+- Implemented the user-approved capture/build boundary. ingest_source now returns captured/empty and persists
+  source, log, ingestion-operation, and extraction-manifest records without LLM or embedding calls. Explicit
+  consolidate snapshots source IDs, processes unfinished extraction, and runs the retained organizer against
+  that snapshot. Builds are serialized; later capture remains pending. ConsolidationResult exposes
+  processed_episode_ids rather than describing all first-time extraction as a retry.
+- Web chat saves a completed turn before capture and advances a durable captured-turn cursor only after source
+  and external-tool observation writes succeed. Stable ingestion keys make interrupted cursor writes replayable.
+  Capture errors do not discard the reply: the UI reports pending capture, and the next turn/build retries.
+  Memory-tool results remain excluded from new evidence. Removed active-episode buffers, Flush controls/routes/
+  request contracts/helpers, and age/count readiness configuration and conditional build APIs.
+- POST /api/memory/build now backs Build Memory; /build/status reports pending sources and statement counts.
+  Updated sidebar/avatar labels, inspector capture state, library contracts/examples, and README/DESIGN. Existing
+  benchmark capture callers now inherit capture-only behavior and their explicit consolidation calls perform
+  extraction. No raw-source index or independent wiki-page retrieval was added.
+- Reviewed meeting sources are captured before optional summary generation. Summary failure leaves the source
+  admitted and the meeting completed with an error; Retry Summary does not recapture. Transcript and speaker
+  editing remain available before admission and are blocked afterward. No real audio processing was run.
+- Per-turn chat capture stores references to up to four prior captured turns. Earlier context is bounded to a
+  quarter of the configured model window using complete source groups. The existing two-stage extractor still
+  classifies/extracts only new segments; an optional exact-ID context_segment_ids field retains additional
+  citations against their original sources. This is bounded reference resolution, not a combined extractor or
+  a new consolidation policy. Source-only context is not automatically promoted to accepted user knowledge.
+- Direct configured-host gemma4:latest probes used production prompts and a candidate structured context-citation
+  schema before integration: acceptance and refusal of a neutral workshop commitment were distinguished, with
+  earlier context cited where needed. Both could emit redundant statements; that pre-existing extraction-quality
+  weakness is recorded rather than repaired with lexical deduplication. Probe script:
+  /tmp/mycelium_capture_context_probe.py. Host /api/tags and model calls used network escalation.
+- In-situ cross-turn extraction at /tmp/mycelium-context-integration-p_8u3_a_ produced a correctly resolved workshop
+  commitment with provenance to both sources; the earlier source remained unprocessed. Redundant statements
+  remained. The production capture/build/retrieve run at /tmp/mycelium-capture-build-qc1ksxx3 captured zero claims
+  before building, built one meeting-time preference, updated the You wiki page without failures, retrieved the
+  supported fact with exact citation, and preserved capture idempotency after restart. These small probes establish
+  the tested lifecycle/meaning boundaries, not general memory quality or benchmark improvement.
+- Validation: **330 passed, 2 skipped in 10.40 seconds**; Ruff, UI lint/build, and diff whitespace checks passed.
+  Focused regressions cover capture without model calls, restart, interrupted capture-cursor persistence, build
+  snapshot concurrency, no repeated extraction on no-work builds, original-source context citations, retired
+  routes, and meeting admission/retry despite summary failure. Existing extractor tests now explicitly capture
+  then extract; obsolete Flush tests were replaced. UI retains its existing ~878 KB bundle warning.
+- Test-isolation incident: newly added automatic capture exposed two older chat-route tests that mocked the route's
+  memory provider but not runtime.get_mem. They created three test sources, three episodes, three ingestion records,
+  and a daily log containing only those test entries in the default store. Verified exact stable IDs and absence
+  of downstream claims, then moved only those ten files to /tmp/mycelium-test-records-An7HJ5. User chat sessions
+  were preserved. Both memory providers are now mocked explicitly; final full-suite verification did not recreate
+  the records. No server was started/stopped and no git commit was made.
+- Remaining user smoke check: capture a new chat, inspect saved/pending status, Build Memory, then retrieve it in
+  another chat and follow its citation/wiki page. Check reviewed meeting finalization separately. Do not advance
+  to combined coverage/extraction until this lifecycle is reviewed.

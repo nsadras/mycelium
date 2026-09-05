@@ -5,7 +5,7 @@ export default function MycoAvatar({ activity }: AvatarProps) {
   let mascotClass = "animate-slow-bob"; // Idle uses slow, subtle bobbing
   if (activity === 'listening') mascotClass = "animate-bob"; // Listening uses more apparent bobbing
   else if (activity === 'thinking') mascotClass = "animate-ponder";
-  else if (activity === 'dreaming') mascotClass = "animate-sleep";
+  else if (activity === 'building') mascotClass = "animate-sleep";
   else if (activity === 'clicked-left') mascotClass = "animate-click-squish-left";
   else if (activity === 'clicked-right') mascotClass = "animate-click-squish-right";
   else if (activity === 'wiki') mascotClass = "animate-slow-bob";
@@ -186,7 +186,7 @@ export default function MycoAvatar({ activity }: AvatarProps) {
       `}</style>
 
       {/* 1. BACKGROUND EFFECT PLANES */}
-      {activity === 'dreaming' && (
+      {activity === 'building' && (
         <ellipse cx="80" cy="132" rx="50" ry="15" fill="url(#dreamGlow)" className="animate-glow" />
       )}
       {activity === 'error' && (
@@ -216,7 +216,7 @@ export default function MycoAvatar({ activity }: AvatarProps) {
         />
 
         {/* C. Blush */}
-        {activity !== 'dreaming' && (
+        {activity !== 'building' && (
           <g>
             <ellipse 
               cx="60" 
@@ -238,7 +238,7 @@ export default function MycoAvatar({ activity }: AvatarProps) {
         )}
 
         {/* D. Eyes */}
-        {activity === 'dreaming' ? (
+        {activity === 'building' ? (
           // Sleepy / closed eyes (curved down)
           <g>
             <path d="M 64,93 Q 68.5,97 73,93" stroke="#2c3531" strokeWidth="2.5" strokeLinecap="round" fill="none" />
@@ -357,7 +357,7 @@ export default function MycoAvatar({ activity }: AvatarProps) {
               fill="url(#bodyGrad)"
             />
           </g>
-        ) : (activity === 'flushing' || activity === 'tool_calling') ? (
+        ) : (activity === 'tool_calling') ? (
           // Logging data with clipboard
           <g>
             {/* Clipboard and pages underneath */}
@@ -442,7 +442,7 @@ export default function MycoAvatar({ activity }: AvatarProps) {
       </g>
 
       {/* 4. OVERLAY ACCESSORIES (independent of body bobbing) */}
-      {activity === 'dreaming' && (
+      {activity === 'building' && (
         <g opacity="0.8">
           <text x="114" y="60" fontSize="11" fontFamily="Arial, sans-serif" fontWeight="bold" fill="#7e9c8e" className="zzz-1">z</text>
           <text x="122" y="46" fontSize="15" fontFamily="Arial, sans-serif" fontWeight="bold" fill="#7e9c8e" className="zzz-2">Z</text>
@@ -468,7 +468,7 @@ export default function MycoAvatar({ activity }: AvatarProps) {
         </g>
       )}
 
-      {(activity === 'flushing' || activity === 'tool_calling') && (
+      {(activity === 'tool_calling') && (
         <g>
           <line x1="28" y1="78" x2="38" y2="78" stroke="#7e9c8e" strokeWidth="2.2" strokeLinecap="round" className="log-line-1" />
           <line x1="42" y1="70" x2="54" y2="70" stroke="#7e9c8e" strokeWidth="2.2" strokeLinecap="round" className="log-line-2" />

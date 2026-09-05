@@ -574,9 +574,9 @@ async def _run_checkpoint_probes(
         retrieval = await memory.retrieve_context(RetrievalRequest(
             query=str(probe["question"]),
         ))
-        loaded_pages = list(retrieval.pages)
+        loaded_pages = list(retrieval.page_references)
         retrieved_gold_facts, retrieved_claim_ids = retrieved_generated_ids(
-            loaded_pages, snapshot_match
+            retrieval.evidence, snapshot_match
         )
         retrieved_evidence = {
             str(value)
@@ -584,16 +584,6 @@ async def _run_checkpoint_probes(
             if str(claim.get("claim_id")) in retrieved_claim_ids
             for value in claim.get("fixture_evidence") or []
         }
-        source_context = "\n".join(
-            page.source_context for page in loaded_pages if page.source_context
-        )
-        for source in memory.artifacts.list_sources():
-            if source.raw_log_entry_id and source.raw_log_entry_id in source_context:
-                retrieved_evidence.update(
-                    str(segment.metadata["fixture_segment_id"])
-                    for segment in source.segments
-                    if segment.metadata.get("fixture_segment_id")
-                )
         required = set(map(str, probe.get("required_facts") or []))
         forbidden = set(map(str, probe.get("forbidden_facts") or []))
         forbidden_evidence = set(map(str, probe.get("forbidden_evidence") or []))
@@ -604,7 +594,8 @@ async def _run_checkpoint_probes(
             session_id=f"daily-driver-{checkpoint_id}-{probe['id']}",
             query=str(probe["question"]),
         )
-        session.loaded_pages = loaded_pages
+        session.page_references = retrieval.page_references
+        session.memory_evidence = retrieval.evidence
         context = session.memory_context
         result: dict[str, Any] = {
             "probe_id": probe["id"],

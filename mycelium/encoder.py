@@ -6,6 +6,7 @@ from typing import Any, List
 import uuid
 from dataclasses import asdict
 
+from mycelium.budget import count_tokens
 from mycelium.models import LogEntry
 from mycelium.operations import IngestionResult, SourceInput
 from mycelium.store import LogStore
@@ -44,7 +45,7 @@ class Encoder:
         self.artifacts = artifacts
 
     async def ingest_source(self, source_input: SourceInput) -> IngestionResult:
-        entries = await self.encode_session(
+        entries = await self.capture_session(
             source_input.transcript,
             source_input.session_id,
             source_type=source_input.source_type,
@@ -79,13 +80,7 @@ class Encoder:
             for source in sources
             if source.metadata.get("ingestion_operation_id")
         ))
-        status = (
-            "complete"
-            if episodes and all(
-                episode.extraction_status == "complete" for episode in episodes
-            )
-            else "incomplete"
-        )
+        status = "captured"
         return IngestionResult(
             status=status,
             log_entries=tuple(entries),
@@ -95,7 +90,7 @@ class Encoder:
             operation_ids=operation_ids,
         )
 
-    async def encode_session(
+    async def capture_session(
         self,
         transcript: str,
         session_id: str,
@@ -215,19 +210,11 @@ class Encoder:
             )
             self.artifacts.save_episode(episode)
 
-        operation.status = "extracting"
-        operation.error = None
-        operation.updated_at = datetime.datetime.now().astimezone().isoformat()
-        self.artifacts.save_ingestion_operation(operation)
-        try:
-            await self._extract_claims(source, episode)
-        except Exception as exc:
-            operation.status = "failed"
-            operation.error = f"{type(exc).__name__}: {exc}"
+        if operation.status != "complete":
+            operation.status = "captured"
+            operation.error = None
             operation.updated_at = datetime.datetime.now().astimezone().isoformat()
             self.artifacts.save_ingestion_operation(operation)
-            raise
-        self._sync_ingestion_operation(episode, operation=operation)
         return [entry]
 
     def _sync_ingestion_operation(
@@ -349,15 +336,17 @@ class Encoder:
             parts.extend(sentence.strip() for sentence in sentences if sentence.strip())
         return parts or [content.strip()]
 
-    async def retry_incomplete_extractions(self) -> list[str]:
-        """Retry only unfinished extraction batches and return completed episode IDs."""
+    async def extract_pending(self, source_ids: set[str] | None = None) -> list[str]:
+        """Extract unfinished sources in the explicit build snapshot."""
         completed: list[str] = []
         sources = {source.source_id: source for source in self.artifacts.list_sources()}
         for episode in self.artifacts.list_episodes():
+            if source_ids is not None and episode.source_id not in source_ids:
+                continue
             if episode.extraction_status == "complete":
                 continue
             source = sources.get(episode.source_id)
-            if source is None:
+            if source is None or source.status != "active":
                 continue
             await self._extract_claims(source, episode)
             self._sync_ingestion_operation(episode)
@@ -367,6 +356,21 @@ class Encoder:
 
     async def _extract_claims(self, source: SourceDocument, episode: EpisodeManifest) -> None:
         try:
+            context_sources = [
+                self.artifacts.get_source(source_id)
+                for source_id in source.metadata.get("context_source_ids", [])
+            ]
+            # Bound earlier context independently; never truncate a cited segment.
+            selected_context = []
+            context_tokens = 0
+            for prior in reversed(context_sources):
+                cost = count_tokens(self._render_segments(prior.segments))
+                if prior.status == "active" and context_tokens + cost <= self.config.llm.context_window_tokens // 4:
+                    selected_context.insert(0, prior)
+                    context_tokens += cost
+            context_sources = selected_context
+            context_segments = [seg for prior in context_sources for seg in prior.segments]
+            context = self._render_segments(context_segments)
             claim_ids: list[str] = list(episode.claim_ids)
             dispositions = {
                 item.segment_id: item for item in episode.segment_dispositions
@@ -402,6 +406,7 @@ class Encoder:
                             source.source_id,
                             source.occurred_at,
                             self._render_segments(batch),
+                            context=context,
                         )
                         coverage = await self.llm.call_structured(
                             system,
@@ -453,12 +458,13 @@ class Encoder:
                         continue
 
                     admitted_ids = set(state.claim_bearing_segment_ids)
-                    claim_model = claim_extraction_output_model(admitted_ids)
+                    claim_model = claim_extraction_output_model(admitted_ids, [s.segment_id for s in context_segments])
                     system, user = prompts.claim_extraction_prompt(
                         source.source_type,
                         source.source_id,
                         list(source.participants),
                         self._render_claim_segments(claim_bearing),
+                        context=context,
                     )
                     response = await self.llm.call_structured(
                         system,
@@ -475,7 +481,7 @@ class Encoder:
                         exclude_none=True
                     )
                     staged_claims = self._build_extracted_claims(
-                        source, response, state.batch_id
+                        source, response, state.batch_id, context_sources=context_sources
                     )
                     for claim in staged_claims:
                         self.artifacts.save_claim(claim)
@@ -566,6 +572,7 @@ class Encoder:
         source: SourceDocument,
         response: dict[str, Any],
         batch_id: str,
+        *, context_sources: list[SourceDocument] | None = None,
     ) -> list[MemoryClaim]:
         """Build a validated batch before any claim in it is persisted."""
         claims: list[MemoryClaim] = []
@@ -615,6 +622,15 @@ class Encoder:
                 temporal_anchor = None
             else:
                 temporal_anchor = source.occurred_at
+            context_provenance = []
+            cited_context_ids = set(raw.get("context_segment_ids", []))
+            for prior in context_sources or []:
+                cited = [seg.segment_id for seg in prior.segments if seg.segment_id in cited_context_ids]
+                if cited:
+                    context_provenance.append(ClaimProvenance(
+                        source_id=prior.source_id, segment_ids=cited,
+                        raw_log_entry_id=prior.raw_log_entry_id, evidence_type="explicit",
+                    ))
             claims.append(MemoryClaim(
                 claim_id=(
                     "claim-"
@@ -630,7 +646,7 @@ class Encoder:
                     raw_log_entry_id=source.raw_log_entry_id,
                     speaker=source_speakers[0] if len(source_speakers) == 1 else raw.get("speaker"),
                     evidence_type="inferred" if is_inferred else "explicit",
-                )],
+                ), *context_provenance],
                 recorded_at=source.recorded_at,
                 confidence=max(0.0, min(1.0, float(raw.get("confidence", 0.8)))),
                 slot=str(raw["slot"]).strip() if raw.get("slot") else None,

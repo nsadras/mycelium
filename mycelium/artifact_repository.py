@@ -259,6 +259,10 @@ class ArtifactStore:
         for linked_id in placement.linked_entity_ids:
             if self.get_entity(linked_id).status != "active":
                 raise ValueError("Placed claims require active linked entities")
+        for entity_id, section in placement.page_sections.items():
+            destination = self.get_entity(entity_id)
+            if destination.status != "active" or section not in section_keys(destination.entity_type):
+                raise ValueError("Page destinations require active identities and type-valid sections")
         _atomic_json(
             self.placements_dir / f"{_safe_id(placement.claim_id)}.json", asdict(placement)
         )

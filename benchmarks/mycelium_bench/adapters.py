@@ -6,11 +6,11 @@ import shutil
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from mycelium.context import render_memory_context
 from mycelium.core import Mycelium
-from mycelium.artifacts import ArtifactStore, MemoryClaim
+from mycelium.artifacts import ArtifactStore, MemoryClaim, SourceSegment
 from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.prompting import render_prompt
@@ -290,6 +290,7 @@ class MyceliumMemorySystem:
         replay_assignments: bool = False,
         frozen_store: Path | None = None,
         include_retrieval_context: bool = False,
+        memory_profile: Literal["user", "none"] = "none",
     ) -> None:
         self.run_dir = run_dir
         self.qa_client = qa_client
@@ -302,6 +303,7 @@ class MyceliumMemorySystem:
         self.replay_assignments = replay_assignments
         self.frozen_store = frozen_store
         self.include_retrieval_context = include_retrieval_context
+        self.memory_profile = memory_profile
         self.case_id = "uninitialized"
         self.mem: Mycelium | None = None
         self._encoded_batches = 0
@@ -323,7 +325,7 @@ class MyceliumMemorySystem:
             ollama_url=self.ollama_url,
             context_budget_tokens=self.context_budget_tokens,
             config_path=self.config_path,
-            memory_profile="none",
+            memory_profile=self.memory_profile,
         )
         if self.replay_assignments:
             replay_store = self._require_replay_store()
@@ -369,6 +371,13 @@ class MyceliumMemorySystem:
                     session_id=session_id,
                     source_type="multi_party_conversation",
                     occurred_at=metadata.get("timestamp"),
+                    participants=tuple(dict.fromkeys(m.speaker for m in messages if m.speaker)),
+                    segments=tuple(SourceSegment(
+                        segment_id="", index=index, content=message.content,
+                        speaker=message.speaker, role=message.role,
+                        timestamp=message.timestamp,
+                        metadata={**message.metadata, "source_label": message.message_id},
+                    ) for index, message in enumerate(messages)) if all(m.speaker for m in messages) else None,
                     metadata={
                         key: value
                         for key, value in metadata.items()
@@ -618,6 +627,18 @@ class MyceliumMemorySystem:
         *,
         session_id: str,
     ) -> None:
+        # Assignment replay bypasses model synthesis, not content projection. Render
+        # each frozen canonical statement once while preserving its saved section.
+        for claim in claims:
+            placement = mem.artifacts.placement_for_claim(claim.claim_id)
+            if claim.status != "active" or placement is None or placement.status != "placed":
+                continue
+            if mem.artifacts.facts_for_claim(claim.claim_id):
+                continue
+            owner = mem.artifacts.get_entity(placement.owner_entity_id)
+            fact, _ = mem.consolidator.fact_resolver._direct_projection(owner, claim, placement)
+            fact.section_key = placement.section_key
+            mem.artifacts.save_consolidated_fact(fact)
         owner_ids = {
             placement.owner_entity_id
             for claim in claims

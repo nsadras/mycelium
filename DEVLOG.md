@@ -3420,3 +3420,203 @@ one prose-similarity summary.
   data were preserved. No server started/stopped and no git commit. Backend restart is user-run for the new schema.
 - Post-swap live retrieval smoke check passed: the original cooking query returned citations to
   source-6c522d36c58ec125 through the real hybrid index and model admission path.
+
+## 2026-09-04 — LoCoMo wiki baseline before organization simplification
+
+- Updated benchmark capture to preserve named speakers, participant roster, explicit roles, and
+  source labels through SourceSegment inputs. Unnamed document inputs retain transcript parsing.
+  Added explicit LoCoMo user-speaker mapping without rewriting dialogue or inferring identity.
+- Added --wiki-baseline: fresh default user store, capture/build per session, full initial/per-build
+  snapshots, selected verbatim inputs, transformed messages, effective config, hashes, and git context.
+  It rejects reused outputs and derived-artifact replay; no QA/gold answers enter this path.
+- Real host gemma4:12b runs used sample 1, sessions 1–2 in two isolated stores:
+  benchmark_runs/locomo-wiki-baseline-20260904-external and
+  benchmark_runs/locomo-wiki-baseline-20260904-user. External finished with 17 claims and three pages;
+  user-mapped finished with 11 claims, three pages, and one pending source. Both kept separate
+  Caroline/Melanie pages; declared user-role Caroline incorrectly remained distinct from You.
+- User session 2 extraction batch 1 failed the exact claimed-segment/citation contract after three
+  response attempts, leaving 48 segments pending. Normal runner exit and empty generic error lists
+  must not be interpreted as full build success. Preserved the failure without a cleanup retry.
+- Review, reproduction commands, limitations, and snapshot links:
+  planning/locomo_wiki_baseline_2026_09_04.md. No production semantic changes or live-store writes.
+- Validation: 25 focused benchmark tests passed; full backend suite 336 passed, 15 skipped;
+  Ruff and git diff checks passed. Real-model findings establish current behavior, not passing
+  semantic acceptance. No server processes started/stopped and no git commit.
+
+## 2026-09-04 — Simplified identity/page planning
+
+- Replaced the subject census, sequential/local identity matching, type proposal/verifier,
+  new/existing identity verifiers, maturity proposal/verifier, and scope admission plan with
+  one grounded identity/page response followed by claim routing. Stable identities, exact
+  evidence references, unresolved review, manual identity authority, bounded work units, and
+  failed-routing resumption remain. Cumulative fact synthesis was not redesigned.
+- A page is a usefulness decision, not a continuity/maturity threshold. Known subjects can
+  remain without pages. Stopped manufacturing encounter-only pages and meeting participation
+  bullets; source rosters remain retained evidence, and incidental external speakers need not
+  become memory identities. Historical audit readers/manual organization APIs remain intact.
+- Removed 20 old prompt templates, their factories/schemas, unused formatting/encounter helpers,
+  and obsolete cascade-stage tests. Added focused ID/binding, duplicate-canonical-ID, explicit
+  human-decision protection, and partial-commit identity allocation tests. Completed plans are
+  reconsidered against the registry; failed routing reuses its validated plan and allocated IDs.
+  Contract-specific cache IDs prevent reusing the retired cascade's plans. No migration or
+  live-store rebuild was performed; removed tracked code is recoverable from the prior Git revision.
+- Direct-probe development exposed meaningful failures before and during integration:
+  unconstrained evidence/participant keys; redundant participant cross-references; missing
+  non-speaker subjects; external speakers mistaken for You; and a named user duplicated despite
+  correct source roles. Neutral probes were expanded to two speakers/multiple claims rather
+  than adding benchmark-specific names or lexical identity rules.
+- The first in-situ comparison is preserved at benchmark_runs/locomo-wiki-post-rework-20260904-{external,user}.
+  External produced person pages; user binding failed contract validation and left claims unplaced.
+  A diagnostic of saved session-1 claims captured the model explicitly proposing the user as a new
+  person: /tmp/mycelium-identity-diagnostic-20260904/debug/structured-failure-f369452e-attempt-1.json.
+- Proven replacement: source-declared user labels are exposed as authoritative canonical-ID bindings,
+  and the structured schema fixes their You identity separately from other subjects. A model still
+  decides claim meaning, other identities, and page usefulness; there is no semantic name-matching
+  fallback. Four final neutral host gemma4:12b probes passed in 26.95 seconds at
+  /tmp/pytest-of-nitin/pytest-564 (tests/test_identity_plan_replays.py).
+- Final real chat replay passed at /tmp/pytest-of-nitin/pytest-566/test_two_conversations_build_o0:
+  verbatim alignment/cooking inputs, one populated You page, both conversations represented,
+  and fried-rice source citations in the third chat. Runtime was 151.60 seconds while sharing Ollama
+  with the two LoCoMo runs; this is not a controlled latency benchmark.
+- Regression suite: 317 passed, 19 skipped; Ruff, compileall, and git diff checks passed.
+  Sandboxed tests stalled inside LanceDB even with fake embeddings; host-escalated suite passed
+  in 13.45 seconds. Interrupted only the two stalled test invocations, not any server process.
+- Final comparison run IDs: locomo-wiki-post-rework-final-20260904-external and
+  locomo-wiki-post-rework-final-20260904-user. See the separate comparison review for completed results.
+- Completed comparison: external retained 17 placed claims on the same two person pages; user variant
+  now has seven personal claims on You, four on Melanie, and no duplicate Caroline page/entity.
+  User session 2 still has the baseline extraction-contract failure (48 segments pending, one pending
+  source), not a fully successful build. All extracted-claim source/segment references passed read-only
+  integrity checks. Review: planning/locomo_wiki_post_rework_2026_09_04.md.
+
+## 2026-09-04 — Extended the existing chat replay with Chicago follow-up
+
+- With user permission, appended the six saved messages from chat b24a9554 to the existing
+  tests/fixtures/chat_memory_replay.json: cooking recall, mapo-tofu pairings, and Chicago restaurants.
+  Preserved both web_search events verbatim, including arguments/results/metadata. The original
+  fried-rice and alignment messages were checked unchanged against the live saved conversations.
+  No derived memory/retrieval snapshots or live-store changes were included.
+- The same opt-in replay now captures all three historical chats into a fresh default store,
+  builds once, and asks the original cooking question in a fresh recall chat. It checks eight
+  captured chat turns plus two tool sources, exact message/result text and tool arguments, one
+  populated You page with the original personal evidence, tool-grounded restaurant/person pages,
+  no tool-backed facts on You, and cooking-source retrieval. Representative page identities
+  (Lao Sze Chuan and Tony Hu) are checked by an evaluation-only model judgment, allowing naming
+  variation; their provenance and the personal/tool boundary are structural assertions.
+  No historical assistant response or web search is regenerated.
+- Real configured-host run: MYCELIUM_RUN_CHAT_REPLAY=1 .venv/bin/pytest -q -s --tb=short
+  tests/test_chat_memory_replay.py. It FAILED in 139.31 seconds at the build-success assertion.
+  Capture verification passed; all ten source episodes extracted completely. The identity planner
+  invented candidate registry IDs (e.g. lao_sze_chuan) and failed validation after three attempts,
+  leaving 16 routing failures. The later page-judgment and fresh-recall checks were not reached.
+  This is a recorded regression, not a passing expanded replay. No product prompt/schema changes,
+  assertion relaxation, or extra build retry was made to conceal it.
+- Artifacts: /tmp/pytest-of-nitin/pytest-568/test_chat_history_rebuilds_use0; build_report.json
+  contains the failures, and llm/structured-failure-8fde87e6-attempt-{1,2,3}.json contains the
+  invalid model output. Ruff and git diff checks passed. No server started/stopped or git commit.
+
+## 2026-09-04 — Identity contract repair and shared evidence formatting
+
+- Clarification of the previous failure: Lao Sze Chuan was present in the frozen web results.
+  The model invented a registry reference (`lao_sze_chuan`), not the restaurant. The supplied
+  registry contained only You. This was a new-vs-existing identity decision error, not slug formatting.
+- Implemented mutually exclusive structured variants for new, existing, and unresolved identities.
+  Existing ID/type pairs and unresolved candidate IDs are constrained in the native output schema;
+  new IDs remain allocated by application code. New/existing decisions require empty candidate lists;
+  unresolved decisions cannot materialize pages. Preserved authoritative user bindings and cross-node
+  validation. No lexical identity rules, fallback model, or extra retry mechanism was introduced.
+- Staged the candidate schema separately from the router for direct configured gemma4:12b probes.
+  First round: five passed, two failed by duplicating the bound user. Clarified resolution semantics
+  and the separate user object; all seven then passed in 29.52 seconds before router integration.
+  Added neutral tool-discovered business/founder, existing match, and genuine two-candidate ambiguity
+  probes alongside user, namesakes, project, and two-speaker cases.
+- Schema-only full replay FAILED its Tony Hu page assertion in 126.72 seconds, despite completing
+  the build and passing the earlier capture/personal-page checks. The large unit produced structurally
+  valid but semantically wrong review candidates referencing You. A later unit discovered Tony Hu
+  but chose no page. Preserved output at benchmark_runs/identity-contract-20260904-schema-only-chat.
+  Final cooking recall was not reached; this run is not a semantic pass.
+- Investigating that failure exposed repeated verbatim source segments in every citing claim's input:
+  the prior failed planner's user message was 171,318 characters. Now each exact (source_id, segment_id)
+  appears once in a shared evidence appendix, with explicit references from every citing claim. No
+  evidence is summarized or discarded. Reformatting the saved 16-claim unit yields 34,022 characters
+  of evidence (excluding the registry/template). This is a size comparison, not proof of exact token
+  counts or a claim that server-side truncation was observed.
+- Probed the new evidence format before enabling it in identity planning and claim routing: all seven
+  direct cases passed in 32.19 seconds. Durable probe outputs:
+  benchmark_runs/identity-contract-20260904-probes. Removed the temporary candidate path/format flag
+  after integration; work-unit contract keys now use identity-plan-v4.
+- Added structural tests for impossible resolution states, native-schema candidate constraints,
+  unknown-candidate pipeline rejection, shared evidence references, and source-local segment IDs.
+  Corrected a pre-existing test's assumption that hashed work-unit filenames sort in processing order:
+  it now checks exact claim-batch-to-status mappings. Full suite: 329 passed, 22 opt-in tests skipped;
+  Ruff and git diff checks passed. Extraction and synthesis semantics are unchanged in this increment.
+- Final expanded replay with both changes FAILED in 228.81 seconds at the tool-person-page check:
+  benchmark_runs/identity-contract-20260904-chat. Build completed all ten source episodes with no
+  failures or pending sources, one populated You page, five populated restaurant pages, and a Tony Hu
+  person identity/page. The Tony Hu page has no grounded facts: the sole extracted founder statement
+  was placed on Lao Sze Chuan. The planner correctly proposed Tony as a new person with page=true;
+  this remaining failure is page population/claim placement, not invented IDs or incorrect person type.
+  The evaluation model incorrectly accepted the restaurant page as the person page; the independent
+  structural person-type assertion caught that false positive. Fresh cooking recall was not reached.
+- Kept the failing page assertion; did not invent a new personal fact, force a fixture-specific page
+  assignment, or count build completion as full replay success. The next decision is how a statement
+  involving multiple subjects should populate their wiki views. General context-budget enforcement
+  and extraction-accounting reliability also remain outside this increment. Live store untouched;
+  no server started/stopped, no migration, and no git commit.
+
+## 2026-09-04 — General multi-page statement placement
+
+- Product decision: a statement can appear on multiple subject pages when it substantively describes
+  each subject; mention alone is insufficient. Store the statement once and preserve the same source
+  evidence across views. Discovering an identity must not by itself manufacture an empty page.
+- Separated identity resolution from page usefulness. Removed the identity schema's page flag and
+  replaced the old general/project-role routing contract with one explicit page-placement response:
+  exact destinations, type-valid sections, per-destination reasons, and an internal primary owner
+  used by the unchanged synthesis stage. All resolved active identities are eligible, including those
+  without pages. Updated the reset spec and DESIGN.md; no new maturity/admission stage was added.
+- Direct configured gemma4:12b placement probes passed before integration (17.41 seconds): a neutral
+  founder/business statement selected both pages, incidental attribution selected only the business,
+  and a person/project responsibility used the same general mechanism. No fixture vocabulary was
+  added to production prompts and no lexical placement override was introduced.
+- Removing page admission from identity resolution exposed neutral probe failures during development:
+  a missing project, a single ambiguous referent split into separate unresolved candidates, and an
+  omitted external speaker. Clarified the definition of resolved identities vs unresolved referents,
+  distinguished personal ownership from identity, and required coverage of external personal claims.
+  The unchanged seven semantic assertions then passed in 28.17 seconds (pytest-585). Some responses
+  still cite broader contextual evidence than necessary; passing these probes is not general identity
+  reliability proof. Earlier failed rounds were not counted as successes.
+- Persist explicit ClaimPlacement.page_sections, validate active IDs/sections, and keep primary section
+  metadata aligned when synthesis regroups it. Placement reasons retain the per-page explanations.
+  General shared views replace the automatic person/project-only renderer. If only some members of
+  a synthesized paragraph belong on another page, render those canonical statements rather than leak
+  unselected members or manufacture a second persisted fact. Shared views preserve claim IDs/citations.
+- Regenerate old as well as new destinations when placements move; retracting a statement updates its
+  selected views. Empty non-You pages are removed, with identities retained as provisional. Explicit
+  manual moves can supply destinations, and entity merges redirect destination IDs. Generalized
+  combined-agent-context deduplication from project-role-only to exact shared claim IDs.
+- Updated assignment replay to project frozen statements into facts instead of producing empty pages
+  from placements alone. It preserves saved sections and does not call model synthesis. Updated old
+  role fixtures to declare shared placements explicitly; retained batching and blocked-revision guards.
+- Expanded deterministic coverage: shared provenance without duplicate storage, incidental omission,
+  partial-group non-leakage, retraction, removed destinations, invalid persisted IDs/sections, and
+  combined-context deduplication. Final backend suite: 336 passed, 25 opt-in tests skipped. Ruff,
+  compileall, and git diff checks passed.
+- First full frozen-chat replay PASSED in 258.34 seconds: all ten source episodes completed, populated
+  You/restaurant/person pages, and cooking-source retrieval in a fresh chat. Preserved at
+  benchmark_runs/multi-page-placement-20260904-chat-1. The replay now checks rendered page statements,
+  not exclusive synthesis ownership, consistent with the agreed multi-page policy.
+- Added an explicit shared-canonical-claim assertion for the fixture's restaurant/founder page pair.
+  Second full replay PASSED in 260.76 seconds at benchmark_runs/multi-page-placement-20260904-chat-2:
+  no build failures/pending sources, five populated restaurant pages, a populated Tony Hu person page,
+  the same canonical statement present on founder and restaurant pages, one populated You page, and
+  cooking-source retrieval. Both runs used fresh stores and the frozen original turns/tool results.
+- Final repeated direct suite: 9 passed, 1 FAILED in 39.04 seconds at
+  benchmark_runs/multi-page-placement-20260904-probes. All three placement probes passed again, but
+  the ambiguity probe again split one uncertain referent into two unresolved proposals with separate
+  candidates. No forced identity match occurred, but the intended representation is not reliably
+  achieved. Kept the failure and assertion intact; did not rerun until green or introduce a semantic
+  fallback. This remains an identity-contract reliability issue despite the two passing product replays.
+- Final deterministic suite after all changes: 336 passed, 25 opt-in tests skipped; Ruff, compileall,
+  and diff checks passed. Live data unchanged, no server started/stopped, no migration, and no git
+  commit. Cumulative synthesis, extraction-accounting reliability, and the repeated ambiguity failure
+  remain separate work; this increment does not establish a fully reliable memory system.

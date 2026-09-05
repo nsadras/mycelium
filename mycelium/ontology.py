@@ -22,7 +22,6 @@ CLAIM_TYPES = (
 )
 ClaimType = Literal.__getitem__(CLAIM_TYPES)
 
-EXISTING_MATERIALIZED_BASIS = "existing_materialized"
 
 
 @dataclass(frozen=True)
@@ -65,29 +64,7 @@ class SubjectScopeDefinition:
 
 # These policies live beside the entity ontology so extraction, census, planning,
 # and routing share one authority for what enters the subject graph.
-SUBJECT_CENSUS_POLICY = """Build a complete list of the distinct subjects represented by the supplied candidate mentions.
 
-A stored claim is a source-supported memory assertion. A subject candidate is a person, organization, continuing
-effort, recurring series, meaningful artifact, abstract topic, place, or bounded event named by extraction. A subject
-node groups candidate mentions that refer to one real-world subject within this batch. The registry lists identities
-already stored, but matching nodes to those identities happens later.
-
-The input uses short aliases so the output can cite exact records: C... identifies a stored claim, P... identifies a
-source-declared participant, and N... identifies a subject node created in this step. `you` is the reserved identity
-for the configured user.
-
-Use the candidate list as the boundary of this task:
-1. Examine every candidate. Create one N001-style node for each distinct subject and merge repeated mentions only when
-   the evidence shows that they refer to the same subject.
-2. Include every candidate marked `subject`, `owner`, or `source_participant`, except the reserved user identity `you`.
-   Include a `participant` candidate when a claim uses that person as a relationship or interaction endpoint.
-3. Use a supplied candidate name as the title. Cite every C... claim alias and P... participant alias that directly
-   supports the node. For a named human source participant, include its P... alias in both evidence lists.
-
-Attributes, preferences, quantities, reasons, and other descriptive details remain information about a subject rather
-than separate nodes. A date, time, duration, deadline, or age is not a subject by itself. Do not choose identity,
-ontology type, containment, or page visibility here. Return schema-valid JSON; use an empty node list only when the
-candidate list contains no representable subject."""
 
 EXTRACTION_SUBJECT_POLICY = """The `about` list is the complete set of named identities needed by later identity
 resolution and routing. Use `subject` for the primary person or identity whose action or state the sentence directly
@@ -97,17 +74,6 @@ another named relationship endpoint. A claim may have both a subject and an owne
 named Organization or Project belongs to that identity as owner. A personal commitment to visit, join, help, or
 volunteer with another identity belongs to the person; the other identity is a participant. Include every explicitly
 named durable identity in `about`."""
-
-ROUTING_SUBJECT_POLICY = """For a general route, `subject_entity` is the identity grammatically described by the claim,
-`object_entities` are explicit relationship endpoints, and `contextual_entities` are useful secondary endpoints.
-Nearby or incidental identities are not endpoints."""
-
-ROUTING_OWNERSHIP_POLICY = """Every materialized identity type can own claims about its own durable record. Choose the
-identity whose record would be incomplete without the claim. An Organization owns its operations, policies, decisions,
-offerings, obligations, and history. A Project owns its purpose, scope, requirements, decisions, status, deadlines,
-work products, and next steps. A Person owns that person's commitments, actions, views, relationships, and personal
-history. A person speaking about or acting within another identity does not by itself make the person the owner. Keep
-other explicitly involved identities as relationship or context endpoints."""
 
 FACT_EVIDENCE_POLICY = """A display fact represents its stored member claims. The claim text and structured temporal
 record support and constrain details included in the display fact. Supporting source evidence has already been
@@ -184,17 +150,6 @@ INDEPENDENT_SUBJECT_SCOPES = tuple(
     for definition in SUBJECT_SCOPE_ONTOLOGY
     if definition.persisted_scope == "independent"
 )
-
-SUBJECT_SCOPE_CONTAINMENT_POLICY = """- Require affirmative parent evidence. Related domain, organization, people, timing, or an available registry option
-  is not containment. A separately named effort remains separate unless evidence places it inside a parent."""
-
-SUBJECT_PAGE_STATE_POLICY = """Page state:
-- Scope directly determines page state: materialized creates a page, provisional preserves an identity without a
-  page, and component, occurrence, standalone_event, and context have no page.
-- A Series is independent only when evidence treats recurrence as a shared frame with its own evolving state, plans,
-  decisions, or history. A person's occupation, habit, hobby, or repeated background activity is not itself a Series.
-- Existing materialized identities remain usable even when this cohort is thin; do not treat scope as a request
-  to erase prior memory."""
 
 
 def _section(key: str, title: str, description: str) -> SectionDefinition:
@@ -750,17 +705,6 @@ def entity_type_prompt_catalog(*, discoverable_only: bool = False) -> str:
     return "\n".join(
         f"- {item.label} (`{item.key}`): {item.description}" for item in definitions
     )
-
-
-def subject_scope_prompt_catalog() -> str:
-    """Render the authoritative subject-scope definitions for model decisions."""
-    lines = ["Scope variants:"]
-    lines.extend(
-        f"- `{definition.key}` {definition.description}"
-        for definition in SUBJECT_SCOPE_ONTOLOGY
-    )
-    lines.append(SUBJECT_SCOPE_CONTAINMENT_POLICY)
-    return "\n".join(lines)
 
 
 def section_prompt_catalog() -> str:

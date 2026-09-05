@@ -159,10 +159,8 @@ The dream process converts source-grounded claims into semantic wiki pages:
 ```mermaid
 flowchart TD
     A[Unconsolidated source-grounded claims] --> B[Compile typed source retention]
-    B --> C[Declare a typed subject census]
-    C --> D[Match subject identities sequentially]
-    D --> E[Adjudicate type, identity, maturity, and page scope]
-    E --> F[Route each claim to an owner, relationship, and section]
+    B --> C[Resolve grounded identities]
+    C --> F[Select useful pages and sections for each statement]
     F --> K{New entity materialized?}
     K -->|yes| L[Re-plan explicit persisted scope neighborhood]
     K -->|no| M[Use initial scope]
@@ -183,29 +181,30 @@ Important behavior:
 - Assistant/system conversation claims and extraction-rejected segments remain source history under closed,
   provenance-linked retention reasons rather than masquerading as deferred or canonical memory.
 - `source_only` is not a model-authored scope outcome: every admitted claim is placed or explicitly deferred.
-- Entity identity and page admission are separate. A known identity may remain provisional until supported by
-  enough durable evidence; creation and participant-resolution decisions retain support, confidence, and review state.
-- Identity planning starts with a type-neutral subject census. Each subject is matched against canonical identities
-  sequentially, with canonically new local identities accumulated between calls. Ontology type is proposed and
-  independently verified from neutral source evidence before an identity match is accepted. The verified type bounds
-  final identity candidates, allowing people and organizations to share names without inheriting one another's shape.
-  Maturity is proposed and verified separately before entity scope and participant resolution. Containment records only
-  `component_of` and `occurrence_of`; claim-level routing handles other relationships.
-  Person and Organization are agents; Project is an intentional continuing effort; Series is a recurring frame;
-  Event is one bounded occurrence; Artifact is a made physical or digital object; Topic is an abstract subject; and
-  Place is physical. Evidence references, stable endpoints, and participants are constrained to exact values
-  supplied for the cohort. Existing page facts ground identity continuity. A Person node may resolve to the
-  singleton `you` only when the source identifies that person as the configured user.
-- The entity plan gives each node one of three page states. Materialized subjects have useful independent personal
-  history and established continuation; plausible but thin subjects remain provisional; components, bounded
-  occurrences, and context receive no page. Existing materialized pages are never demoted by a thin later cohort.
-  Provisional identities return to the census when later evidence adds their own history.
-- One final routing call decides owner, subject/object/context endpoints, relationship kind, and typed page section
-  together for every claim. Exact model-call counts depend on the number of census identities and bounded verifier
-  partitions. Unusually large claim sets are split into bounded work units.
-- A project-role claim has one canonical owner but renders on both the Person/You and Project pages with the same
-  provenance. A newly proposed owner must be materialized before its claim can be placed; otherwise the claim remains
-  deferred for later evidence or user review.
+- One bounded structured response resolves identities and chooses types, without page admission. Explicit
+  source user roles are authoritative bindings to You, expressed in both input and schema. Other subjects are
+  model decisions backed by exact claim/participant evidence, not lexical matching or confidence thresholds.
+- Page usefulness is independent of identity confidence. A known identity can exist without a page; the persisted
+  state is still named `provisional`, but there is no maturity threshold or continuity verifier. Pages without
+  selected statements are not manufactured from participant encounters. External speakers who only report facts about
+  others may remain source participants without becoming memory identities.
+- Uncertain identities remain reviewable proposals and defer affected routing. Existing registry IDs/types and
+  explicit human identity decisions cannot be overridden by the planner. Historical audit record readers and
+  manual organization APIs remain; the retired model cascade no longer produces maturity assessments.
+- One subsequent placement response selects one or more useful page/section destinations for each claim, including
+  identities without pages. Destinations have exact IDs, type-valid sections, and per-page reasons. The primary owner
+  remains an internal synthesis grouping, not an exclusive display destination. `ClaimPlacement.page_sections`
+  records the chosen views; the source statement is stored once.
+  Claims without a suitable page remain searchable independently of the wiki. Completed identity plans are
+  reconsidered against the current registry on later runs; failed routing reuses its saved plan and exact allocated
+  IDs, avoiding duplicate identities after a partial commit. Old-cascade caches are not reused by the new contract.
+- Unusually large claim sets are split into bounded work units. Cumulative fact synthesis and scope-neighborhood
+  revision are unchanged in this increment.
+- General selected placements replace the special person/project projection rule. Incidental mentions do not
+  automatically receive a copy. Shared views retain the same claim IDs and provenance; if only part of a synthesized
+  group was selected for a page, that view renders only the selected canonical statements, not unrelated group text.
+  Removing a destination or retracting a claim regenerates affected pages. Empty non-You pages are removed, while
+  their subject identities remain available for future placements. Reading pages does not create extra stored facts.
 - Claim entity references preserve extracted surface mentions and stable subject, object, context, and owner IDs.
 - Scope revision uses persisted source/cohort/entity-reference neighborhoods, never token or alias overlap.
 - `_index.md` is rebuilt deterministically from materialized pages.
@@ -435,6 +434,28 @@ uv run python -m benchmarks.mycelium_bench locomo \
 ```
 
 Run a selected LoCoMo conversation with `SAMPLE_INDEX=2 scripts/benchmark-locomo.sh`. Change the sample index as needed, or pass `null` or `full_context` instead of `mycelium` to run those baselines.
+
+For a human-reviewed encoding/wiki baseline (no QA scoring), use a fresh run ID:
+
+```bash
+.venv/bin/python -m benchmarks.mycelium_bench locomo \
+  --wiki-baseline --sample-index 1 --max-sessions 2 \
+  --config-path mycelium.toml --qa-model gemma4:12b \
+  --run-id locomo-wiki-before-external
+```
+
+Repeat with `--user-speaker Caroline --run-id locomo-wiki-before-user` to explicitly bind that exact speaker
+to the configured user; names/dialogue remain unchanged. Without this flag both speakers are external participants.
+This mode seeds the default You identity, captures each session through the current public API, and runs Build
+Memory after each session. It rejects reused output directories and derived-store replay options.
+
+Each run retains `input.json` (selected raw conversation only, no QA/answers), `messages.json` (explicit roles and
+turn labels), `manifest.json` (input hashes, effective configuration, build outcomes), `working_tree.patch`, and
+full `snapshots/initial`, `snapshots/session_1`, `snapshots/session_2` stores. Open each snapshot's `wiki/` folder
+to compare organization over time; sources, claims, identity decisions, and build failures remain beside it.
+These are measured baselines, not automatic assertions that the resulting wiki is correct. A fresh after-run
+should use identical input hashes, model configuration, user mapping, and session/build cadence. Model outputs
+can vary; page-title equality and LoCoMo QA scores are not the acceptance criteria for this comparison.
 
 For a MemoryAgentBench smoke run:
 

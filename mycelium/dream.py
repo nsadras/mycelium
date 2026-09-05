@@ -255,6 +255,7 @@ class ConsolidationProcess:
                 linked_entity_ids=tuple(
                     placement_updates[route.claim_id].linked_entity_ids
                 ),
+                page_sections=dict(placement_updates[route.claim_id].page_sections),
             ) if route.claim_id in placement_updates else route
             for route in successful_routes
         ]

@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 import re
 import time
+import hashlib
+import shutil
+import subprocess
+from dataclasses import asdict
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from benchmarks.mycelium_bench.adapters import BenchmarkMessage, MemorySystem
+from benchmarks.mycelium_bench.adapters import BenchmarkMessage, MemorySystem, MyceliumMemorySystem
 from benchmarks.mycelium_bench.scoring import locomo_score, summarize_scores
 
 
@@ -144,8 +148,70 @@ async def run_locomo(
     return summary
 
 
+async def run_locomo_wiki_baseline(
+    *, data_path: Path, output_dir: Path, system: MyceliumMemorySystem,
+    sample_index: int = 1, max_sessions: int = 2, user_speaker: str | None = None,
+) -> dict[str, Any]:
+    """Fresh, sequential build snapshots for human wiki review; no QA or gold input."""
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise ValueError("Wiki baseline requires a fresh output directory")
+    if system.replay_store or system.frozen_store or system.replay_assignments:
+        raise ValueError("Wiki baseline must build from source, not derived replay artifacts")
+    samples = json.loads(data_path.read_text(encoding="utf-8"))
+    if not 1 <= sample_index <= len(samples) or max_sessions < 1:
+        raise ValueError("Invalid sample index or session count")
+    sample = samples[sample_index - 1]
+    selected = iter_locomo_sessions(sample, user_speaker=user_speaker)[:max_sessions]
+    speakers = {m.speaker for _, _, messages in selected for m in messages}
+    if user_speaker is not None and user_speaker not in speakers:
+        raise ValueError("Configured user speaker must appear in the selected sessions")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    system.memory_profile = "user"
+    system.dream_policy = "per-batch"
+    await system.reset(str(sample["sample_id"]))
+    memory = system._require_mem()
+    keys = {key for sid, _, _ in selected for key in (sid, f"{sid}_date_time")}
+    write_json(output_dir / "input.json", {
+        "sample_id": sample["sample_id"],
+        "conversation": {k: v for k, v in sample["conversation"].items() if k in keys or k in {"speaker_a", "speaker_b"}},
+    })
+    write_json(output_dir / "messages.json", [
+        {"session_id": sid, "timestamp": timestamp, "messages": [asdict(m) for m in messages]}
+        for sid, timestamp, messages in selected
+    ])
+    manifest = {
+        "sample_id": sample["sample_id"], "sample_index": sample_index,
+        "session_ids": [sid for sid, _, _ in selected], "user_speaker": user_speaker,
+        "dataset_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
+        "input_sha256": hashlib.sha256((output_dir / "input.json").read_bytes()).hexdigest(),
+        "config": asdict(memory.config), "build_policy": "after_each_session",
+        "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "checkpoints": [],
+    }
+    (output_dir / "working_tree.patch").write_text(subprocess.check_output(["git", "diff", "HEAD"], text=True))
+    write_json(output_dir / "manifest.json", manifest)
+    shutil.copytree(memory.store_path, output_dir / "snapshots" / "initial")
+    for sid, timestamp, messages in selected:
+        print(f"[wiki-baseline] {sample['sample_id']} user={user_speaker!r}: capture/build {sid}", flush=True)
+        started = time.perf_counter()
+        await system.memorize(messages, {"session_id": sid, "timestamp": timestamp, "sample_id": sample["sample_id"]})
+        snapshot = output_dir / "snapshots" / sid
+        shutil.copytree(memory.store_path, snapshot)
+        checkpoint = {
+            "session_id": sid, "elapsed_seconds": time.perf_counter() - started,
+            "stats": system.stats(), "coverage": memory.artifacts.coverage_report(),
+            "pages": [{"slug": p.slug, "title": p.title, "entity_id": p.entity_id} for p in memory.wiki.list()],
+            "pending_sources": memory.consolidation_status().pending_sources,
+        }
+        manifest["checkpoints"].append(checkpoint)
+        write_json(output_dir / "manifest.json", manifest)
+        print(f"[wiki-baseline] saved {snapshot}: {len(checkpoint['pages'])} pages", flush=True)
+    return manifest
+
+
 def iter_locomo_sessions(
     sample: dict[str, Any],
+    *, user_speaker: str | None = None,
 ) -> list[tuple[str, str | None, list[BenchmarkMessage]]]:
     conversation = sample.get("conversation", {})
     sessions = []
@@ -154,13 +220,13 @@ def iter_locomo_sessions(
             continue
         session_turns = conversation.get(key) or []
         timestamp = conversation.get(f"{key}_date_time")
-        messages = [locomo_turn_to_message(turn, timestamp) for turn in session_turns]
+        messages = [locomo_turn_to_message(turn, timestamp, user_speaker=user_speaker) for turn in session_turns]
         sessions.append((key, timestamp, messages))
     return sessions
 
 
 def locomo_turn_to_message(
-    turn: dict[str, Any], timestamp: str | None
+    turn: dict[str, Any], timestamp: str | None, *, user_speaker: str | None = None,
 ) -> BenchmarkMessage:
     text = str(turn.get("text", "")).strip()
     if turn.get("blip_caption"):
@@ -168,7 +234,7 @@ def locomo_turn_to_message(
     if turn.get("img_url"):
         text = f"{text}\nImage URL: {turn['img_url']}"
     return BenchmarkMessage(
-        role="user",
+        role="user" if user_speaker is not None and turn.get("speaker") == user_speaker else "participant",
         speaker=str(turn.get("speaker", "speaker")),
         content=text.strip(),
         timestamp=timestamp,

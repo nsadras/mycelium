@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import uuid
 import hashlib
+import json
+from dataclasses import replace
 from datetime import datetime
 from typing import Iterable
 
-from mycelium import prompts
 from mycelium.consolidation_formatting import RoutingFormatter
 from mycelium.consolidation_models import (
     ClaimEvidence, ClaimRoute, RoutingFailure, RoutingResult, slugify,
@@ -19,23 +20,10 @@ from mycelium.artifacts import (
     EntityRecord,
     EntityResolutionDecision,
     IdentityWorkUnit,
-    IdentityMaturityAssessment,
 )
 from mycelium.ollama import OllamaClient
-from mycelium.ontology import EXISTING_MATERIALIZED_BASIS, subject_scope_definition
-from mycelium.structured_outputs import (
-    claim_routing_output_model,
-    entity_plan_output_model,
-    identity_node_matching_output_model,
-    local_identity_matching_output_model,
-    pending_identity_matching_output_model,
-    new_identity_verification_output_model,
-    identity_maturity_output_model,
-    identity_maturity_verification_output_model,
-    identity_type_output_model,
-    identity_type_verification_output_model,
-    subject_node_output_model,
-)
+from mycelium.identity_plan import identity_plan_model, identity_plan_prompt, planned_subjects, declared_user_bindings
+from mycelium.page_plan import page_plan_model, page_plan_prompt
 
 
 class ClaimRouter:
@@ -80,1290 +68,175 @@ class ClaimRouter:
         return result
 
     async def _route_unit(
-        self,
-        evidence: list[ClaimEvidence],
-        *,
-        dream_run_id: str = "unpersisted",
-        seed_entities: Iterable[EntityRecord] = (),
-        participant_source_ids: set[str] | None = None,
-        work_unit: IdentityWorkUnit,
-        seed_identity_decisions: Iterable[EntityResolutionDecision] = (),
+        self, evidence: list[ClaimEvidence], *, dream_run_id: str = "unpersisted",
+        seed_entities: Iterable[EntityRecord] = (), participant_source_ids=None,
+        work_unit: IdentityWorkUnit, seed_identity_decisions=(),
     ) -> RoutingResult:
-        result = RoutingResult()
-        planned = {entity.entity_id: entity for entity in self.artifacts.list_entities()}
-        planned.update({entity.entity_id: entity for entity in seed_entities})
-        initially_materialized = {
-            entity.entity_id
-            for entity in planned.values()
-            if entity.materialization_state == "materialized"
-        }
         if not evidence:
-            return result
+            return RoutingResult()
+        result = RoutingResult()
+        planned = {e.entity_id: e for e in self.artifacts.list_entities()}
+        planned.update({e.entity_id: e for e in seed_entities})
+        aliases = {f"C{index:03d}": item for index, item in enumerate(evidence, 1)}
+        participants = self.resolution.participant_occurrences(
+            evidence, source_ids=participant_source_ids,
+        )
+        schema = identity_plan_model(
+            aliases, {p: role for p, (_, _, role) in participants.items()},
+            {e.entity_id: e.entity_type for e in planned.values() if e.status == "active"},
+        )
         work_unit.attempt_count += 1
         work_unit.status = "pending"
-        work_unit.last_error = None
-        work_unit.updated_at = datetime.now().astimezone().isoformat()
-        self.artifacts.save_identity_work_unit(work_unit)
-        aliases = {f"C{index:03d}": item for index, item in enumerate(evidence, start=1)}
-        participants = self.resolution.participant_occurrences(
-            evidence, source_ids=participant_source_ids
-        )
-        allowed_evidence = {*aliases, *participants}
-        registry_types = {
-            entity.entity_id: entity.entity_type
-            for entity in planned.values()
-            if entity.status == "active"
-        }
+        now = datetime.now().astimezone().isoformat()
+        pending = [
+            *self.artifacts.list_entity_resolution_decisions(review_state="review_required"),
+            *seed_identity_decisions,
+        ]
         try:
-            if work_unit.subject_nodes:
-                node_plan = {"nodes": work_unit.subject_nodes}
-            else:
-                node_model = subject_node_output_model(allowed_evidence, participants)
-                system, user = prompts.subject_node_prompt(
-                    self.formatter.entity_catalog(
-                        planned.values(), include_sections=False
-                    ),
-                    self.formatter.format_subject_candidates(
-                        aliases, participants
-                    ),
-                    self.formatter.format_evidence(aliases, participants),
-                )
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    node_model,
-                    num_predict=8192,
-                    debug_label="dream-subject-nodes",
-                )
-                node_plan = node_model.model_validate(response).model_dump()
-            if any(
-                set(node["supporting_evidence"]) - allowed_evidence
-                for node in node_plan["nodes"]
-            ):
-                raise ValueError("Subject node census cited an unknown evidence alias")
-            graph_nodes = {
-                node["node_id"]: node for node in node_plan["nodes"]
-            }
-            if len(graph_nodes) != len(node_plan["nodes"]):
-                raise ValueError("Subject node census repeated a node ID")
-            work_unit.subject_nodes = node_plan["nodes"]
-            work_unit.stage = "identity_matching"
-            self.artifacts.save_identity_work_unit(work_unit)
-        except Exception as exc:
-            return self._fail_work_unit(
-                work_unit,
-                evidence,
-                "subject_nodes",
-                "Subject node response did not satisfy the contract: "
-                f"{type(exc).__name__}: {exc}",
-            )
-
-        census_nodes = graph_nodes
-        reviewed_node_entities: dict[str, str] = {}
-        for node_id, node in census_nodes.items():
-            reviewed = {
-                reference.entity_id
-                for alias in node["supporting_evidence"]
-                if alias in aliases
-                for reference in self.artifacts.list_entity_references(
-                    claim_id=aliases[alias].claim.claim_id, status="active"
-                )
-                if reference.role == "identity_subject"
-                and reference.origin == "manual"
-                and reference.entity_id
-            }
-            if len(reviewed) > 1:
-                return self._fail_work_unit(
-                    work_unit,
-                    evidence,
-                    "identity_matching",
-                    "Reviewed claim identities conflict within one subject node",
-                )
-            if reviewed:
-                reviewed_node_entities[node_id] = next(iter(reviewed))
-
-        match_groups: list[dict] = []
-        if census_nodes:
-            try:
-                node_decisions = dict(work_unit.identity_node_decisions)
-                local_decisions = dict(work_unit.local_identity_decisions)
-                match_groups = []
-                for node_id, node in census_nodes.items():
-                    match_model = identity_node_matching_output_model(
-                        node_id,
-                        list(registry_types),
-                    )
-                    supporting = set(node["supporting_evidence"])
-                    node_aliases = {
-                        alias: item for alias, item in aliases.items()
-                        if alias in supporting
-                    }
-                    node_participants = {
-                        alias: item for alias, item in participants.items()
-                        if alias in supporting
-                    }
-                    node_text = self.formatter.format_subject_graph(
-                        {node_id: node}, []
-                    )
-                    evidence_text = self.formatter.format_evidence(
-                        node_aliases, node_participants
-                    )
-                    if node_id in node_decisions:
-                        decision = match_model.model_validate({
-                            "decision": node_decisions[node_id]
-                        }).model_dump()["decision"]
-                    else:
-                        system, user = prompts.identity_node_matching_prompt(
-                            self.formatter.entity_planning_catalog(planned.values()),
-                            node_text,
-                            evidence_text,
-                            self.formatter.identity_review_catalog(node_aliases),
-                        )
-                        response = await self.llm.call_structured(
-                            system,
-                            user,
-                            match_model,
-                            num_predict=2048,
-                            debug_label=f"dream-identity-matching-{node_id}",
-                        )
-                        decision = match_model.model_validate(response).model_dump()[
-                            "decision"
-                        ]
-                        node_decisions[node_id] = decision
-                        work_unit.identity_node_decisions = node_decisions
-                        work_unit.updated_at = datetime.now().astimezone().isoformat()
-                        self.artifacts.save_identity_work_unit(work_unit)
-                    local_groups = [
-                        group for group in match_groups
-                        if group["resolution"] == "new"
-                    ]
-                    if decision["resolution"] == "new" and local_groups:
-                        local_model = local_identity_matching_output_model(
-                            node_id,
-                            [group["identity_key"] for group in local_groups],
-                        )
-                        if node_id in local_decisions:
-                            local_decision = local_model.model_validate({
-                                "decision": local_decisions[node_id]
-                            }).model_dump()["decision"]
-                        else:
-                            system, user = prompts.local_identity_matching_prompt(
-                                node_text,
-                                evidence_text,
-                                self.formatter.format_accumulated_identity_groups(
-                                    local_groups
-                                ),
-                            )
-                            response = await self.llm.call_structured(
-                                system,
-                                user,
-                                local_model,
-                                num_predict=1024,
-                                debug_label=(
-                                    f"dream-local-identity-matching-{node_id}"
-                                ),
-                            )
-                            local_decision = local_model.model_validate(
-                                response
-                            ).model_dump()["decision"]
-                            local_decisions[node_id] = local_decision
-                            work_unit.local_identity_decisions = local_decisions
-                            work_unit.updated_at = (
-                                datetime.now().astimezone().isoformat()
-                            )
-                            self.artifacts.save_identity_work_unit(work_unit)
-                        if local_decision["resolution"] == "same_as_local":
-                            decision = {
-                                **decision,
-                                "resolution": "same_as_local",
-                                "local_identity_key": local_decision[
-                                    "local_identity_key"
-                                ],
-                            }
-                    match_groups = self._accumulate_identity_decision(
-                        match_groups, decision
-                    )
-                    work_unit.identity_groups = match_groups
-                    work_unit.updated_at = datetime.now().astimezone().isoformat()
-                    self.artifacts.save_identity_work_unit(work_unit)
-                for group in match_groups:
-                    reviewed = {
-                        reviewed_node_entities[node_id]
-                        for node_id in group["node_ids"]
-                        if node_id in reviewed_node_entities
-                    }
-                    if len(reviewed) > 1:
-                        raise ValueError(
-                            "One identity group contains conflicting reviewed identities"
-                        )
-                    if reviewed and (
-                        group["resolution"] != "existing"
-                        or group["entity_id"] != next(iter(reviewed))
-                    ):
-                        raise ValueError(
-                            "Identity matching conflicts with a reviewed identity"
-                        )
-                work_unit.identity_groups = match_groups
-                work_unit.stage = "identity_types"
-                self.artifacts.save_identity_work_unit(work_unit)
-            except Exception as exc:
-                return self._fail_work_unit(
-                    work_unit,
-                    evidence,
-                    "identity_matching",
-                    "Identity matching response did not satisfy the contract: "
-                    f"{type(exc).__name__}: {exc}",
-                )
-
-        graph_nodes = {}
-        for group in match_groups:
-            member_nodes = [census_nodes[node_id] for node_id in group["node_ids"]]
-            graph_nodes[group["identity_key"]] = {
-                "node_id": group["identity_key"],
-                "source_node_ids": list(group["node_ids"]),
-                "title": group["preferred_title"],
-                "aliases": list(group["aliases"]),
-                "identity_resolution": group["resolution"],
-                "entity_id": group["entity_id"],
-                "identity_reason": group["reason"],
-                "candidate_entity_ids": list(group["candidate_entity_ids"]),
-                "supporting_evidence": list(dict.fromkeys(
-                    alias
-                    for node in member_nodes
-                    for alias in node["supporting_evidence"]
-                )),
-                "participant_evidence": list(dict.fromkeys(
-                    alias
-                    for node in member_nodes
-                    for alias in node["participant_evidence"]
-                )),
-            }
-
-        pending_by_id = {
-            decision.decision_id: decision
-            for decision in self.artifacts.list_entity_resolution_decisions(
-                review_state="review_required"
-            )
-            if decision.decision_type == "entity_creation"
-        }
-        pending_by_id.update({
-            decision.decision_id: decision
-            for decision in seed_identity_decisions
-            if decision.decision_type == "entity_creation"
-            and decision.review_state == "review_required"
-        })
-        identity_type_evidence = {
-            identity_key: node["supporting_evidence"]
-            for identity_key, node in graph_nodes.items()
-            if not (
-                node["identity_resolution"] == "existing"
-                and node["entity_id"] == "you"
-            )
-        }
-        type_proposals: dict[str, dict] = {}
-        type_verdicts: dict[str, dict] = {}
-        if identity_type_evidence:
-            neutral_identities = "\n".join(
-                self.formatter.format_identity_evidence(node)
-                for identity_key, node in graph_nodes.items()
-                if identity_key in identity_type_evidence
-            )
-            try:
-                if work_unit.type_proposals:
-                    type_proposals = work_unit.type_proposals
-                else:
-                    type_model = identity_type_output_model(identity_type_evidence)
-                    system, user = prompts.identity_types_prompt(
-                        neutral_identities,
-                        self.formatter.format_evidence(aliases, participants),
-                    )
-                    response = await self.llm.call_structured(
-                        system,
-                        user,
-                        type_model,
-                        num_predict=4096,
-                        debug_label="dream-identity-types",
-                    )
-                    type_proposals = type_model.model_validate(response).model_dump()[
-                        "decisions"
-                    ]
-                work_unit.type_proposals = type_proposals
-                work_unit.stage = "identity_type_verification"
-                self.artifacts.save_identity_work_unit(work_unit)
-            except Exception as exc:
-                return self._fail_work_unit(
-                    work_unit,
-                    evidence,
-                    "identity_types",
-                    "Identity type response did not satisfy the contract: "
-                    f"{type(exc).__name__}: {exc}",
-                )
-            type_verification_model = identity_type_verification_output_model(
-                {
-                    identity_key: proposal["entity_type"]
-                    for identity_key, proposal in type_proposals.items()
-                },
-                identity_type_evidence,
-            )
-            system, user = prompts.identity_type_verification_prompt(
-                self.formatter.format_type_proposals(type_proposals),
-                neutral_identities,
-                self.formatter.format_evidence(aliases, participants),
-            )
-            try:
-                if work_unit.type_verdicts:
-                    type_verdicts = work_unit.type_verdicts
-                else:
-                    response = await self.llm.call_structured(
-                        system,
-                        user,
-                        type_verification_model,
-                        num_predict=4096,
-                        debug_label="dream-identity-type-verification",
-                    )
-                    type_verdicts = type_verification_model.model_validate(
-                        response
-                    ).model_dump()["decisions"]
-                work_unit.type_verdicts = type_verdicts
-                work_unit.stage = "identity_maturity"
-                self.artifacts.save_identity_work_unit(work_unit)
-            except Exception as exc:
-                return self._fail_work_unit(
-                    work_unit,
-                    evidence,
-                    "identity_type_verification",
-                    "Identity type verification did not satisfy the contract: "
-                    f"{type(exc).__name__}: {exc}",
-                )
-
-        for identity_key, node in graph_nodes.items():
-            # The configured user's type is part of its stored identity, not a
-            # discoverable category. Semantic identity matching above selected it.
-            if (
-                node["identity_resolution"] == "existing"
-                and node["entity_id"] == "you"
-            ):
-                node["entity_type"] = planned["you"].entity_type
-                node["type_adjudication"] = "accepted"
-                node["type_reason"] = "Retained the configured user's registered type."
-                continue
-            proposal = type_proposals[identity_key]
-            verdict = type_verdicts[identity_key]
-            node["entity_type"] = proposal["entity_type"]
-            node["type_adjudication"] = (
-                "accepted"
-                if verdict["verdict"] == "supported"
-                and node["identity_resolution"] != "review_required"
-                else "review_required"
-            )
-            node["type_reason"] = verdict["reason"]
-            if (
-                verdict["verdict"] != "supported"
-                and node["identity_resolution"] == "existing"
-            ):
-                node["candidate_entity_ids"] = [str(node["entity_id"])]
-                node["entity_id"] = ""
-                node["identity_resolution"] = "review_required"
-
-        try:
-            pending_matches = dict(work_unit.pending_identity_decisions)
-            for identity_key, node in graph_nodes.items():
-                if (
-                    node["identity_resolution"] != "new"
-                    or node["type_adjudication"] != "accepted"
-                ):
-                    continue
-                pending_proposals = [
-                    decision
-                    for _, decision in sorted(pending_by_id.items())
-                    if decision.proposed_entity_type == node["entity_type"]
-                ]
-                if not pending_proposals:
-                    continue
-                pending_ids = [
-                    decision.decision_id for decision in pending_proposals
-                ]
-                if identity_key in pending_matches:
-                    output_model = pending_identity_matching_output_model(
-                        pending_ids
-                    )
-                    pending_match = output_model.model_validate({
-                        "decision": pending_matches[identity_key]
-                    }).model_dump()["decision"]
-                else:
-                    supporting = set(node["supporting_evidence"])
-                    node_aliases = {
-                        alias: item for alias, item in aliases.items()
-                        if alias in supporting
-                    }
-                    node_participants = {
-                        alias: item for alias, item in participants.items()
-                        if alias in supporting
-                    }
-                    pending_match = await self._match_pending_identity(
-                        node,
-                        pending_proposals,
-                        node_aliases,
-                        node_participants,
-                    )
-                    pending_matches[identity_key] = pending_match
-                    work_unit.pending_identity_decisions = pending_matches
-                    work_unit.stage = "pending_identity_matching"
-                    work_unit.updated_at = datetime.now().astimezone().isoformat()
-                    self.artifacts.save_identity_work_unit(work_unit)
-                if pending_match["resolution"] == "distinct":
-                    continue
-                node["identity_resolution"] = "review_required"
-                node["entity_id"] = ""
-                node["candidate_entity_ids"] = []
-                node["pending_identity_resolution"] = pending_match["resolution"]
-                node["pending_identity_decision_ids"] = (
-                    [pending_match["decision_id"]]
-                    if pending_match["resolution"] == "same_as_pending"
-                    else list(pending_match["candidate_decision_ids"])
-                )
-                node["identity_reason"] = pending_match["reason"]
-        except Exception as exc:
-            return self._fail_work_unit(
-                work_unit,
-                evidence,
-                "pending_identity_matching",
-                "Pending identity matching did not satisfy the contract: "
-                f"{type(exc).__name__}: {exc}",
-            )
-
-        rejected_existing_ids: dict[str, str] = {}
-        try:
-            for identity_key, node in graph_nodes.items():
-                if (
-                    node["identity_resolution"] != "existing"
-                    or node["type_adjudication"] != "accepted"
-                ):
-                    continue
-                proposed_entity_id = str(node["entity_id"])
-                if identity_key in work_unit.existing_identity_verdicts:
-                    identity_verdict = work_unit.existing_identity_verdicts[
-                        identity_key
-                    ]
-                else:
-                    candidates = sorted(
-                        (
-                            entity for entity in planned.values()
-                            if entity.status == "active"
-                            and entity.entity_type in (
-                                {"person", "you"}
-                                if node["entity_type"] in {"person", "you"}
-                                else {node["entity_type"]}
-                            )
-                        ),
-                        key=lambda entity: entity.entity_id,
-                    )
-                    identity_verdict = await self._verify_identity(
-                        node,
-                        candidates,
-                        aliases,
-                        participants,
-                    )
-                    work_unit.existing_identity_verdicts[
-                        identity_key
-                    ] = identity_verdict
-                    work_unit.stage = "existing_identity_verification"
-                    self.artifacts.save_identity_work_unit(work_unit)
-                if identity_verdict["verdict"] == "existing":
-                    node["identity_resolution"] = "existing"
-                    node["entity_id"] = identity_verdict["entity_id"]
-                    node["entity_type"] = planned[node["entity_id"]].entity_type
-                    node["candidate_entity_ids"] = []
-                    node["identity_reason"] = identity_verdict["reason"]
-                    continue
-                node["entity_id"] = ""
-                node["identity_reason"] = identity_verdict["reason"]
-                if identity_verdict["verdict"] == "review_required":
-                    node["identity_resolution"] = "review_required"
-                    node["candidate_entity_ids"] = identity_verdict[
-                        "candidate_entity_ids"
-                    ]
-                    node["type_adjudication"] = "review_required"
-                else:
-                    proposed_entity = planned[proposed_entity_id]
-                    if proposed_entity.entity_type == node["entity_type"]:
-                        # Two independent identity decisions disagree about a
-                        # same-type canonical candidate. That is unresolved
-                        # identity, not evidence authorizing a duplicate.
-                        node["identity_resolution"] = "review_required"
-                        node["candidate_entity_ids"] = [proposed_entity_id]
-                        node["type_adjudication"] = "review_required"
-                    else:
-                        # The initial untyped match selected an entity whose
-                        # shape conflicts with the independently verified type.
-                        # A distinct verdict over the correctly typed registry
-                        # therefore supports a genuinely new identity.
-                        node["identity_resolution"] = "new"
-                        node["candidate_entity_ids"] = []
-                        rejected_existing_ids[identity_key] = proposed_entity_id
-        except Exception as exc:
-            return self._fail_work_unit(
-                work_unit,
-                evidence,
-                "existing_identity_verification",
-                "Existing identity verification did not satisfy the contract: "
-                f"{type(exc).__name__}: {exc}",
-            )
-
-        try:
-            for identity_key, node in graph_nodes.items():
-                if (
-                    node["identity_resolution"] != "new"
-                    or node["type_adjudication"] != "accepted"
-                ):
-                    continue
-                if identity_key in work_unit.new_identity_verdicts:
-                    identity_verdict = work_unit.new_identity_verdicts[identity_key]
-                else:
-                    candidates = [
-                        entity for entity in planned.values()
-                        if entity.status == "active"
-                        and entity.entity_type in (
-                            {"person", "you"}
-                            if node["entity_type"] in {"person", "you"}
-                            else {node["entity_type"]}
-                        )
-                        and entity.entity_id != rejected_existing_ids.get(identity_key)
-                    ]
-                    identity_verdict = await self._verify_identity(
-                        node,
-                        candidates,
-                        aliases,
-                        participants,
-                    )
-                    work_unit.new_identity_verdicts[identity_key] = identity_verdict
-                    work_unit.stage = "new_identity_verification"
-                    self.artifacts.save_identity_work_unit(work_unit)
-                if identity_verdict["verdict"] == "existing":
-                    node["identity_resolution"] = "existing"
-                    node["entity_id"] = identity_verdict["entity_id"]
-                    node["entity_type"] = planned[node["entity_id"]].entity_type
-                    node["candidate_entity_ids"] = []
-                elif identity_verdict["verdict"] == "review_required":
-                    node["identity_resolution"] = "review_required"
-                    node["entity_id"] = ""
-                    node["candidate_entity_ids"] = identity_verdict[
-                        "candidate_entity_ids"
-                    ]
-                    node["type_adjudication"] = "review_required"
-                node["identity_reason"] = identity_verdict["reason"]
-        except Exception as exc:
-            return self._fail_work_unit(
-                work_unit,
-                evidence,
-                "new_identity_verification",
-                "New identity verification did not satisfy the contract: "
-                f"{type(exc).__name__}: {exc}",
-            )
-
-        node_types = {
-            node_id: str(node["entity_type"])
-            for node_id, node in graph_nodes.items()
-        }
-        existing_materialized_nodes = {
-            node_id
-            for node_id, node in graph_nodes.items()
-            if node["identity_resolution"] == "existing"
-            and (entity := planned.get(str(node["entity_id"]))) is not None
-            and entity.materialization_state == "materialized"
-        }
-        multi_episode_nodes = {
-            node_id
-            for node_id, node in graph_nodes.items()
-            if len({
-                aliases[alias].source.source_id
-                for alias in node["supporting_evidence"]
-                if alias in aliases
-            }) > 1
-        }
-        direct_encounter_nodes = {
-            node_id
-            for node_id, node in graph_nodes.items()
-            if node["entity_type"] == "person" and node["participant_evidence"]
-        }
-        allowed_maturity_bases = {
-            node_id: (
-                ("multiple_episodes",)
-                if node_id in multi_episode_nodes
-                else (
-                    ("direct_encounter",)
-                    if node_id in direct_encounter_nodes
-                    else ("explicit_prior_history",)
-                )
-            )
-            for node_id in graph_nodes
-            if node_id not in existing_materialized_nodes
-        }
-        fixed_maturity_decisions = {
-            node_id: {
-                "admission": "materialized",
-                "basis": {"continuity_basis": EXISTING_MATERIALIZED_BASIS},
-                "confidence": 1.0,
-                "reason": "The matched canonical identity already has a visible page.",
-            }
-            for node_id in existing_materialized_nodes
-        }
-        try:
-            if work_unit.maturity_decisions:
-                maturity_decisions = work_unit.maturity_decisions
-            else:
-                proposed_maturity = {}
-                if allowed_maturity_bases or not existing_materialized_nodes:
-                    maturity_model = identity_maturity_output_model(
-                        allowed_maturity_bases, aliases
-                    )
-                    system, user = prompts.identity_maturity_prompt(
-                        self.formatter.format_subject_graph(
-                            {
-                                node_id: graph_nodes[node_id]
-                                for node_id in allowed_maturity_bases
-                            },
-                            [],
-                        ),
-                        self.formatter.format_evidence(aliases, participants),
-                    )
-                    response = await self.llm.call_structured(
-                        system,
-                        user,
-                        maturity_model,
-                        num_predict=4096,
-                        debug_label="dream-identity-maturity",
-                    )
-                    proposed_maturity = maturity_model.model_validate(
-                        response
-                    ).model_dump()["decisions"]
-                maturity_decisions = {
-                    **fixed_maturity_decisions,
-                    **proposed_maturity,
-                }
-            work_unit.maturity_decisions = maturity_decisions
-            work_unit.stage = "identity_maturity_verification"
-            self.artifacts.save_identity_work_unit(work_unit)
-        except Exception as exc:
-            return self._fail_work_unit(
-                work_unit,
-                evidence,
-                "identity_maturity",
-                "Identity maturity response did not satisfy the contract: "
-                f"{type(exc).__name__}: {exc}",
-            )
-        explicit_nodes = {
-            node_id
-            for node_id, decision in maturity_decisions.items()
-            if decision["admission"] == "materialized"
-            and decision["basis"]["continuity_basis"]
-            == "explicit_prior_history"
-        }
-        maturity_verification_nodes = {
-            node_id: graph_nodes[node_id]
-            for node_id in allowed_maturity_bases
-        }
-        fixed_maturity_verdicts = {
-            node_id: {
-                "verdict": "not_required",
-                "reason": "Existing materialized state is authoritative.",
-            }
-            for node_id in existing_materialized_nodes
-        }
-        try:
-            if work_unit.maturity_verdicts:
-                maturity_verdicts = work_unit.maturity_verdicts
-            else:
-                proposed_verdicts = {}
-                if maturity_verification_nodes or not existing_materialized_nodes:
-                    verification_model = identity_maturity_verification_output_model(
-                        explicit_nodes, maturity_verification_nodes
-                    )
-                    system, user = prompts.identity_maturity_verification_prompt(
-                        self.formatter.format_maturity_decisions({
-                            node_id: maturity_decisions[node_id]
-                            for node_id in maturity_verification_nodes
-                        }),
-                        self.formatter.format_evidence(aliases, participants),
-                    )
-                    response = await self.llm.call_structured(
-                        system,
-                        user,
-                        verification_model,
-                        num_predict=4096,
-                        debug_label="dream-identity-maturity-verification",
-                    )
-                    proposed_verdicts = verification_model.model_validate(
-                        response
-                    ).model_dump()["decisions"]
-                maturity_verdicts = {
-                    **fixed_maturity_verdicts,
-                    **proposed_verdicts,
-                }
-            work_unit.maturity_verdicts = maturity_verdicts
-            work_unit.stage = "entity_plan"
-            self.artifacts.save_identity_work_unit(work_unit)
-        except Exception as exc:
-            return self._fail_work_unit(
-                work_unit,
-                evidence,
-                "identity_maturity_verification",
-                "Identity maturity verification did not satisfy the contract: "
-                f"{type(exc).__name__}: {exc}",
-            )
-        materialization_bases = {
-            node_id: (str(decision["basis"]["continuity_basis"]),)
-            for node_id, decision in maturity_decisions.items()
-            if decision["admission"] == "materialized"
-            and (
-                node_id not in explicit_nodes
-                or maturity_verdicts[node_id]["verdict"] == "supported"
-            )
-        }
-        maturity_review_required_nodes = {
-            node_id
-            for node_id in explicit_nodes
-            if node_types[node_id] in {"project", "series"}
-            and maturity_verdicts[node_id]["verdict"] == "supported"
-            and not any(
-                entity.entity_type == node_types[node_id]
-                and entity.materialization_state == "materialized"
-                for entity in planned.values()
-            )
-        }
-        try:
-            matched_entity_ids = {
-                node_id: node["entity_id"]
-                for node_id, node in graph_nodes.items()
-                if node["identity_resolution"] == "existing"
-            }
-            entity_model = entity_plan_output_model(
-                node_types,
-                {alias: role for alias, (_, _, role) in participants.items()},
-                registry_types,
-                matched_entity_ids,
-                materialization_bases,
-                {
-                    node_id
-                    for node_id, node in graph_nodes.items()
-                    if node["type_adjudication"] == "review_required"
-                    or node["identity_resolution"] == "review_required"
-                } | maturity_review_required_nodes,
-            )
             if work_unit.entity_plan:
-                entity_plan = entity_model.model_validate(
-                    work_unit.entity_plan
-                ).model_dump()
+                plan = schema.model_validate(work_unit.entity_plan).model_dump()
             else:
-                system, user = prompts.entity_plan_prompt(
+                system, user = identity_plan_prompt(
                     self.formatter.entity_planning_catalog(planned.values()),
-                    self.formatter.format_subject_graph(graph_nodes, []),
-                    self.formatter.format_maturity_decisions(
-                        maturity_decisions,
-                        maturity_verdicts,
-                    ),
                     self.formatter.format_evidence(aliases, participants),
                     self.formatter.identity_review_catalog(aliases),
+                    self.formatter.format_pending_identity_proposals(pending),
+                    declared_user_bindings(participants),
                 )
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    entity_model,
-                    num_predict=8192,
-                    debug_label="dream-entity-plan",
-                )
-                entity_plan = entity_model.model_validate(response).model_dump()
-            entity_decisions = entity_plan["decisions"]
-            if set(entity_decisions) != set(graph_nodes):
-                raise ValueError("Entity plan did not cover exact census nodes")
-            if set(entity_plan["participants"]) != set(participants):
-                raise ValueError("Entity plan did not resolve exact participants")
-            for node_id, decision in entity_decisions.items():
-                parent = str(decision["parent_entity"])
-                if parent in graph_nodes:
-                    parent_decision = entity_decisions[parent]
-                    if (
-                        parent_decision["adjudication"] != "accepted"
-                        or parent_decision["scope"]
-                        not in {"materialized", "provisional"}
-                    ):
-                        raise ValueError(
-                            "A contained entity requires an accepted independent parent"
-                        )
-            for resolution in entity_plan["participants"].values():
-                entity_ref = str(resolution["entity"])
-                if entity_ref == "you":
-                    continue
-                existing = planned.get(entity_ref)
-                if existing is not None and existing.entity_type == "person":
-                    continue
-                if (
-                    entity_ref not in graph_nodes
-                    or graph_nodes[entity_ref]["entity_type"] != "person"
-                ):
-                    raise ValueError("Participant did not resolve to a Person node")
-            work_unit.entity_plan = entity_plan
+                plan = schema.model_validate(await self.llm.call_structured(
+                    system, user, schema, num_predict=8192, debug_label="dream-identity-plan",
+                )).model_dump()
+            # Explicit human identity references are authoritative exact-ID constraints.
+            for node in planned_subjects(plan):
+                reviewed = {
+                    ref.entity_id for alias in node["supporting_evidence"] if alias in aliases
+                    for ref in self.artifacts.list_entity_references(
+                        claim_id=aliases[alias].claim.claim_id, status="active",
+                    ) if ref.role == "identity_subject" and ref.origin == "manual" and ref.entity_id
+                }
+                if reviewed and (node["resolution"] != "existing" or reviewed != {node["entity_id"]}):
+                    raise ValueError("Identity plan conflicts with an explicit human identity decision")
+            work_unit.entity_plan = plan
             work_unit.stage = "claim_routing"
             self.artifacts.save_identity_work_unit(work_unit)
         except Exception as exc:
-            return self._fail_work_unit(
-                work_unit,
-                evidence,
-                "entity_plan",
-                "Entity plan response did not satisfy the contract: "
-                f"{type(exc).__name__}: {exc}",
-            )
+            return self._fail_work_unit(work_unit, evidence, "identity_plan",
+                                        f"Identity plan failed: {type(exc).__name__}: {exc}")
 
-        graph_edges = [
-            {
-                "source_node": node_id,
-                "target_node": decision["parent_entity"],
-                "relation": (
-                    "occurrence_of"
-                    if decision["scope"] == "occurrence"
-                    else "component_of"
-                ),
-                "supporting_evidence": graph_nodes[node_id]["supporting_evidence"],
-            }
-            for node_id, decision in entity_decisions.items()
-            if decision["scope"] in {"component", "occurrence"}
-        ]
-        graph_plan = {
-            "nodes": node_plan["nodes"],
-            "edges": graph_edges,
-            "participants": entity_plan["participants"],
-        }
-
-        candidate_entities: dict[str, EntityRecord] = {}
-        candidate_support: dict[str, tuple[str, ...]] = {}
-        identity_blockers_by_alias: dict[str, list[str]] = {}
-        reused_pending_decisions: dict[str, EntityResolutionDecision] = {}
-        now = datetime.now().astimezone().isoformat()
-        for node_id, node in graph_nodes.items():
-            decision = entity_decisions[node_id]
-            support = tuple(
-                value for value in dict.fromkeys(node["supporting_evidence"])
-                if value in aliases
-            )
-            participant_alias_support = tuple(
-                value for value in dict.fromkeys(node["supporting_evidence"])
-                if value in participants
-            )
-            supporting = [aliases[value] for value in support]
-            participant_support = [
-                participants[value]
-                for value in participant_alias_support
-            ]
-            confidence = float(decision["confidence"])
-            accepted = decision["adjudication"] == "accepted"
-            scope = str(decision["scope"])
-            scope_definition = subject_scope_definition(scope)
-            page_state = scope_definition.page_state
-            entity: EntityRecord | None = None
-            if accepted and decision["entity_id"]:
-                entity = planned[str(decision["entity_id"])]
-                before = (
-                    entity.title,
-                    tuple(entity.aliases),
-                    entity.materialization_state,
-                )
-                if accepted:
-                    previous_title = entity.title
-                    entity.title = str(node["title"])
-                    entity.aliases = sorted({
-                        *entity.aliases,
-                        *[str(value) for value in node["aliases"]],
-                        *([previous_title] if previous_title != entity.title else []),
-                    })
-                    if page_state == "materialized":
-                        entity.materialization_state = "materialized"
-                    entity.updated_at = now
-                    entity.__post_init__()
-                    after = (
-                        entity.title,
-                        tuple(entity.aliases),
-                        entity.materialization_state,
+        resolved = []
+        blockers: dict[str, list[str]] = {}
+        for node in planned_subjects(plan):
+            support = [aliases[a] for a in node["supporting_evidence"] if a in aliases]
+            participant_support = [participants[p] for p in node["participant_evidence"]]
+            entity = None
+            if node["resolution"] == "existing":
+                # Never mutate registry objects in place before the build commit.
+                entity = replace(planned[node["entity_id"]])
+                entity.aliases = sorted(set(entity.aliases + node["aliases"]))
+                if entity.entity_id != "you":
+                    entity.aliases = sorted(set(entity.aliases + node["aliases"] +
+                                                ([entity.title] if entity.title != node["title"] else [])))
+                    entity.title = node["title"]
+                entity.updated_at = now
+                entity.__post_init__()
+            elif node["resolution"] == "new":
+                allocated_id = work_unit.allocated_entity_ids.get(node["node_id"])
+                if allocated_id in planned:
+                    entity = replace(planned[allocated_id])
+                else:
+                    entity = self._planned_entity(
+                        node["entity_type"], node["title"], planned.values(), now,
+                        aliases=node["aliases"],
+                        materialization_state="provisional",
                     )
-                    if after != before:
-                        result.new_entities.append(entity)
-            elif (
-                accepted
-                and node["identity_resolution"] == "new"
-                and scope_definition.persisted_scope == "independent"
-            ):
-                entity = self._planned_entity(
-                    node["entity_type"],
-                    node["title"],
-                    planned.values(),
-                    now,
-                    aliases=node["aliases"],
-                    materialization_state=page_state,
-                )
+                    work_unit.allocated_entity_ids[node["node_id"]] = entity.entity_id
+            if entity:
                 planned[entity.entity_id] = entity
                 result.new_entities.append(entity)
-            if entity is not None:
-                candidate_entities[node_id] = entity
-                candidate_support[entity.entity_id] = support
-            supporting_claim_ids = [item.claim.claim_id for item in supporting]
-            supporting_source_ids = [
-                *[item.source.source_id for item in supporting],
-                *[source.source_id for source, _, _ in participant_support],
-            ]
-            supporting_segment_ids = [
-                *[
-                    segment_id
-                    for item in supporting
-                    for provenance in item.claim.provenance
-                    for segment_id in provenance.segment_ids
-                ],
-                *[
-                    segment.segment_id
-                    for source, surface, _ in participant_support
-                    for segment in source.segments
-                    if str(segment.speaker or "").strip() == surface
-                ],
-            ]
-            parent_ref = str(decision["parent_entity"])
-            parent_entity = candidate_entities.get(parent_ref) or planned.get(parent_ref)
-            pending_ids = list(node.get("pending_identity_decision_ids", []))
-            if pending_ids:
-                for alias in support:
-                    identity_blockers_by_alias.setdefault(alias, []).extend(
-                        pending_ids
-                    )
-                if node.get("pending_identity_resolution") == "same_as_pending":
-                    pending_id = pending_ids[0]
-                    identity_decision = reused_pending_decisions.get(pending_id)
-                    if identity_decision is None:
-                        identity_decision = pending_by_id[pending_id]
-                    identity_decision.source_ids = sorted({
-                        *identity_decision.source_ids, *supporting_source_ids
-                    })
-                    identity_decision.supporting_claim_ids = sorted({
-                        *identity_decision.supporting_claim_ids,
-                        *supporting_claim_ids,
-                    })
-                    identity_decision.supporting_segment_ids = sorted({
-                        *identity_decision.supporting_segment_ids,
-                        *supporting_segment_ids,
-                    })
-                    identity_decision.proposed_aliases = sorted({
-                        *identity_decision.proposed_aliases,
-                        *[str(value) for value in node["aliases"]],
-                    })
-                    reused_pending_decisions[pending_id] = identity_decision
-            else:
-                identity_decision = EntityResolutionDecision(
-                    decision_id=f"identity-{uuid.uuid4().hex[:12]}",
-                    decision_type="entity_creation",
-                    entity_id=entity.entity_id if entity else None,
-                    proposed_entity_type=str(node["entity_type"]),
-                    proposed_title=str(node["title"]),
-                    source_ids=supporting_source_ids,
-                    supporting_claim_ids=supporting_claim_ids,
-                    identity_evidence_claim_ids=supporting_claim_ids,
-                    supporting_segment_ids=supporting_segment_ids,
-                    confidence=confidence,
-                    reason=str(decision["reason"]),
-                    review_state=str(decision["adjudication"]),
-                    dream_run_id=dream_run_id,
-                    created_at=now,
-                    proposed_scope=scope_definition.persisted_scope,
-                    proposed_parent_entity_id=(
-                        parent_entity.entity_id if parent_entity else None
-                    ),
-                    proposed_page_state=page_state,
-                    proposed_aliases=[str(value) for value in node["aliases"]],
-                    proposed_type_reason=str(node["type_reason"]),
-                )
-                result.entity_decisions.append(identity_decision)
-                if (
-                    identity_decision.review_state == "review_required"
-                    or identity_decision.proposed_page_state == "provisional"
-                ):
-                    for alias in support:
-                        identity_blockers_by_alias.setdefault(alias, []).append(
-                            identity_decision.decision_id
-                        )
-            maturity = maturity_decisions[node_id]
-            verdict = maturity_verdicts[node_id]
-            result.maturity_assessments.append(IdentityMaturityAssessment(
-                assessment_id=f"maturity-{uuid.uuid4().hex[:12]}",
-                dream_run_id=dream_run_id,
-                identity_key=node_id,
-                source_node_ids=list(node["source_node_ids"]),
-                proposed_title=str(node["title"]),
-                proposed_entity_type=str(node["entity_type"]),
-                supporting_source_ids=supporting_source_ids,
-                supporting_claim_ids=supporting_claim_ids,
-                supporting_segment_ids=supporting_segment_ids,
-                proposal_admission=str(maturity["admission"]),
-                proposal_basis=dict(maturity.get("basis") or {}),
-                proposal_reason=str(maturity["reason"]),
-                proposal_confidence=float(maturity["confidence"]),
-                verifier_verdict=str(verdict["verdict"]),
-                verifier_reason=str(verdict["reason"]),
-                effective_admission=(
-                    "review_required"
-                    if decision["adjudication"] == "review_required"
-                    else page_state
-                ),
-                created_at=now,
+            decision = EntityResolutionDecision(
+                decision_id=f"identity-{uuid.uuid4().hex[:12]}", decision_type="entity_creation",
                 entity_id=entity.entity_id if entity else None,
-            ))
-
-        result.entity_decisions.extend(reused_pending_decisions.values())
-
-        result.encounters = self.resolution.participant_encounters(
-            participants,
-            graph_plan["participants"],
-            planned,
-            candidate_entities,
-        )
-        for encounter in result.encounters:
-            encountered = planned.get(encounter.entity_id)
-            if encountered is not None:
-                encountered.materialization_state = "materialized"
-        result.entity_decisions.extend(self.resolution.participant_decisions(
-            participants,
-            graph_plan["participants"],
-            planned,
-            candidate_entities,
-            dream_run_id,
-            now,
-        ))
-
-        routable_entity_types = {
-            entity.entity_id: entity.entity_type
-            for entity in planned.values()
-            if entity.status == "active"
-            and entity.materialization_state == "materialized"
-        }
-        resolved_plan = self.formatter.format_resolved_entity_plan(
-            graph_nodes,
-            entity_decisions,
-            candidate_entities,
-            planned,
-            entity_plan["participants"],
-        )
-        review_required_aliases = {
-            alias
-            for node_id, decision in entity_decisions.items()
-            if decision["adjudication"] == "review_required"
-            for alias in graph_nodes[node_id]["supporting_evidence"]
-            if alias in aliases
-        }
-        provisional_aliases = {
-            alias
-            for node_id, decision in entity_decisions.items()
-            if decision["adjudication"] == "accepted"
-            and decision["scope"] == "provisional"
-            for alias in graph_nodes[node_id]["supporting_evidence"]
-            if alias in aliases
-        }
-        deferred_identity_aliases = review_required_aliases | provisional_aliases
-        routing_decisions: dict[str, dict] = {
-            alias: {
-                "route_kind": "deferred",
-                "identity_blocker_ids": identity_blockers_by_alias.get(alias, []),
-                "confidence": 1.0,
-                "reason": (
-                    "A supporting identity decision requires user review."
-                    if alias in review_required_aliases
-                    else "The supporting independent identity is still provisional."
-                ),
-            }
-            for alias in deferred_identity_aliases
-        }
-        routable_aliases = {
-            alias: item for alias, item in aliases.items()
-            if alias not in deferred_identity_aliases
-        }
-        for batch_aliases in self._alias_batches(routable_aliases):
-            batch_participants = self.resolution.participants_for_evidence(
-                batch_aliases, participants
+                proposed_entity_type=node["entity_type"], proposed_title=node["title"],
+                proposed_aliases=node["aliases"], proposed_scope="independent",
+                proposed_page_state=entity.materialization_state if entity else "provisional",
+                source_ids=sorted({*[s.source.source_id for s in support],
+                                   *[s.source_id for s, _, _ in participant_support]}),
+                supporting_claim_ids=[s.claim.claim_id for s in support],
+                identity_evidence_claim_ids=[s.claim.claim_id for s in support],
+                supporting_segment_ids=sorted({
+                    *[seg for s in support for p in s.claim.provenance for seg in p.segment_ids],
+                    *[seg.segment_id for s, name, role in participant_support for seg in s.segments
+                      if seg.speaker == name and seg.role == role],
+                }),
+                confidence=node["confidence"], reason=node["reason"],
+                review_state="accepted" if entity else "review_required",
+                dream_run_id=dream_run_id, created_at=now,
             )
-            routing_model = claim_routing_output_model(
-                batch_aliases,
-                routable_entity_types,
-            )
-            system, user = prompts.claim_routing_prompt(
-                self.formatter.entity_catalog(
-                    (
-                        entity for entity in planned.values()
-                        if entity.entity_id in routable_entity_types
-                    ),
-                    include_sections=False,
-                ),
-                resolved_plan,
-                self.formatter.format_evidence(batch_aliases, batch_participants),
+            result.entity_decisions.append(decision)
+            if entity is None:
+                for alias in node["supporting_evidence"]:
+                    if alias in aliases:
+                        blockers.setdefault(alias, []).append(decision.decision_id)
+                # A participant binding covers that speaker's exact cited segments.
+                participant_segments = set(decision.supporting_segment_ids)
+                for alias, item in aliases.items():
+                    if any(participant_segments.intersection(p.segment_ids) for p in item.claim.provenance):
+                        blockers.setdefault(alias, []).append(decision.decision_id)
+            resolved.append({
+                **node, "entity_id": entity.entity_id if entity else None,
+                "participant_bindings": node["participant_evidence"],
+            })
+
+        routable = {e.entity_id: e.entity_type for e in planned.values() if e.status == "active"}
+        routings = {a: {"route_kind": "deferred", "confidence": 1.0,
+                       "reason": "A supporting identity requires review."} for a in blockers}
+        for batch in self._alias_batches({a: item for a, item in aliases.items() if a not in blockers}):
+            routing_model = page_plan_model(batch, routable)
+            system, user = page_plan_prompt(
+                self.formatter.entity_catalog(planned.values(), include_sections=True),
+                json.dumps(resolved, ensure_ascii=False),
+                self.formatter.format_evidence(batch, self.resolution.participants_for_evidence(batch, participants)),
             )
             try:
-                response = await self.llm.call_structured(
-                    system,
-                    user,
-                    routing_model,
-                    num_predict=8192,
-                    debug_label="dream-claim-routing",
-                )
-                batch_decisions = routing_model.model_validate(
-                    response
-                ).model_dump()["decisions"]
-                routing_decisions.update(batch_decisions)
+                routings.update(routing_model.model_validate(await self.llm.call_structured(
+                    system, user, routing_model, num_predict=8192, debug_label="dream-claim-routing",
+                )).model_dump()["decisions"])
             except Exception as exc:
-                result.failures.extend(
-                    self._failure(
-                        item,
-                        "Claim routing response did not satisfy the contract: "
-                        f"{type(exc).__name__}: {exc}",
-                    )
-                    for item in batch_aliases.values()
-                )
-                continue
-
-        for alias, item in aliases.items():
-            if alias not in routing_decisions:
-                continue
-            routing = routing_decisions[alias]
-            route_kind = str(routing["route_kind"])
-            if route_kind == "deferred":
-                normalized = {
-                    "disposition": "deferred",
-                    "owner_entity": "",
-                    "linked_entities": [],
-                    "subject_entity": "",
-                    "object_entities": [],
-                    "contextual_entities": [],
-                    "relationship_kind": "none",
-                    "supporting_claims": [],
-                    "identity_blocker_ids": routing.get(
-                        "identity_blocker_ids", []
-                    ),
-                    "confidence": routing["confidence"],
-                    "reason": routing["reason"],
-                }
-            elif route_kind == "project_role":
-                normalized = {
-                    "disposition": "canonical",
-                    "owner_entity": routing["owner_entity"],
-                    "linked_entities": [routing["project_entity"]],
-                    "subject_entity": routing["owner_entity"],
-                    "object_entities": [routing["project_entity"]],
-                    "contextual_entities": [],
-                    "relationship_kind": "project_role",
-                    "supporting_claims": [],
-                    "identity_blocker_ids": [],
-                    "confidence": routing["confidence"],
-                    "reason": routing["reason"],
-                }
-            else:
-                normalized = {
-                    "disposition": "canonical",
-                    "owner_entity": routing["owner_entity"],
-                    "linked_entities": [],
-                    "subject_entity": routing["subject_entity"],
-                    "object_entities": routing["object_entities"],
-                    "contextual_entities": routing["contextual_entities"],
-                    "relationship_kind": routing["relationship_kind"],
-                    "supporting_claims": [],
-                    "identity_blocker_ids": [],
-                    "confidence": routing["confidence"],
-                    "reason": routing["reason"],
-                }
-            result.routes.append(self._route_decision(
-                alias,
-                item,
-                normalized,
-                aliases,
-                planned,
-                candidate_entities,
-                candidate_support,
-            ))
-        owned_entity_ids = {
-            str(route.owner_entity_id)
-            for route in result.routes
-            if route.placed and route.owner_entity_id
-        }
-        encountered_entity_ids = {
-            encounter.entity_id for encounter in result.encounters
-        }
-        for entity in candidate_entities.values():
-            if (
-                entity.materialization_state == "materialized"
-                and entity.entity_id not in initially_materialized
-                and entity.entity_id not in owned_entity_ids
-                and entity.entity_id not in encountered_entity_ids
-            ):
-                entity.materialization_state = "provisional"
+                result.failures.extend(self._failure(item, f"Claim routing failed: {exc}") for item in batch.values())
+        for alias, routing in routings.items():
+            kind = routing["route_kind"]
+            destinations = {p["entity_id"]: p["section_key"] for p in routing.get("pages", [])}
+            normalized = {
+                "disposition": "deferred" if kind == "deferred" else "canonical",
+                "owner_entity": routing.get("owner_entity", ""),
+                "linked_entities": list(destinations),
+                "subject_entity": "",
+                "object_entities": [], "contextual_entities": [], "relationship_kind": "none",
+                "page_sections": destinations,
+                "supporting_claims": [], "identity_blocker_ids": blockers.get(alias, []),
+                "confidence": routing["confidence"],
+                "reason": routing["reason"] + "\n" + "\n".join(
+                    f"Page {p['entity_id']}: {p['reason']}" for p in routing.get("pages", [])
+                ),
+            }
+            route = self._route_decision(alias, aliases[alias], normalized, aliases, planned, {}, {})
+            result.routes.append(route)
+            if route.placed:
+                for entity_id in route.page_sections:
+                    entity = planned[entity_id]
+                    if entity.materialization_state != "materialized":
+                        entity.materialization_state = "materialized"
+                        if not any(e.entity_id == entity_id for e in result.new_entities):
+                            result.new_entities.append(entity)
         result.entity_references = self.resolution.claim_entity_references(
-            aliases,
-            result.routes,
-            planned,
-            dream_run_id,
-            now,
+            aliases, result.routes, planned, dream_run_id, now,
         )
         work_unit.status = "failed" if result.failures else "complete"
         work_unit.stage = "claim_routing" if result.failures else "complete"
-        work_unit.last_error = (
-            result.failures[0].reason if result.failures else None
-        )
-        work_unit.updated_at = datetime.now().astimezone().isoformat()
+        work_unit.last_error = result.failures[0].reason if result.failures else None
+        work_unit.updated_at = now
         self.artifacts.save_identity_work_unit(work_unit)
         return result
-
-    @staticmethod
-    def _accumulate_identity_decision(
-        groups: list[dict], decision: dict
-    ) -> list[dict]:
-        accumulated = [dict(group) for group in groups]
-        resolution = str(decision["resolution"])
-        target: dict | None = None
-        if resolution == "same_as_local":
-            target = next((
-                group for group in accumulated
-                if group["identity_key"] == decision["local_identity_key"]
-            ), None)
-            if target is None:
-                raise ValueError(
-                    "A local identity decision must reference an accumulated group"
-                )
-        elif resolution == "existing":
-            target = next((
-                group for group in accumulated
-                if group["resolution"] == "existing"
-                and group["entity_id"] == decision["entity_id"]
-            ), None)
-        if target is None:
-            if resolution == "same_as_local":
-                raise ValueError("Local identity target was not available")
-            target = {
-                "identity_key": f"I{len(accumulated) + 1:03d}",
-                "node_ids": [],
-                "preferred_title": decision["preferred_title"],
-                "aliases": [],
-                "confidence": decision["confidence"],
-                "reason": decision["reason"],
-                "resolution": resolution,
-                "entity_id": decision["entity_id"],
-                "candidate_entity_ids": list(
-                    decision["candidate_entity_ids"]
-                ),
-            }
-            accumulated.append(target)
-        target["node_ids"] = list(dict.fromkeys([
-            *target["node_ids"], decision["node_id"]
-        ]))
-        target["aliases"] = list(dict.fromkeys([
-            *target["aliases"], *decision["aliases"]
-        ]))
-        target["confidence"] = min(
-            float(target["confidence"]), float(decision["confidence"])
-        )
-        if len(target["node_ids"]) > 1:
-            target["reason"] = (
-                f"{target['reason']} {decision['node_id']}: {decision['reason']}"
-            )
-        return accumulated
 
     @staticmethod
     def _identity_units(
@@ -1379,7 +252,8 @@ class ClaimRouter:
         self, evidence: list[ClaimEvidence], dream_run_id: str
     ) -> IdentityWorkUnit:
         claim_ids = sorted(item.claim.claim_id for item in evidence)
-        digest = hashlib.sha256("\n".join(claim_ids).encode()).hexdigest()[:16]
+        # Cached plans belong to this decision contract, not the retired cascade.
+        digest = hashlib.sha256(("identity-page-placement-v1\n" + "\n".join(claim_ids)).encode()).hexdigest()[:16]
         unit_id = f"identity-work-{digest}"
         try:
             unit = self.artifacts.get_identity_work_unit(unit_id)
@@ -1390,149 +264,11 @@ class ClaimRouter:
                 source_ids=sorted({item.source.source_id for item in evidence}),
             )
         unit.dream_run_ids.append(dream_run_id)
+        if unit.status == "complete":
+            unit.entity_plan = {}
+            unit.allocated_entity_ids = {}
         unit.dream_run_ids = list(dict.fromkeys(unit.dream_run_ids))
         return unit
-
-    async def _match_pending_identity(
-        self,
-        node: dict,
-        proposals: list[EntityResolutionDecision],
-        aliases: dict[str, ClaimEvidence],
-        participants: dict[str, tuple],
-        chunk_size: int = 12,
-    ) -> dict:
-        decisions = []
-        for start in range(0, len(proposals), chunk_size):
-            chunk = proposals[start:start + chunk_size]
-            output_model = pending_identity_matching_output_model(
-                [proposal.decision_id for proposal in chunk]
-            )
-            system, user = prompts.pending_identity_matching_prompt(
-                self.formatter.format_identity_evidence(node),
-                self.formatter.format_evidence(aliases, participants),
-                self.formatter.format_pending_identity_proposals(chunk),
-            )
-            response = await self.llm.call_structured(
-                system,
-                user,
-                output_model,
-                num_predict=2048,
-                debug_label="dream-pending-identity-matching",
-            )
-            decisions.append(
-                output_model.model_validate(response).model_dump()["decision"]
-            )
-        same_ids = {
-            decision["decision_id"] for decision in decisions
-            if decision["resolution"] == "same_as_pending"
-        }
-        review_ids = {
-            decision_id for decision in decisions
-            if decision["resolution"] == "review_required"
-            for decision_id in decision["candidate_decision_ids"]
-        }
-        plausible = sorted(same_ids | review_ids)
-        confidence = min(float(item["confidence"]) for item in decisions)
-        reasons = " ".join(str(item["reason"]) for item in decisions)
-        if len(same_ids) == 1 and plausible == sorted(same_ids):
-            return {
-                "resolution": "same_as_pending",
-                "decision_id": next(iter(same_ids)),
-                "candidate_decision_ids": [],
-                "confidence": confidence,
-                "reason": reasons,
-            }
-        if plausible:
-            return {
-                "resolution": "review_required",
-                "decision_id": "",
-                "candidate_decision_ids": plausible,
-                "confidence": confidence,
-                "reason": reasons,
-            }
-        return {
-            "resolution": "distinct",
-            "decision_id": "",
-            "candidate_decision_ids": [],
-            "confidence": confidence,
-            "reason": reasons,
-        }
-
-    async def _verify_identity(
-        self,
-        node: dict,
-        candidates: list[EntityRecord],
-        aliases: dict[str, ClaimEvidence],
-        participants: dict[str, tuple],
-        chunk_size: int = 12,
-    ) -> dict:
-        if not candidates:
-            return {
-                "verdict": "distinct",
-                "entity_id": "",
-                "candidate_entity_ids": [],
-                "confidence": 1.0,
-                "reason": (
-                    "No active canonical identity has the fixed ontology type, so "
-                    "there is no existing identity candidate to duplicate."
-                ),
-            }
-        decisions = []
-        proposed = self.formatter.format_identity_evidence(node)
-        for start in range(0, len(candidates), chunk_size):
-            chunk = candidates[start:start + chunk_size]
-            candidate_ids = [entity.entity_id for entity in chunk]
-            output_model = new_identity_verification_output_model(candidate_ids)
-            system, user = prompts.new_identity_verification_prompt(
-                proposed,
-                self.formatter.entity_planning_catalog(chunk),
-                self.formatter.format_evidence(aliases, participants),
-            )
-            response = await self.llm.call_structured(
-                system,
-                user,
-                output_model,
-                num_predict=2048,
-                debug_label="dream-new-identity-verification",
-            )
-            decisions.append(
-                output_model.model_validate(response).model_dump()["decision"]
-            )
-        existing_ids = {
-            decision["entity_id"] for decision in decisions
-            if decision["verdict"] == "existing"
-        }
-        review_ids = {
-            entity_id for decision in decisions
-            if decision["verdict"] == "review_required"
-            for entity_id in decision["candidate_entity_ids"]
-        }
-        reasons = " ".join(decision["reason"] for decision in decisions)
-        confidence = min(float(decision["confidence"]) for decision in decisions)
-        if len(existing_ids) == 1 and not review_ids:
-            return {
-                "verdict": "existing",
-                "entity_id": next(iter(existing_ids)),
-                "candidate_entity_ids": [],
-                "confidence": confidence,
-                "reason": reasons,
-            }
-        plausible = sorted(existing_ids | review_ids)
-        if plausible:
-            return {
-                "verdict": "review_required",
-                "entity_id": "",
-                "candidate_entity_ids": plausible,
-                "confidence": confidence,
-                "reason": reasons,
-            }
-        return {
-            "verdict": "distinct",
-            "entity_id": "",
-            "candidate_entity_ids": [],
-            "confidence": confidence,
-            "reason": reasons,
-        }
 
     @staticmethod
     def _merge_result(target: RoutingResult, source: RoutingResult) -> None:
@@ -1608,7 +344,6 @@ class ClaimRouter:
         if (
             owner is None
             or owner.status != "active"
-            or owner.materialization_state != "materialized"
         ):
             return ClaimRoute(
                 item.claim.claim_id, None, None, (), item.raw_log_entry_id,
@@ -1636,7 +371,6 @@ class ClaimRouter:
             if (
                 linked_entity is None
                 or linked_entity.status != "active"
-                or linked_entity.materialization_state != "materialized"
             ):
                 return ClaimRoute(
                     item.claim.claim_id, None, None, (), item.raw_log_entry_id,
@@ -1647,25 +381,16 @@ class ClaimRouter:
             resolved_references[value] = linked_entity.entity_id
         linked.update(resolved_references[value] for value in endpoint_refs)
         linked.discard(owner.entity_id)
-        link_entities = [entities[value] for value in linked if value in entities]
         relationship_kind = str(decision.get("relationship_kind") or "none")
-        if relationship_kind == "project_role" and not self._valid_project_role_route(
-            owner, link_entities
-        ):
-            return ClaimRoute(
-                item.claim.claim_id, None, None, (), item.raw_log_entry_id,
-                "Project-role placement requires a Person or You owner and exactly one linked Project.",
-                "deferred", supporting_ids, float(decision["confidence"]),
-            )
         if item.claim.evidence_modality == "tool":
-            if owner.entity_type == "you":
+            if "you" in decision.get("page_sections", {}):
                 return ClaimRoute(
                     item.claim.claim_id, None, None, (), item.raw_log_entry_id,
                     "External evidence cannot automatically establish a personal fact on You.",
                     "deferred", supporting_ids, float(decision["confidence"]),
                 )
         return ClaimRoute(
-            item.claim.claim_id, owner.entity_id, None, tuple(sorted(linked)),
+            item.claim.claim_id, owner.entity_id, decision["page_sections"][owner.entity_id], tuple(sorted(linked)),
             item.raw_log_entry_id, str(decision["reason"]), "canonical",
             supporting_ids, float(decision["confidence"]),
             resolved_references.get(subject_ref) if subject_ref else None,
@@ -1674,6 +399,7 @@ class ClaimRouter:
                 resolved_references[value] for value in contextual_refs
             })),
             None if relationship_kind == "none" else relationship_kind,
+            page_sections=dict(decision["page_sections"]),
         )
 
     def _unresolved_identity_blockers(
@@ -1717,29 +443,6 @@ class ClaimRouter:
         items = list(aliases.items())
         for start in range(0, len(items), size):
             yield dict(items[start:start + size])
-
-    @staticmethod
-    def _user_evidence(item: ClaimEvidence) -> bool:
-        wanted = {
-            segment_id
-            for provenance in item.claim.provenance
-            for segment_id in provenance.segment_ids
-        }
-        return any(
-            segment.segment_id in wanted
-            and str(segment.role or segment.speaker or "").strip().lower() == "user"
-            for segment in item.source.segments
-        )
-
-    @staticmethod
-    def _valid_project_role_route(
-        owner: EntityRecord, links: Iterable[EntityRecord]
-    ) -> bool:
-        links = list(links)
-        return (
-            owner.entity_type in {"you", "person"}
-            and sum(entity.entity_type == "project" for entity in links) == 1
-        )
 
     @staticmethod
     def _planned_entity(
@@ -1809,4 +512,5 @@ def placement_from_route(route: ClaimRoute, *, now: str | None = None) -> ClaimP
         updated_at=timestamp,
         relationship_kind=route.relationship_kind,
         identity_blocker_ids=list(route.identity_blocker_ids),
+        page_sections=dict(route.page_sections),
     )

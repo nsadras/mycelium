@@ -46,6 +46,7 @@ class ClaimRoute:
     contextual_entity_ids: tuple[str, ...] = ()
     relationship_kind: str | None = None
     identity_blocker_ids: tuple[str, ...] = ()
+    page_sections: dict[str, str] = field(default_factory=dict)
 
     @property
     def placed(self) -> bool:

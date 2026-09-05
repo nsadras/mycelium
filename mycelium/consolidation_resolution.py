@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 
 from mycelium.artifacts import (
     ClaimEntityReference,
-    EntityEncounter,
     EntityRecord,
-    EntityResolutionDecision,
     SourceDocument,
 )
 from mycelium.consolidation_models import ClaimEvidence, ClaimRoute
@@ -57,105 +54,6 @@ class ResolutionArtifacts:
             f"P{index:03d}": occurrence
             for index, occurrence in enumerate(occurrences, start=1)
         }
-
-    @staticmethod
-    def participant_encounters(
-        occurrences: dict[str, tuple[SourceDocument, str, str | None]],
-        resolutions: dict[str, dict],
-        entities: dict[str, EntityRecord],
-        candidates: dict[str, EntityRecord],
-    ) -> list[EntityEncounter]:
-        created_at = datetime.now().astimezone().isoformat()
-        encounters: dict[str, EntityEncounter] = {}
-        for alias, (source, _, _) in occurrences.items():
-            resolution = resolutions[alias]
-            entity = candidates.get(resolution["entity"]) or entities.get(
-                resolution["entity"]
-            )
-            if entity is None or entity.entity_type != "person":
-                continue
-            title = str(source.metadata.get("title") or "").strip() or None
-            encounter_id = f"encounter-{entity.entity_id}-{source.source_id}"
-            encounters[encounter_id] = EntityEncounter(
-                encounter_id=encounter_id,
-                entity_id=entity.entity_id,
-                source_id=source.source_id,
-                raw_log_entry_id=source.raw_log_entry_id,
-                occurred_at=source.occurred_at,
-                title=title,
-                created_at=created_at,
-            )
-        return sorted(encounters.values(), key=lambda item: item.encounter_id)
-
-    @staticmethod
-    def participant_decisions(
-        occurrences: dict[str, tuple[SourceDocument, str, str | None]],
-        resolutions: dict[str, dict],
-        entities: dict[str, EntityRecord],
-        candidates: dict[str, EntityRecord],
-        dream_run_id: str,
-        created_at: str,
-    ) -> list[EntityResolutionDecision]:
-        decisions = []
-        for alias, (source, surface, _) in occurrences.items():
-            resolution = resolutions[alias]
-            entity = candidates.get(resolution["entity"]) or entities.get(
-                resolution["entity"]
-            )
-            confidence = float(resolution["confidence"])
-            if entity is None:
-                decisions.append(
-                    EntityResolutionDecision(
-                        decision_id=f"identity-{uuid.uuid4().hex[:12]}",
-                        decision_type="participant_resolution",
-                        entity_id=None,
-                        proposed_entity_type="person",
-                        proposed_title=surface,
-                        source_ids=[source.source_id],
-                        supporting_claim_ids=[],
-                        supporting_segment_ids=[
-                            segment.segment_id
-                            for segment in source.segments
-                            if str(segment.speaker or "").strip() == surface
-                        ],
-                        confidence=confidence,
-                        reason=(
-                            "Review required because the model referenced an undeclared "
-                            f"participant entity {resolution['entity']!r}. "
-                            f"{resolution['reason']}"
-                        ),
-                        review_state="review_required",
-                        dream_run_id=dream_run_id,
-                        created_at=created_at,
-                        participant_surface=surface,
-                    )
-                )
-                continue
-            decisions.append(
-                EntityResolutionDecision(
-                    decision_id=f"identity-{uuid.uuid4().hex[:12]}",
-                    decision_type="participant_resolution",
-                    entity_id=entity.entity_id,
-                    proposed_entity_type=entity.entity_type,
-                    proposed_title=entity.title,
-                    source_ids=[source.source_id],
-                    supporting_claim_ids=[],
-                    supporting_segment_ids=[
-                        segment.segment_id
-                        for segment in source.segments
-                        if str(segment.speaker or "").strip() == surface
-                    ],
-                    confidence=confidence,
-                    reason=str(resolution["reason"]),
-                    review_state=(
-                        "accepted" if confidence >= 0.7 else "review_required"
-                    ),
-                    dream_run_id=dream_run_id,
-                    created_at=created_at,
-                    participant_surface=surface,
-                )
-            )
-        return decisions
 
     @staticmethod
     def claim_entity_references(

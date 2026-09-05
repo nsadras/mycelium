@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from benchmarks.mycelium_bench.adapters import build_memory_system, run_async
-from benchmarks.mycelium_bench.locomo import run_locomo
+from benchmarks.mycelium_bench.locomo import run_locomo, run_locomo_wiki_baseline
 from benchmarks.mycelium_bench.mab import run_memoryagentbench
 
 
@@ -32,6 +32,8 @@ def main() -> None:
         help="Run the first N questions in each category as a balanced diagnostic panel.",
     )
     locomo.add_argument("--sample-index", type=int, default=None, help="Run one 1-based LoCoMo sample index.")
+    locomo.add_argument("--wiki-baseline", action="store_true", help="Build fresh per-session wiki snapshots without QA scoring.")
+    locomo.add_argument("--user-speaker", default=None, help="For wiki baseline only: exact speaker name to bind to the configured user.")
 
     mab = subparsers.add_parser("mab", help="Run MemoryAgentBench through its data/metric utilities.")
     add_common_args(mab)
@@ -59,6 +61,19 @@ def main() -> None:
     )
 
     if args.benchmark == "locomo":
+        if args.user_speaker and not args.wiki_baseline:
+            parser.error("--user-speaker requires --wiki-baseline")
+        if args.wiki_baseline:
+            if args.system != "mycelium":
+                parser.error("--wiki-baseline requires --system mycelium")
+            summary = run_async(run_locomo_wiki_baseline(
+                data_path=args.locomo_path, output_dir=output_dir, system=system,
+                sample_index=1 if args.sample_index is None else args.sample_index,
+                max_sessions=2 if args.max_sessions is None else args.max_sessions,
+                user_speaker=args.user_speaker,
+            ))
+            print(json.dumps(summary, indent=2, ensure_ascii=False))
+            return
         summary = run_async(
             run_locomo(
                 data_path=args.locomo_path,

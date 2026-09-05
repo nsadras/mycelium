@@ -380,6 +380,7 @@ class IdentityWorkUnit:
     maturity_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
     maturity_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
     entity_plan: dict[str, Any] = field(default_factory=dict)
+    allocated_entity_ids: dict[str, str] = field(default_factory=dict)
     last_error: str | None = None
     dream_run_ids: list[str] = field(default_factory=list)
     updated_at: str | None = None
@@ -422,8 +423,17 @@ class ClaimPlacement:
     updated_at: str
     relationship_kind: str | None = None
     identity_blocker_ids: list[str] = field(default_factory=list)
+    page_sections: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.page_sections:
+            if self.status != "placed" or self.owner_entity_id not in self.page_sections:
+                raise ValueError("Page destinations require a placed statement and its primary owner")
+            if any(not entity_id or not section for entity_id, section in self.page_sections.items()):
+                raise ValueError("Page destinations require exact entity and section IDs")
+            # Synthesis can regroup the primary presentation into a different section.
+            # Keep its page metadata aligned without changing secondary placements.
+            self.page_sections = {**self.page_sections, self.owner_entity_id: self.section_key}
         if self.status not in {"placed", "deferred"}:
             raise ValueError(f"Unsupported placement status: {self.status}")
         if self.status == "placed" and (not self.owner_entity_id or not self.section_key):

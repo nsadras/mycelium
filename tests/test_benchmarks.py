@@ -21,6 +21,7 @@ from benchmarks.mycelium_bench.locomo import (
     _record_retrieval_evidence,
     iter_locomo_sessions,
     run_locomo,
+    run_locomo_wiki_baseline,
     select_questions_per_category,
 )
 from benchmarks.mycelium_bench.scoring import locomo_score
@@ -100,6 +101,45 @@ def test_locomo_session_parser_orders_sessions():
         "session_2",
         "session_10",
     ]
+
+
+def test_locomo_user_binding_is_explicit_and_does_not_rewrite_dialogue():
+    sample = {"conversation": {"session_1": [
+        {"dia_id": "D1:1", "speaker": "A", "text": "My plan."},
+        {"dia_id": "D1:2", "speaker": "B", "text": "Your plan."},
+    ]}}
+    external = iter_locomo_sessions(sample)[0][2]
+    mapped = iter_locomo_sessions(sample, user_speaker="A")[0][2]
+    assert [m.role for m in external] == ["participant", "participant"]
+    assert [m.role for m in mapped] == ["user", "participant"]
+    assert [(m.content, m.speaker, m.message_id) for m in mapped] == [
+        (m.content, m.speaker, m.message_id) for m in external
+    ]
+
+
+@pytest.mark.asyncio
+async def test_wiki_baseline_captures_and_builds_each_session_without_qa(tmp_path, monkeypatch):
+    from mycelium.models import DreamReport
+    data = tmp_path / "input.json"
+    data.write_text(json.dumps([{"sample_id": "sample", "qa": [{"answer": "not source material"}], "conversation": {
+        "speaker_a": "A", "speaker_b": "B",
+        "session_1": [{"dia_id": "D1:1", "speaker": "A", "text": "First assertion."}],
+        "session_2": [{"dia_id": "D2:1", "speaker": "B", "text": "Second assertion."}],
+    }}]))
+    build = AsyncMock(return_value=SimpleNamespace(report=DreamReport(0, 0, 0)))
+    monkeypatch.setattr(Mycelium, "consolidate", build)
+    directory = tmp_path / "run"
+    system = MyceliumMemorySystem(run_dir=directory, qa_client=AsyncMock(), memory_model="test", ollama_url="http://localhost:11434")
+    manifest = await run_locomo_wiki_baseline(data_path=data, output_dir=directory, system=system, user_speaker="A")
+    assert build.await_count == 2
+    system.qa_client.answer.assert_not_awaited()
+    assert manifest["session_ids"] == ["session_1", "session_2"]
+    assert "qa" not in json.loads((directory / "input.json").read_text())
+    assert len(list((directory / "snapshots/session_1/artifacts/sources").glob("*.json"))) == 1
+    assert len(list((directory / "snapshots/session_2/artifacts/sources").glob("*.json"))) == 2
+    assert (directory / "snapshots/initial/wiki/you.md").exists()
+    with pytest.raises(ValueError, match="fresh"):
+        await run_locomo_wiki_baseline(data_path=data, output_dir=directory, system=system)
 
 
 def test_select_questions_per_category_preserves_source_indices():
@@ -610,7 +650,7 @@ async def test_mycelium_benchmark_adapter_surfaces_encode_failure_without_fallba
 
 
 @pytest.mark.asyncio
-async def test_mycelium_benchmark_leaves_segments_unspecified_for_transcript_ingestion(
+async def test_mycelium_benchmark_preserves_structured_source_roles(
     tmp_path,
 ):
     class FakeQa:
@@ -629,14 +669,17 @@ async def test_mycelium_benchmark_leaves_segments_unspecified_for_transcript_ing
     await system.memorize(
         [
             BenchmarkMessage(
-                role="user", content="Caroline researched adoption agencies."
+                role="user", speaker="Caroline", content="Caroline researched adoption agencies.", message_id="D1:1"
             )
         ]
     )
 
     source_input = system.mem.ingest_source.await_args.args[0]
     assert source_input.transcript
-    assert source_input.segments is None
+    assert source_input.segments[0].role == "user"
+    assert source_input.segments[0].speaker == "Caroline"
+    assert source_input.segments[0].metadata["source_label"] == "D1:1"
+    assert source_input.segments[0].content == "Caroline researched adoption agencies."
 
 
 @pytest.mark.asyncio

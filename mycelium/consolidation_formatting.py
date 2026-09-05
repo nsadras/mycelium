@@ -14,7 +14,6 @@ from mycelium.consolidation_models import ClaimEvidence
 from mycelium.ontology import (
     entity_type_prompt_catalog,
     section_prompt_catalog,
-    subject_scope_definition,
 )
 
 
@@ -88,41 +87,6 @@ class RoutingFormatter:
         )
         return "\n".join(lines) or "- none"
 
-    @staticmethod
-    def format_resolved_entity_plan(
-        nodes: dict[str, dict],
-        decisions: dict[str, dict],
-        candidates: dict[str, EntityRecord],
-        entities: dict[str, EntityRecord],
-        participants: dict[str, dict],
-    ) -> str:
-        lines = ["Subjects:"]
-        for node_id, node in nodes.items():
-            decision = decisions[node_id]
-            entity = candidates.get(node_id) or entities.get(str(decision["entity_id"]))
-            parent_ref = str(decision["parent_entity"])
-            parent = candidates.get(parent_ref) or entities.get(parent_ref)
-            scope = str(decision["scope"])
-            page_state = subject_scope_definition(scope).page_state
-            lines.append(
-                f"- {node_id}: type={node['entity_type']}; "
-                f"evidence_title={node['title']!r}; "
-                f"stable_id={entity.entity_id if entity else 'no_page'}; "
-                f"stable_title={entity.title if entity else 'none'}; "
-                f"page_state={page_state}; "
-                f"scope={scope}; "
-                f"parent={parent.entity_id if parent else parent_ref or 'none'}; "
-                f"evidence={','.join(node['supporting_evidence'])}"
-            )
-        lines.append("Participants:")
-        lines.extend(
-            f"- {alias}: entity={decision['entity']}"
-            for alias, decision in participants.items()
-        )
-        if not participants:
-            lines.append("- none")
-        return "\n".join(lines)
-
     def identity_review_catalog(
         self, aliases: dict[str, ClaimEvidence]
     ) -> str:
@@ -150,73 +114,6 @@ class RoutingFormatter:
             )
         return "\n".join(lines) or "none"
 
-    @staticmethod
-    def format_subject_graph(
-        nodes: dict[str, dict],
-        edges: list[dict],
-    ) -> str:
-        """Render the fixed census without adding semantic decisions."""
-        lines = ["Nodes:"]
-        for node_id, node in nodes.items():
-            details = [
-                f"title={node['title']!r}",
-                f"evidence={','.join(node['supporting_evidence'])}",
-                f"participant_evidence={','.join(node['participant_evidence']) or 'none'}",
-            ]
-            if node.get("entity_type"):
-                details.insert(0, f"type={node['entity_type']}")
-                details.insert(1, f"type_adjudication={node['type_adjudication']}")
-                details.insert(2, f"type_reason={node['type_reason']!r}")
-            if node.get("identity_resolution"):
-                details.append(f"identity_resolution={node['identity_resolution']}")
-                details.append(f"entity_id={node.get('entity_id') or 'new'}")
-                details.append(f"aliases={','.join(node.get('aliases', [])) or 'none'}")
-            lines.append(f"- {node_id}: {'; '.join(details)}")
-        lines.append("Edges:")
-        lines.extend(
-            f"- {edge['source_node']} -[{edge['relation']}]-> "
-            f"{edge['target_node']}; evidence="
-            f"{','.join(edge['supporting_evidence'])}"
-            for edge in edges
-        )
-        if not edges:
-            lines.append("- none")
-        return "\n".join(lines)
-
-    @staticmethod
-    def format_identity_groups(identities: dict[str, dict]) -> str:
-        lines = []
-        for identity_key, identity in identities.items():
-            lines.append(
-                f"- {identity_key}: nodes={','.join(identity['source_node_ids'])}; "
-                f"resolution={identity['identity_resolution']}; "
-                f"entity_id={identity['entity_id'] or 'new'}; "
-                f"preferred_title={identity['title']!r}; "
-                f"aliases={','.join(identity['aliases']) or 'none'}; "
-                f"evidence={','.join(identity['supporting_evidence'])}"
-            )
-        return "\n".join(lines) or "none"
-
-    @staticmethod
-    def format_identity_evidence(identity: dict) -> str:
-        """Render only source-grounded identity data for later decisions."""
-        return (
-            f"- {identity['node_id']}: title={identity['title']!r}; "
-            f"evidence={','.join(identity['supporting_evidence'])}"
-        )
-
-    @staticmethod
-    def format_accumulated_identity_groups(identities: list[dict]) -> str:
-        return "\n".join(
-            f"- {identity['identity_key']}: "
-            f"nodes={','.join(identity['node_ids'])}; "
-            f"resolution={identity['resolution']}; "
-            f"entity_id={identity['entity_id'] or 'new'}; "
-            f"preferred_title={identity['preferred_title']!r}; "
-            f"aliases={','.join(identity['aliases']) or 'none'}"
-            for identity in identities
-        ) or "none"
-
     def format_pending_identity_proposals(
         self, decisions: Iterable[EntityResolutionDecision]
     ) -> str:
@@ -238,46 +135,13 @@ class RoutingFormatter:
             )
         return "\n".join(blocks) or "none"
 
-    @staticmethod
-    def format_type_proposals(proposals: dict[str, dict]) -> str:
-        return "\n".join(
-            f"- {identity_key}: proposed_type={proposal['entity_type']}; "
-            f"reason={proposal['reason']!r}; "
-            f"evidence={','.join(proposal['supporting_evidence'])}"
-            for identity_key, proposal in proposals.items()
-        ) or "none"
-
-    @staticmethod
-    def format_maturity_decisions(
-        decisions: dict[str, dict],
-        verdicts: dict[str, dict] | None = None,
-    ) -> str:
-        lines = []
-        for node_id, decision in decisions.items():
-            basis = decision.get("basis") or {}
-            details = [
-                f"admission={decision['admission']}",
-                f"reason={decision['reason']!r}",
-            ]
-            if basis:
-                details.extend(
-                    f"{key}={value!r}" for key, value in basis.items()
-                )
-            verdict = (verdicts or {}).get(node_id)
-            if verdict:
-                details.append(f"verification={verdict['verdict']}")
-                details.append(
-                    f"verification_reason={verdict['reason']!r}"
-                )
-            lines.append(f"- {node_id}: {'; '.join(details)}")
-        return "\n".join(lines) or "none"
-
     def format_evidence(
         self,
         aliases: dict[str, ClaimEvidence],
         participants: dict[str, tuple[SourceDocument, str, str | None]],
     ) -> str:
         blocks = []
+        source_blocks = {}
         for alias, item in aliases.items():
             claim = item.claim
             cited_segment_ids = {
@@ -286,16 +150,17 @@ class RoutingFormatter:
                 if provenance.source_id == item.source.source_id
                 for segment_id in provenance.segment_ids
             }
-            source_evidence = (
-                "\n".join(
-                    f"[{segment.segment_id}] "
-                    f"role={segment.role or 'unknown'}; "
-                    f"{f'{segment.speaker}: ' if segment.speaker else ''}{segment.content}"
-                    for segment in item.source.segments
-                    if segment.segment_id in cited_segment_ids
-                )
-                or "none"
-            )
+            references = []
+            for segment in item.source.segments:
+                if segment.segment_id not in cited_segment_ids:
+                    continue
+                key = (item.source.source_id, segment.segment_id)
+                label = f"source_id={key[0]}; segment_id={key[1]}"
+                text = (f"[{segment.segment_id}] role={segment.role or 'unknown'}; "
+                        f"{f'{segment.speaker}: ' if segment.speaker else ''}{segment.content}")
+                source_blocks[key] = f"[{label}]\n{text}"
+                references.append(label)
+            source_evidence = " | ".join(references) or "none"
             source_title = str(item.source.metadata.get("title") or "").strip()
             entities = (
                 ", ".join(
@@ -338,4 +203,7 @@ class RoutingFormatter:
                 f"occurred_at={source.occurred_at or 'unknown'}"
                 for alias, (source, name, role) in participants.items()
             )
+        if source_blocks:
+            blocks.append("[CITED SOURCE SEGMENTS: shared evidence, included once per exact source/segment ID]")
+            blocks.extend(source_blocks.values())
         return "\n\n".join(blocks)

@@ -71,6 +71,10 @@ def place(artifacts, item, owner, section, *, links=None):
         relationship_kind=(
             "project_role" if item.predicate == "project_role" else None
         ),
+        page_sections={owner.entity_id: section, **(
+            {entity_id: "people_organizations" for entity_id in links or []}
+            if item.predicate == "project_role" else {}
+        )},
     ))
     artifacts.save_consolidated_fact(ConsolidatedFact(
         fact_id=f"fact-{item.claim_id}",
@@ -253,7 +257,7 @@ def test_ordinary_linked_fact_is_not_copied_to_linked_page(tmp_path):
     materializer.regenerate({person.entity_id, project.entity_id})
 
     assert "reviewed Mycelium" in wiki.get(person.slug).content
-    assert "reviewed Mycelium" not in wiki.get(project.slug).content
+    assert not wiki.exists(project.slug)
 
 
 def test_removing_project_role_regenerates_both_endpoint_views(tmp_path):
@@ -272,9 +276,9 @@ def test_removing_project_role_regenerates_both_endpoint_views(tmp_path):
     artifacts.save_claim(role)
     result = materializer.regenerate({person.entity_id})
 
-    assert set(result.updated_slugs) == {person.slug, project.slug}
-    assert "Priya Raman leads Mycelium" not in wiki.get(person.slug).content
-    assert "Priya Raman leads Mycelium" not in wiki.get(project.slug).content
+    assert result.deleted_slugs == {person.slug, project.slug}
+    assert not wiki.exists(person.slug)
+    assert not wiki.exists(project.slug)
 
 
 def test_moving_project_role_updates_old_and_new_project_views(tmp_path):
@@ -296,9 +300,10 @@ def test_moving_project_role_updates_old_and_new_project_views(tmp_path):
         person.entity_id,
         "shared_projects",
         linked_entity_ids=[new_project.entity_id],
+        page_sections={person.entity_id: "shared_projects", new_project.entity_id: "people_organizations"},
     )
 
-    assert "leads the memory project" not in wiki.get(old_project.slug).content
+    assert not wiki.exists(old_project.slug)
     assert "leads the memory project" in wiki.get(new_project.slug).content
     person_fact = wiki.get(person.slug).sections[0]["items"][0]
     assert person_fact["links"][0]["entity_id"] == new_project.entity_id

@@ -140,6 +140,7 @@ class EntityCurationService:
         section_key: str | None,
         *,
         linked_entity_ids: list[str] | None = None,
+        page_sections: dict[str, str] | None = None,
         reason: str = "Manual wiki organization",
         origin: str = "manual",
     ) -> CurationResult | None:
@@ -161,6 +162,7 @@ class EntityCurationService:
                 list(linked_entity_ids if linked_entity_ids is not None else (old.linked_entity_ids if old else [])),
                 "placed", reason, old.created_at if old else now, now,
                 old.relationship_kind if old else None,
+                page_sections=dict(page_sections or {owner_entity_id: section_key}),
             )
             affected.update({owner_entity_id, *placement.linked_entity_ids})
         self.artifacts.save_placement(placement)
@@ -249,6 +251,13 @@ class EntityCurationService:
             raise ValueError("Entities must have the same type to merge")
         for placement in self.artifacts.list_placements():
             changed = False
+            if source_entity_id in placement.page_sections:
+                section = placement.page_sections.pop(source_entity_id)
+                if section not in section_keys(target.entity_type):
+                    claim = self.artifacts.get_claim(placement.claim_id)
+                    section = default_section(target.entity_type, claim.claim_type, claim.predicate)
+                placement.page_sections.setdefault(target_entity_id, section)
+                changed = True
             if placement.owner_entity_id == source_entity_id:
                 placement.owner_entity_id = target_entity_id
                 claim = self.artifacts.get_claim(placement.claim_id)
@@ -448,6 +457,7 @@ class EntityCurationService:
                 "maturity_decisions",
                 "maturity_verdicts",
                 "entity_plan",
+                "allocated_entity_ids",
             ):
                 current = getattr(unit, field_name)
                 revised = self._replace_exact_id(current, source_id, target_id)

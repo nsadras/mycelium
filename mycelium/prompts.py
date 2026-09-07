@@ -3,7 +3,6 @@
 from mycelium.ontology import (
     CLAIM_TYPES,
     EXTRACTION_SUBJECT_POLICY,
-    FACT_EVIDENCE_POLICY,
 )
 from mycelium.prompting import render_prompt, render_prompt_pair
 
@@ -57,73 +56,13 @@ def assistant_context_selection_prompt(
     )
 
 
-def fact_grouping_prompt(
-    owner: str,
-    claims: str,
-    existing_facts: str,
-    truth_changes: str,
+def fact_synthesis_prompt(
+    owner: str, claims: str, existing_facts: str, truth_changes: str, sections: str,
 ) -> tuple[str, str]:
     return render_prompt_pair(
-        "memory/fact_grouping",
-        owner=owner,
-        claims=claims,
-        existing_facts=existing_facts,
-        truth_changes=truth_changes,
-    )
-
-
-def fact_rendering_prompt(
-    owner: str,
-    sections: str,
-    groups: str,
-    existing_facts: str,
-) -> tuple[str, str]:
-    return render_prompt_pair(
-        "memory/fact_rendering",
-        owner=owner,
+        "memory/fact_synthesis", owner=owner, claims=claims,
+        existing_facts=existing_facts, truth_changes=truth_changes,
         sections=sections,
-        groups=groups,
-        existing_facts=existing_facts,
-        fact_evidence_policy=FACT_EVIDENCE_POLICY,
-    )
-
-
-def fact_group_quality_prompt(
-    owner: str,
-    group: str,
-) -> tuple[str, str]:
-    return render_prompt_pair(
-        "memory/fact_group_quality",
-        owner=owner,
-        group=group,
-    )
-
-
-def fact_quality_prompt(
-    owner: str,
-    rendered_facts: str,
-    groups: str,
-) -> tuple[str, str]:
-    return render_prompt_pair(
-        "memory/fact_quality",
-        owner=owner,
-        rendered_facts=rendered_facts,
-        groups=groups,
-        fact_evidence_policy=FACT_EVIDENCE_POLICY,
-    )
-
-
-def fact_repair_prompt(
-    owner: str,
-    rejected_facts: str,
-    groups: str,
-) -> tuple[str, str]:
-    return render_prompt_pair(
-        "memory/fact_repair",
-        owner=owner,
-        rejected_facts=rejected_facts,
-        groups=groups,
-        fact_evidence_policy=FACT_EVIDENCE_POLICY,
     )
 
 

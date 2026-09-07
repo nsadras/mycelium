@@ -264,31 +264,6 @@ def fact_resolution_plan(
     truth_changes: list[dict] | None = None,
     incoming_aliases: list[str] | None = None,
 ) -> list[dict]:
-    keyed: dict[str, str] = {}
-    next_fact_index = 1
-    for change in truth_changes or []:
-        for side in ("target_claim_aliases", "incoming_claim_aliases"):
-            aliases = set(change[side])
-            fact_key = next(
-                key for key, (members, _, _) in facts.items()
-                if aliases <= set(members)
-            )
-            keyed[fact_key] = f"F{next_fact_index:03d}"
-            next_fact_index += 1
-    for fact_key in facts:
-        if fact_key not in keyed:
-            keyed[fact_key] = f"F{next_fact_index:03d}"
-            next_fact_index += 1
-    presentations = {
-        keyed[fact_key]: {
-            "state": "current",
-            "section_key": section,
-            "text": text,
-            "confidence": 0.9,
-            "reason": "Source-grounded test resolution.",
-        }
-        for fact_key, (_, text, section) in facts.items()
-    }
     changes_by_incoming = {
         alias: change
         for change in truth_changes or []
@@ -299,26 +274,6 @@ def fact_resolution_plan(
         if changes_by_incoming
         else sorted({alias for aliases, _, _ in facts.values() for alias in aliases})
     )
-    group_quality_responses = [
-        {"decisions": {keyed[fact_key]: {
-            "verdict": "composable",
-            "reason": "The member claims can share one faithful display fact.",
-        }}}
-        for fact_key, (aliases, _, _) in facts.items()
-        if len(aliases) > 1
-    ]
-    member_count_by_key = {
-        keyed[fact_key]: len(aliases)
-        for fact_key, (aliases, _, _) in facts.items()
-    }
-    fact_responses = []
-    for key, presentation in sorted(presentations.items()):
-        fact_responses.append({"facts": {key: presentation}})
-        if member_count_by_key[key] > 1:
-            fact_responses.append({"decisions": {key: {
-                "verdict": "supported",
-                "reason": "The presentation is self-contained and source-grounded.",
-            }}})
     return [
         {"decisions": {
             alias: (
@@ -352,15 +307,11 @@ def fact_resolution_plan(
             )
         }}
         for alias in incoming_aliases
-    ] + [
-        {"assignments": {
-            alias: {"fact_key": keyed[fact_key]}
-            for fact_key, (aliases, _, _) in facts.items()
-            for alias in aliases
-        }},
-        *group_quality_responses,
-        *fact_responses,
-    ]
+    ] + [{"facts": [{
+        "member_claim_aliases": aliases, "state": "current",
+        "section_key": section, "text": text, "confidence": 0.9,
+        "reason": "Source-grounded test resolution.",
+    } for aliases, text, section in facts.values()]}]
 
 
 def participant(entity: str) -> dict:

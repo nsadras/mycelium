@@ -45,19 +45,12 @@ class DeterministicProductionModel:
         if "claims" in output_type.model_fields:
             segment_ids = self._declared_segment_ids(output_type, "claims", "segment_ids")
             segment_id = segment_ids[0]
-            return {"segment_dispositions": [
+            return {"source_only": [
                 {
                     "segment_id": segment_id,
-                    "disposition": (
-                        "claimed" if index == 0 else "source_only"
-                    ),
-                    "reason": (
-                        "The user states a durable future commitment."
-                        if index == 0
-                        else "The assistant response is supporting conversation context."
-                    ),
+                    "reason": "The assistant response is supporting conversation context.",
                 }
-                for index, segment_id in enumerate(segment_ids)
+                for segment_id in segment_ids[1:]
             ],
                 "claims": [{
                     "text": "The user will send the Cedar brief tomorrow.",

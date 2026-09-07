@@ -1,5 +1,6 @@
 """Structured response contracts used by production LLM calls."""
 
+from collections import Counter
 from collections.abc import Collection, Mapping
 from typing import Annotated, Any, Literal, Union
 
@@ -44,10 +45,9 @@ def extraction_output_model(
     if not ids:
         raise ValueError("Extraction requires source segments")
     id_type = Literal.__getitem__(ids)
-    disposition = create_model(
-        "ExtractionDisposition", __config__=ConfigDict(extra="forbid"),
+    source_only = create_model(
+        "SourceOnlySegment", __config__=ConfigDict(extra="forbid"),
         segment_id=(id_type, ...),
-        disposition=(Literal["claimed", "source_only"], ...),
         reason=(str, Field(min_length=1, max_length=500)),
     )
     fields = {}
@@ -64,20 +64,21 @@ def extraction_output_model(
     )
     base = create_model(
         "ExtractionResponse", __config__=ConfigDict(extra="forbid"),
-        segment_dispositions=(list[disposition], Field(min_length=len(ids), max_length=len(ids))),
         claims=(list[claim], Field(max_length=128)),
+        source_only=(list[source_only], Field(max_length=len(ids))),
     )
 
     class ExactExtractionResponse(base):
         @model_validator(mode="after")
         def validate_accounting(self):
-            supplied = [d.segment_id for d in self.segment_dispositions]
-            if len(supplied) != len(set(supplied)) or set(supplied) != set(ids):
-                raise ValueError("Every source segment requires exactly one disposition")
-            claimed = {d.segment_id for d in self.segment_dispositions if d.disposition == "claimed"}
+            remainder = [d.segment_id for d in self.source_only]
             cited = {s for c in self.claims for s in c.segment_ids}
-            if claimed != cited:
-                raise ValueError("Claim citations must cover exactly the segments marked claimed")
+            if len(remainder) != len(set(remainder)):
+                raise ValueError("Duplicate source-only segment")
+            if cited & set(remainder):
+                raise ValueError(f"Cited segments cannot also be source-only: {sorted(cited & set(remainder))}")
+            if cited | set(remainder) != set(ids):
+                raise ValueError(f"Claims and source-only reasons must account for every new segment; missing={sorted(set(ids) - cited - set(remainder))}")
             return self
 
     return ExactExtractionResponse
@@ -118,40 +119,9 @@ def assistant_context_selection_output_model(
     )
 
 
-class FactClaimAssignmentOutput(BaseModel):
-    """Assign one exact claim alias to one output fact key."""
-
-    model_config = ConfigDict(extra="forbid")
-    fact_key: str = Field(pattern=r"^F[0-9]{3}$")
-
-
 class FactCandidateSelectionOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     candidate_fact_ids: list[str] = Field(max_length=12)
-    reason: str = Field(min_length=1, max_length=800)
-
-
-class FactPresentationOutput(BaseModel):
-    """One presentation fact for a fixed claim group."""
-    model_config = ConfigDict(extra="forbid")
-    state: Literal["current", "history"]
-    section_key: str = Field(min_length=1, max_length=80)
-    text: str = Field(min_length=1, max_length=800)
-    confidence: float = Field(ge=0.0, le=1.0)
-    reason: str = Field(min_length=1, max_length=800)
-
-
-class FactQualityVerdictOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    verdict: Literal["supported", "unsupported"]
-    reason: str = Field(min_length=1, max_length=800)
-
-
-class FactGroupQualityVerdictOutput(BaseModel):
-    """Whether one proposed claim group can be represented by one display fact."""
-
-    model_config = ConfigDict(extra="forbid")
-    verdict: Literal["equivalent", "composable", "split_required"]
     reason: str = Field(min_length=1, max_length=800)
 
 
@@ -280,165 +250,51 @@ def fact_candidate_selection_output_model(
     )
 
 
-def fact_grouping_output_model(
-    claim_aliases: Collection[str],
-    truth_changes: Collection[Mapping[str, Any]],
+def fact_synthesis_output_model(
+    claim_texts: Mapping[str, str],
+    allowed_sections: Collection[str],
+    truth_changes: Collection[Mapping[str, Any]] = (),
 ) -> type[BaseModel]:
-    """Build exact compact claim-to-fact assignments after truth adjudication."""
-    claims = tuple(dict.fromkeys(str(value) for value in claim_aliases if value))
-    if not claims:
-        raise ValueError("Fact grouping requires claim aliases")
-    protected_fact_keys: dict[str, str] = {}
-    next_fact_index = 1
-    for change in truth_changes:
-        target_key = f"F{next_fact_index:03d}"
-        next_fact_index += 1
-        incoming_key = f"F{next_fact_index:03d}"
-        next_fact_index += 1
-        protected_fact_keys.update({
-            str(alias): target_key
-            for alias in change["target_claim_aliases"]
-        })
-        protected_fact_keys.update({
-            str(alias): incoming_key
-            for alias in change["incoming_claim_aliases"]
-        })
-    assignment_fields: dict[str, Any] = {}
-    for alias in claims:
-        protected_key = protected_fact_keys.get(alias)
-        assignment = FactClaimAssignmentOutput
-        if protected_key is not None:
-            assignment = create_model(
-                f"{alias}ProtectedFactAssignment",
-                __base__=FactClaimAssignmentOutput,
-                fact_key=(Literal.__getitem__((protected_key,)), ...),
-            )
-        assignment_fields[alias] = (assignment, ...)
-    assignments_model = create_model(
-        "ExactFactClaimAssignments",
-        __config__=ConfigDict(extra="forbid"),
-        **assignment_fields,
+    """Partition canonical claims into grounded presentation groups in one response."""
+    if not claim_texts or not allowed_sections:
+        raise ValueError("Synthesis requires claims and allowed sections")
+    alias_type = Literal.__getitem__(tuple(claim_texts))
+    section_type = Literal.__getitem__(tuple(dict.fromkeys(allowed_sections)))
+    fact = create_model(
+        "SynthesizedFact", __config__=ConfigDict(extra="forbid"),
+        member_claim_aliases=(list[alias_type], Field(min_length=1, max_length=len(claim_texts))),
+        state=(Literal["current", "history"], ...),
+        section_key=(section_type, ...),
+        text=(str, Field(min_length=1, max_length=1000)),
+        confidence=(float, Field(ge=0.0, le=1.0)),
+        reason=(str, Field(min_length=1, max_length=800)),
     )
-    base_model = create_model(
-        "ExactFactGroupingPlan",
-        __config__=ConfigDict(extra="forbid"),
-        assignments=(assignments_model, ...),
+    base = create_model(
+        "FactSynthesis", __config__=ConfigDict(extra="forbid"),
+        facts=(list[fact], Field(min_length=1, max_length=len(claim_texts))),
     )
-    change_sides = [
-        (
-            tuple(str(value) for value in change["incoming_claim_aliases"]),
-            tuple(str(value) for value in change["target_claim_aliases"]),
-        )
-        for change in truth_changes
-    ]
 
-    class ExactFactGroupingPlan(base_model):  # type: ignore[valid-type, misc]
+    class ExactFactSynthesis(base):
         @model_validator(mode="after")
-        def validate_truth_change_separation(self):
-            assignments = self.assignments.model_dump()
-            for incoming, targets in change_sides:
-                incoming_keys = {assignments[alias]["fact_key"] for alias in incoming}
-                target_keys = {assignments[alias]["fact_key"] for alias in targets}
-                if incoming_keys & target_keys:
-                    raise ValueError("Truth-change sides cannot share a fact")
+        def validate_projection(self):
+            supplied = [alias for fact in self.facts for alias in fact.member_claim_aliases]
+            if len(supplied) != len(set(supplied)) or set(supplied) != set(claim_texts):
+                repeated = sorted(alias for alias, count in Counter(supplied).items() if count > 1)
+                missing = sorted(set(claim_texts) - set(supplied))
+                raise ValueError(
+                    "Every canonical claim must belong to exactly one display group; "
+                    f"repeated={repeated}; missing={missing}. Do not add a second review-summary group."
+                )
+            for fact in self.facts:
+                members = fact.member_claim_aliases
+                if len(members) == 1 and fact.text != claim_texts[members[0]]:
+                    raise ValueError(
+                        f"Singleton {members[0]} must copy the canonical claim text exactly: "
+                        f"{claim_texts[members[0]]!r}"
+                    )
+                for change in truth_changes:
+                    if set(members) & set(change["incoming_claim_aliases"]) and set(members) & set(change["target_claim_aliases"]):
+                        raise ValueError("Truth-change sides cannot share a fact")
             return self
 
-    return ExactFactGroupingPlan
-
-
-def fact_rendering_output_model(
-    fact_keys: Collection[str],
-    allowed_sections: Collection[str],
-    fixed_text_by_key: Mapping[str, str] | None = None,
-) -> type[BaseModel]:
-    """Build exact presentation definitions for one bounded group batch."""
-    keys = tuple(dict.fromkeys(str(value) for value in fact_keys if value))
-    sections = tuple(dict.fromkeys(str(value) for value in allowed_sections if value))
-    if not keys or not sections:
-        raise ValueError("Fact rendering requires fact keys and allowed sections")
-    section_type = Literal.__getitem__(sections)
-    fixed_text_by_key = fixed_text_by_key or {}
-    presentations = {}
-    for key in keys:
-        fields: dict[str, Any] = {
-            "section_key": (section_type, ...),  # type: ignore[valid-type]
-        }
-        if key in fixed_text_by_key:
-            text_type = Literal.__getitem__((fixed_text_by_key[key],))
-            fields["text"] = (text_type, ...)
-        presentations[key] = create_model(
-            f"{key}ExactFactPresentation",
-            __base__=FactPresentationOutput,
-            **fields,
-        )
-    facts_model = create_model(
-        "ExactFactPresentations",
-        __config__=ConfigDict(extra="forbid"),
-        **{key: (presentations[key], ...) for key in keys},
-    )
-    return create_model(
-        "ExactFactRenderingPlan",
-        __config__=ConfigDict(extra="forbid"),
-        facts=(facts_model, ...),
-    )
-
-
-def fact_group_quality_output_model(
-    fact_keys: Collection[str],
-) -> type[BaseModel]:
-    """Build exact compatibility verdicts for proposed multi-claim groups."""
-    keys = tuple(dict.fromkeys(str(value) for value in fact_keys if value))
-    if not keys:
-        raise ValueError("Fact group verification requires fact keys")
-    decisions = create_model(
-        "ExactFactGroupQualityDecisions",
-        __config__=ConfigDict(extra="forbid"),
-        **{key: (FactGroupQualityVerdictOutput, ...) for key in keys},
-    )
-    return create_model(
-        "ExactFactGroupQualityPlan",
-        __config__=ConfigDict(extra="forbid"),
-        decisions=(decisions, ...),
-    )
-
-
-def fact_quality_output_model(fact_keys: Collection[str]) -> type[BaseModel]:
-    keys = tuple(dict.fromkeys(str(value) for value in fact_keys if value))
-    if not keys:
-        raise ValueError("Fact quality verification requires fact keys")
-    decisions = create_model(
-        "ExactFactQualityDecisions",
-        __config__=ConfigDict(extra="forbid"),
-        **{key: (FactQualityVerdictOutput, ...) for key in keys},
-    )
-    return create_model(
-        "ExactFactQualityPlan",
-        __config__=ConfigDict(extra="forbid"),
-        decisions=(decisions, ...),
-    )
-
-
-def fact_repair_output_model(
-    rendered_facts: Mapping[str, Mapping[str, Any]],
-) -> type[BaseModel]:
-    if not rendered_facts:
-        raise ValueError("Fact repair requires rejected facts")
-    fields: dict[str, Any] = {}
-    for key, fact in rendered_facts.items():
-        presentation = create_model(
-            f"{key}ExactFactRepair",
-            __base__=FactPresentationOutput,
-            state=(Literal.__getitem__((str(fact["state"]),)), ...),
-            section_key=(Literal.__getitem__((str(fact["section_key"]),)), ...),
-        )
-        fields[str(key)] = (presentation, ...)
-    facts = create_model(
-        "ExactFactRepairs",
-        __config__=ConfigDict(extra="forbid"),
-        **fields,
-    )
-    return create_model(
-        "ExactFactRepairPlan",
-        __config__=ConfigDict(extra="forbid"),
-        facts=(facts, ...),
-    )
+    return ExactFactSynthesis

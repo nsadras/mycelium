@@ -39,11 +39,13 @@ Encode a continuing role or responsibility between a person and a Project as `cl
 `predicate=project_role`, with the person as subject and the Project as owner. A one-off action, attendance, or
 incidental contribution is not a continuing role.
 
-Return claims and exactly one segment_dispositions entry for every supplied new segment.
-Use claimed when a segment directly supports an extracted durable assertion, and source_only when it only carries
+Return claims and a source_only list for the remaining new segments not cited by any claim.
+Write claims first. After their citations are complete, account for only the uncited remainder in source_only.
+A cited new segment is already accounted for; do not classify it a second time. Use source_only when it only carries
 the conversation forward, repeats evidence exactly, or contains a suggestion or external content nobody adopted
-or made relevant. Explain each disposition from the evidence. Durability, not subjective importance, determines
-admission. The union of claim segment_ids must exactly equal the segments marked claimed. An empty claims list
+or made relevant. Explain each source_only entry from the evidence. Durability, not subjective importance, determines
+admission. Every new segment must either be cited by at least one claim OR appear exactly once in source_only,
+never both. Omitting a segment is invalid; it does not mean source_only. An empty claims list
 is valid when every segment is source_only. Do not turn an assistant suggestion into a user decision without
 supporting user evidence. Earlier context resolves references but is not a new extraction target.
 When resolving a pronoun, acceptance, or refusal using earlier context, the resulting claim MUST cite the earlier

@@ -5,8 +5,10 @@ This document describes how Mycelium is organized and how information moves thro
 ## System overview
 
 Build Memory extracts statements and accounts for source segments in one structured response per batch.
-Each segment is either `claimed` (linked to one or more returned statements) or `source_only` with a reason;
-claim citations must cover exactly the claimed segments. Earlier conversational context can resolve references,
+The model writes claims first, then explicit `source_only` reasons for the uncited remainder. Code derives
+`claimed` dispositions from exact citations; the model does not classify cited segments a second time.
+Citations and the source-only remainder must form a disjoint, complete partition. Omissions fail visibly and
+remain retryable, never implicitly source-only. Earlier conversational context can resolve references,
 but its original segment IDs must be cited separately and it is not re-extracted as new evidence.
 An extraction batch has one pending/failed/complete status. Validated model output is saved temporarily before
 claim writes, reused after write interruption, and discarded once the completed batch is durably recorded.
@@ -198,8 +200,15 @@ Important behavior:
   Claims without a suitable page remain searchable independently of the wiki. Completed identity plans are
   reconsidered against the current registry on later runs; failed routing reuses its saved plan and exact allocated
   IDs, avoiding duplicate identities after a partial commit. Old-cascade caches are not reused by the new contract.
-- Unusually large claim sets are split into bounded work units. Cumulative fact synthesis and scope-neighborhood
-  revision are unchanged in this increment.
+- Unusually large claim sets are split into bounded work units. Cumulative synthesis retains prior-fact candidate
+  selection and separate truth-change review, then makes one grounded grouping/presentation call per owner work
+  unit. Each output group declares exact member claim IDs, section, state, text, and rationale. Code validates
+  complete nonduplicated membership and separation of review-required truth-change sides. Singleton text copies
+  the canonical display statement exactly; multi-claim prose must preserve the members' meaning and uncertainty.
+  Presentation sees canonical statements and their temporal records, not raw transcripts that could resurrect
+  corrected claims. Grouping, group verification, per-fact rendering, prose verification, and repair are no longer
+  separate model stages. Existing fact-ID reuse, pending-review protection, selected-view projection, and commit
+  recovery remain. Scope-neighborhood revision has not been redesigned.
 - General selected placements replace the special person/project projection rule. Incidental mentions do not
   automatically receive a copy. Shared views retain the same claim IDs and provenance; if only part of a synthesized
   group was selected for a page, that view renders only the selected canonical statements, not unrelated group text.

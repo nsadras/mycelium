@@ -84,7 +84,7 @@ async def test_combined_batch_replays_validated_output_after_interrupted_claim_w
     source = memory.artifacts.get_source(captured.source_ids[0])
     segment_id = source.segments[0].segment_id
     response = {
-        "segment_dispositions": [{"segment_id": segment_id, "disposition": "claimed", "reason": "Two assertions."}],
+        "source_only": [],
         "claims": [
             {"text": text, "about": [{"entity": "user"}], "segment_ids": [segment_id]}
             for text in ("The user prefers tea.", "The user avoids coffee.")
@@ -146,9 +146,7 @@ async def test_cross_turn_context_citations_keep_original_source_identity(tmp_pa
 
     async def response(_system, _user, output_type, **kwargs):
         return {
-            "segment_dispositions": [{
-                "segment_id": new_segment, "disposition": "claimed", "reason": "Explicit commitment.",
-            }],
+            "source_only": [],
             "claims": [
                 {
                     "text": "The user will lead the workshop.",

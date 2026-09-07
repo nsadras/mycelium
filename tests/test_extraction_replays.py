@@ -55,6 +55,42 @@ async def capture(memory, messages, key, context_ids=()):
     ))
 
 
+async def test_large_extraction_partition(tmp_path, monkeypatch):
+    """Exercise a full-size batch; tiny turns alone missed accounting overlap."""
+    monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path / "llm-errors"))
+    memory = Mycelium(tmp_path / "store", config_path=CONFIG)
+    assertions = [
+        "I work as a librarian.", "I enjoy landscape painting.",
+        "My sister lives in Oslo.", "I own a blue bicycle.",
+        "I am learning Spanish.", "I volunteer at an animal shelter.",
+        "I prefer written directions.", "I joined a choir last month.",
+        "I am considering a trip in October.", "I dislike crowded concerts.",
+        "I have two cats.", "I grow tomatoes on my balcony.",
+    ]
+    messages = [message for assertion in assertions for message in (
+        {"role": "user", "content": assertion},
+        {"role": "assistant", "content": "Thanks for sharing."},
+        {"role": "user", "content": "You're welcome."},
+        {"role": "assistant", "content": "Is there anything else?"},
+    )]
+    captured = await capture(memory, messages, "large")
+    source = memory.artifacts.get_source(captured.source_ids[0])
+    schema = extraction_output_model([s.segment_id for s in source.segments])
+    system, user = prompts.claim_extraction_prompt(
+        source.source_type, source.source_id, source.participants,
+        memory.encoder._render_claim_segments(source.segments),
+    )
+    result = schema.model_validate(await memory.llm.call_structured(
+        system, user, schema, num_predict=8192, debug_label="large-partition",
+    )).model_dump()
+    (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
+    assert result["claims"] and result["source_only"]
+    await check_meaning(memory, {
+        "expected": "The user works as a librarian and grows tomatoes on their balcony.",
+        "forbidden": "The user has committed to an October trip.",
+    }, result["claims"], tmp_path / "meaning.json")
+
+
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c["name"])
 @pytest.mark.parametrize("mode", ["probe", "replay"])
 async def test_extraction_contract_in_real_system(tmp_path, monkeypatch, case, mode):

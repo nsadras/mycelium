@@ -11,6 +11,8 @@ from mycelium.artifacts import (
     ConsolidatedFact,
     MemoryClaim,
     ReconsolidationProposal,
+    SourceDocument,
+    SourceSegment,
 )
 from mycelium.config import Config
 from mycelium.facts import FactResolutionResult, FactResolver
@@ -19,9 +21,6 @@ from mycelium.reconsolidation import ReconsolidationReviewService
 from mycelium.store import WikiStore
 from mycelium.structured_outputs import (
     fact_candidate_selection_output_model,
-    fact_group_quality_output_model,
-    fact_grouping_output_model,
-    fact_rendering_output_model,
     fact_truth_output_model,
 )
 
@@ -66,25 +65,6 @@ def place(artifacts: ArtifactStore, item: MemoryClaim) -> ClaimPlacement:
     return placement
 
 
-def test_truth_change_sides_receive_distinct_fixed_fact_groups():
-    schema = fact_grouping_output_model(["C001", "C002", "C003"], [{
-        "incoming_claim_aliases": ["C003"],
-        "target_claim_aliases": ["C001", "C002"],
-    }])
-    valid = {"assignments": {
-        "C001": {"fact_key": "F001"},
-        "C002": {"fact_key": "F001"},
-        "C003": {"fact_key": "F002"},
-    }}
-
-    assert schema.model_validate(valid).assignments.C003.fact_key == "F002"
-    with pytest.raises(ValidationError):
-        schema.model_validate({"assignments": {
-            **valid["assignments"],
-            "C003": {"fact_key": "F001"},
-        }})
-
-
 def fact(item: MemoryClaim) -> ConsolidatedFact:
     return ConsolidatedFact(
         fact_id=f"fact-{item.claim_id}",
@@ -107,7 +87,6 @@ def staged_fact_responses(
     *,
     candidate_fact_aliases: list[str] | None = None,
     incoming_aliases: list[str] | None = None,
-    group_quality_verdicts: dict[str, str] | None = None,
 ) -> list[dict]:
     changes_by_incoming = {
         alias: change
@@ -153,39 +132,13 @@ def staged_fact_responses(
         }}
         for alias in incoming_aliases
     ]
-    members_by_key: dict[str, list[str]] = {}
-    for alias, assignment in plan["assignments"].items():
-        members_by_key.setdefault(assignment["fact_key"], []).append(alias)
-    fact_responses = []
-    for item in plan["facts"]:
-        fact_key = item["fact_key"]
-        fact_responses.append({"facts": {fact_key: {
-            key: value for key, value in item.items() if key != "fact_key"
-        }}})
-        if (
-            len(members_by_key.get(fact_key, [])) > 1
-            and (group_quality_verdicts or {}).get(fact_key, "composable")
-            == "composable"
-        ):
-            fact_responses.append({"decisions": {fact_key: {
-                "verdict": "supported",
-                "reason": "The presentation is self-contained and source-grounded.",
-            }}})
-    group_quality_responses = [
-        {"decisions": {fact_key: {
-            "verdict": (group_quality_verdicts or {}).get(
-                fact_key, "composable"
-            ),
-            "reason": "The member claims can share one faithful display fact.",
-        }}}
-        for fact_key, members in sorted(members_by_key.items())
-        if len(members) > 1
-    ]
-    responses = truth_responses + [
-        {"assignments": plan["assignments"]},
-        *group_quality_responses,
-        *fact_responses,
-    ]
+    responses = truth_responses + [{
+        "facts": [{
+            **{key: value for key, value in fact.items() if key != "fact_key"},
+            "member_claim_aliases": [alias for alias, assignment in plan["assignments"].items()
+                                     if assignment["fact_key"] == fact["fact_key"]],
+        } for fact in plan["facts"]],
+    }]
     if candidate_fact_aliases is not None:
         responses[0:0] = [
             {"decisions": {f"C{index:03d}": {
@@ -236,39 +189,6 @@ def test_fact_candidate_schema_requires_exact_claim_and_fact_aliases():
         schema.model_validate(valid)
 
 
-def test_fact_group_quality_schema_requires_exact_fact_keys():
-    schema = fact_group_quality_output_model(["F001"])
-    valid = {"decisions": {"F001": {
-        "verdict": "equivalent",
-        "reason": "The claims record distinct memories.",
-    }}}
-
-    assert schema.model_validate(valid).decisions.F001.verdict == "equivalent"
-    valid["decisions"]["F002"] = valid["decisions"].pop("F001")
-    with pytest.raises(ValidationError):
-        schema.model_validate(valid)
-
-
-def test_fact_rendering_schema_can_fix_canonical_projection_text():
-    schema = fact_rendering_output_model(
-        ["F001"],
-        ["timeline"],
-        fixed_text_by_key={"F001": "Evan visited the beach."},
-    )
-    valid = {"facts": {"F001": {
-        "state": "history",
-        "section_key": "timeline",
-        "text": "Evan visited the beach.",
-        "confidence": 0.9,
-        "reason": "Exact canonical claim projection.",
-    }}}
-
-    assert schema.model_validate(valid).facts.F001.text == "Evan visited the beach."
-    valid["facts"]["F001"]["text"] = "Evan visited a beach."
-    with pytest.raises(ValidationError):
-        schema.model_validate(valid)
-
-
 def test_fact_prompt_does_not_expose_recording_time_as_event_evidence(tmp_path):
     artifacts = setup_owner(tmp_path)
     item = claim(
@@ -288,16 +208,6 @@ def test_fact_prompt_does_not_expose_recording_time_as_event_evidence(tmp_path):
 
     assert item.recorded_at not in rendered
 
-    fact_group = resolver._fact_groups_text(
-        ["F001"],
-        {"F001": ["C001"]},
-        {"C001": item},
-        {item.claim_id: placement},
-        {},
-        {"you": artifacts.get_entity("you")},
-    )
-    assert "claim=The user prefers written updates." in fact_group
-    assert "evidence=" not in fact_group
 
 
 @pytest.mark.asyncio
@@ -318,7 +228,7 @@ async def test_owner_plan_groups_independent_support(tmp_path):
             "reason": "Independent support.",
         }],
         "truth_changes": [],
-    }, group_quality_verdicts={"F001": "equivalent"})
+    })
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -334,7 +244,45 @@ async def test_owner_plan_groups_independent_support(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_incompatible_claim_group_is_split_before_rendering(tmp_path):
+async def test_synthesis_uses_corrected_claim_not_original_source(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    corrected = claim("corrected", "The user prefers coffee.", "2026-08-01T12:00:00")
+    related = claim("related", "The user drinks coffee each morning.", "2026-08-02T12:00:00")
+    placements = [place(artifacts, item) for item in (corrected, related)]
+    evidence = corrected.provenance[0]
+    artifacts.save_source(SourceDocument(
+        source_id=evidence.source_id, source_type="agent_conversation", session_id="chat",
+        recorded_at=corrected.recorded_at, occurred_at=None, participants=["user"],
+        segments=[SourceSegment(evidence.segment_ids[0], 0, "I prefer tea.", "user", "user")],
+    ))
+    llm = AsyncMock()
+
+    async def respond(_system, user, _schema, **kwargs):
+        if kwargs["debug_label"] == "dream-fact-truth":
+            return {"decisions": {alias: {"disposition": "no_change", "confidence": 0.9,
+                                         "reason": "No prior state is changed."}
+                                  for alias in _schema.model_fields["decisions"].annotation.model_fields}}
+        assert kwargs["debug_label"] == "dream-fact-synthesis"
+        assert corrected.text in user and related.text in user
+        assert "I prefer tea." not in user
+        assert corrected.recorded_at not in user
+        return {"facts": [{"member_claim_aliases": ["C001", "C002"], "state": "current",
+                           "section_key": "preferences_working_style",
+                           "text": "The user prefers coffee and drinks it each morning.",
+                           "confidence": 0.9, "reason": "Compatible canonical statements."}]}
+
+    llm.call_structured.side_effect = respond
+    result = await FactResolver(llm, artifacts).resolve(
+        placements, affected_entity_ids={"you"},
+        incoming_claim_ids={corrected.claim_id, related.claim_id}, dream_run_id="dream-corrected",
+    )
+    assert result.failures == []
+    assert result.facts[0].member_claim_ids == ["corrected", "related"]
+    assert artifacts.get_claim("corrected").text == corrected.text
+
+
+@pytest.mark.asyncio
+async def test_synthesis_keeps_distinct_claim_groups(tmp_path):
     artifacts = setup_owner(tmp_path)
     first = claim("first", "The user joined a cooking class.", "2026-08-01T12:00:00")
     second = claim("second", "The user began exercising.", "2026-08-02T12:00:00")
@@ -343,7 +291,7 @@ async def test_incompatible_claim_group_is_split_before_rendering(tmp_path):
     llm.call_structured.side_effect = staged_fact_responses({
         "assignments": {
             "C001": {"fact_key": "F001"},
-            "C002": {"fact_key": "F001"},
+            "C002": {"fact_key": "F002"},
         },
         "facts": [
             {
@@ -364,7 +312,7 @@ async def test_incompatible_claim_group_is_split_before_rendering(tmp_path):
             },
         ],
         "truth_changes": [],
-    }, group_quality_verdicts={"F001": "split_required"})
+    })
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -562,33 +510,21 @@ async def test_truth_changes_are_decided_sequentially_and_cannot_compete(tmp_pat
             "reason": "The changed target was already claimed by an earlier decision.",
             "confidence": 0.95,
         }}},
-        {"assignments": {
-            "C001": {"fact_key": "F001"},
-            "C002": {"fact_key": "F002"},
-            "C003": {"fact_key": "F002"},
-        }},
-        {"decisions": {"F002": {
-            "verdict": "composable",
-            "reason": "Both claims support the same changed bicycle state.",
-        }}},
-        {"facts": {"F001": {
+        {"facts": [{
+            "member_claim_aliases": ["C001"],
             "state": "current",
             "section_key": "preferences_working_style",
             "text": old.text,
             "confidence": 0.9,
             "reason": "Accepted prior state.",
-        }}},
-        {"facts": {"F002": {
+        }, {
+                "member_claim_aliases": ["C002", "C003"],
                 "state": "current",
                 "section_key": "preferences_working_style",
                 "text": "The user's bicycle is green.",
                 "confidence": 0.9,
                 "reason": "Proposed replacement with independent support.",
-        }}},
-        {"decisions": {"F002": {
-            "verdict": "supported",
-            "reason": "The presentation is source-grounded.",
-        }}},
+        }]},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -632,24 +568,21 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path
             "reason": "The evidence does not explicitly replace the prior preference.",
             "confidence": 0.8,
         }}},
-        {"assignments": {
-            "C001": {"fact_key": "F001"},
-            "C002": {"fact_key": "F002"},
-        }},
-        {"facts": {"F001": {
+        {"facts": [{
+            "member_claim_aliases": ["C001"],
             "state": "current",
             "section_key": "preferences_working_style",
             "text": old.text,
             "confidence": 0.9,
             "reason": "Existing preference.",
-        }}},
-        {"facts": {"F002": {
+        }, {
+                "member_claim_aliases": ["C002"],
                 "state": "current",
                 "section_key": "preferences_working_style",
                 "text": new.text,
                 "confidence": 0.9,
                 "reason": "Independent incoming preference.",
-        }}},
+        }]},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -685,9 +618,16 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
             "relation": "supersedes",
             "target_claim_aliases": ["C001"],
             "explanation": "Replacement.",
+            "durable_field": "preferred drink",
+            "prior_state": "tea",
+            "incoming_state": "coffee",
+            "transition_evidence": "The user explicitly says now.",
             "confidence": 0.9,
         }}},
-        {"assignments": {"C001": {"fact_key": "F001"}, "C002": {"fact_key": "F001"}}},
+        {"facts": [{"member_claim_aliases": ["C001", "C002"],
+                    "state": "current", "section_key": "preferences_working_style",
+                    "text": new.text, "confidence": 0.9,
+                    "reason": "Invalidly combine the sides of a pending truth change."}]},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -698,6 +638,7 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
     )
 
     assert len(result.failures) == 1
+    assert "Truth-change sides cannot share a fact" in result.failures[0].reason
     assert result.facts == [old_fact]
     assert result.deleted_fact_ids == set()
     assert result.proposals == []
@@ -716,7 +657,7 @@ async def test_large_new_claim_sets_are_grouped_incrementally(tmp_path):
     ]
     placements = [place(artifacts, item) for item in claims]
     llm = AsyncMock()
-    call_counts = {"truth": 0, "grouping": 0, "rendering": 0}
+    call_counts = {"truth": 0, "synthesis": 0}
 
     async def respond(_system, _user, _schema, **kwargs):
         label = kwargs["debug_label"]
@@ -737,34 +678,14 @@ async def test_large_new_claim_sets_are_grouped_incrementally(tmp_path):
                 "reason": "No accepted truth is changed.",
                 "confidence": 0.9,
             }}}
-        if label == "dream-fact-grouping":
-            call_counts["grouping"] += 1
-            aliases = (
-                [f"C{index:03d}" for index in range(1, 13)]
-                if call_counts["grouping"] == 1
-                else ["C001"]
-            )
-            return {"assignments": {
-                alias: {"fact_key": f"F{index:03d}"}
-                for index, alias in enumerate(aliases, start=1)
-            }}
-        if label.startswith("dream-fact-rendering"):
-            call_counts["rendering"] += 1
-            index = call_counts["rendering"]
-            fact_key = f"F{index:03d}" if index <= 12 else "F001"
-            return {"facts": {fact_key: {
-                "state": "current",
-                "section_key": "preferences_working_style",
-                "text": f"The user records distinct preference {index}.",
-                "confidence": 0.9,
-                "reason": "One fixed source-grounded claim group.",
-            }}}
-        if label.startswith("dream-fact-quality-"):
-            fact_key = label.rsplit("-", 1)[-1]
-            return {"decisions": {fact_key: {
-                "verdict": "supported",
-                "reason": "The presentation is source-grounded.",
-            }}}
+        if label == "dream-fact-synthesis":
+            call_counts["synthesis"] += 1
+            batch = claims[:12] if call_counts["synthesis"] == 1 else claims[12:]
+            return {"facts": [{
+                "member_claim_aliases": [f"C{index:03d}"],
+                "state": "current", "section_key": "preferences_working_style",
+                "text": item.text, "confidence": 0.9, "reason": "Distinct memory.",
+            } for index, item in enumerate(batch, 1)]}
         raise AssertionError(f"Unexpected model call: {label}")
 
     llm.call_structured.side_effect = respond
@@ -778,161 +699,11 @@ async def test_large_new_claim_sets_are_grouped_incrementally(tmp_path):
 
     assert result.failures == []
     assert len(result.facts) == 13
-    grouping_calls = [
+    synthesis_calls = [
         call for call in llm.call_structured.await_args_list
-        if call.kwargs.get("debug_label") == "dream-fact-grouping"
+        if call.kwargs.get("debug_label") == "dream-fact-synthesis"
     ]
-    assert len(grouping_calls) == 2
-    rendering_calls = [
-        call for call in llm.call_structured.await_args_list
-        if str(call.kwargs.get("debug_label", "")).startswith(
-            "dream-fact-rendering"
-        )
-    ]
-    assert len(rendering_calls) == 13
-
-
-@pytest.mark.asyncio
-async def test_unsupported_fact_is_repaired_and_verified_once(tmp_path):
-    llm = AsyncMock()
-    llm.call_structured.side_effect = [
-        {"decisions": {"F001": {
-            "verdict": "unsupported",
-            "reason": "The object of the conversational reference is unresolved.",
-        }}},
-        {"facts": {"F001": {
-            "state": "current",
-            "section_key": "goals_plans",
-            "text": "Jolene wants to try surfing and is looking for a lesson.",
-            "confidence": 0.95,
-            "reason": "The member claim supplies the explicit activity.",
-        }}},
-        {"decisions": {"F001": {
-            "verdict": "supported",
-            "reason": "The repaired fact is self-contained and fully entailed.",
-        }}},
-    ]
-    resolver = FactResolver(llm, ArtifactStore(tmp_path / "artifacts"))
-
-    result = await resolver._verify_and_repair_facts(
-        "id=person-jolene; type=person; title=Jolene",
-        {"F001": "[F001] members=[\"C001\"]\n[C001] Jolene wants to try surfing and is looking for a lesson."},
-        {"F001": {
-            "state": "current",
-            "section_key": "goals_plans",
-            "text": "Jolene wants to try it.",
-            "confidence": 0.8,
-            "reason": "Initial rendering.",
-        }},
-    )
-
-    assert result["F001"]["text"] == (
-        "Jolene wants to try surfing and is looking for a lesson."
-    )
-    assert llm.call_structured.await_count == 3
-
-
-@pytest.mark.asyncio
-async def test_fact_quality_checks_cannot_see_another_facts_claims(tmp_path):
-    llm = AsyncMock()
-    llm.call_structured.side_effect = [
-        {"decisions": {"F001": {
-            "verdict": "unsupported",
-            "reason": "The text belongs to the other claim group.",
-        }}},
-        {"decisions": {"F002": {
-            "verdict": "supported",
-            "reason": "The text follows from this claim group.",
-        }}},
-        {"facts": {"F001": {
-            "state": "current",
-            "section_key": "timeline",
-            "text": "Riley performed at the community concert.",
-            "confidence": 0.95,
-            "reason": "The repaired text uses only C001.",
-        }}},
-        {"decisions": {"F001": {
-            "verdict": "supported",
-            "reason": "The repaired text follows from C001.",
-        }}},
-    ]
-    resolver = FactResolver(llm, ArtifactStore(tmp_path / "artifacts"))
-
-    result = await resolver._verify_and_repair_facts(
-        "id=person-riley; type=person; title=Riley",
-        {
-            "F001": "[F001] members=[C001]\n[C001] Riley performed at the community concert.",
-            "F002": "[F002] members=[C002]\n[C002] Riley ordered cedar shelves.",
-        },
-        {
-            "F001": {
-                "state": "current",
-                "section_key": "timeline",
-                "text": "Riley ordered cedar shelves.",
-                "confidence": 0.9,
-                "reason": "Incorrectly copied from F002.",
-            },
-            "F002": {
-                "state": "current",
-                "section_key": "timeline",
-                "text": "Riley ordered cedar shelves.",
-                "confidence": 0.9,
-                "reason": "Supported by C002.",
-            },
-        },
-    )
-
-    assert result["F001"]["text"] == "Riley performed at the community concert."
-
-
-def test_fixed_fact_group_renders_only_its_declared_members(tmp_path):
-    artifacts = ArtifactStore(tmp_path / "artifacts")
-    owner = artifacts.create_entity("person", "Riley")
-    first = claim(
-        "first", "Riley performed at the community concert.",
-        "2026-09-03T10:00:00-07:00",
-    )
-    second = claim(
-        "second", "Riley ordered cedar shelves.",
-        "2026-09-03T10:00:00-07:00",
-    )
-    placements = {
-        first.claim_id: ClaimPlacement(
-            claim_id=first.claim_id,
-            owner_entity_id=owner.entity_id,
-            section_key="timeline",
-            linked_entity_ids=[],
-            status="placed",
-            reason="test",
-            created_at=first.recorded_at,
-            updated_at=first.recorded_at,
-        ),
-        second.claim_id: ClaimPlacement(
-            claim_id=second.claim_id,
-            owner_entity_id=owner.entity_id,
-            section_key="timeline",
-            linked_entity_ids=[],
-            status="placed",
-            reason="test",
-            created_at=second.recorded_at,
-            updated_at=second.recorded_at,
-        ),
-    }
-    resolver = FactResolver(AsyncMock(), artifacts)
-
-    rendered = resolver._fact_groups_text(
-        ["F001"],
-        {"F001": ["C001"], "F002": ["C002"]},
-        {"C001": first, "C002": second},
-        placements,
-        {},
-        {owner.entity_id: owner},
-    )
-
-    assert '[F001] members=["C001"]' in rendered
-    assert "[C001]" in rendered
-    assert "[C002]" not in rendered
-    assert second.text not in rendered
+    assert len(synthesis_calls) == 2
 
 
 @pytest.mark.asyncio

@@ -424,15 +424,22 @@ class Encoder:
                         except FileNotFoundError:
                             self.artifacts.save_claim(claim)
                         claim_ids.append(claim.claim_id)
-                    for item in response["segment_dispositions"]:
-                        dispositions[item["segment_id"]] = ExtractionSegmentDisposition(
-                            segment_id=item["segment_id"],
-                            disposition=item["disposition"],
-                            reason=item["reason"],
-                            claim_ids=[
-                                claim.claim_id for claim in staged_claims
-                                if item["segment_id"] in claim.provenance[0].segment_ids
-                            ],
+                    source_only = {
+                        item["segment_id"]: item["reason"] for item in response["source_only"]
+                    }
+                    for segment_id in batch_ids:
+                        supporting_ids = [
+                            claim.claim_id for claim in staged_claims
+                            if segment_id in claim.provenance[0].segment_ids
+                        ]
+                        dispositions[segment_id] = ExtractionSegmentDisposition(
+                            segment_id=segment_id,
+                            disposition="claimed" if supporting_ids else "source_only",
+                            reason=(
+                                "Cited by extracted statements." if supporting_ids
+                                else source_only[segment_id]
+                            ),
+                            claim_ids=supporting_ids,
                         )
                     state.status = "complete"
                     state.last_error = None

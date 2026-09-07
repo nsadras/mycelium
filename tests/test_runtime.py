@@ -130,15 +130,7 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
         response = dict(llm.call_structured.return_value)
         response["claims"] = [dict(response["claims"][0])]
         response["claims"][0]["segment_ids"] = [user.split("[", 1)[1].split("]", 1)[0]]
-        response.update({
-                "segment_dispositions": [
-                    {
-                        "segment_id": response["claims"][0]["segment_ids"][0],
-                        "disposition": "claimed",
-                        "reason": "The tool result contains a durable observation.",
-                    }
-                ]
-        })
+        response["source_only"] = []
         return response
 
     llm.call_structured.side_effect = source_aware_response

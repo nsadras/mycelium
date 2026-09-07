@@ -32,27 +32,11 @@ async def capture_and_extract(encoder, *args, **kwargs):
 
 
 def extraction_response(claims, source_only_segment_ids=()):
-    return {"claims": claims, **coverage_response(claims, source_only_segment_ids)}
-
-
-def coverage_response(claims, source_only_segment_ids=()):
-    claimed_ids = {
-        segment_id
-        for claim in claims
-        for segment_id in claim["segment_ids"]
-    }
     return {
-        "segment_dispositions": [
+        "claims": claims,
+        "source_only": [
             {
                 "segment_id": segment_id,
-                "disposition": "claimed",
-                "reason": "The segment directly supports a durable claim.",
-            }
-            for segment_id in claimed_ids
-        ] + [
-            {
-                "segment_id": segment_id,
-                "disposition": "source_only",
                 "reason": "The segment contains no durable assertion.",
             }
             for segment_id in source_only_segment_ids
@@ -69,10 +53,10 @@ def test_combined_extraction_enforces_exact_accounting_and_citations():
     import copy
     invalid = []
     missing = copy.deepcopy(valid)
-    missing["segment_dispositions"].pop()
+    missing["source_only"].pop()
     invalid.append(missing)
     duplicate = copy.deepcopy(valid)
-    duplicate["segment_dispositions"][1] = duplicate["segment_dispositions"][0]
+    duplicate["source_only"].append(dict(duplicate["source_only"][0]))
     invalid.append(duplicate)
     invalid.append({**valid, "claims": []})
     uncited = copy.deepcopy(valid)
@@ -578,7 +562,7 @@ async def test_encoder_records_uncovered_segments_without_repair(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_encoder_rejects_duplicate_segment_dispositions(tmp_path):
+async def test_encoder_rejects_duplicate_source_only_segments(tmp_path):
     llm = AsyncMock()
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
@@ -590,8 +574,8 @@ async def test_encoder_rejects_duplicate_segment_dispositions(tmp_path):
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        value = coverage_response([{"segment_ids": [segment_id]}])
-        value["segment_dispositions"].append(dict(value["segment_dispositions"][0]))
+        value = extraction_response([], [segment_id])
+        value["source_only"].append(dict(value["source_only"][0]))
         return value
 
     llm.call_structured.side_effect = response
@@ -604,7 +588,7 @@ async def test_encoder_rejects_duplicate_segment_dispositions(tmp_path):
 
     episode = artifacts.list_episodes()[0]
     assert episode.extraction_status == "partial"
-    assert "segment_dispositions" in str(episode.extraction_error)
+    assert "source_only" in str(episode.extraction_error)
     assert artifacts.list_claims() == []
 
 
@@ -748,7 +732,7 @@ async def test_encoder_routes_image_urls_through_semantic_coverage(tmp_path):
         ]
         target_ids = (
             source_ids
-            if "segment_dispositions" in output_type.model_fields
+            if "source_only" in output_type.model_fields
             else source_ids[:1]
         )
         claim = {
@@ -1197,9 +1181,8 @@ async def test_ingestion_key_rejects_different_input(tmp_path):
         llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts
     )
     llm.call_structured.side_effect = [
-        {"segment_dispositions": [{
+        {"claims": [], "source_only": [{
             "segment_id": "unused",
-            "disposition": "source_only",
             "reason": "No durable claim.",
         }]},
     ]

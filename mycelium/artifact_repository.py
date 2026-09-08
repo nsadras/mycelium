@@ -403,6 +403,8 @@ class ArtifactStore:
     ) -> None:
         if decision.entity_id:
             self.get_entity(decision.entity_id)
+        for entity_id in decision.candidate_entity_ids:
+            self.get_entity(entity_id)
         for claim_id in decision.supporting_claim_ids:
             self.get_claim(claim_id)
         _atomic_json(

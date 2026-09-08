@@ -130,6 +130,8 @@ class RoutingFormatter:
             blocks.append(
                 f"[{decision.decision_id}] type={decision.proposed_entity_type}; "
                 f"title={decision.proposed_title!r}; "
+                f"candidate_entity_ids={','.join(decision.candidate_entity_ids) or 'none'}; "
+                f"reason={decision.reason}; "
                 f"scope={decision.proposed_scope or 'unspecified'}; "
                 f"identity_defining_evidence={' | '.join(claims) or 'none'}"
             )

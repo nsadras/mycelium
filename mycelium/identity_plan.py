@@ -11,15 +11,18 @@ from mycelium.prompting import render_prompt_pair
 class IdentitySubject(BaseModel):
     model_config = ConfigDict(extra="forbid")
     node_id: str
+    reason: str = Field(min_length=1, description=(
+        "Describe this particular source referent by its asserted action or role, then explain its identity. "
+        "Do not combine distinct actors. Possible identities of one actor are alternatives, not extra actors."
+    ))
     title: str = Field(min_length=1)
+    supporting_evidence: list[str] = Field(min_length=1)
+    participant_evidence: list[str]
     entity_type: PageType
     resolution: Literal["existing", "new", "review_required"]
     entity_id: str
-    aliases: list[str]
-    supporting_evidence: list[str] = Field(min_length=1)
-    participant_evidence: list[str]
     candidate_entity_ids: list[str]
-    reason: str = Field(min_length=1)
+    aliases: list[str]
     confidence: float = Field(ge=0, le=1)
 
 
@@ -30,7 +33,10 @@ def _subject_variants(evidence_ids, participant_roles, registry_types):
                     if not (role == "user" and "you" in registry_types)]
     grounded = create_model(
         "GroundedIdentitySubject", __base__=IdentitySubject,
-        supporting_evidence=(list[evidence_type], Field(min_length=1)),
+        supporting_evidence=(list[evidence_type], Field(min_length=1, description=(
+            "Only claims that describe this subject, and participant aliases for this actual speaker. "
+            "Do not cite another speaker's personal claims merely because they share the conversation."
+        ))),
         participant_evidence=(list[Literal.__getitem__(tuple(participants))], ...)
         if participants else (list[str], Field(max_length=0)),
     )
@@ -71,10 +77,23 @@ def identity_plan_model(evidence_ids, participant_roles, registry_types):
     user_aliases = [p for p, role in participant_roles.items() if role == "user" and "you" in registry_types]
     evidence_type = Literal.__getitem__(tuple(sorted(allowed)))
     subject_model = _subject_variants(evidence_ids, participant_roles, registry_types)
+    fields = {}
+    if user_aliases:
+        user_model = create_model(
+            "DeclaredUserIdentity", __base__=IdentitySubject,
+            node_id=(Literal["you"], ...), title=(Literal["You"], ...),
+            entity_type=(Literal["you"], ...), resolution=(Literal["existing"], ...),
+            entity_id=(Literal["you"], ...),
+            supporting_evidence=(list[evidence_type], Field(min_length=1)),
+            participant_evidence=(list[Literal.__getitem__(tuple(user_aliases))],
+                                  Field(min_length=len(user_aliases), max_length=len(user_aliases))),
+            candidate_entity_ids=(list[str], Field(max_length=0)),
+        )
+        fields["user"] = (user_model, ...)
+    fields["subjects"] = (list[subject_model], ...)
+    base = create_model("IdentityPlanFields", __config__=ConfigDict(extra="forbid"), **fields)
 
-    class IdentityPlan(BaseModel):
-        model_config = ConfigDict(extra="forbid")
-        subjects: list[subject_model]
+    class IdentityPlan(base):
 
         @model_validator(mode="after")
         def validate_references(self):
@@ -108,19 +127,7 @@ def identity_plan_model(evidence_ids, participant_roles, registry_types):
                     raise ValueError("Subjects discussed in claims must cite claim evidence")
             return self
 
-    if not user_aliases:
-        return IdentityPlan
-    user_model = create_model(
-        "DeclaredUserIdentity", __base__=IdentitySubject,
-        node_id=(Literal["you"], ...), title=(Literal["You"], ...),
-        entity_type=(Literal["you"], ...), resolution=(Literal["existing"], ...),
-        entity_id=(Literal["you"], ...),
-        supporting_evidence=(list[evidence_type], Field(min_length=1)),
-        participant_evidence=(list[Literal.__getitem__(tuple(user_aliases))],
-                              Field(min_length=len(user_aliases), max_length=len(user_aliases))),
-        candidate_entity_ids=(list[str], Field(max_length=0)),
-    )
-    return create_model("UserBoundIdentityPlan", __base__=IdentityPlan, user=(user_model, ...))
+    return IdentityPlan
 
 
 def planned_subjects(plan):

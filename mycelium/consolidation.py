@@ -163,6 +163,7 @@ class ClaimRouter:
                                    *[s.source_id for s, _, _ in participant_support]}),
                 supporting_claim_ids=[s.claim.claim_id for s in support],
                 identity_evidence_claim_ids=[s.claim.claim_id for s in support],
+                candidate_entity_ids=node["candidate_entity_ids"],
                 supporting_segment_ids=sorted({
                     *[seg for s in support for p in s.claim.provenance for seg in p.segment_ids],
                     *[seg.segment_id for s, name, role in participant_support for seg in s.segments

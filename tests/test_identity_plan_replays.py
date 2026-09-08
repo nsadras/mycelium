@@ -8,6 +8,7 @@ import pytest
 from mycelium import Mycelium
 from mycelium.artifacts import ClaimProvenance, EntityRecord, MemoryClaim, SourceDocument, SourceSegment
 from mycelium.consolidation_models import ClaimEvidence
+from mycelium.consolidation import ClaimRouter
 from mycelium.consolidation_formatting import RoutingFormatter
 from mycelium.identity_plan import identity_plan_model, identity_plan_prompt, planned_subjects, declared_user_bindings
 
@@ -15,8 +16,12 @@ from mycelium.identity_plan import identity_plan_model, identity_plan_prompt, pl
 @pytest.mark.integration
 @pytest.mark.asyncio
 @pytest.mark.skipif(os.getenv("MYCELIUM_RUN_IDENTITY_REPLAYS") != "1", reason="Opt-in host model probes")
-@pytest.mark.parametrize("case", ["user", "namesakes", "project", "two_speakers", "tool", "existing", "ambiguous"])
-async def test_identity_plan_real_model(tmp_path, case):
+@pytest.mark.parametrize("mode,case", [
+    ("probe", case) for case in ["user", "namesakes", "project", "two_speakers", "tool", "existing",
+                                "ambiguous", "ambiguous_rephrased", "distinct_ambiguous"]
+] + [("replay", case) for case in ["ambiguous", "ambiguous_rephrased", "distinct_ambiguous"]])
+async def test_identity_plan_real_model(tmp_path, monkeypatch, mode, case):
+    monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path / "llm-errors"))
     memory = Mycelium(tmp_path / "store", config_path=Path(__file__).resolve().parents[1] / "mycelium.toml")
     cases = {
         "user": [("Nora", "user", "I enjoy restoring old radios.")],
@@ -30,11 +35,13 @@ async def test_identity_plan_real_model(tmp_path, case):
                  ("catalog", "tool", "Elena Ruiz founded Harbor Workshop in 2019 and teaches its repair classes.")],
         "existing": [("catalog", "tool", "Harbor Workshop, the bicycle repair business at 42 Wharf Road, now offers wheel-building classes.")],
         "ambiguous": [("Lee", "participant", "Morgan offered to help. I cannot tell whether the message came from my colleague or my neighbor; both are named Morgan.")],
+        "ambiguous_rephrased": [("Lee", "participant", "An unsigned offer to help came from one of the two Morgans I know. It could be my neighbor or my colleague; I do not know which sent it.")],
+        "distinct_ambiguous": [("Lee", "participant", "Two different people named Morgan sent separate offers to help. One offered transport, the other offered equipment. They are my colleague and neighbor, but I cannot tell which made which offer.")],
     }
     registry = []
     if case == "existing":
         registry = [("entity-73", "organization", "Harbor Workshop", ["Bicycle repair business at 42 Wharf Road"])]
-    elif case == "ambiguous":
+    elif case in {"ambiguous", "ambiguous_rephrased", "distinct_ambiguous"}:
         registry = [("entity-18", "person", "Morgan (Lee's colleague)", ["Morgan"]),
                     ("entity-29", "person", "Morgan (Lee's neighbor)", ["Morgan"])]
     for entity_id, kind, title, names in registry:
@@ -56,7 +63,30 @@ async def test_identity_plan_real_model(tmp_path, case):
                                        formatter.format_evidence(aliases, participants), "none", "none",
                                        declared_user_bindings(participants))
     try:
-        response = schema.model_validate(await memory.llm.call_structured(system, user, schema, num_predict=8192)).model_dump()
+        if mode == "probe":
+            response = schema.model_validate(await memory.llm.call_structured(system, user, schema, num_predict=8192)).model_dump()
+        else:
+            memory.artifacts.save_source(source)
+            for item in aliases.values():
+                memory.artifacts.save_claim(item.claim)
+            routed = await ClaimRouter(memory.llm, memory.artifacts).route(list(aliases.values()))
+            assert not routed.failures
+            assert not routed.new_entities
+            assert all(r.disposition == "deferred" and r.identity_blocker_ids for r in routed.routes)
+            assert len(routed.routes) == len(aliases)
+            for decision in routed.entity_decisions:
+                memory.artifacts.save_entity_resolution_decision(decision)
+            restarted = Mycelium(tmp_path / "store", config_path=Path(__file__).resolve().parents[1] / "mycelium.toml")
+            pending = restarted.artifacts.list_entity_resolution_decisions(review_state="review_required")
+            assert len(pending) == (2 if case == "distinct_ambiguous" else 1)
+            for decision in pending:
+                assert set(decision.candidate_entity_ids) == {"entity-18", "entity-29"}
+                assert decision.supporting_claim_ids == ["c1"]
+                assert decision.supporting_segment_ids == ["s1#0"]
+            catalog = RoutingFormatter(restarted.artifacts).format_pending_identity_proposals(pending)
+            assert "entity-18" in catalog and "entity-29" in catalog
+            assert {e.entity_id for e in memory.artifacts.list_entities()} == {"you", "entity-18", "entity-29"}
+            return
     finally:
         (tmp_path / "calls.json").write_text(json.dumps(list(memory.llm._call_log), indent=2, default=str))
     (tmp_path / "response.json").write_text(json.dumps(response, indent=2))
@@ -76,6 +106,8 @@ async def test_identity_plan_real_model(tmp_path, case):
         assert nodes[participants["P001"]]["entity_id"] == "you"
         assert nodes[participants["P002"]]["entity_type"] == "person"
         assert len(nodes) == 2
+        assert set(nodes[participants["P001"]]["supporting_evidence"]) & set(aliases) == {"C001", "C003"}
+        assert set(nodes[participants["P002"]]["supporting_evidence"]) & set(aliases) == {"C002", "C004"}
     if case == "tool":
         assert len(nodes) == 2
         assert {n["entity_type"] for n in nodes.values()} == {"organization", "person"}
@@ -83,7 +115,8 @@ async def test_identity_plan_real_model(tmp_path, case):
     if case == "existing":
         assert len(nodes) == 1
         assert next(iter(nodes.values()))["entity_id"] == "entity-73"
-    if case == "ambiguous":
+    if case in {"ambiguous", "ambiguous_rephrased", "distinct_ambiguous"}:
         unresolved = [n for n in nodes.values() if n["resolution"] == "review_required"]
-        assert len(unresolved) == 1
-        assert set(unresolved[0]["candidate_entity_ids"]) == {"entity-18", "entity-29"}
+        assert len(unresolved) == (2 if case == "distinct_ambiguous" else 1)
+        for node in unresolved:
+            assert set(node["candidate_entity_ids"]) == {"entity-18", "entity-29"}

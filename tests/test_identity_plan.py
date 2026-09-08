@@ -34,6 +34,7 @@ def test_identity_contract_rejects_invalid_ids_and_user_binding(changes):
 def test_declared_user_is_required_separately_from_other_subjects():
     schema = identity_plan_model(["C001"], {"P001": "user"}, {"you": "you"})
     plan = schema.model_validate({"subjects": [], "user": subject(node_id="you")})
+    assert list(schema.model_json_schema()["properties"]) == ["user", "subjects"]
     assert plan.user.entity_id == "you"
     with pytest.raises(ValidationError):
         schema.model_validate({"subjects": []})
@@ -175,3 +176,31 @@ async def test_invented_candidate_fails_without_creating_entities_or_routing(tmp
     assert result.routes == []
     assert llm.call_structured.await_count == 1
     assert [e.entity_id for e in memory.artifacts.list_entities()] == ["you"]
+
+
+@pytest.mark.asyncio
+async def test_identity_candidates_survive_routing_and_repository_roundtrip(tmp_path):
+    from mycelium.artifacts import EntityRecord
+
+    memory, llm, router, evidence = setup_router(tmp_path)
+    for entity_id in ["person-a", "person-b"]:
+        memory.artifacts.save_entity(EntityRecord(
+            entity_id, "person", entity_id, entity_id, [], "active", "2026-09-07", "2026-09-07",
+        ))
+    llm.call_structured.return_value = {"subjects": [subject(
+        title="Unknown organizer", entity_type="person", resolution="review_required",
+        entity_id="", participant_evidence=[], candidate_entity_ids=["person-a", "person-b"],
+    )]}
+    result = await router.route(evidence)
+    assert not result.failures and not result.new_entities
+    assert len(result.entity_decisions) == 1
+    decision = result.entity_decisions[0]
+    memory.artifacts.save_entity_resolution_decision(decision)
+    stored = memory.artifacts.get_entity_resolution_decision(decision.decision_id)
+    assert stored.candidate_entity_ids == ["person-a", "person-b"]
+    assert result.routes[0].identity_blocker_ids == (decision.decision_id,)
+    rendered = RoutingFormatter(memory.artifacts).format_pending_identity_proposals([stored])
+    assert "candidate_entity_ids=person-a,person-b" in rendered
+    stored.candidate_entity_ids = ["missing"]
+    with pytest.raises(FileNotFoundError):
+        memory.artifacts.save_entity_resolution_decision(stored)

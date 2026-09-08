@@ -3763,3 +3763,28 @@ one prose-similarity summary.
 - Include the two existing, unchanged synthesis templates in this commit: they were untracked despite being
   required by the previously committed production pipeline. Other unrelated untracked files are excluded.
 - These are bounded regression checks, not a claim that truth review has perfect semantic accuracy.
+
+## 2026-09-07 — Identity ambiguity and retained review alternatives
+
+- The original ambiguity probe passed once at `benchmark_runs/identity-20260907-before`; historical failures
+  remain relevant. Added a rephrasing and a counterexample with two distinct unknown actors, plus exact
+  speaker-claim citation assertions. No production lexical merging or fixture-dependent overrides.
+- Retained unsuccessful direct experiments under `benchmark_runs/identity-20260907-*`: `referent-first`
+  (7/9; existing match incorrectly deferred, distinct actors collapsed, and inspection found bad citations),
+  `resolution-first` (8/9; duplicate user representation), `neutral-referent` (6/9; citation contamination and
+  candidate splitting), `explicit-referent` (6/9; the unresolved-only field biased generation into new identities),
+  and `common-referent` (6/9; speaker and ambiguous matching regressions). None of these variants was integrated.
+- Final contract uses existing fields: explain the source referent before choosing identity, resolve the bound user
+  before additional subjects, choose alternatives after resolution, and constrain evidence descriptions to this
+  subject. Removed experimental extra fields. Nine direct probes passed in 36.20s at
+  `benchmark_runs/identity-20260907-user-first` before integration.
+- Persist candidate_entity_ids in EntityResolutionDecision; previously only the cached identity plan retained them.
+  Exact candidate IDs are repository-validated and included with the reason in pending-review context. No inferred
+  candidate reconstruction, migration, live-store edits, or automatic ambiguous matching.
+- Integrated validation: 12 passed in 47.91s at `benchmark_runs/identity-20260907-integrated`: all nine direct
+  probes plus three real ClaimRouter replays. Routing defers ambiguous claims without creating identities;
+  one actor retains one proposal with both alternatives, two distinct actors retain two, and candidates/evidence
+  survive repository reload. Added deterministic routing/roundtrip and user-first schema checks.
+- Backend: 344 passed, 50 opt-in skipped; Ruff and diff checks passed. The counterexample's titles still describe
+  possible roles rather than clearly distinguishing the offered actions; candidate sets and uncertainty remain
+  intact, but review-description quality and broader model reliability are not solved by these small probes.

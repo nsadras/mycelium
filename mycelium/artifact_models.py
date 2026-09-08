@@ -273,6 +273,7 @@ class EntityResolutionDecision:
     reviewer_note: str | None = None
     reviewed_at: str | None = None
     identity_evidence_claim_ids: list[str] = field(default_factory=list)
+    candidate_entity_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.decision_type not in {"entity_creation", "participant_resolution"}:
@@ -300,6 +301,7 @@ class EntityResolutionDecision:
             )
         self.supporting_segment_ids = sorted(set(self.supporting_segment_ids))
         self.proposed_aliases = sorted(set(self.proposed_aliases))
+        self.candidate_entity_ids = sorted(set(self.candidate_entity_ids))
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
 
 

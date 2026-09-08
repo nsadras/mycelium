@@ -511,19 +511,12 @@ async def test_truth_changes_are_decided_sequentially_and_cannot_compete(tmp_pat
             "confidence": 0.95,
         }}},
         {"facts": [{
-            "member_claim_aliases": ["C001"],
-            "state": "current",
-            "section_key": "preferences_working_style",
-            "text": old.text,
-            "confidence": 0.9,
-            "reason": "Accepted prior state.",
-        }, {
-                "member_claim_aliases": ["C002", "C003"],
+                "member_claim_aliases": ["C003"],
                 "state": "current",
                 "section_key": "preferences_working_style",
-                "text": "The user's bicycle is green.",
+                "text": support.text,
                 "confidence": 0.9,
-                "reason": "Proposed replacement with independent support.",
+                "reason": "Independent event; review-held state is outside presentation input.",
         }]},
     ]
 
@@ -614,20 +607,14 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
             "reason": "The prior fact may express the same durable state.",
         }}},
         {"decisions": {"C002": {
-            "disposition": "truth_change",
-            "relation": "supersedes",
-            "target_claim_aliases": ["C001"],
-            "explanation": "Replacement.",
-            "durable_field": "preferred drink",
-            "prior_state": "tea",
-            "incoming_state": "coffee",
-            "transition_evidence": "The user explicitly says now.",
+            "disposition": "no_change",
+            "reason": "No change proposed by this test decision.",
             "confidence": 0.9,
         }}},
-        {"facts": [{"member_claim_aliases": ["C001", "C002"],
+        {"facts": [{"member_claim_aliases": ["C002"],
                     "state": "current", "section_key": "preferences_working_style",
                     "text": new.text, "confidence": 0.9,
-                    "reason": "Invalidly combine the sides of a pending truth change."}]},
+                    "reason": "Invalidly omit the existing claim."}]},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -638,10 +625,53 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
     )
 
     assert len(result.failures) == 1
-    assert "Truth-change sides cannot share a fact" in result.failures[0].reason
+    assert "exactly one display group" in result.failures[0].reason
     assert result.facts == [old_fact]
     assert result.deleted_fact_ids == set()
     assert result.proposals == []
+
+
+@pytest.mark.asyncio
+async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    old = claim("old", "The user's bicycle is blue.", "2026-08-01T12:00:00")
+    pending = claim("pending", "The user's bicycle is now green.", "2026-08-02T12:00:00")
+    other = claim("other", "The user joined a choir.", "2026-08-03T12:00:00")
+    placements = [place(artifacts, item) for item in (old, pending, other)]
+    old_fact = fact(old)
+    artifacts.save_consolidated_fact(old_fact)
+    artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
+        proposal_id="review-color", incoming_claim_ids=[pending.claim_id],
+        target_claim_ids=[old.claim_id], proposed_relation="supersedes",
+        explanation="An explicit color replacement awaits review.", confidence=0.9,
+        dream_run_id="earlier", created_at=old.recorded_at, affected_entity_ids=["you"],
+    ))
+    llm = AsyncMock()
+    llm.call_structured.side_effect = [
+        {"decisions": {alias: {"candidate_fact_ids": ["X001"], "reason": "Candidate for review."}}}
+        for alias in ("C001", "C002")
+    ] + [
+        {"decisions": {alias: {"disposition": "no_change", "reason": "No new proposal.", "confidence": 0.9}}}
+        for alias in ("C002", "C003")
+    ] + [{"facts": [{
+        "member_claim_aliases": ["C003"], "text": other.text, "state": "current",
+        "section_key": "preferences_working_style", "confidence": 0.9, "reason": "Separate activity.",
+    }]}]
+
+    result = await FactResolver(llm, artifacts).resolve(
+        placements, affected_entity_ids={"you"}, incoming_claim_ids={"pending", "other"},
+        dream_run_id="next",
+    )
+
+    assert not result.failures
+    assert old_fact in result.facts
+    assert {cid for item in result.facts for cid in item.member_claim_ids} == {"old", "other"}
+    assert not result.proposals
+    synthesis = llm.call_structured.await_args_list[-1]
+    assert synthesis.kwargs["debug_label"] == "dream-fact-synthesis"
+    assert old.text not in synthesis.args[1]
+    assert pending.text not in synthesis.args[1]
+    assert other.text in synthesis.args[1]
 
 
 @pytest.mark.asyncio

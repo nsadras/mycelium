@@ -3832,3 +3832,23 @@ one prose-similarity summary.
   Three real two-build truth probes also verify that updating the same subject does not invoke historical revision:
   3 passed in 198.89s at `benchmark_runs/long-memory-20260908-replan`.
 - Backend: 345 passed, 61 skipped; Ruff and diff checks passed. Original benchmark and live store untouched.
+
+## 2026-09-08 — Keep pending truth review outside presentation synthesis
+
+- Removed post-synthesis group dropping: pending incoming IDs and all members of protected accepted facts now
+  leave the presentation input before synthesis. Whole accepted facts remain unchanged. An unrelated claim cannot
+  disappear just because the model grouped it with a review-held statement. An entirely held work unit needs no
+  presentation call. No lexical inference or alternate extraction path was added.
+- Direct production prompt/schema checks passed (distinct memories and complementary details with review sides
+  excluded): 2 passed in 11.53s at `benchmark_runs/long-memory-20260908-review-contract`, before integration.
+- Structural tests cover existing pending review, preservation, exact membership and rejection of incomplete output.
+  Updated mock responses to reflect the smaller input rather than silently accepting extraneous aliases.
+- First integrated pass: two passed, one test assertion failed because the model legitimately first-materialized
+  a children identity. The original no-replan assertion was broader than the invariant; changed it to inspect every
+  trigger's persisted prior state. Build itself completed successfully; retained the failed run at
+  `benchmark_runs/long-memory-20260908-review-integrated`.
+- Extended the public replay with an unrelated third capture/build after replacement and contradiction reviews:
+  all eligible placed claims remain represented, all held incoming claims stay out of accepted facts. Three cases
+  passed in 153.93s at `benchmark_runs/long-memory-20260908-review-three-builds`.
+- Backend: 346 passed, 62 skipped in 13.49s with host access; Ruff and diff checks clean. Sandbox-only full suite
+  stalled on local networking; host-enabled rerun is the recorded validation. No live or original benchmark edits.

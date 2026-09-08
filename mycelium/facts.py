@@ -311,7 +311,6 @@ class FactResolver:
             entity_id: alias for alias, entity_id in linked_aliases.items()
         }
         owner_text = self._owner_text(owner)
-        existing_text = self._existing_facts_text(existing, alias_for_claim)
         incoming_aliases = sorted(
             alias for alias, claim in aliases.items()
             if claim.claim_id in incoming_claim_ids
@@ -404,28 +403,6 @@ class FactResolver:
         ]
         self._validate_truth_changes(changes, aliases, incoming_claim_ids)
 
-        canonical = {
-            alias: {
-                "text": display_claim_text(claim),
-                "temporal_status": claim.temporal_status,
-                "temporal": temporal_record(claim.facets),
-            }
-            for alias, claim in aliases.items()
-        }
-        system, user = prompts.fact_synthesis_prompt(
-            owner_text, json.dumps(canonical, ensure_ascii=False), existing_text,
-            json.dumps(changes, ensure_ascii=False),
-            "\n".join(f"{section.key}: {section.description}" for section in definition.sections),
-        )
-        schema = fact_synthesis_output_model(
-            {alias: value["text"] for alias, value in canonical.items()},
-            definition.section_keys(), changes,
-        )
-        response = schema.model_validate(await self.llm.call_structured(
-            system, user, schema, num_predict=8192,
-            debug_label="dream-fact-synthesis",
-        )).model_dump()
-        groups = [(group, group["member_claim_aliases"]) for group in response["facts"]]
         now = datetime.now().astimezone().isoformat()
         output = FactResolutionResult(facts=list(untouched_existing))
         pending_incoming = {
@@ -489,13 +466,40 @@ class FactResolver:
             if set(fact.member_claim_ids) & protected_targets:
                 output.facts.append(fact)
                 preserved_member_ids.update(fact.member_claim_ids)
+        # Review owns these exact claim IDs. Presentation must neither rewrite
+        # protected facts nor hide other claims by grouping them with held ones.
+        canonical = {
+            alias: {
+                "text": display_claim_text(claim),
+                "temporal_status": claim.temporal_status,
+                "temporal": temporal_record(claim.facets),
+            }
+            for alias, claim in aliases.items()
+            if claim.claim_id not in pending_incoming | preserved_member_ids
+        }
+        groups = []
+        if canonical:
+            presentation_existing = [
+                fact for fact in existing
+                if not set(fact.member_claim_ids) & (pending_incoming | preserved_member_ids)
+            ]
+            system, user = prompts.fact_synthesis_prompt(
+                owner_text, json.dumps(canonical, ensure_ascii=False),
+                self._existing_facts_text(presentation_existing, alias_for_claim), "[]",
+                "\n".join(f"{section.key}: {section.description}" for section in definition.sections),
+            )
+            schema = fact_synthesis_output_model(
+                {alias: value["text"] for alias, value in canonical.items()},
+                definition.section_keys(),
+            )
+            response = schema.model_validate(await self.llm.call_structured(
+                system, user, schema, num_predict=8192,
+                debug_label="dream-fact-synthesis",
+            )).model_dump()
+            groups = [(group, group["member_claim_aliases"]) for group in response["facts"]]
         for group, member_aliases in groups:
             members = [aliases[alias] for alias in member_aliases]
             member_ids = {claim.claim_id for claim in members}
-            if member_ids & pending_incoming:
-                continue
-            if member_ids & preserved_member_ids:
-                continue
             section = group["section_key"]
             linked = sorted({
                 linked_id

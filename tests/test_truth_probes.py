@@ -70,6 +70,7 @@ async def test_truth_review_two_builds(tmp_path, monkeypatch, prior, incoming, r
     assert not first.report.failures
     accepted = {c.claim_id: c.text for c in memory.artifacts.list_claims()}
     assert accepted
+    prior_states = {e.entity_id: e.materialization_state for e in memory.artifacts.list_entities()}
     revision = Mock(wraps=memory.consolidator.policy.scope_revision_claims)
     monkeypatch.setattr(memory.consolidator.policy, "scope_revision_claims", revision)
     await capture(memory, [{"role": "user", "content": incoming}], "incoming")
@@ -77,7 +78,9 @@ async def test_truth_review_two_builds(tmp_path, monkeypatch, prior, incoming, r
     (tmp_path / "build.json").write_text(json.dumps(asdict(second), indent=2, default=str))
     (tmp_path / "calls.json").write_text(json.dumps(list(memory.llm._call_log), indent=2, default=str))
     assert not second.report.failures
-    revision.assert_not_called()
+    for call in revision.call_args_list:
+        assert call.args[1]
+        assert all(prior_states.get(e.entity_id) != "materialized" for e in call.args[1])
     proposals = memory.artifacts.list_reconsolidation_proposals()
     (tmp_path / "proposals.json").write_text(json.dumps([asdict(p) for p in proposals], indent=2))
     if relation:
@@ -90,3 +93,15 @@ async def test_truth_review_two_builds(tmp_path, monkeypatch, prior, incoming, r
     for claim_id, text in accepted.items():
         claim = memory.artifacts.get_claim(claim_id)
         assert claim.status == "active" and claim.text == text
+    if relation:
+        await capture(memory, [{"role": "user", "content": "I joined a choir last month."}], "unrelated")
+        third = await memory.consolidate()
+        assert not third.report.failures
+        held = {cid for p in memory.artifacts.list_reconsolidation_proposals(status="pending")
+                for cid in p.incoming_claim_ids}
+        represented = {cid for fact in memory.artifacts.list_consolidated_facts()
+                       for cid in fact.member_claim_ids}
+        eligible = {p.claim_id for p in memory.artifacts.list_placements() if p.status == "placed"} - held
+        assert eligible <= represented
+        assert not held & represented
+        (tmp_path / "third-build.json").write_text(json.dumps(asdict(third), indent=2, default=str))

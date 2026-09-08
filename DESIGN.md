@@ -213,12 +213,15 @@ Important behavior:
 - Unusually large claim sets are split into bounded work units. Cumulative synthesis retains prior-fact candidate
   selection and separate truth-change review, then makes one grounded grouping/presentation call per owner work
   unit. Each output group declares exact member claim IDs, section, state, text, and rationale. Code validates
-  complete nonduplicated membership and separation of review-required truth-change sides. Singleton text copies
+  complete nonduplicated membership. Review-held incoming statements and whole protected prior facts are excluded
+  before presentation; accepted facts remain unchanged and independent claims cannot disappear through a discarded
+  mixed group. Singleton text copies
   the canonical display statement exactly; multi-claim prose must preserve the members' meaning and uncertainty.
   Presentation sees canonical statements and their temporal records, not raw transcripts that could resurrect
   corrected claims. Grouping, group verification, per-fact rendering, prose verification, and repair are no longer
   separate model stages. Existing fact-ID reuse, pending-review protection, selected-view projection, and commit
-  recovery remain. Scope-neighborhood revision has not been redesigned.
+  recovery remain. Scope-neighborhood revision is triggered only by actual identity creation or first materialization,
+  not routine updates to existing materialized identities.
   Truth review requires evidence of incompatible values for the same particular state/event or an actual
   replacement. A shared topic, newer recording time, or another independent plan is insufficient. Genuine
   changes create review proposals without automatically mutating accepted statements.

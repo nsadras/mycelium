@@ -224,9 +224,15 @@ Important behavior:
   not routine updates to existing materialized identities.
   Initial synthesis admits at most twelve new claims per work unit; additions against an existing history admit
   at most four, plus model-selected prior facts. This bounds new work, not the size of a selected historical fact.
+  The smaller limit also applies once an initial long build has accumulated its first facts. Already pending-review
+  incoming claims are excluded from subsequent fact work until their review status changes; their canonical claims
+  remain stored and available to retrieval.
   Additions preserve successful batches when another batch fails; only failed claim IDs remain retryable. Changes
   to existing placements retain owner-scoped atomicity. Pending proposals created by earlier batches protect
   accepted facts in later batches of the same build, before anything is persisted.
+  Placement batches target at most 32 claim/page decisions while retaining every eligible page (a registry larger
+  than 32 still receives one complete row). Routing failures keep their source logs pending rather than reporting
+  them consolidated.
   Truth review requires evidence of incompatible values for the same particular state/event or an actual
   replacement. A shared topic, newer recording time, or another independent plan is insufficient. Genuine
   changes create review proposals without automatically mutating accepted statements.

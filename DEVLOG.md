@@ -3959,3 +3959,17 @@ one prose-similarity summary.
   retrieval. Neither prior failed run was deleted, and no expected page or shared-evidence assertion was weakened.
 - This is a source-policy scoping repair, not proof of perfect identity discovery. Both the benchmark and the neutral
   corpus remain guideposts; no fixture names or desired answers enter production prompts or matching logic.
+
+## 2026-09-08 — Stop rescheduling review-held facts and shrink later initial-build batches
+
+- A pending truth proposal already determines that its incoming statement cannot enter accepted presentation.
+  Exclude those exact persisted pending IDs before fact candidate selection, not just before prose synthesis.
+  Underlying claims remain active/stored/retrievable. Once review releases a statement it is eligible again.
+- The smaller addition limit now applies after the first successful batch inside a long initial build, not only
+  when history existed before the build started. Failure-injection tests now span 29 additions, including failed
+  first/late batches and owner-atomic changes to valid existing page placements.
+- Added a no-model-work pending-review regression and a release-after-review counterexample. Existing pending-review
+  coverage tests now assert the reduced input rather than asking the model to reconsider the held statement.
+- Three actual repeated-build review cases passed in 277.76s at
+  `benchmark_runs/long-memory-20260908-review-scheduling`; focused fact tests: 23 passed. Backend: 367 passed,
+  73 opt-in skipped in 19.03s; Ruff/diff checks clean.

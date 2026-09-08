@@ -75,9 +75,14 @@ class FactResolver:
             item.claim_id: item
             for item in [*self.artifacts.list_placements(), *placements]
         }
+        held_claim_ids = {
+            claim_id for proposal in self.artifacts.list_reconsolidation_proposals(status="pending")
+            for claim_id in proposal.incoming_claim_ids
+        }
         active_claims = {
             claim.claim_id: claim
             for claim in self.artifacts.list_claims(status="active")
+            if claim.claim_id not in held_claim_ids
         }
         existing_facts = self.artifacts.list_consolidated_facts()
         entities = {entity.entity_id: entity for entity in self.artifacts.list_entities()}
@@ -188,16 +193,16 @@ class FactResolver:
             or prior.owner_entity_id == owner_id
             for claim in unrepresented
         )
-        group_size = (
-            self._MAX_ADDITIONS_WITH_HISTORY if existing
-            else self._MAX_UNREPRESENTED_PER_GROUPING
-        )
-        for start in range(
-            0, len(unrepresented), group_size
-        ):
+        start = 0
+        while start < len(unrepresented):
+            group_size = (
+                self._MAX_ADDITIONS_WITH_HISTORY if working_facts
+                else self._MAX_UNREPRESENTED_PER_GROUPING
+            )
             incoming_group = unrepresented[
                 start:start + group_size
             ]
+            start += len(incoming_group)
             represented = {
                 claim_id
                 for fact in working_facts

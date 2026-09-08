@@ -675,12 +675,12 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
     llm = AsyncMock()
     llm.call_structured.side_effect = [
         {"decisions": {alias: {"candidate_fact_ids": ["X001"], "reason": "Candidate for review."}}}
-        for alias in ("C001", "C002")
+        for alias in ("C001",)
     ] + [
         {"decisions": {alias: {"disposition": "no_change", "reason": "No new proposal.", "confidence": 0.9}}}
-        for alias in ("C002", "C003")
+        for alias in ("C002",)
     ] + [{"facts": [{
-        "member_claim_aliases": ["C003"], "text": other.text, "state": "current",
+        "member_claim_aliases": ["C002"], "text": other.text, "state": "current",
         "section_key": "preferences_working_style", "confidence": 0.9, "reason": "Separate activity.",
     }]}]
 
@@ -701,6 +701,38 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_pending_review_alone_does_not_trigger_more_model_work(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    old = claim("old", "The user's bicycle is blue.", "2026-08-01T12:00:00")
+    pending = claim("pending", "The user's bicycle is now green.", "2026-08-02T12:00:00")
+    for item in (old, pending):
+        place(artifacts, item)
+    old_fact = fact(old)
+    artifacts.save_consolidated_fact(old_fact)
+    artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
+        proposal_id="review", incoming_claim_ids=["pending"], target_claim_ids=["old"],
+        proposed_relation="supersedes", explanation="Awaiting review.", confidence=0.9,
+        dream_run_id="earlier", created_at=old.recorded_at, affected_entity_ids=["you"],
+    ))
+    llm = AsyncMock()
+    resolver = FactResolver(llm, artifacts)
+    result = await resolver.resolve(
+        [], affected_entity_ids={"you"}, incoming_claim_ids=set(), dream_run_id="next",
+    )
+    llm.call_structured.assert_not_awaited()
+    assert result.facts == [old_fact]
+    assert not result.failures
+    assert not result.proposals
+    assert not result.deleted_fact_ids
+    proposal = artifacts.get_reconsolidation_proposal("review")
+    proposal.status = "rejected"
+    artifacts.save_reconsolidation_proposal(proposal)
+    resolver._resolve_owner_step = AsyncMock(return_value=FactResolutionResult(facts=[old_fact, fact(pending)]))
+    await resolver.resolve([], affected_entity_ids={"you"}, incoming_claim_ids=set(), dream_run_id="reviewed")
+    assert {c.claim_id for c in resolver._resolve_owner_step.await_args.args[1]} == {"old", "pending"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("has_history,change_placement", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("failed_batch", [0, 1])
 async def test_failed_addition_batch_preserves_other_batches(tmp_path, has_history, change_placement, failed_batch):
@@ -710,10 +742,11 @@ async def test_failed_addition_batch_preserves_other_batches(tmp_path, has_histo
         place(artifacts, old)
         artifacts.save_consolidated_fact(fact(old))
     additions = [claim(f"new-{i}", f"Statement {i}.", f"2026-08-{i:02d}T12:00:00")
-                 for i in range(1, 14)]
+                 for i in range(1, 30)]
     placements = [place(artifacts, item) for item in additions]
     if change_placement:
-        placements.append(replace(artifacts.placement_for_claim(old.claim_id), section_key="identity"))
+        placements.append(replace(artifacts.placement_for_claim(old.claim_id),
+                                  section_key="current_context", page_sections={"you": "current_context"}))
     resolver = FactResolver(AsyncMock(), artifacts)
     batches = []
 
@@ -750,6 +783,8 @@ async def test_failed_addition_batch_preserves_other_batches(tmp_path, has_histo
     assert {cid for f in result.facts for cid in f.member_claim_ids} == expected
     limit = resolver._MAX_ADDITIONS_WITH_HISTORY if has_history else resolver._MAX_UNREPRESENTED_PER_GROUPING
     assert all(len(batch) <= limit for batch in batches)
+    first_success = 1 if failed_batch == 0 else 0
+    assert all(len(batch) <= resolver._MAX_ADDITIONS_WITH_HISTORY for batch in batches[first_success + 1:])
     assert set.union(*batches) == {c.claim_id for c in additions}
 
 

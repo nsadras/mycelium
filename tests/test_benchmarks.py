@@ -208,7 +208,7 @@ async def test_run_locomo_writes_predictions(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_run_locomo_can_finalize_a_bounded_session_prefix(tmp_path):
+async def test_run_locomo_can_finalize_a_bounded_session_prefix(tmp_path, monkeypatch, capsys):
     data_path = tmp_path / "locomo.json"
     data_path.write_text(
         json.dumps(
@@ -233,6 +233,19 @@ async def test_run_locomo_can_finalize_a_bounded_session_prefix(tmp_path):
         encoding="utf-8",
     )
     system = FakeMemorySystem()
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr(
+        "benchmarks.mycelium_bench.locomo.time",
+        SimpleNamespace(perf_counter=lambda: clock.now),
+    )
+    durations = iter([65.0, 125.0])
+    memorize = system.memorize
+
+    async def timed_memorize(messages, metadata):
+        await memorize(messages, metadata)
+        clock.now += next(durations)
+
+    system.memorize = timed_memorize
 
     await run_locomo(
         data_path=data_path,
@@ -243,6 +256,10 @@ async def test_run_locomo_can_finalize_a_bounded_session_prefix(tmp_path):
     )
 
     assert [message.message_id for message in system.messages] == ["D1:1", "D2:1"]
+    output = capsys.readouterr().out
+    assert "session 1/2: session_1 finished in 65.0s" in output
+    assert "session 2/2: session_2 finished in 125.0s" in output
+    assert "session_3" not in output
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,7 @@ async def run_locomo(
                 f"[locomo] sample {sample_id} memorize session {session_index + 1}/{len(sessions)}: {session_id}",
                 flush=True,
             )
+            session_started = time.perf_counter()
             await system.memorize(
                 messages,
                 {
@@ -71,6 +72,11 @@ async def run_locomo(
                     "session_id": session_id,
                     "timestamp": timestamp,
                 },
+            )
+            print(
+                f"[locomo] sample {sample_id} memorize session {session_index + 1}/{len(sessions)}: "
+                f"{session_id} finished in {time.perf_counter() - session_started:.1f}s",
+                flush=True,
             )
         print(f"[locomo] sample {sample_id} finalize memory", flush=True)
         await system.finalize_case()
@@ -205,7 +211,11 @@ async def run_locomo_wiki_baseline(
         }
         manifest["checkpoints"].append(checkpoint)
         write_json(output_dir / "manifest.json", manifest)
-        print(f"[wiki-baseline] saved {snapshot}: {len(checkpoint['pages'])} pages", flush=True)
+        print(
+            f"[wiki-baseline] saved {snapshot}: {len(checkpoint['pages'])} pages "
+            f"in {checkpoint['elapsed_seconds']:.1f}s",
+            flush=True,
+        )
     return manifest
 
 

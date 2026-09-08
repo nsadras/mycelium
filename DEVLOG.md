@@ -3995,3 +3995,11 @@ one prose-similarity summary.
 - Full comparison, commit map, neutral/public replay evidence, limitations, and reproduction command:
   `planning/long_memory_repairs_2026_09_08.md`. Next semantic priority is page relevance, followed by event/grouping
   fidelity and truth-review precision, using neutral counterexamples before another corpus-scale run.
+
+## 2026-09-08 — Print per-session benchmark elapsed time
+
+- LoCoMo now prints a flushed completion line with elapsed seconds around each `memorize` call. This includes that
+  session's build under `per-batch`, but not separately deferred `finalize_case` work under `per-case`.
+- Wiki-baseline output also shows its existing checkpoint duration (capture/build plus snapshot copy).
+- Extended the bounded-session runner test with a controlled clock to verify individual rather than cumulative
+  durations. Benchmark test module: 25 passed; targeted Ruff and diff checks clean. No real benchmark was launched.

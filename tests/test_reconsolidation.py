@@ -83,6 +83,31 @@ def fact(item: MemoryClaim) -> ConsolidatedFact:
     )
 
 
+def test_coverage_distinguishes_review_holdback_from_missing_presentation(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    items = {key: claim(key, f"Statement {key}.", "2026-08-01T12:00:00")
+             for key in ("accepted", "pending", "gap", "unplaced")}
+    for key, item in items.items():
+        if key == "unplaced":
+            artifacts.save_claim(item)
+        else:
+            place(artifacts, item)
+    artifacts.save_consolidated_fact(fact(items["accepted"]))
+    artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
+        proposal_id="review", incoming_claim_ids=["pending"], target_claim_ids=["accepted"],
+        proposed_relation="supersedes", explanation="Awaiting review.", confidence=0.9,
+        dream_run_id="test", created_at=items["accepted"].recorded_at,
+    ))
+    report = artifacts.coverage_report()
+    assert report["represented_active_claims"] == 1
+    assert report["review_held_claim_ids"] == ["pending"]
+    assert report["placed_claims_without_facts"] == ["gap"]
+    assert report["active_claims_without_facts"] == ["gap", "pending", "unplaced"]
+    assert report["repeated_fact_claim_ids"] == []
+    artifacts.save_consolidated_fact(replace(fact(items["accepted"]), fact_id="duplicate"))
+    assert artifacts.coverage_report()["repeated_fact_claim_ids"] == ["accepted"]
+
+
 def staged_fact_responses(
     plan: dict,
     *,

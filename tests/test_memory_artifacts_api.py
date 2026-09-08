@@ -47,6 +47,23 @@ def test_integrity_requires_pages_only_for_materialized_entities(tmp_path):
     ]
 
 
+def test_integrity_allows_shared_claims_but_not_repetition_on_one_page(tmp_path):
+    mem = Mycelium(store_path=tmp_path / "store", memory_profile="none")
+    now = datetime.now()
+    for slug in ("first", "second"):
+        mem.wiki.save(WikiPage(
+            slug=slug, title=slug, content="", created=now, last_updated=now, version=1,
+            page_type="person", entity_id=f"person-{slug}", sections=[{"key": "profile", "items": [
+                {"kind": "fact", "claim_ids": ["shared"]},
+            ]}],
+        ))
+    assert artifact_integrity(mem)["issues"]["pages_with_repeated_claims"] == []
+    page = mem.wiki.get("first")
+    page.sections.append({"key": "timeline", "items": [{"kind": "fact", "claim_ids": ["shared"]}]})
+    mem.wiki.save(page)
+    assert artifact_integrity(mem)["issues"]["pages_with_repeated_claims"] == ["first:shared"]
+
+
 @pytest.fixture
 def artifact_memory(tmp_path, monkeypatch):
     mem = Mycelium(store_path=tmp_path / "store")
@@ -294,7 +311,8 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
             "entities_missing_pages": [],
                 "sources_missing_raw_log": [],
                 "proposals_missing_claims": [],
-                "pages_unclassified": [],
+                    "pages_unclassified": [],
+                    "pages_with_repeated_claims": [],
             },
     }
     assert chat_episodes == [{

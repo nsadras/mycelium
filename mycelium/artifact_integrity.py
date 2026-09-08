@@ -1,11 +1,24 @@
 """Coverage and cross-store integrity reports for memory artifacts."""
 
 from typing import Any
+from collections import Counter
 
 def coverage_report(store) -> dict[str, Any]:
     sources = store.list_sources()
     claims = store.list_claims()
     episodes = store.list_episodes()
+    active_ids = {claim.claim_id for claim in claims if claim.status == "active"}
+    facts = store.list_consolidated_facts()
+    memberships = Counter(cid for fact in facts for cid in fact.member_claim_ids)
+    represented = active_ids & memberships.keys()
+    held = active_ids & {
+        cid for proposal in store.list_reconsolidation_proposals(status="pending")
+        for cid in proposal.incoming_claim_ids
+    }
+    placed = active_ids & {
+        placement.claim_id for placement in store.list_placements()
+        if placement.status == "placed" and placement.owner_entity_id
+    }
     all_segments = {segment.segment_id for source in sources for segment in source.segments}
     claimed_segments = {
         segment_id for claim in claims for provenance in claim.provenance
@@ -28,6 +41,13 @@ def coverage_report(store) -> dict[str, Any]:
         "episodes": len(episodes),
         "claims": len(claims),
         "active_claims": sum(claim.status == "active" for claim in claims),
+        # Representation accounting, not a semantic recall or prose-quality score.
+        "consolidated_facts": len(facts),
+        "represented_active_claims": len(represented),
+        "active_claims_without_facts": sorted(active_ids - represented),
+        "review_held_claim_ids": sorted(held),
+        "placed_claims_without_facts": sorted(placed - held - represented),
+        "repeated_fact_claim_ids": sorted(cid for cid, count in memberships.items() if count > 1),
         "segments": len(all_segments),
         "claimed_segments": len(all_segments & claimed_segments),
         "segment_coverage": (len(all_segments & claimed_segments) / len(all_segments)) if all_segments else 1.0,
@@ -207,6 +227,15 @@ def artifact_integrity(mem) -> dict:
         ),
         "pages_unclassified": sorted(
             page.slug for page in wiki_pages if page.page_type is None
+        ),
+        "pages_with_repeated_claims": sorted(
+            f"{page.slug}:{claim_id}"
+            for page in wiki_pages
+            for claim_id, count in Counter(
+                claim_id for section in page.sections for item in section.get("items", [])
+                if item.get("kind") == "fact" for claim_id in item.get("claim_ids", [])
+            ).items()
+            if count > 1
         ),
     }
     return {

@@ -3896,3 +3896,19 @@ one prose-similarity summary.
 - Backend at this stage: 355 passed, 71 skipped; Ruff/diff clean. Frozen-extraction benchmark runs cannot measure
   extraction recall improvement; these are explicit policy and neutral regression checks, not a claimed LoCoMo
   recall gain. Earlier loss cannot be recovered by merely resynthesizing frozen claims.
+
+## 2026-09-08 — Expose presentation gaps in existing artifact diagnostics
+
+- Extended coverage reporting with represented active claims, active claims without facts, pending-review holdbacks,
+  placed claims missing facts after excluding holdbacks, and repeated canonical fact membership. These are structural
+  accounting measures, not semantic recall or compression targets; the existing benchmark stats include them.
+- Integrity reporting detects repeated claim IDs within one page while allowing projection onto different pages.
+  Added neutral tests distinguishing unplaced input, intentional review holdback, lost presentation, canonical
+  duplication, and allowed cross-page sharing. Existing inspection API expectations include the new issue key.
+- Read-only application to the original interrupted store identifies 109 represented active claims, two review-held
+  claims and one unexplained placed-claim gap (`claim-c4e8ab413633657d`), without treating all three as equivalent loss.
+- A direct synthesis regression for two distinct occurrences of the same activity, their dates/details, and unrelated
+  preferences/plans passed at `benchmark_runs/long-memory-20260908-occurrences` in 56.64s. The current contract handled
+  this neutral case; no extra grouping stage or speculative prompt change was justified by this result.
+- Focused diagnostics/API tests: 31 passed; backend: 355 passed, 71 skipped; Ruff/diff clean. Initial test failures were
+  incomplete page fixture identity metadata and the old exact API issue-key expectation; both fixtures were corrected.

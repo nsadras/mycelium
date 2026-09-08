@@ -191,7 +191,10 @@ class ClaimRouter:
         routable = {e.entity_id: e.entity_type for e in planned.values() if e.status == "active"}
         routings = {a: {"route_kind": "deferred", "confidence": 1.0,
                        "reason": "A supporting identity requires review."} for a in blockers}
-        for batch in self._alias_batches({a: item for a, item in aliases.items() if a not in blockers}):
+        for batch in self._alias_batches(
+            {a: item for a, item in aliases.items() if a not in blockers},
+            entity_count=len(routable),
+        ):
             routing_model = page_plan_model(batch, routable)
             system, user = page_plan_prompt(
                 self.formatter.entity_catalog(planned.values(), include_sections=True),
@@ -203,7 +206,9 @@ class ClaimRouter:
                     system, user, routing_model, num_predict=8192, debug_label="dream-claim-routing",
                 )).model_dump()["decisions"])
             except Exception as exc:
-                result.failures.extend(self._failure(item, f"Claim routing failed: {exc}") for item in batch.values())
+                result.failures.extend(self._failure(
+                    item, f"Claim routing failed: {type(exc).__name__}: {exc}"
+                ) for item in batch.values())
         for alias, routing in routings.items():
             kind = routing["route_kind"]
             destinations = {
@@ -442,9 +447,10 @@ class ClaimRouter:
 
     @staticmethod
     def _alias_batches(
-        aliases: dict[str, ClaimEvidence], size: int = 24
+        aliases: dict[str, ClaimEvidence], size: int = 24, *, entity_count: int = 1,
     ) -> Iterable[dict[str, ClaimEvidence]]:
-        """Bound unusually large routing responses without splitting ordinary cohorts."""
+        """Bound claim/page decisions, preserving every claim and eligible page."""
+        size = min(size, max(1, 32 // max(1, entity_count)))
         items = list(aliases.items())
         for start in range(0, len(items), size):
             yield dict(items[start:start + size])

@@ -160,6 +160,7 @@ class ConsolidationProcess:
                 if failure.claim_id not in incoming_claim_ids:
                     continue
                 failed_claim_ids.add(failure.claim_id)
+                failed_source_ids.add(failure.raw_log_entry_id)
                 failures.append({
                     "stage": "routing",
                     "source_id": failure.raw_log_entry_id,

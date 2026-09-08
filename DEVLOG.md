@@ -3922,3 +3922,23 @@ one prose-similarity summary.
   precision and other relative-time tests remain. Artifact/temporal tests: 59 passed; Ruff/diff clean.
 - This does not rewrite old extracted temporal artifacts. The frozen-extraction replays intentionally retain the
   original extraction, including its old temporal normalization; a fresh extraction uses the repaired mechanism.
+
+## 2026-09-08 — Bound placement grids and keep failed routing sources pending
+
+- The established chat replay failed at `benchmark_runs/long-memory-20260908-chat` in 713.89s. A placement response
+  repeatedly selected an owner excluded from its page map (about 6,900 output tokens / 95s per returned attempt);
+  other routing failures had empty exception messages. The old batch limit counted claims, not claims times pages.
+- Routing now targets at most 32 claim/page decisions per response while preserving every claim and every eligible
+  page. A registry larger than 32 still receives a complete single-claim row; this is a workload bound, not a full
+  input/output token-budget solution. Exception types are included in routing errors. No page is selected by code.
+- Five production page-contract probes passed before integration at `benchmark_runs/long-memory-20260908-page-grid-probes`
+  in 50.97s, including four claims against eight identities and shared/irrelevant subject counterexamples.
+- Failed routing now adds the source's raw-log ID to pending accounting. Previously the report could list failures
+  while marking their logs consolidated. Corrected two tests that encoded that bad completion behavior; added a
+  successful retry check and page-grid size/coverage checks across growing registries.
+- The smaller-grid chat replay completed its build but failed the stronger shared-evidence assertion in 611.80s
+  at `benchmark_runs/long-memory-20260908-chat-page-grid`: a restaurant identity was omitted. Inspection also caught
+  the evaluation judge incorrectly matching a different restaurant; that did not pass the shared-statement gate.
+  These semantic failures were retained and addressed separately below, not reported as a successful chat replay.
+- Backend: 366 passed, 73 opt-in skipped; Ruff/diff checks clean. Combined public replay validation after the
+  source-policy correction below passed; the grid change alone is not claimed to solve identity omissions.

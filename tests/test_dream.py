@@ -408,6 +408,15 @@ def test_claim_decision_batches_preserve_every_alias_once():
     assert [alias for batch in batches for alias in batch] == list(aliases)
 
 
+@pytest.mark.parametrize("entity_count", [1, 2, 8, 16, 40])
+def test_routing_batches_bound_the_page_decision_grid(entity_count):
+    aliases = {f"C{i:03d}": object() for i in range(1, 30)}
+    batches = list(ClaimRouter._alias_batches(aliases, entity_count=entity_count))
+    assert [alias for batch in batches for alias in batch] == list(aliases)
+    assert all(len(batch) * entity_count <= max(32, entity_count) for batch in batches)
+    assert all(batch for batch in batches)
+
+
 def test_revision_cannot_overwrite_identity_blocked_deferral():
     initial = RoutingResult(routes=[ClaimRoute(
         claim_id="claim-kitchen",
@@ -1131,8 +1140,8 @@ async def test_later_dream_discovers_page_from_claims_across_episodes(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dream_rejects_incomplete_alias_coverage_claim_locally(tmp_path):
-    dream, _, wiki, logs, artifacts = build_dream(
+async def test_dream_keeps_failed_routing_source_pending_until_retry(tmp_path):
+    dream, llm, wiki, logs, artifacts = build_dream(
         tmp_path, llm_response={}
     )
     entry, source = add_source(logs, artifacts)
@@ -1143,12 +1152,19 @@ async def test_dream_rejects_incomplete_alias_coverage_claim_locally(tmp_path):
 
     report = await dream.run()
 
-    assert report.pending_source_ids == []
-    assert report.completed_source_ids == [entry.entry_id]
+    assert report.pending_source_ids == [entry.entry_id]
+    assert report.completed_source_ids == []
     assert report.failures[0]["stage"] == "routing"
     assert [page.slug for page in wiki.list_all()] == ["you"]
-    assert logs.get(entry.entry_id).consolidated is True
+    assert logs.get(entry.entry_id).consolidated is False
     assert artifacts.get_claim("claim-one").dream_disposition == "routing_failed"
+    set_scope_response(llm, new_scope("C001", "Test System"))
+    retried = await dream.run()
+    assert not retried.failures
+    assert retried.completed_source_ids == [entry.entry_id]
+    assert not retried.pending_source_ids
+    assert logs.get(entry.entry_id).consolidated is True
+    assert artifacts.get_claim("claim-one").dream_disposition == "routed"
 
 
 @pytest.mark.asyncio
@@ -1326,7 +1342,9 @@ async def test_subject_graph_rejects_an_undeclared_participant_identity(tmp_path
 
     report = await dream.run()
 
-    assert report.completed_source_ids == [entry.entry_id]
+    assert report.completed_source_ids == []
+    assert report.pending_source_ids == [entry.entry_id]
+    assert not logs.get(entry.entry_id).consolidated
     assert len(report.failures) == 1
     assert "Identity plan failed" in report.failures[0][
         "reason"

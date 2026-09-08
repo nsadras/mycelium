@@ -150,6 +150,31 @@ async def test_long_multiparty_concrete_admission(tmp_path, monkeypatch):
     }, result["claims"], tmp_path / "meaning.json")
 
 
+async def test_tool_admission_preserves_business_facts_not_transport_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path / "llm-errors"))
+    memory = Mycelium(tmp_path / "store", config_path=CONFIG)
+    payload = json.dumps({
+        "result": "Harbor Workshop is a bicycle repair business at 42 Wharf Road, founded by Elena Ruiz in 2019.",
+        "transport_metadata": {"operator": "Noah", "request_id": "request-7", "elapsed_ms": 41},
+    })
+    captured = await memory.ingest_source(SourceInput(
+        transcript=payload, source_type="tool_observation", session_id="tool-probe",
+        idempotency_key="tool-probe", segments=({"segment_id": "", "index": 0, "content": payload, "role": "tool"},),
+    ))
+    source = memory.artifacts.get_source(captured.source_ids[0])
+    schema = extraction_output_model([s.segment_id for s in source.segments])
+    system, user = prompts.claim_extraction_prompt(
+        source.source_type, source.source_id, source.participants,
+        memory.encoder._render_claim_segments(source.segments),
+    )
+    result = schema.model_validate(await memory.llm.call_structured(system, user, schema, num_predict=8192)).model_dump()
+    (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
+    await check_meaning(memory, {
+        "expected": "Harbor Workshop is a bicycle repair business at 42 Wharf Road, founded by Elena Ruiz in 2019.",
+        "forbidden": "Noah operates Harbor Workshop.",
+    }, result["claims"], tmp_path / "meaning.json")
+
+
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c["name"])
 @pytest.mark.parametrize("mode", ["probe", "replay"])
 async def test_extraction_contract_in_real_system(tmp_path, monkeypatch, case, mode):

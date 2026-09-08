@@ -3942,3 +3942,20 @@ one prose-similarity summary.
   These semantic failures were retained and addressed separately below, not reported as a successful chat replay.
 - Backend: 366 passed, 73 opt-in skipped; Ruff/diff checks clean. Combined public replay validation after the
   source-policy correction below passed; the grid change alone is not claimed to solve identity omissions.
+
+## 2026-09-08 — Keep experience admission specific to conversational sources
+
+- The broader admission wording had also applied to tool results, broadening incidental review-author extraction
+  and crowding identity planning in the chat replay (30 claims versus 23 after correction). The paragraph now applies
+  only outside the declared `tool_observation` source type. Tool extraction retains its existing targeted policy;
+  a rendered-prompt comparison against eef5aa3 confirmed identical words apart from whitespace. No name filter was added.
+- Added source-type prompt-boundary tests and a neutral real-tool probe preserving business/founder/address facts
+  without promoting transport metadata. That probe and the two conversational experience probes passed in 45.99s at
+  `benchmark_runs/long-memory-20260908-source-policy-probes` before the new public replay.
+- Tightened the evaluation-only page matcher: shared industry or similar names do not establish identity, and aliases
+  or translations cannot be invented. The shared canonical statement requirement remains unchanged.
+- Full chat replay PASSED in 438.33s at `benchmark_runs/long-memory-20260908-chat-source-policy`: one populated You,
+  tool-grounded restaurant/person pages, shared founding evidence, per-page claim uniqueness, and fresh cooking-source
+  retrieval. Neither prior failed run was deleted, and no expected page or shared-evidence assertion was weakened.
+- This is a source-policy scoping repair, not proof of perfect identity discovery. Both the benchmark and the neutral
+  corpus remain guideposts; no fixture names or desired answers enter production prompts or matching logic.

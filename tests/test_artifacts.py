@@ -947,6 +947,19 @@ def test_year_relative_time_preserves_year_precision():
     assert facets["temporal"]["precision"] == "year"
 
 
+@pytest.mark.parametrize("from_text", [False, True])
+def test_unquantified_years_do_not_invent_a_calendar_year(from_text):
+    facets = normalize_temporal_facets(
+        {} if from_text else {"when": "years ago"},
+        "4:24 pm on 16 March, 2023",
+        "Ava visited the coast years ago." if from_text else "",
+    )
+    assert facets["temporal"]["expression"] == "years ago"
+    assert facets["temporal"]["status"] == "unresolved"
+    assert "start" not in facets["temporal"]
+    assert "end" not in facets["temporal"]
+
+
 @pytest.mark.parametrize(
     ("expression", "expected"),
     [

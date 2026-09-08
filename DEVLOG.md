@@ -3912,3 +3912,13 @@ one prose-similarity summary.
   this neutral case; no extra grouping stage or speculative prompt change was justified by this result.
 - Focused diagnostics/API tests: 31 passed; backend: 355 passed, 71 skipped; Ruff/diff clean. Initial test failures were
   incomplete page fixture identity metadata and the old exact API issue-key expectation; both fixtures were corrected.
+
+## 2026-09-08 — Do not invent a quantity for unquantified relative years
+
+- Removed the temporal normalizer's implicit one-year default when its parsed year quantity is absent. This removes
+  an unsupported inference rather than adding a natural-language classification rule. The invariant is that absent
+  quantities cannot acquire exact calendar intervals during normalization; original wording stays unresolved.
+- Tests exercise both a supplied temporal facet and recovery from canonical claim text. Existing explicit-year
+  precision and other relative-time tests remain. Artifact/temporal tests: 59 passed; Ruff/diff clean.
+- This does not rewrite old extracted temporal artifacts. The frozen-extraction replays intentionally retain the
+  original extraction, including its old temporal normalization; a fresh extraction uses the repaired mechanism.

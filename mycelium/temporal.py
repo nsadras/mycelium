@@ -163,7 +163,9 @@ def normalize_temporal_facets(
         target = base + timedelta(days=offset_days)
     years_ago = re.fullmatch(r"(?:(a|one|two|three|\d+) )?years? ago", lowered)
     if years_ago:
-        raw_years = years_ago.group(1) or "one"
+        raw_years = years_ago.group(1)
+        if raw_years is None:
+            return result
         years = {"a": 1, "one": 1, "two": 2, "three": 3}.get(raw_years)
         if years is None and raw_years.isdigit():
             years = int(raw_years)

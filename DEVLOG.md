@@ -3788,3 +3788,36 @@ one prose-similarity summary.
 - Backend: 344 passed, 50 opt-in skipped; Ruff and diff checks passed. The counterexample's titles still describe
   possible roles rather than clearly distinguishing the offered actions; candidate sets and uncertainty remain
   intact, but review-description quality and broader model reliability are not solved by these small probes.
+
+## 2026-09-07 — Extraction commitment-level fidelity
+
+- Added five neutral fixtures: tentative outing, explicitly undecided outing, conditional intention, firm
+  commitment, and an uncertain report. The old prompt passed four small examples at
+  `benchmark_runs/fidelity-20260907-before`. A shorter tentative example reproduced the defect at
+  `benchmark_runs/fidelity-20260907-tentative-before`: "thinking about" became unqualified "plans to".
+  The old model judge incorrectly passed that output; inspection, not its score, caught the problem.
+- Tightened the evaluation-only judge to distinguish tentative consideration from unqualified intention. Added
+  a judge counterexample that must reject a strengthened intention. No evaluation vocabulary enters production.
+- Added one extraction prompt paragraph requiring the readable assertion to preserve commitment level, conditions,
+  negation, and attribution. No extra extraction stage or certainty taxonomy; categories/confidence cannot replace
+  qualifiers. The matched tentative output now says "is considering" instead of "plans to".
+- Thirteen direct checks passed in 139.27s at `benchmark_runs/fidelity-20260907-after-probes`: eleven extraction
+  cases, the judge counterexample, and 48-segment accounting. The large batch initially omitted source-only entries;
+  the existing bounded structured-call retry recovered. Its failed output remains in llm-errors, not hidden.
+- Eleven actual capture/build/restart/retrieval replays passed in 193.56s at
+  `benchmark_runs/fidelity-20260907-replays`. Added meaning checks over rendered wiki statements as well as stored
+  claims and retrieved evidence. This covers suggestions, context-dependent acceptance/refusal, source-only input,
+  and the five fidelity cases. No replay assertion was relaxed; no-work rebuilds preserve canonical claims.
+- Backend: 344 passed, 61 opt-in skipped; Ruff, compileall and diff checks passed. Full frozen-chat regression
+  is recorded below when complete. Source attribution can still be implicit in citations rather than readable
+  prose (the reported-move example); the model judge is not a proof of every qualifier or relationship's retention.
+  This increment repairs demonstrated commitment-strength drift, not all semantic omissions.
+- Combined frozen-chat/web-search replay PASSED in 264.22s at `benchmark_runs/semantic-repairs-20260907-chat`:
+  one populated You, expected tool-grounded restaurant/person pages, shared canonical restaurant/founder evidence,
+  no repeated canonical statement ID within any page, and fried-rice source recall in a fresh chat. One extraction
+  response overlapped cited/source-only accounting; the existing bounded retry recovered, with the failure retained
+  in the replay's llm directory. No extra build or relaxed assertion was used.
+- Final backend rerun: 344 passed, 61 opt-in skipped in 16.50s; lint/compile/diff checks clean. Updated DESIGN.md
+  and the local incremental plan. The pre-existing untracked plan remains untracked, as do unrelated user files.
+  The earlier LoCoMo comparison was not rerun in this increment. No live data, server processes, or model settings
+  changed; speed remains out of scope. User-run UI check of these latest repairs is the remaining handoff.

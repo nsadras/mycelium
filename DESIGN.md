@@ -144,6 +144,9 @@ summary generation; a failed summary is retryable without recapturing or reopeni
 Build Memory snapshots source IDs, extracts unfinished batches, and runs the existing organizer on that snapshot.
 New sources arriving during the build remain pending. The library serializes builds; web capture recovery happens
 under per-session locks before the build snapshot. Existing extraction stages and persisted batch recovery remain.
+Extracted sentences preserve source commitment level, negation, conditions, and reported attribution. Tentative
+possibilities are durable memories, not definite plans; explicit commitments are not weakened into possibilities.
+Categories and confidence scores do not substitute for these qualifiers in the readable statement.
 
 Web turn sources point to up to four preceding captured turns for extraction context rather than duplicating their
 text. Earlier context is capped at one quarter of the model context window using complete source groups. Coverage
@@ -186,6 +189,8 @@ Important behavior:
 - One bounded structured response resolves identities and chooses types, without page admission. Explicit
   source user roles are authoritative bindings to You, expressed in both input and schema. Other subjects are
   model decisions backed by exact claim/participant evidence, not lexical matching or confidence thresholds.
+  The response accounts for the bound user first, then explains each other source referent before selecting its
+  resolution. One uncertain actor carries its alternatives together; distinct actors remain distinct.
 - Page usefulness is independent of identity confidence. A known identity can exist without a page; the persisted
   state is still named `provisional`, but there is no maturity threshold or continuity verifier. Pages without
   selected statements are not manufactured from participant encounters. External speakers who only report facts about
@@ -193,6 +198,8 @@ Important behavior:
 - Uncertain identities remain reviewable proposals and defer affected routing. Existing registry IDs/types and
   explicit human identity decisions cannot be overridden by the planner. Historical audit record readers and
   manual organization APIs remain; the retired model cascade no longer produces maturity assessments.
+  Review proposals retain exact candidate identity IDs and source evidence across reloads; pending-review context
+  includes those candidates and the explanation, not just a proposed title.
 - One subsequent placement response selects one or more useful page/section destinations for each claim, including
   identities without pages. A page-ID-keyed object makes one explicit decision per eligible page: a type-valid
   section or `not_selected`, with a reason. One statement may appear on several pages but has only one chosen
@@ -212,6 +219,9 @@ Important behavior:
   corrected claims. Grouping, group verification, per-fact rendering, prose verification, and repair are no longer
   separate model stages. Existing fact-ID reuse, pending-review protection, selected-view projection, and commit
   recovery remain. Scope-neighborhood revision has not been redesigned.
+  Truth review requires evidence of incompatible values for the same particular state/event or an actual
+  replacement. A shared topic, newer recording time, or another independent plan is insufficient. Genuine
+  changes create review proposals without automatically mutating accepted statements.
 - General selected placements replace the special person/project projection rule. Incidental mentions do not
   automatically receive a copy. Shared views retain the same claim IDs and provenance; if only part of a synthesized
   group was selected for a page, that view renders only the selected canonical statements, not unrelated group text.

@@ -1,5 +1,60 @@
 [
   {
+    "name": "tentative_outing",
+    "context": [],
+    "messages": [
+      {"role": "user", "content": "We're thinking about taking the children stargazing next month."},
+      {"role": "assistant", "content": "Understood."}
+    ],
+    "expected": "The user is considering taking the children stargazing next month.",
+    "forbidden": "The user has decided to take the children stargazing next month.",
+    "query": "What activity am I considering for next month?"
+  },
+  {
+    "name": "consideration_not_commitment",
+    "context": [],
+    "messages": [
+      {"role": "user", "content": "I'm thinking about taking my children to a science museum next month. We haven't decided yet."},
+      {"role": "assistant", "content": "Understood."}
+    ],
+    "expected": "The user is considering taking their children to a science museum next month but has not decided.",
+    "forbidden": "The user has decided to take their children to a science museum next month.",
+    "query": "What outing am I considering, and have I decided?"
+  },
+  {
+    "name": "conditional_intention",
+    "context": [],
+    "messages": [
+      {"role": "user", "content": "If I get a travel grant, I will attend the September conference. I haven't received a grant yet."},
+      {"role": "assistant", "content": "Understood."}
+    ],
+    "expected": "The user's intention to attend the September conference is conditional on receiving a travel grant; they have not received one yet.",
+    "forbidden": "The user is definitely attending the September conference.",
+    "query": "What does my conference attendance depend on?"
+  },
+  {
+    "name": "explicit_commitment",
+    "context": [],
+    "messages": [
+      {"role": "user", "content": "I've decided to attend a ceramics workshop next Saturday and have booked my place."},
+      {"role": "assistant", "content": "Understood."}
+    ],
+    "expected": "The user has decided to attend a ceramics workshop next Saturday and booked a place.",
+    "forbidden": "The user has not decided whether to attend the ceramics workshop.",
+    "query": "What workshop have I booked?"
+  },
+  {
+    "name": "uncertain_report",
+    "context": [],
+    "messages": [
+      {"role": "user", "content": "My colleague Dana told me she might move to Bergen. She hasn't decided whether to move."},
+      {"role": "assistant", "content": "Understood."}
+    ],
+    "expected": "The user's colleague Dana said she might move to Bergen but has not decided.",
+    "forbidden": "Dana has decided to move to Bergen.",
+    "query": "What do I know about Dana's possible move?"
+  },
+  {
     "name": "source_only",
     "context": [],
     "messages": [

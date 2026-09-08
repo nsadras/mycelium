@@ -36,6 +36,9 @@ async def check_meaning(memory, case, statements, path):
         "Evaluate whether the supplied stored assertions entail the expected assertion and "
         "whether they assert the forbidden assertion. Mere mention or explicit negation is "
         "not assertion. Do not infer agreement from a proposal, consideration, or refusal. "
+        "Use strict entailment, not topic similarity. Preserve the expected assertion's commitment level: "
+        "an unqualified 'plans to' or 'will' does not preserve 'is considering' or 'might'. "
+        "Tentativeness and conditions must be stated, not inferred from absent evidence of a decision. "
         "Return schema-valid JSON and explain the evidence.",
         json.dumps({"statements": statements, "expected": case["expected"], "forbidden": case["forbidden"]}),
         MeaningVerdict, num_predict=2048,
@@ -53,6 +56,15 @@ async def capture(memory, messages, key, context_ids=()):
                         "timestamp": "2026-09-04T12:00:00+00:00"} for i, m in enumerate(messages)),
         metadata={"context_source_ids": list(context_ids)},
     ))
+
+
+async def test_meaning_judge_rejects_strengthened_intention(tmp_path):
+    memory = Mycelium(tmp_path / "store", config_path=CONFIG)
+    with pytest.raises(AssertionError):
+        await check_meaning(memory, {
+            "expected": "The user is considering learning to sail.",
+            "forbidden": "The user has decided to learn to sail.",
+        }, ["The user plans to learn to sail."], tmp_path / "meaning.json")
 
 
 async def test_large_extraction_partition(tmp_path, monkeypatch):
@@ -142,6 +154,12 @@ async def test_extraction_contract_in_real_system(tmp_path, monkeypatch, case, m
         if prior_ids:
             assert any(p.source_id in prior_ids for c in current_claims for p in c.provenance)
         await check_meaning(memory, case, [asdict(c) for c in current_claims], tmp_path / "extracted_meaning.json")
+        current_ids = {c.claim_id for c in current_claims}
+        rendered = [item["text"] for page in memory.wiki.list()
+                    for section in page.sections for item in section["items"]
+                    if item["kind"] == "fact" and current_ids.intersection(item["claim_ids"])]
+        (tmp_path / "wiki_statements.json").write_text(json.dumps(rendered, indent=2))
+        await check_meaning(memory, case, rendered, tmp_path / "wiki_meaning.json")
 
     # Restart and no-work Build must neither re-extract nor duplicate sources/claims.
     def extracted_snapshot(claims):

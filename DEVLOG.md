@@ -3973,3 +3973,25 @@ one prose-similarity summary.
 - Three actual repeated-build review cases passed in 277.76s at
   `benchmark_runs/long-memory-20260908-review-scheduling`; focused fact tests: 23 passed. Backend: 367 passed,
   73 opt-in skipped in 19.03s; Ruff/diff checks clean.
+
+## 2026-09-08 — Completed fifteen-session accumulation replay and quality audit
+
+- `benchmark_runs/long-memory-20260908-replay-after-batching` completed all 15 builds in 5,088.22s with no build-level
+  failures. It reuses the original sample9 extraction in a fresh organization store; no QA was requested (count 0).
+  Four rejected structured synthesis responses recovered on retry. Original/live stores were not rebuilt or cleared.
+- Original: 178 active claims, 109 represented by 60 canonical facts, 2 held, 66 unplaced, 1 unexplained placed gap;
+  eight completed builds, six failed, and a cancelled fifteenth. Replay: the same 178 claims, 166 represented by
+  107 facts, 12 held, no unplaced claims or unexplained placed gaps. Cross-store integrity is healthy and canonical
+  memberships / within-page claim IDs have no duplicates. These structural measures are not semantic recall scores.
+- Total audited claim decisions fell from 1,161 to 197; identity work units from 106 to 20. Session 12 deferred eight
+  claims; session 13 retried and placed them all. Later knee-recovery, Tahoe, and ER/gastritis facts are now present.
+- Manual page inspection still finds substantial irrelevant cross-page sharing, particularly the Canadian woman's
+  31-bullet page, plus over-broad synthesized sentences, stale current context, and questionable truth-review holds.
+  Coverage/reliability improved; uniformly good organization or concise faithful prose is not claimed.
+- Attribution: this process started after the batching increment but before the subsequent placement-grid and
+  review-scheduling changes. Those later changes passed their own real probes/replays and the latest backend suite.
+  Frozen extraction cannot test the fresh admission/temporal repairs. Concurrent model tests preclude a clean latency
+  comparison; the last three builds took 7.48/6.07/4.75 minutes, but selected historical context remains unbounded.
+- Full comparison, commit map, neutral/public replay evidence, limitations, and reproduction command:
+  `planning/long_memory_repairs_2026_09_08.md`. Next semantic priority is page relevance, followed by event/grouping
+  fidelity and truth-review precision, using neutral counterexamples before another corpus-scale run.

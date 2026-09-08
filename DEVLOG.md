@@ -3745,3 +3745,21 @@ one prose-similarity summary.
   checkpoint is user-run UI smoke testing; the LoCoMo comparison from the synthesis increment was not rerun
   in this bounded placement repair. Explicit per-page decisions grow with registry size; general context/output
   budgeting remains a follow-up, not something this contract alone solves.
+
+## 2026-09-07 — Truth-review scope repair
+
+- User confirmed the latest UI smoke test and page quality; build latency is acceptable and not an optimization
+  target. Authorized separate truth, identity, and extraction repairs with incremental successful commits.
+- Narrowed the existing truth-review prompt: same subject/topic is insufficient; evidence must establish the same
+  particular state/event and incompatibility or replacement. Multiple plans and uncertain alternatives may coexist.
+  No additional pass, schema, lexical rule, automatic correction, or change to review authority.
+- Initial seven neutral direct probes passed even before the change (`benchmark_runs/truth-20260907-before`);
+  they do not reproduce the historical false positive. Final eight direct production-contract probes passed at
+  `benchmark_runs/truth-20260907-after`, including same-domain independent plans and genuine cancellation.
+- Three actual capture/two-build replays passed in 120.51s at `benchmark_runs/truth-20260907-replays`: compatible
+  plans generate no proposal; explicit replacement and same-event contradiction generate pending proposals and
+  preserve accepted canonical claims. This also exercises prior-fact selection and cumulative synthesis.
+- Backend: 343 passed, 45 opt-in skipped; Ruff and diff checks passed. No live data or servers touched.
+- Include the two existing, unchanged synthesis templates in this commit: they were untracked despite being
+  required by the previously committed production pipeline. Other unrelated untracked files are excluded.
+- These are bounded regression checks, not a claim that truth review has perfect semantic accuracy.

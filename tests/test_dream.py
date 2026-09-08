@@ -23,6 +23,7 @@ from mycelium.consolidation_models import ClaimRoute, RoutingResult
 from mycelium.consolidation_formatting import RoutingFormatter
 from mycelium.dream import ConsolidationProcess
 from mycelium.dream_policy import DreamPolicy
+from mycelium.facts import FactResolutionResult
 from mycelium.models import LogEntry
 from mycelium.store import LogStore, WikiStore
 from mycelium.page_plan import page_plan_model
@@ -1647,6 +1648,48 @@ async def test_dream_preserves_accepted_fact_while_contradiction_is_pending(tmp_
     assert "prefers tea" in page.content
     assert "dislikes tea" not in page.content
     assert page.content.count("pending reconciliation") == 1
+
+
+@pytest.mark.asyncio
+async def test_partial_fact_failure_commits_successes_and_retries_only_missing_claims(tmp_path):
+    dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response=scope_plan({
+        f"C{i:03d}": assignment("you") for i in range(1, 14)
+    }))
+    entry, source = add_source(logs, artifacts)
+    claims = [add_claim(artifacts, source, claim_id=f"claim-{i:02d}", text=f"Statement {i}.")
+              for i in range(1, 14)]
+    calls = []
+
+    async def step(owner_id, step_claims, placements, existing, incoming_ids, *args, **kwargs):
+        calls.append(set(incoming_ids))
+        if len(calls) == 2:
+            raise ValueError("Injected model failure in the last addition batch")
+        pairs = [dream.fact_resolver._direct_projection(
+            artifacts.get_entity(owner_id), c, placements[c.claim_id]
+        ) for c in step_claims if c.claim_id in incoming_ids]
+        return FactResolutionResult(facts=[*existing, *(p[0] for p in pairs)],
+                                    placements=[p[1] for p in pairs])
+
+    dream.fact_resolver._resolve_owner_step = AsyncMock(side_effect=step)
+    first = await dream.run()
+    assert len(first.failures) == 1
+    assert first.pending_source_ids == [entry.entry_id]
+    assert len(artifacts.list_consolidated_facts()) == 12
+    assert artifacts.get_claim(claims[-1].claim_id).dream_disposition == "routing_failed"
+    assert all(artifacts.get_claim(c.claim_id).dream_disposition == "routed" for c in claims[:-1])
+    before = {f.fact_id: f for f in artifacts.list_consolidated_facts()}
+
+    set_scope_response(llm, you_scope())
+    second = await dream.run()
+    assert not second.failures
+    assert second.completed_source_ids == [entry.entry_id]
+    assert calls[-1] == {claims[-1].claim_id}
+    after = {f.fact_id: f for f in artifacts.list_consolidated_facts()}
+    assert all(after[fid] == prior for fid, prior in before.items())
+    assert len(after) == 13
+    page_claims = [cid for section in wiki.get("you").sections for item in section["items"]
+                   if item["kind"] == "fact" for cid in item["claim_ids"]]
+    assert len(page_claims) == len(set(page_claims)) == 13
 
 
 @pytest.mark.asyncio

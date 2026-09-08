@@ -33,6 +33,7 @@ class FactResolutionFailure:
     claim_ids: list[str]
     raw_log_entry_ids: list[str]
     reason: str
+    partial: bool = False
 
 
 @dataclass
@@ -45,13 +46,14 @@ class FactResolutionResult:
 
     @property
     def failed_owner_ids(self) -> set[str]:
-        return {failure.owner_entity_id for failure in self.failures}
+        return {failure.owner_entity_id for failure in self.failures if not failure.partial}
 
 
 class FactResolver:
-    """Make one complete, fail-closed fact decision for each affected owner."""
+    """Resolve bounded additions; preserve atomicity when changing existing ownership."""
 
     _MAX_UNREPRESENTED_PER_GROUPING = 12
+    _MAX_ADDITIONS_WITH_HISTORY = 4
 
     def __init__(self, llm: OllamaClient, artifacts: ArtifactStore):
         self.llm = llm
@@ -132,6 +134,7 @@ class FactResolver:
             result.facts.extend(resolved.facts)
             result.placements.extend(resolved.placements)
             result.proposals.extend(resolved.proposals)
+            result.failures.extend(resolved.failures)
             output_ids = {item.fact_id for item in resolved.facts}
             result.deleted_fact_ids.update(
                 fact.fact_id for fact in owner_existing
@@ -156,7 +159,7 @@ class FactResolver:
             claim for claim in claims
             if claim.claim_id not in represented_claim_ids
         ]
-        if len(unrepresented) <= self._MAX_UNREPRESENTED_PER_GROUPING:
+        if not unrepresented:
             return await self._resolve_owner_step(
                 owner_id,
                 claims,
@@ -172,12 +175,28 @@ class FactResolver:
         working_facts = list(existing)
         placement_updates: dict[str, ClaimPlacement] = {}
         proposals: list[ReconsolidationProposal] = []
+        failures: list[FactResolutionFailure] = []
         claim_by_id = {claim.claim_id: claim for claim in claims}
+        # Partial progress is safe only for additions: existing represented claims
+        # keep their persisted ownership/views. Existing-view changes remain owner-atomic.
+        additions_only = all(
+            claim_id in claim_by_id
+            and placements.get(claim_id) == self.artifacts.placement_for_claim(claim_id)
+            for claim_id in represented_claim_ids
+        ) and all(
+            (prior := self.artifacts.placement_for_claim(claim.claim_id)) is None
+            or prior.owner_entity_id == owner_id
+            for claim in unrepresented
+        )
+        group_size = (
+            self._MAX_ADDITIONS_WITH_HISTORY if existing
+            else self._MAX_UNREPRESENTED_PER_GROUPING
+        )
         for start in range(
-            0, len(unrepresented), self._MAX_UNREPRESENTED_PER_GROUPING
+            0, len(unrepresented), group_size
         ):
             incoming_group = unrepresented[
-                start:start + self._MAX_UNREPRESENTED_PER_GROUPING
+                start:start + group_size
             ]
             represented = {
                 claim_id
@@ -186,19 +205,29 @@ class FactResolver:
             }
             incoming_group_ids = {claim.claim_id for claim in incoming_group}
             step_claims = [
-                claim_by_id[claim_id]
-                for claim_id in sorted(represented | incoming_group_ids)
-                if claim_id in claim_by_id
+                claim for claim in claims
+                if claim.claim_id in represented | incoming_group_ids
             ]
-            step = await self._resolve_owner_step(
-                owner_id,
-                step_claims,
-                placements,
-                working_facts,
-                incoming_group_ids,
-                dream_run_id,
-                entities,
-            )
+            try:
+                step = await self._resolve_owner_step(
+                    owner_id, step_claims, placements, working_facts,
+                    incoming_group_ids & incoming_claim_ids, dream_run_id, entities,
+                    pending_proposals=proposals,
+                )
+            except Exception as exc:
+                if not additions_only:
+                    raise
+                failures.append(FactResolutionFailure(
+                    owner_entity_id=owner_id,
+                    claim_ids=sorted(incoming_group_ids),
+                    raw_log_entry_ids=sorted({
+                        p.raw_log_entry_id for claim in incoming_group for p in claim.provenance
+                        if p.raw_log_entry_id
+                    }),
+                    reason=f"Fact addition batch was rejected: {type(exc).__name__}: {exc}",
+                    partial=True,
+                ))
+                continue
             working_facts = step.facts
             placement_updates.update({
                 placement.claim_id: placement for placement in step.placements
@@ -208,6 +237,7 @@ class FactResolver:
             facts=working_facts,
             placements=list(placement_updates.values()),
             proposals=proposals,
+            failures=failures,
         )
 
     @staticmethod
@@ -247,6 +277,8 @@ class FactResolver:
         incoming_claim_ids: set[str],
         dream_run_id: str,
         entities: dict[str, EntityRecord],
+        *,
+        pending_proposals: list[ReconsolidationProposal] | None = None,
     ) -> FactResolutionResult:
         owner = entities[owner_id]
         definition = entity_type_definition(owner.entity_type)
@@ -450,7 +482,8 @@ class FactResolver:
                 ))
         existing_pending = [
             proposal
-            for proposal in self.artifacts.list_reconsolidation_proposals(status="pending")
+            for proposal in [*self.artifacts.list_reconsolidation_proposals(status="pending"),
+                             *(pending_proposals or [])]
             if owner_id in proposal.affected_entity_ids
         ]
         pending_incoming.update(

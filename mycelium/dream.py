@@ -226,26 +226,28 @@ class ConsolidationProcess:
             failed_source_ids.update(failure.raw_log_entry_ids)
             for route in successful_routes:
                 prior = self.artifacts.placement_for_claim(route.claim_id)
-                if (
-                    (
-                        route.owner_entity_id == failure.owner_entity_id
-                        or (
-                            prior is not None
-                            and prior.owner_entity_id == failure.owner_entity_id
-                        )
-                    )
-                    and route.claim_id in incoming_claim_ids
-                ):
+                affected = (
+                    route.claim_id in failure.claim_ids if failure.partial
+                    else route.owner_entity_id == failure.owner_entity_id
+                    or (prior is not None and prior.owner_entity_id == failure.owner_entity_id)
+                )
+                if affected and route.claim_id in incoming_claim_ids:
                     failed_source_ids.add(route.raw_log_entry_id)
                     self.policy.set_decision(
                         decisions, route.claim_id, "routing_failed", failure.reason
                     )
+        failed_addition_ids = {
+            claim_id for failure in fact_result.failures if failure.partial
+            for claim_id in failure.claim_ids
+        }
+        failed_owner_ids = fact_result.failed_owner_ids
         successful_routes = [
             route for route in successful_routes
-            if route.owner_entity_id not in fact_result.failed_owner_ids
+            if route.claim_id not in failed_addition_ids
+            and route.owner_entity_id not in failed_owner_ids
             and (
                 (prior := self.artifacts.placement_for_claim(route.claim_id)) is None
-                or prior.owner_entity_id not in fact_result.failed_owner_ids
+                or prior.owner_entity_id not in failed_owner_ids
             )
         ]
         placement_updates = {

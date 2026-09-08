@@ -222,6 +222,11 @@ Important behavior:
   separate model stages. Existing fact-ID reuse, pending-review protection, selected-view projection, and commit
   recovery remain. Scope-neighborhood revision is triggered only by actual identity creation or first materialization,
   not routine updates to existing materialized identities.
+  Initial synthesis admits at most twelve new claims per work unit; additions against an existing history admit
+  at most four, plus model-selected prior facts. This bounds new work, not the size of a selected historical fact.
+  Additions preserve successful batches when another batch fails; only failed claim IDs remain retryable. Changes
+  to existing placements retain owner-scoped atomicity. Pending proposals created by earlier batches protect
+  accepted facts in later batches of the same build, before anything is persisted.
   Truth review requires evidence of incompatible values for the same particular state/event or an actual
   replacement. A shared topic, newer recording time, or another independent plan is insufficient. Genuine
   changes create review proposals without automatically mutating accepted statements.

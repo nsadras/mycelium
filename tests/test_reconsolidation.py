@@ -1,4 +1,5 @@
 from datetime import datetime
+from dataclasses import replace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -672,6 +673,59 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
     assert old.text not in synthesis.args[1]
     assert pending.text not in synthesis.args[1]
     assert other.text in synthesis.args[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_history,change_placement", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("failed_batch", [0, 1])
+async def test_failed_addition_batch_preserves_other_batches(tmp_path, has_history, change_placement, failed_batch):
+    artifacts = setup_owner(tmp_path)
+    old = claim("old", "The user grows herbs.", "2026-07-01T12:00:00")
+    if has_history:
+        place(artifacts, old)
+        artifacts.save_consolidated_fact(fact(old))
+    additions = [claim(f"new-{i}", f"Statement {i}.", f"2026-08-{i:02d}T12:00:00")
+                 for i in range(1, 14)]
+    placements = [place(artifacts, item) for item in additions]
+    if change_placement:
+        placements.append(replace(artifacts.placement_for_claim(old.claim_id), section_key="identity"))
+    resolver = FactResolver(AsyncMock(), artifacts)
+    batches = []
+
+    async def step(owner_id, claims, placements, existing, incoming_ids, *args, **kwargs):
+        represented = {cid for f in existing for cid in f.member_claim_ids}
+        new = [c for c in claims if c.claim_id not in represented]
+        batches.append({c.claim_id for c in new})
+        if len(batches) - 1 == failed_batch:
+            raise ValueError("Injected invalid model output")
+        return FactResolutionResult(facts=[*existing, *(fact(c) for c in new)],
+                                    placements=[placements[c.claim_id] for c in new])
+
+    resolver._resolve_owner_step = AsyncMock(side_effect=step)
+    result = await resolver.resolve(
+        placements, affected_entity_ids={"you"}, incoming_claim_ids={c.claim_id for c in additions},
+        dream_run_id="batch-test",
+    )
+    assert len(result.failures) == 1
+    if change_placement:
+        assert not result.failures[0].partial
+        assert result.failed_owner_ids == {"you"}
+        assert result.facts == [fact(old)]
+        assert not result.placements
+        assert not result.deleted_fact_ids
+        return
+    assert result.failures[0].partial
+    assert set(result.failures[0].claim_ids) == batches[failed_batch]
+    assert not result.failed_owner_ids
+    assert not result.deleted_fact_ids
+    expected = {c.claim_id for c in additions} - batches[failed_batch]
+    if has_history:
+        expected.add(old.claim_id)
+        assert fact(old) in result.facts
+    assert {cid for f in result.facts for cid in f.member_claim_ids} == expected
+    limit = resolver._MAX_ADDITIONS_WITH_HISTORY if has_history else resolver._MAX_UNREPRESENTED_PER_GROUPING
+    assert all(len(batch) <= limit for batch in batches)
+    assert set.union(*batches) == {c.claim_id for c in additions}
 
 
 @pytest.mark.asyncio

@@ -3852,3 +3852,25 @@ one prose-similarity summary.
   passed in 153.93s at `benchmark_runs/long-memory-20260908-review-three-builds`.
 - Backend: 346 passed, 62 skipped in 13.49s with host access; Ruff and diff checks clean. Sandbox-only full suite
   stalled on local networking; host-enabled rerun is the recorded validation. No live or original benchmark edits.
+
+## 2026-09-08 — Bounded cumulative additions and batch-local failure recovery
+
+- Additions against existing history now use at most four new claims per work unit (initial batches remain twelve).
+  Prior facts are still selected semantically; there is no lexical partition or arbitrary truncation of old evidence.
+  The direct synthesis contract remains unchanged and was exercised by the preceding neutral probes.
+- Previously, a late batch failure discarded all successful work for its owner. Addition-only failures now carry
+  exact failed claim IDs; successful batches persist, and a subsequent Build retries the missing claims only.
+  Existing placement changes still fail owner-atomically. Pending proposals are carried across batches before commit.
+- Added injected first/late failure tests with and without history, an existing-placement atomicity counterexample,
+  and a full Dream commit/retry regression: twelve valid facts survive a thirteenth-claim failure unchanged, then the
+  retry completes the remaining claim without duplicates. Chronological input order is preserved across batching.
+- Public real-model neutral replay: three captures/builds with six statements each, complementary details, repetition,
+  independent facts, reloads, and bicycle retrieval. Passed in 543.66s at
+  `benchmark_runs/long-memory-20260908-neutral-batching`. Every eligible placed claim is represented; no per-page
+  duplicate claim IDs; strict meaning checks retain profession duration, painting preference, bicycle details, and
+  language-practice schedule. Timing includes concurrent model probes and is not a latency comparison.
+- Backend: 353 passed, 69 skipped in 15.88s; focused final tests 60 passed; Ruff/diff clean. The sandbox-stalled pytest
+  was terminated by its verified PID after the host-enabled replacement passed; no server processes were touched.
+- Fifteen-session frozen-extraction replay is running separately from commit eef5aa3, before this batching change;
+  results will be attributed accordingly. The admission wording was being probed during the neutral replay; admission
+  has separate direct and integrated tests and is committed separately. This replay is not an isolated A/B on extraction.

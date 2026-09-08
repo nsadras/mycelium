@@ -1,5 +1,38 @@
 [
   {
+    "name": "concrete_past_experience",
+    "context": [],
+    "messages": [
+      {"role": "user", "content": "Last weekend I stayed in a small cabin near the coast. I made lentil soup with roasted peppers on Sunday evening."},
+      {"role": "assistant", "content": "That sounds lovely. Keep making time for yourself!"}
+    ],
+    "expected": "The user stayed in a cabin near the coast last weekend and made lentil soup with roasted peppers on Sunday evening.",
+    "forbidden": "The user plans to stay in a coastal cabin next weekend.",
+    "query": "What did I cook and where did I stay last weekend?"
+  },
+  {
+    "name": "concrete_health_update",
+    "context": [],
+    "messages": [
+      {"role": "user", "content": "I saw my doctor yesterday about my wrist. It is still sore but improving. The doctor said it wasn't fractured."},
+      {"role": "assistant", "content": "Glad to hear that. You've got this!"}
+    ],
+    "expected": "The user saw a doctor yesterday about a wrist that is still sore but improving; the doctor said it was not fractured.",
+    "forbidden": "The user's wrist is fully healed.",
+    "query": "What happened with my wrist?"
+  },
+  {
+    "name": "encouragement_without_assertion",
+    "context": [],
+    "messages": [
+      {"role": "user", "content": "Thanks for the encouragement."},
+      {"role": "assistant", "content": "You've got this! Keep going, one step at a time."}
+    ],
+    "expected": null,
+    "forbidden": null,
+    "query": "What are my plans?"
+  },
+  {
     "name": "tentative_outing",
     "context": [],
     "messages": [

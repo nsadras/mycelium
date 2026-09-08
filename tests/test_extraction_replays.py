@@ -103,6 +103,53 @@ async def test_large_extraction_partition(tmp_path, monkeypatch):
     }, result["claims"], tmp_path / "meaning.json")
 
 
+async def test_long_multiparty_concrete_admission(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path / "llm-errors"))
+    memory = Mycelium(tmp_path / "store", config_path=CONFIG)
+    statements = [
+        "Last weekend I stayed in a small cabin near the coast.",
+        "I made lentil soup with roasted peppers on Sunday evening.",
+        "I saw my doctor yesterday about my wrist.",
+        "My wrist is still sore but improving; the doctor said it wasn't fractured.",
+        "I practiced landscape painting at the community studio on Monday.",
+        "I have been keeping a journal to manage stress.",
+        "I took my daughter to her dentist appointment on Tuesday.",
+        "My daughter needs another dentist appointment next month.",
+    ]
+    segments = [segment for statement in statements for segment in (
+        {"speaker": "Mira", "content": statement},
+        {"speaker": "Noah", "content": "Thanks for sharing. Keep going, you've got this!"},
+        {"speaker": "Mira", "content": "Thanks for listening."},
+        {"speaker": "Noah", "content": "Of course. What else is new?"},
+    )]
+    captured = await memory.ingest_source(SourceInput(
+        transcript="\n".join(f"{s['speaker']}: {s['content']}" for s in segments),
+        source_type="multi_party_conversation", participants=("Mira", "Noah"),
+        session_id="neutral-long", idempotency_key="neutral-long",
+        segments=tuple({**s, "segment_id": "", "index": i,
+                        "metadata": {"fixture_assertion": i % 4 == 0}}
+                       for i, s in enumerate(segments)),
+    ))
+    source = memory.artifacts.get_source(captured.source_ids[0])
+    schema = extraction_output_model([s.segment_id for s in source.segments])
+    system, user = prompts.claim_extraction_prompt(
+        source.source_type, source.source_id, source.participants,
+        memory.encoder._render_claim_segments(source.segments),
+    )
+    result = schema.model_validate(await memory.llm.call_structured(
+        system, user, schema, num_predict=8192, debug_label="multiparty-admission",
+    )).model_dump()
+    (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
+    cited = {sid for c in result["claims"] for sid in c["segment_ids"]}
+    assert {s.segment_id for s in source.segments if s.metadata["fixture_assertion"]} <= cited
+    assert {s.segment_id for s in source.segments if not s.metadata["fixture_assertion"]}.isdisjoint(cited)
+    await check_meaning(memory, {
+        "expected": "Mira stayed in a coastal cabin last weekend, made lentil soup with roasted peppers on "
+                    "Sunday evening, and has a sore but improving wrist that the doctor said was not fractured.",
+        "forbidden": "Mira's wrist is fully healed.",
+    }, result["claims"], tmp_path / "meaning.json")
+
+
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c["name"])
 @pytest.mark.parametrize("mode", ["probe", "replay"])
 async def test_extraction_contract_in_real_system(tmp_path, monkeypatch, case, mode):

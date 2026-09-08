@@ -3874,3 +3874,25 @@ one prose-similarity summary.
 - Fifteen-session frozen-extraction replay is running separately from commit eef5aa3, before this batching change;
   results will be attributed accordingly. The admission wording was being probed during the neutral replay; admission
   has separate direct and integrated tests and is committed separately. This replay is not an isolated A/B on extraction.
+
+## 2026-09-08 — Admit concrete experiences without promoting conversational encouragement
+
+- Clarified existing admission policy: ordinary experiences, actions, observations, and changing conditions can
+  remain useful as dated history. Durability is not permanence or subjective importance. Generic encouragement
+  does not establish recipient traits or commitments. No keyword filtering, extra admission pass, or benchmark
+  vocabulary entered the production prompt.
+- Three neutral tiny cases passed under the old prompt at `benchmark_runs/long-memory-20260908-admission-before`;
+  these alone did not reproduce the long-run omissions. After clarification, five direct cases/counterexamples
+  passed in 88.08s at `benchmark_runs/long-memory-20260908-admission-after`.
+- A longer external-participant probe uses eight concrete reports interleaved with filler. The first assertion
+  incorrectly indexed input turns after ingestion split them into sentences; its output had retained the reports.
+  Added evaluation-only metadata to carry fixture identity through splitting (not rendered to the model).
+  The corrected 48-segment probe passed in 71.64s at `benchmark_runs/long-memory-20260908-multiparty-admission-ids`:
+  all eight assertion segments cited, no filler cited, and meal/health/travel details preserved by the meaning check.
+- Three public capture/build/wiki/restart/retrieval cases plus the long direct probe passed in 219.80s at
+  `benchmark_runs/long-memory-20260908-admission-replays`. Existing suggestions, acceptance/refusal, fidelity,
+  questions and large-batch accounting probes all rechecked: 15 passed in 395.35s at
+  `benchmark_runs/long-memory-20260908-admission-regression-probes`.
+- Backend at this stage: 355 passed, 71 skipped; Ruff/diff clean. Frozen-extraction benchmark runs cannot measure
+  extraction recall improvement; these are explicit policy and neutral regression checks, not a claimed LoCoMo
+  recall gain. Earlier loss cannot be recovered by merely resynthesizing frozen claims.

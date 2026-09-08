@@ -112,9 +112,12 @@ class ConsolidationProcess:
             dream_run_id=run_id,
             participant_source_ids=incoming_source_ids,
         ) if evidence else None
+        previous_entities = {entity.entity_id: entity for entity in self.artifacts.list_entities()}
         newly_materialized = [
             entity for entity in (routing.new_entities if routing is not None else [])
             if entity.materialization_state == "materialized"
+            and (entity.entity_id not in previous_entities
+                 or previous_entities[entity.entity_id].materialization_state != "materialized")
         ]
         if newly_materialized:
             revision_claims = self.policy.scope_revision_claims(

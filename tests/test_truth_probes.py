@@ -3,6 +3,7 @@ import json
 import os
 from dataclasses import asdict
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -69,11 +70,14 @@ async def test_truth_review_two_builds(tmp_path, monkeypatch, prior, incoming, r
     assert not first.report.failures
     accepted = {c.claim_id: c.text for c in memory.artifacts.list_claims()}
     assert accepted
+    revision = Mock(wraps=memory.consolidator.policy.scope_revision_claims)
+    monkeypatch.setattr(memory.consolidator.policy, "scope_revision_claims", revision)
     await capture(memory, [{"role": "user", "content": incoming}], "incoming")
     second = await memory.consolidate()
     (tmp_path / "build.json").write_text(json.dumps(asdict(second), indent=2, default=str))
     (tmp_path / "calls.json").write_text(json.dumps(list(memory.llm._call_log), indent=2, default=str))
     assert not second.report.failures
+    revision.assert_not_called()
     proposals = memory.artifacts.list_reconsolidation_proposals()
     (tmp_path / "proposals.json").write_text(json.dumps([asdict(p) for p in proposals], indent=2))
     if relation:

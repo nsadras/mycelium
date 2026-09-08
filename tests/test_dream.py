@@ -1,5 +1,6 @@
 from datetime import datetime
-from unittest.mock import AsyncMock
+from dataclasses import replace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from pydantic import ValidationError
@@ -717,6 +718,17 @@ def add_claim(
 
 
 @pytest.mark.asyncio
+async def test_updating_existing_subject_does_not_replan_historical_neighborhood(tmp_path):
+    dream, _, _, logs, artifacts = build_dream(tmp_path, llm_response=you_scope())
+    _, source = add_source(logs, artifacts)
+    add_claim(artifacts, source)
+    dream.policy.scope_revision_claims = Mock(side_effect=AssertionError("Unexpected historical replan"))
+    report = await dream.run()
+    assert not report.failures
+    dream.policy.scope_revision_claims.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_dream_routes_claim_and_materializes_deterministic_page(tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
         tmp_path, llm_response=new_scope("C001", "Memory Design")
@@ -838,7 +850,8 @@ async def test_rerouting_placed_claim_to_deferred_removes_its_fact(tmp_path):
         text="Ben has a stable current preference.",
         about="Ben",
     )
-    second_owner = artifacts.create_entity("person", "Ben")
+    second_owner = artifacts.create_entity("person", "Ben", materialization_state="provisional")
+    second_owner = replace(second_owner, materialization_state="materialized")
     second_route = ClaimRoute(
         claim_id=second_claim.claim_id,
         owner_entity_id=second_owner.entity_id,

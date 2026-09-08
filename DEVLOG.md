@@ -3821,3 +3821,14 @@ one prose-similarity summary.
   and the local incremental plan. The pre-existing untracked plan remains untracked, as do unrelated user files.
   The earlier LoCoMo comparison was not rerun in this increment. No live data, server processes, or model settings
   changed; speed remains out of scope. User-run UI check of these latest repairs is the remaining handoff.
+
+## 2026-09-08 — Limit historical replanning to actual materialization
+
+- The partial long-session run exposed repeated historical routing. The router's `new_entities` also includes
+  updated existing identities; Dream incorrectly treated those updates as newly materialized subjects.
+- Compare persisted materialization state before triggering scope revision. Creation and provisional-to-materialized
+  transitions still replan history; routine updates do not. No semantic heuristic or prompt change was introduced.
+- Added a structural regression and corrected the existing materialization fixture to exercise a real transition.
+  Three real two-build truth probes also verify that updating the same subject does not invoke historical revision:
+  3 passed in 198.89s at `benchmark_runs/long-memory-20260908-replan`.
+- Backend: 345 passed, 61 skipped; Ruff and diff checks passed. Original benchmark and live store untouched.

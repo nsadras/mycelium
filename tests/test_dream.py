@@ -86,7 +86,7 @@ def scope_plan(
     }
 
 
-def split_scope_plan(plan: dict) -> list[dict]:
+def split_scope_plan(plan: dict, *, other_entities=()) -> list[dict]:
     assignments = dict(plan.get("assignments", {}))
     candidates = list(plan.get("candidates", []))
     candidate_entities = {
@@ -103,6 +103,14 @@ def split_scope_plan(plan: dict) -> list[dict]:
         for candidate in candidates
         if candidate["confidence"] < 0.7
     }
+    eligible = {"you", *other_entities} | {
+        stable(candidate["candidate_id"]) for candidate in candidates
+        if candidate["type_adjudication"] == "accepted"
+    } | {
+        stable(entity_id) for decision in assignments.values()
+        for entity_id in [decision.get("owner_entity", ""), *decision.get("linked_entities", [])]
+        if entity_id
+    }
 
     routing = {"decisions": {
         alias: (
@@ -112,15 +120,17 @@ def split_scope_plan(plan: dict) -> list[dict]:
             else {
                 "route_kind": "general",
                 "owner_entity": stable(decision["owner_entity"]),
-                "pages": [
-                    {"entity_id": target,
-                     "section_key": default_section(target.split("-")[0], "unknown", None),
+                "pages": {
+                    **{entity_id: {"section_key": "not_selected", "reason": "Not a selected subject."}
+                       for entity_id in eligible},
+                    **{target: {"section_key": default_section(target.split("-")[0], "unknown", None),
                      "reason": decision["reason"]}
                     for target in dict.fromkeys([
                         stable(decision["owner_entity"]),
                         *[stable(e) for e in decision.get("linked_entities", [])],
                     ])
-                ],
+                    },
+                },
                 "confidence": decision["confidence"], "reason": decision["reason"],
             }
         ) for alias, decision in assignments.items()
@@ -147,6 +157,16 @@ def split_scope_plan(plan: dict) -> list[dict]:
 
 def use_existing_identity(responses, entity_id, *, title, aliases):
     node = responses[0]["subjects"][0]
+    proposed_id = f"{node['entity_type']}-{slugify(node['title'])}"
+    if proposed_id != entity_id:
+        for decision in responses[1]["decisions"].values():
+            if decision["route_kind"] != "general":
+                continue
+            proposed = decision["pages"].pop(proposed_id, None)
+            if entity_id not in decision["pages"] and proposed is not None:
+                decision["pages"][entity_id] = proposed
+            if decision["owner_entity"] == proposed_id:
+                decision["owner_entity"] = entity_id
     node.update(resolution="existing", entity_id=entity_id, title=title, aliases=aliases)
     return responses
 
@@ -414,17 +434,20 @@ def test_revision_cannot_overwrite_identity_blocked_deferral():
 def test_claim_routing_contract_requires_exact_claims_and_registry_values():
     schema = page_plan_model(["C001", "C002"], {"you": "you", "project-cedar": "project"})
     decision = {"route_kind": "general", "owner_entity": "you",
-                "pages": [{"entity_id": "you", "section_key": "profile", "reason": "Personal fact."}],
+                "pages": {"you": {"section_key": "profile", "reason": "Personal fact."},
+                          "project-cedar": {"section_key": "not_selected", "reason": "Not about the project."}},
                 "confidence": 0.9, "reason": "Useful placement."}
     valid = {"decisions": {"C001": decision, "C002": decision}}
     assert set(schema.model_validate(valid).decisions.model_dump()) == {"C001", "C002"}
     with pytest.raises(ValidationError):
         schema.model_validate({"decisions": {"C001": decision}})
     for pages in [
-        [], [{"entity_id": "missing", "section_key": "profile", "reason": "Invalid ID."}],
-        [{"entity_id": "you", "section_key": "invalid", "reason": "Invalid section."}],
-        decision["pages"] * 2,
-        [{"entity_id": "project-cedar", "section_key": "overview", "reason": "Missing primary."}],
+        {}, {**decision["pages"], "missing": {"section_key": "profile", "reason": "Invalid ID."}},
+        {**decision["pages"], "you": {"section_key": "invalid", "reason": "Invalid section."}},
+        {**decision["pages"], "you": {"section_key": "people_organizations", "reason": "Wrong entity type's section."}},
+        {**decision["pages"], "you": [decision["pages"]["you"], decision["pages"]["you"]]},
+        {**decision["pages"], "you": {"section_key": "not_selected", "reason": "Missing primary."}},
+        {**decision["pages"], "you": {"section_key": ["profile", "current_context"], "reason": "Two sections."}},
     ]:
         with pytest.raises(ValidationError):
             schema.model_validate({"decisions": {"C001": {**decision, "pages": pages}, "C002": decision}})
@@ -480,7 +503,7 @@ async def test_later_dream_cannot_route_claim_while_provisional_blocker_remains(
     ))
     llm.call_structured.side_effect = split_scope_plan(scope_plan({
         "C001": assignment(person.entity_id, supporting=["C001"]),
-    }))
+    }), other_entities=[project.entity_id])
 
     result = await dream.router.route([ClaimEvidence(claim, source)])
 
@@ -493,7 +516,7 @@ async def test_later_dream_cannot_route_claim_while_provisional_blocker_remains(
     artifacts.save_entity(project)
     resolved_responses = split_scope_plan(scope_plan({
         "C001": assignment(person.entity_id, supporting=["C001"]),
-    }))
+    }), other_entities=[project.entity_id])
     llm.call_structured.side_effect = resolved_responses
 
     resolved = await dream.router.route([ClaimEvidence(claim, source)])
@@ -534,7 +557,7 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
             alias: {
                 "route_kind": "general",
                 "owner_entity": "you",
-                "pages": [{"entity_id": "you", "section_key": "profile", "reason": "Personal fact."}],
+                "pages": {"you": {"section_key": "profile", "reason": "Personal fact."}},
                 "confidence": 0.9,
                 "reason": "The claim changes the user's durable preferences.",
             }
@@ -1016,7 +1039,7 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
     revision_responses = split_scope_plan(scope_plan({
         alias: assignment("project-atlas", supporting=revision_support)
         for alias in revision_support
-    }))
+    }), other_entities=["topic-supporting-concept"])
     dream.llm.call_structured.side_effect = [
         *discovery_responses,
         *revision_responses,
@@ -1391,7 +1414,7 @@ async def test_rejected_identity_match_cannot_mutate_existing_person(tmp_path):
     responses = split_scope_plan(scope_plan(
         {"C001": assignment("N001", supporting=["C001"])},
         [candidate],
-    ))
+    ), other_entities=[person.entity_id])
     responses.insert(4, {"decision": {
         "verdict": "distinct",
         "entity_id": "",

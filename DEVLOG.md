@@ -3704,3 +3704,44 @@ one prose-similarity summary.
   planning/encoding_simplification_2026_09_07.md. Updated the incremental plan with duplicate-page placement
   as the recommended next bounded repair, before another UI smoke check. No additional organizer redesign was
   implemented to make the failed chat replay pass.
+
+## 2026-09-07 — Unique-per-page placement repair
+
+- User confirmed the invariant: a canonical statement may appear on multiple pages, but not more than once on
+  the same page. Replaced the repeatable destination list with an exact page-ID-keyed response. The model chooses
+  one type-valid section or `not_selected` per eligible page, with a reason; primary owner must be selected.
+  This is an explicit structured model decision, not a deduplication fallback or application-chosen section.
+- Probed before integration using the configured host gemma4:12b and production prompt/schema. Initial sparse
+  maps under-selected substantive shared placements (2 passed / 2 failed); choosing destinations before the owner
+  improved the project case but not the founder case (3 passed / 1 failed). Preserved runs:
+  benchmark_runs/page-map-20260907-probes and page-map-20260907-destinations-first-probes.
+- Explicit per-page nullable decisions selected the intended pages, but the incidental case failed revalidation:
+  the shared LLM serializer removes null fields. A mixed object/string exclusion variant then returned all pages
+  unselected despite reasons describing useful destinations (4 failed). Neither variant was integrated; shared
+  LLM parsing was not changed to accommodate them. Runs: page-map-20260907-explicit-probes and
+  page-map-20260907-final-probes. Early failed rounds lack full debug dumps; their pytest outputs record failures.
+- Uniform per-page objects with a declared `not_selected` section choice PASSED all four direct cases in 13.43
+  seconds at benchmark_runs/page-map-20260907-section-probes. Founder/business and person/project relationships
+  selected both useful pages; incidental attribution selected only the business; a personal goal motivated by a
+  relationship chose one section on You. No fixture vocabulary or lexical semantic rule entered production.
+- Integrated only the proven contract. Retired the old list and temporary probe switch, updated routing's
+  conversion to selected `page_sections`, and retained explanations for selected and unselected pages in routing
+  reasons. No persisted claim/page schema change, live-store reset, migration, or alternative pipeline.
+- Updated affected fixture registries explicitly, including unselected existing entities and identity renames.
+  Contract tests reject missing/unknown destinations, wrong-type sections, lists of duplicate page entries,
+  multiple sections, and an unselected owner. Added parser/serializer round-trip checks, multi-page acceptance,
+  and no-eligible-page deferral. The full chat replay now checks exact canonical claim-ID uniqueness across all
+  sections on every page, while retaining the shared restaurant/founder claim assertion and fresh retrieval check.
+- Backend suite: 343 passed, 34 opt-in tests skipped in 17.91 seconds. Ruff, compileall, and diff checks passed.
+  Full frozen chat replay is recorded below when complete. Live data untouched; no servers started/stopped and
+  no git commit. Existing unrelated identity ambiguity, truth-review reliability, and context-budget issues remain.
+- Full frozen chat/web-search replay PASSED in 294.09 seconds at
+  benchmark_runs/page-map-20260907-chat/test_chat_history_rebuilds_use0: all ten input sources completed,
+  22 extracted claims, no build failures/pending sources, one populated You page, five populated restaurant
+  pages and one person page, shared restaurant/founder canonical evidence, no repeated canonical claim ID within
+  any page, and fried-rice source retrieval in a fresh chat. The earlier failing replay remains intact. No
+  assertion was relaxed and no additional build was used to hide incomplete work.
+- Updated DESIGN.md, the incremental plan, and the prior encoding comparison with this repair's outcome. Next
+  checkpoint is user-run UI smoke testing; the LoCoMo comparison from the synthesis increment was not rerun
+  in this bounded placement repair. Explicit per-page decisions grow with registry size; general context/output
+  budgeting remains a follow-up, not something this contract alone solves.

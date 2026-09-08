@@ -205,7 +205,10 @@ class ClaimRouter:
                 result.failures.extend(self._failure(item, f"Claim routing failed: {exc}") for item in batch.values())
         for alias, routing in routings.items():
             kind = routing["route_kind"]
-            destinations = {p["entity_id"]: p["section_key"] for p in routing.get("pages", [])}
+            destinations = {
+                entity_id: page["section_key"] for entity_id, page in routing.get("pages", {}).items()
+                if page["section_key"] != "not_selected"
+            }
             normalized = {
                 "disposition": "deferred" if kind == "deferred" else "canonical",
                 "owner_entity": routing.get("owner_entity", ""),
@@ -216,7 +219,8 @@ class ClaimRouter:
                 "supporting_claims": [], "identity_blocker_ids": blockers.get(alias, []),
                 "confidence": routing["confidence"],
                 "reason": routing["reason"] + "\n" + "\n".join(
-                    f"Page {p['entity_id']}: {p['reason']}" for p in routing.get("pages", [])
+                    f"Page {entity_id} ({page['section_key']}): {page['reason']}"
+                    for entity_id, page in routing.get("pages", {}).items()
                 ),
             }
             route = self._route_decision(alias, aliases[alias], normalized, aliases, planned, {}, {})

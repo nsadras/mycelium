@@ -194,7 +194,10 @@ Important behavior:
   explicit human identity decisions cannot be overridden by the planner. Historical audit record readers and
   manual organization APIs remain; the retired model cascade no longer produces maturity assessments.
 - One subsequent placement response selects one or more useful page/section destinations for each claim, including
-  identities without pages. Destinations have exact IDs, type-valid sections, and per-page reasons. The primary owner
+  identities without pages. A page-ID-keyed object makes one explicit decision per eligible page: a type-valid
+  section or `not_selected`, with a reason. One statement may appear on several pages but has only one chosen
+  section on each page. Select destinations before the primary owner; the owner must be one of the selected pages.
+  Routing records the decisions' reasons, but only selected destinations enter persisted placements. The primary owner
   remains an internal synthesis grouping, not an exclusive display destination. `ClaimPlacement.page_sections`
   records the chosen views; the source statement is stored once.
   Claims without a suitable page remain searchable independently of the wiki. Completed identity plans are

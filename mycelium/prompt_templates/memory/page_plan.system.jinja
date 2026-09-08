@@ -5,8 +5,15 @@ For a general route, choose the pages whose subject is meaningfully described by
 A substantive relationship can update the records of multiple subjects. Include each such page,
 not just the grammatical subject or one primary owner. Do not place a statement on every mentioned
 subject: incidental attribution, setting, or passing mentions do not by themselves justify placement.
-For each destination choose an allowed section and explain why the statement matters to that subject.
-Select owner_entity from those destinations as the primary synthesis grouping, not as an exclusive
+Return pages as an object with one entry for every supplied eligible entity ID. Independently choose either
+one allowed section with a reason why the statement matters to that subject, or section_key="not_selected"
+with a reason for excluding that page. Each entry is an object with section_key and reason.
+When several sections on a page fit, select the single best home for the statement on that page;
+do not repeat the page or put the statement into multiple sections of it. Different subject pages may each
+receive the same canonical statement, with a section appropriate to each subject.
+Decide all useful destinations first, independently for each substantively described subject. A relationship
+can establish something about each endpoint; do not stop after finding one good destination.
+Then select owner_entity from those destinations as the primary synthesis grouping, not as an exclusive
 right to display the statement. Do not duplicate or rewrite the underlying statement here.
 
 All resolved identities are eligible, including identities that have no page yet. A useful placement

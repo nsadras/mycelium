@@ -10,6 +10,7 @@ are checked structurally. No search results or historical assistant replies are 
 
 import json
 import os
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
@@ -165,6 +166,12 @@ async def test_chat_history_rebuilds_user_and_tool_pages_and_recalls_cooking(tmp
 
     pages = memory.wiki.list()
     (tmp_path / "pages.json").write_text(json.dumps([asdict(p) for p in pages], indent=2, default=str))
+    for page in pages:
+        occurrences = Counter(
+            claim_id for section in page.sections for item in section["items"]
+            if item["kind"] == "fact" for claim_id in item["claim_ids"]
+        )
+        assert all(count == 1 for count in occurrences.values()), (page.slug, occurrences)
     user_pages = [p for p in pages if p.page_type == "you" or p.title.casefold() == "you"]
     assert [(p.entity_id, p.slug) for p in user_pages] == [("you", "you")]
     assert not memory.wiki.exists("you-2")

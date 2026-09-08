@@ -121,7 +121,8 @@ def test_shared_source_text_is_included_once_with_each_claim_reference(tmp_path)
 
 def route(owner="you"):
     return {"decisions": {"C001": {"route_kind": "general", "owner_entity": owner,
-            "pages": [{"entity_id": owner, "section_key": "overview", "reason": "Useful statement."}],
+            "pages": {"you": {"section_key": "not_selected", "reason": "External subject."},
+                      owner: {"section_key": "overview", "reason": "Useful statement."}},
             "reason": "Source-grounded owner.", "confidence": 1.0}}}
 
 

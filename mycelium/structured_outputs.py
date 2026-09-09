@@ -26,7 +26,7 @@ class ExtractedClaimOutput(BaseModel):
     )
     temporal_status: Literal[
         "past", "current", "future", "recurring", "atemporal", "unknown"
-    ] = "unknown"
+    ]
     temporal_anchor_segment_id: str | None = None
     about: list[ExtractedEntityOutput] = Field(min_length=1, max_length=12)
     segment_ids: list[str] = Field(min_length=1, max_length=32)
@@ -67,6 +67,12 @@ def extraction_output_model(
         segment_ids=(list[id_type], Field(min_length=1, max_length=32)),
         temporal_anchor_segment_id=(id_type | None, None),
         **fields,
+    )
+    evidence_order = ["segment_ids", *fields, "temporal_status", "facets"]
+    ordered_fields = [*evidence_order, *(name for name in claim.model_fields if name not in evidence_order)]
+    claim = create_model(
+        "EvidenceFirstStatement", __config__=ConfigDict(extra="forbid"),
+        **{name: (claim.model_fields[name].annotation, claim.model_fields[name]) for name in ordered_fields},
     )
     base = create_model(
         "ExtractionResponse",

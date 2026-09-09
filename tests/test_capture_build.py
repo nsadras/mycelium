@@ -86,7 +86,7 @@ async def test_combined_batch_replays_validated_output_after_interrupted_claim_w
     response = {
         "source_only": [],
         "claims": [
-            {"text": text, "about": [{"entity": "user"}], "segment_ids": [segment_id]}
+            {"temporal_status": "unknown", "text": text, "about": [{"entity": "user"}], "segment_ids": [segment_id]}
             for text in ("The user prefers tea.", "The user avoids coffee.")
         ],
     }
@@ -148,7 +148,7 @@ async def test_cross_turn_context_citations_keep_original_source_identity(tmp_pa
         return {
             "source_only": [],
             "claims": [
-                {
+                {"temporal_status": "unknown",
                     "text": "The user will lead the workshop.",
                     "about": [{"entity": "user"}],
                     "segment_ids": [new_segment],

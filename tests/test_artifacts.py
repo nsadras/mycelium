@@ -46,7 +46,7 @@ def extraction_response(claims, source_only_segment_ids=()):
 
 def test_combined_extraction_enforces_exact_accounting_and_citations():
     schema = extraction_output_model(["a", "b"], ["prior"])
-    claim = {"text": "Ava prefers tea.", "about": [{"entity": "Ava"}],
+    claim = {"temporal_status": "unknown", "text": "Ava prefers tea.", "about": [{"entity": "Ava"}],
              "segment_ids": ["a"], "context_segment_ids": ["prior"]}
     valid = extraction_response([claim], ["b"])
     assert schema.model_validate(valid).claims[0].context_segment_ids == ["prior"]
@@ -122,7 +122,7 @@ async def test_encoder_preserves_repeated_claims_as_separate_source_events(tmp_p
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{
+        return extraction_response([{"temporal_status": "unknown",
                 "text": "Ava prefers tea.",
                 "claim_type": "preference",
                 "predicate": "prefers",
@@ -349,7 +349,7 @@ async def test_chat_relative_time_stays_unresolved_with_wrong_anchor_segment(tmp
             if part.startswith("source-")
         ]
         original_ids[:] = segment_ids
-        return extraction_response([{
+        return extraction_response([{"temporal_status": "unknown",
                 "text": "The conversation includes earlier context.",
                 "about": [{"entity": "conversation"}],
                 "segment_ids": [original_ids[0]],
@@ -408,7 +408,7 @@ async def test_encoder_rejects_claim_without_explicit_about_entity(tmp_path):
             for part in user.split("[")[1:]
             if not part.startswith(("TARGET ", "CONTEXT "))
         ]
-        return extraction_response([{
+        return extraction_response([{"temporal_status": "unknown",
                 "text": "Ava enjoys teaching dance.",
                 "about": [],
                 "segment_ids": segment_ids,
@@ -451,7 +451,7 @@ async def test_encoder_retries_failed_combined_batch(tmp_path):
         claim_attempts += 1
         if claim_attempts == 1:
             raise ValueError("temporary malformed claim response")
-        return extraction_response([{
+        return extraction_response([{"temporal_status": "unknown",
             "text": "Ava prefers tea.",
             "claim_type": "preference",
             "predicate": "prefers",
@@ -502,7 +502,7 @@ async def test_encoder_records_inference_only_on_provenance(tmp_path):
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{
+        return extraction_response([{"temporal_status": "unknown",
                 "text": "Ava is Clara's grandmother.",
                 "about": [{"entity": "Ava", "role": "subject"}],
                 "segment_ids": [segment_id],
@@ -537,7 +537,7 @@ async def test_encoder_records_uncovered_segments_without_repair(tmp_path):
 
     async def response(system, user, output_type, **kwargs):
         segment_ids = [part.split("]", 1)[0] for part in user.split("[")[1:]]
-        return extraction_response([{
+        return extraction_response([{"temporal_status": "unknown",
                 "text": "Ava likes tea.",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": [segment_ids[0]],
@@ -631,7 +631,7 @@ async def test_encoder_does_not_lexically_reject_model_valid_claim_text(tmp_path
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{
+        return extraction_response([{"temporal_status": "unknown",
                 "text": "I prefer tea.",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": [segment_id],
@@ -664,7 +664,7 @@ async def test_encoder_persists_contract_output_without_final_normalization(tmp_
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{
+        return extraction_response([{"temporal_status": "unknown",
                 "text": "My store is doing great!",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": [segment_id],
@@ -735,7 +735,7 @@ async def test_encoder_routes_image_urls_through_semantic_coverage(tmp_path):
             if "source_only" in output_type.model_fields
             else source_ids[:1]
         )
-        claim = {
+        claim = {"temporal_status": "unknown",
                 "text": "Ava shared a painting.",
                 "about": [{"entity": "Ava"}],
                 "segment_ids": [target_ids[0]],
@@ -1103,7 +1103,7 @@ async def test_ingestion_idempotency_key_reuses_one_source_episode_claim_and_log
 
     async def response(_system, user, output_type, **_kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{
+        return extraction_response([{"temporal_status": "unknown",
             "text": "Ava prefers tea.",
             "claim_type": "preference",
             "predicate": "prefers",
@@ -1144,7 +1144,7 @@ async def test_ingestion_retry_repairs_claim_saved_before_episode_checkpoint(
 
     async def response(_system, user, output_type, **_kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{
+        return extraction_response([{"temporal_status": "unknown",
             "text": "Ava prefers tea.",
             "claim_type": "preference",
             "about": [{"entity": "Ava"}],

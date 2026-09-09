@@ -4026,3 +4026,24 @@ one prose-similarity summary.
   `benchmark_runs/cumulative-contracts-20260908/truth-regression`. Backend: 384 passed, 77 deselected;
   targeted Ruff passed. Fixed an intermediate canonical-record indentation error and updated mock contracts
   before acceptance. These are bounded behavioral checks, not a new LoCoMo score.
+
+## 2026-09-08 — Explicit temporal extraction and complete contextual assertions
+
+- Extraction must deliberately classify temporal status, with citations and temporal context generated before
+  readable claim text. Prompts distinguish intended/completed actions, preserve travel direction and ordinary
+  experience details, and reconstruct the scope and decision in contextual acceptance/refusal replies.
+- Neutral six-assertion prototype retained every assertion with correct checked temporal states, intention, and
+  direction. Final integrated fidelity check: 2 passed at
+  `benchmark_runs/cumulative-contracts-20260908/extraction-final-fidelity`.
+- The initial full extraction suite produced 30 passes and two real failures: contextual replies omitted the
+  proposal's timing. Context wording alone repaired acceptance but not refusal. Evidence-first ordering retained
+  the timing; the refusal still lost the act of declining. A neutral decision-preservation probe passed before
+  the final prompt integration. Final refusal direct/build checks: 2 passed in 37.83s at
+  `benchmark_runs/cumulative-contracts-20260908/extraction-decision-integrated`; acceptance direct/build checks
+  passed in the preceding `extraction-evidence-first-integrated` run. All intermediate failures remain inspectable.
+- Structural mocks now declare temporal status rather than relying on an implicit unknown default. The combined
+  backend suite passed 389 tests (79 opt-in deselected); final six-assertion fidelity tests passed. No lexical
+  correction or source-only override was added. Original benchmark stores were not modified.
+- Final prompt regression sweep: 17 direct extraction/admission cases passed in 193.97s at
+  `benchmark_runs/cumulative-contracts-20260908/extraction-final-regression`, including large and multi-party
+  batches, contextual replies, uncertainty, questions, and tool observations.

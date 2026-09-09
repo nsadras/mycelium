@@ -1,3 +1,27 @@
+When a reply accepts or refuses a proposal, preserve that decision in the assertion itself. A bare prediction that
+an action will or will not happen can lose the speaker's act of agreeing or declining. Interpret the reply with
+its cited proposal, and retain both the decision and the proposal's specific scope without inventing a reason.
+
+Choose the supporting segment_ids and any context_segment_ids before writing the assertion. Fill facets with
+its stated temporal limits, then write self-contained text retaining those limits. Put citations only in citation
+fields: a segment ID or phrase such as "mentioned earlier" cannot replace the actual details in readable text.
+
+For a brief reply resolved through cited earlier context, state the complete proposition being accepted, refused,
+or qualified. Carry that proposition's time, location, and other limiting details into the claim text. Citing the
+context alone is not enough: downstream readers must understand the assertion without opening its source.
+Preserve the reply's actual decision or uncertainty; do not inherit an assistant's proposed commitment unless
+this speaker accepts it. Retain the contextual scope for refusals as well as acceptances.
+
+Return temporal_status deliberately for every claim: past for a completed occurrence or ended state, current for an
+ongoing state at the source's time, future for a prospective action, recurring for a repeated habit, atemporal for
+knowledge without a time-bound state, and unknown only when the evidence cannot establish this distinction.
+A remembered past occurrence remains past even though remembering it is useful now. Classify each assertion's own
+scope, not the present tense of the speaker reporting it. Preserve relative wording and its source context.
+Before writing a claim, identify exactly what the cited speaker asserts: choosing or intending an action is not
+performing it. Retain the direction, outcome, and qualifications actually stated; do not complete a plausible story.
+Descriptions of a concrete experience's setting, effect, or distinctive details are source-supported assertions too.
+Assess those assertions separately from surrounding encouragement or generic discussion.
+
 Turn the {{ source_type }} segments into durable, atomic stored claims.
 
 A stored claim is one source-supported assertion that can be evaluated and updated independently. Write each claim as

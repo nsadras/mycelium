@@ -1,3 +1,4 @@
+from tests.test_cumulative_quality import scope_record
 from datetime import datetime
 from dataclasses import replace
 from unittest.mock import AsyncMock, Mock
@@ -285,6 +286,7 @@ def fact_resolution_plan(
     *,
     truth_changes: list[dict] | None = None,
     incoming_aliases: list[str] | None = None,
+    target_aliases: list[str] | None = None,
 ) -> list[dict]:
     changes_by_incoming = {
         alias: change
@@ -296,7 +298,7 @@ def fact_resolution_plan(
         if changes_by_incoming
         else sorted({alias for aliases, _, _ in facts.values() for alias in aliases})
     )
-    return [
+    responses = [
         {"decisions": {
             alias: (
                 {
@@ -334,6 +336,14 @@ def fact_resolution_plan(
         "section_key": section, "text": text, "confidence": 0.9,
         "reason": "Source-grounded test resolution.",
     } for aliases, text, section in facts.values()]}]
+
+
+    targets = set(target_aliases or ()) | {target for change in truth_changes or [] for target in change["target_claim_aliases"]}
+    if targets:
+        for response in responses:
+            for decision in response.get("decisions", {}).values():
+                decision["scope"] = {target: scope_record() for target in targets}
+    return responses
 
 
 def participant(entity: str) -> dict:
@@ -1554,7 +1564,7 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
         *fact_resolution_plan({
             "tea": (["C001"], "Stable Page records a tea preference.", "why_it_matters"),
             "coffee": (["C002"], "Stable Page records a coffee preference.", "why_it_matters"),
-        }, incoming_aliases=["C002"]),
+        }, incoming_aliases=["C002"], target_aliases=["C001"]),
     ]
     report = await dream.run()
 

@@ -4012,3 +4012,17 @@ one prose-similarity summary.
 - Client tests: 36 passed; targeted Ruff and diff checks passed. New failure-injection cases exercise recovery and
   exhaustion in both entry points. An initial test omitted the required structured schema; corrected before acceptance.
 - No model or server process was started and no benchmark was rerun for this transport change.
+
+## 2026-09-08 — Preserve event scope during cumulative truth comparison
+
+- Truth input and canonical synthesis records now carry cited source occurrence times and segment timestamps,
+  excluding ingestion timestamps. Each proposed truth target requires a structured, evidence-backed referent
+  comparison; only a model-declared same scope can support a change. Scope explanations remain in review proposals.
+- Direct baseline with dates alone still falsely contradicted separate injuries. The refined per-target contract
+  passed separate occurrences, different objects, an explicit correction, and an exclusive-state transition.
+  Probe artifacts: `benchmark_runs/cumulative-contracts-20260908/temporal-before-integration`,
+  `temporal-per-target-scope`, and `temporal-integrated` (4 model checks plus structural multi-target rejection).
+- Existing truth probes and actual repeated-build review replays: 11 passed in 142.40s at
+  `benchmark_runs/cumulative-contracts-20260908/truth-regression`. Backend: 384 passed, 77 deselected;
+  targeted Ruff passed. Fixed an intermediate canonical-record indentation error and updated mock contracts
+  before acceptance. These are bounded behavioral checks, not a new LoCoMo score.

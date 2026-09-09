@@ -432,7 +432,7 @@ class FactResolver:
                 "prior_state": decision["prior_state"],
                 "incoming_state": decision["incoming_state"],
                 "transition_evidence": decision["transition_evidence"],
-                "explanation": decision["explanation"],
+                "explanation": decision["explanation"] + "\nScope comparisons: " + json.dumps(decision["scope"], ensure_ascii=False),
                 "confidence": decision["confidence"],
             }
             for alias, decision in adjudications.items()
@@ -511,6 +511,7 @@ class FactResolver:
                 "text": display_claim_text(claim),
                 "temporal_status": claim.temporal_status,
                 "temporal": temporal_record(claim.facets),
+                "source_times": self._source_times(claim),
             }
             for alias, claim in aliases.items()
             if claim.claim_id not in pending_incoming | preserved_member_ids
@@ -658,6 +659,22 @@ class FactResolver:
     def _owner_text(owner: EntityRecord) -> str:
         return f"id={owner.entity_id}; type={owner.entity_type}; title={owner.title}"
 
+    def _source_times(self, claim: MemoryClaim) -> list[dict]:
+        """Carry cited occurrence anchors, never ingestion wall-clock time."""
+        times = []
+        for provenance in claim.provenance:
+            try:
+                source = self.artifacts.get_source(provenance.source_id)
+            except FileNotFoundError:
+                continue
+            times.append({
+                "source_id": source.source_id,
+                "occurred_at": source.occurred_at,
+                "segments": [{"segment_id": segment.segment_id, "timestamp": segment.timestamp}
+                             for segment in source.segments if segment.segment_id in provenance.segment_ids],
+            })
+        return times
+
     def _claims_text(
         self,
         aliases: dict[str, MemoryClaim],
@@ -677,6 +694,7 @@ class FactResolver:
                 f"[{alias}] id={claim.claim_id}; type={claim.claim_type}; "
                 f"predicate={claim.predicate or 'unknown'}; temporal_status={claim.temporal_status}; "
                 f"temporal={json.dumps(temporal_record(claim.facets), sort_keys=True)}; "
+                f"source_times={json.dumps(self._source_times(claim), sort_keys=True)}; "
                 f"linked_entities={json.dumps(linked)}\nclaim={claim.text}"
             )
             evidence = []

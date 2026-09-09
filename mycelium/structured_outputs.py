@@ -21,9 +21,9 @@ class ExtractedClaimOutput(BaseModel):
     text: str = Field(min_length=1, max_length=1000)
     claim_type: ClaimType = "unknown"
     predicate: str | None = None
-    evidence_modality: Literal[
-        "speech", "visual", "tool", "mixed", "unknown"
-    ] = "speech"
+    evidence_modality: Literal["speech", "visual", "tool", "mixed", "unknown"] = (
+        "speech"
+    )
     temporal_status: Literal[
         "past", "current", "future", "recurring", "atemporal", "unknown"
     ] = "unknown"
@@ -38,7 +38,8 @@ class ExtractedClaimOutput(BaseModel):
 
 
 def extraction_output_model(
-    segment_ids: Collection[str], context_segment_ids: Collection[str] = (),
+    segment_ids: Collection[str],
+    context_segment_ids: Collection[str] = (),
 ) -> type[BaseModel]:
     """Extract and account for every new segment in one validated response."""
     ids = tuple(sorted(set(segment_ids)))
@@ -46,24 +47,30 @@ def extraction_output_model(
         raise ValueError("Extraction requires source segments")
     id_type = Literal.__getitem__(ids)
     source_only = create_model(
-        "SourceOnlySegment", __config__=ConfigDict(extra="forbid"),
+        "SourceOnlySegment",
+        __config__=ConfigDict(extra="forbid"),
         segment_id=(id_type, ...),
         reason=(str, Field(min_length=1, max_length=500)),
     )
     fields = {}
     if context_segment_ids:
         context_type = Literal.__getitem__(tuple(sorted(set(context_segment_ids))))
-        fields["context_segment_ids"] = (list[context_type], Field(
-            description="Exact earlier-context evidence IDs used to resolve or support this statement. Required; empty only if the new segments support the entire statement independently."
-        ))
+        fields["context_segment_ids"] = (
+            list[context_type],
+            Field(
+                description="Exact earlier-context evidence IDs used to resolve or support this statement. Required; empty only if the new segments support the entire statement independently."
+            ),
+        )
     claim = create_model(
-        "ExtractedStatement", __base__=ExtractedClaimOutput,
+        "ExtractedStatement",
+        __base__=ExtractedClaimOutput,
         segment_ids=(list[id_type], Field(min_length=1, max_length=32)),
         temporal_anchor_segment_id=(id_type | None, None),
         **fields,
     )
     base = create_model(
-        "ExtractionResponse", __config__=ConfigDict(extra="forbid"),
+        "ExtractionResponse",
+        __config__=ConfigDict(extra="forbid"),
         claims=(list[claim], Field(max_length=128)),
         source_only=(list[source_only], Field(max_length=len(ids))),
     )
@@ -76,9 +83,13 @@ def extraction_output_model(
             if len(remainder) != len(set(remainder)):
                 raise ValueError("Duplicate source-only segment")
             if cited & set(remainder):
-                raise ValueError(f"Cited segments cannot also be source-only: {sorted(cited & set(remainder))}")
+                raise ValueError(
+                    f"Cited segments cannot also be source-only: {sorted(cited & set(remainder))}"
+                )
             if cited | set(remainder) != set(ids):
-                raise ValueError(f"Claims and source-only reasons must account for every new segment; missing={sorted(set(ids) - cited - set(remainder))}")
+                raise ValueError(
+                    f"Claims and source-only reasons must account for every new segment; missing={sorted(set(ids) - cited - set(remainder))}"
+                )
             return self
 
     return ExactExtractionResponse
@@ -107,10 +118,7 @@ def assistant_context_selection_output_model(
     decisions_model = create_model(
         "AssistantContextCandidateDecisions",
         __config__=ConfigDict(extra="forbid"),
-        **{
-            alias: (AssistantContextCandidateDecisionOutput, ...)
-            for alias in aliases
-        },
+        **{alias: (AssistantContextCandidateDecisionOutput, ...) for alias in aliases},
     )
     return create_model(
         "AssistantContextSelectionOutput",
@@ -123,6 +131,14 @@ class FactCandidateSelectionOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     candidate_fact_ids: list[str] = Field(max_length=12)
     reason: str = Field(min_length=1, max_length=800)
+
+
+class FactScopeComparison(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    prior_referent: str = Field(min_length=1)
+    incoming_referent: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    relation: Literal["same", "distinct", "unresolved"]
 
 
 class FactTruthNoChangeOutput(BaseModel):
@@ -154,19 +170,28 @@ def fact_truth_output_model(
     target_claim_aliases: Collection[str],
 ) -> type[BaseModel]:
     """Build one exact truth adjudication for every incoming claim alias."""
-    incoming = tuple(dict.fromkeys(
-        str(value) for value in incoming_claim_aliases if value
-    ))
-    targets = tuple(dict.fromkeys(
-        str(value) for value in target_claim_aliases if value
-    ))
+    incoming = tuple(
+        dict.fromkeys(str(value) for value in incoming_claim_aliases if value)
+    )
+    targets = tuple(
+        dict.fromkeys(str(value) for value in target_claim_aliases if value)
+    )
     if not incoming:
         raise ValueError("Fact truth resolution requires incoming claim aliases")
     decision_fields: dict[str, Any] = {}
+    scope_fields = {}
+    if targets:
+        scope_model = create_model(
+            "TargetScopes",
+            __config__=ConfigDict(extra="forbid"),
+            **{alias: (FactScopeComparison, ...) for alias in targets},
+        )
+        scope_fields["scope"] = (scope_model, ...)
     for alias in incoming:
         no_change = create_model(
             f"{alias}FactTruthNoChange",
             __base__=FactTruthNoChangeOutput,
+            **scope_fields,
         )
         if not targets:
             decision_fields[alias] = (no_change, ...)
@@ -175,6 +200,7 @@ def fact_truth_output_model(
         truth_change = create_model(
             f"{alias}FactTruthChange",
             __base__=FactTruthChangeOutput,
+            **scope_fields,
             target_claim_aliases=(
                 list[target_type],  # type: ignore[valid-type]
                 Field(min_length=1, max_length=len(targets)),
@@ -206,6 +232,13 @@ def fact_truth_output_model(
                 if decision[1].disposition != "truth_change":
                     continue
                 decision_targets = set(decision[1].target_claim_aliases)
+                if any(
+                    getattr(decision[1].scope, target).relation != "same"
+                    for target in decision_targets
+                ):
+                    raise ValueError(
+                        "Truth changes require model-established same scope for every target"
+                    )
                 if changed_targets & decision_targets:
                     raise ValueError(
                         "Incoming truth changes cannot compete for the same target claim"
@@ -221,12 +254,10 @@ def fact_candidate_selection_output_model(
     prior_fact_aliases: Collection[str],
 ) -> type[BaseModel]:
     """Select bounded prior fact candidates for every incoming claim."""
-    incoming = tuple(dict.fromkeys(
-        str(value) for value in incoming_claim_aliases if value
-    ))
-    facts = tuple(dict.fromkeys(
-        str(value) for value in prior_fact_aliases if value
-    ))
+    incoming = tuple(
+        dict.fromkeys(str(value) for value in incoming_claim_aliases if value)
+    )
+    facts = tuple(dict.fromkeys(str(value) for value in prior_fact_aliases if value))
     if not incoming or not facts:
         raise ValueError("Fact candidate selection requires claims and prior facts")
     fact_type = Literal.__getitem__(facts)
@@ -261,8 +292,12 @@ def fact_synthesis_output_model(
     alias_type = Literal.__getitem__(tuple(claim_texts))
     section_type = Literal.__getitem__(tuple(dict.fromkeys(allowed_sections)))
     fact = create_model(
-        "SynthesizedFact", __config__=ConfigDict(extra="forbid"),
-        member_claim_aliases=(list[alias_type], Field(min_length=1, max_length=len(claim_texts))),
+        "SynthesizedFact",
+        __config__=ConfigDict(extra="forbid"),
+        member_claim_aliases=(
+            list[alias_type],
+            Field(min_length=1, max_length=len(claim_texts)),
+        ),
         state=(Literal["current", "history"], ...),
         section_key=(section_type, ...),
         text=(str, Field(min_length=1, max_length=1000)),
@@ -270,16 +305,21 @@ def fact_synthesis_output_model(
         reason=(str, Field(min_length=1, max_length=800)),
     )
     base = create_model(
-        "FactSynthesis", __config__=ConfigDict(extra="forbid"),
+        "FactSynthesis",
+        __config__=ConfigDict(extra="forbid"),
         facts=(list[fact], Field(min_length=1, max_length=len(claim_texts))),
     )
 
     class ExactFactSynthesis(base):
         @model_validator(mode="after")
         def validate_projection(self):
-            supplied = [alias for fact in self.facts for alias in fact.member_claim_aliases]
+            supplied = [
+                alias for fact in self.facts for alias in fact.member_claim_aliases
+            ]
             if len(supplied) != len(set(supplied)) or set(supplied) != set(claim_texts):
-                repeated = sorted(alias for alias, count in Counter(supplied).items() if count > 1)
+                repeated = sorted(
+                    alias for alias, count in Counter(supplied).items() if count > 1
+                )
                 missing = sorted(set(claim_texts) - set(supplied))
                 raise ValueError(
                     "Every canonical claim must belong to exactly one display group; "
@@ -293,7 +333,9 @@ def fact_synthesis_output_model(
                         f"{claim_texts[members[0]]!r}"
                     )
                 for change in truth_changes:
-                    if set(members) & set(change["incoming_claim_aliases"]) and set(members) & set(change["target_claim_aliases"]):
+                    if set(members) & set(change["incoming_claim_aliases"]) and set(
+                        members
+                    ) & set(change["target_claim_aliases"]):
                         raise ValueError("Truth-change sides cannot share a fact")
             return self
 

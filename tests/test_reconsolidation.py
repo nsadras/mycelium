@@ -1,3 +1,4 @@
+from tests.test_cumulative_quality import scope_record
 from datetime import datetime
 from dataclasses import replace
 from unittest.mock import AsyncMock
@@ -158,6 +159,11 @@ def staged_fact_responses(
         }}
         for alias in incoming_aliases
     ]
+    targets = set(plan["assignments"]) - set(incoming_aliases)
+    if targets:
+        for response in truth_responses:
+            for decision in response["decisions"].values():
+                decision["scope"] = {target: scope_record() for target in targets}
     responses = truth_responses + [{
         "facts": [{
             **{key: value for key, value in fact.items() if key != "fact_key"},
@@ -183,6 +189,7 @@ def test_truth_schema_separates_incoming_from_prior_targets():
         "disposition": "truth_change",
         "relation": "supersedes",
         "target_claim_aliases": ["C001"],
+        "scope": {"C001": scope_record()},
         "durable_field": "preferred drink",
         "prior_state": "tea",
         "incoming_state": "coffee",
@@ -432,6 +439,7 @@ async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_p
             "relation": "supersedes",
             "incoming_claim_aliases": ["C002"],
             "target_claim_aliases": ["C001"],
+        "scope": {"C001": scope_record()},
             "durable_field": "bicycle color",
             "prior_state": "blue",
             "incoming_state": "green",
@@ -524,6 +532,7 @@ async def test_truth_changes_are_decided_sequentially_and_cannot_compete(tmp_pat
             "disposition": "truth_change",
             "relation": "supersedes",
             "target_claim_aliases": ["C001"],
+        "scope": {"C001": scope_record()},
             "durable_field": "preferred drink",
             "prior_state": "tea",
             "incoming_state": "coffee",
@@ -585,6 +594,7 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path
         {"decisions": {"C002": {
             "disposition": "no_change",
             "reason": "The evidence does not explicitly replace the prior preference.",
+            "scope": {"C001": scope_record()},
             "confidence": 0.8,
         }}},
         {"facts": [{
@@ -635,6 +645,7 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
         {"decisions": {"C002": {
             "disposition": "no_change",
             "reason": "No change proposed by this test decision.",
+            "scope": {"C001": scope_record()},
             "confidence": 0.9,
         }}},
         {"facts": [{"member_claim_aliases": ["C002"],
@@ -677,7 +688,7 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
         {"decisions": {alias: {"candidate_fact_ids": ["X001"], "reason": "Candidate for review."}}}
         for alias in ("C001",)
     ] + [
-        {"decisions": {alias: {"disposition": "no_change", "reason": "No new proposal.", "confidence": 0.9}}}
+        {"decisions": {alias: {"disposition": "no_change", "reason": "No new proposal.", "confidence": 0.9, "scope": {"C001": scope_record("distinct")}}}}
         for alias in ("C002",)
     ] + [{"facts": [{
         "member_claim_aliases": ["C002"], "text": other.text, "state": "current",

@@ -117,16 +117,19 @@ def split_scope_plan(plan: dict, *, other_entities=()) -> list[dict]:
 
     routing = {"decisions": {
         alias: (
-            {"route_kind": "deferred", "confidence": decision["confidence"], "reason": decision["reason"]}
+            {"route_kind": "deferred", "owner_entity": "",
+             "pages": {eid: {"subject_evidence": "No relevant assertion.", "relevance": "incidental_or_unrelated",
+                             "section_key": "not_selected", "reason": "No useful destination."} for eid in eligible},
+             "confidence": decision["confidence"], "reason": decision["reason"]}
             if decision.get("disposition") != "canonical"
             or stable(decision.get("owner_entity", "")) in provisional_candidates
             else {
                 "route_kind": "general",
                 "owner_entity": stable(decision["owner_entity"]),
                 "pages": {
-                    **{entity_id: {"section_key": "not_selected", "reason": "Not a selected subject."}
+                    **{entity_id: {"subject_evidence": "Explicit fixture subject decision.", "relevance": "incidental_or_unrelated", "section_key": "not_selected", "reason": "Not a selected subject."}
                        for entity_id in eligible},
-                    **{target: {"section_key": default_section(target.split("-")[0], "unknown", None),
+                    **{target: {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": default_section(target.split("-")[0], "unknown", None),
                      "reason": decision["reason"]}
                     for target in dict.fromkeys([
                         stable(decision["owner_entity"]),
@@ -331,7 +334,7 @@ def fact_resolution_plan(
             )
         }}
         for alias in incoming_aliases
-    ] + [{"facts": [{
+    ] + [{"facts": [{"memory_scope": "The fixture memory.",
         "member_claim_aliases": aliases, "state": "current",
         "section_key": section, "text": text, "confidence": 0.9,
         "reason": "Source-grounded test resolution.",
@@ -455,20 +458,20 @@ def test_revision_cannot_overwrite_identity_blocked_deferral():
 def test_claim_routing_contract_requires_exact_claims_and_registry_values():
     schema = page_plan_model(["C001", "C002"], {"you": "you", "project-cedar": "project"})
     decision = {"route_kind": "general", "owner_entity": "you",
-                "pages": {"you": {"section_key": "profile", "reason": "Personal fact."},
-                          "project-cedar": {"section_key": "not_selected", "reason": "Not about the project."}},
+                "pages": {"you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "profile", "reason": "Personal fact."},
+                          "project-cedar": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "incidental_or_unrelated", "section_key": "not_selected", "reason": "Not about the project."}},
                 "confidence": 0.9, "reason": "Useful placement."}
     valid = {"decisions": {"C001": decision, "C002": decision}}
     assert set(schema.model_validate(valid).decisions.model_dump()) == {"C001", "C002"}
     with pytest.raises(ValidationError):
         schema.model_validate({"decisions": {"C001": decision}})
     for pages in [
-        {}, {**decision["pages"], "missing": {"section_key": "profile", "reason": "Invalid ID."}},
-        {**decision["pages"], "you": {"section_key": "invalid", "reason": "Invalid section."}},
-        {**decision["pages"], "you": {"section_key": "people_organizations", "reason": "Wrong entity type's section."}},
+        {}, {**decision["pages"], "missing": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "profile", "reason": "Invalid ID."}},
+        {**decision["pages"], "you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "invalid", "reason": "Invalid section."}},
+        {**decision["pages"], "you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "people_organizations", "reason": "Wrong entity type's section."}},
         {**decision["pages"], "you": [decision["pages"]["you"], decision["pages"]["you"]]},
-        {**decision["pages"], "you": {"section_key": "not_selected", "reason": "Missing primary."}},
-        {**decision["pages"], "you": {"section_key": ["profile", "current_context"], "reason": "Two sections."}},
+        {**decision["pages"], "you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "incidental_or_unrelated", "section_key": "not_selected", "reason": "Missing primary."}},
+        {**decision["pages"], "you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": ["profile", "current_context"], "reason": "Two sections."}},
     ]:
         with pytest.raises(ValidationError):
             schema.model_validate({"decisions": {"C001": {**decision, "pages": pages}, "C002": decision}})
@@ -578,7 +581,7 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
             alias: {
                 "route_kind": "general",
                 "owner_entity": "you",
-                "pages": {"you": {"section_key": "profile", "reason": "Personal fact."}},
+                "pages": {"you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "profile", "reason": "Personal fact."}},
                 "confidence": 0.9,
                 "reason": "The claim changes the user's durable preferences.",
             }

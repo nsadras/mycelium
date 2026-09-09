@@ -165,7 +165,7 @@ def staged_fact_responses(
             for decision in response["decisions"].values():
                 decision["scope"] = {target: scope_record() for target in targets}
     responses = truth_responses + [{
-        "facts": [{
+        "facts": [{"memory_scope": "The fixture memory.",
             **{key: value for key, value in fact.items() if key != "fact_key"},
             "member_claim_aliases": [alias for alias, assignment in plan["assignments"].items()
                                      if assignment["fact_key"] == fact["fact_key"]],
@@ -299,7 +299,7 @@ async def test_synthesis_uses_corrected_claim_not_original_source(tmp_path):
         assert corrected.text in user and related.text in user
         assert "I prefer tea." not in user
         assert corrected.recorded_at not in user
-        return {"facts": [{"member_claim_aliases": ["C001", "C002"], "state": "current",
+        return {"facts": [{"memory_scope": "The fixture memory.", "member_claim_aliases": ["C001", "C002"], "state": "current",
                            "section_key": "preferences_working_style",
                            "text": "The user prefers coffee and drinks it each morning.",
                            "confidence": 0.9, "reason": "Compatible canonical statements."}]}
@@ -545,7 +545,7 @@ async def test_truth_changes_are_decided_sequentially_and_cannot_compete(tmp_pat
             "reason": "The changed target was already claimed by an earlier decision.",
             "confidence": 0.95,
         }}},
-        {"facts": [{
+        {"facts": [{"memory_scope": "The fixture memory.",
                 "member_claim_aliases": ["C003"],
                 "state": "current",
                 "section_key": "preferences_working_style",
@@ -597,14 +597,14 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path
             "scope": {"C001": scope_record()},
             "confidence": 0.8,
         }}},
-        {"facts": [{
+        {"facts": [{"memory_scope": "The fixture memory.",
             "member_claim_aliases": ["C001"],
             "state": "current",
             "section_key": "preferences_working_style",
             "text": old.text,
             "confidence": 0.9,
             "reason": "Existing preference.",
-        }, {
+        }, {"memory_scope": "The fixture memory.",
                 "member_claim_aliases": ["C002"],
                 "state": "current",
                 "section_key": "preferences_working_style",
@@ -648,7 +648,7 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
             "scope": {"C001": scope_record()},
             "confidence": 0.9,
         }}},
-        {"facts": [{"member_claim_aliases": ["C002"],
+        {"facts": [{"memory_scope": "The fixture memory.", "member_claim_aliases": ["C002"],
                     "state": "current", "section_key": "preferences_working_style",
                     "text": new.text, "confidence": 0.9,
                     "reason": "Invalidly omit the existing claim."}]},
@@ -690,7 +690,7 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
     ] + [
         {"decisions": {alias: {"disposition": "no_change", "reason": "No new proposal.", "confidence": 0.9, "scope": {"C001": scope_record("distinct")}}}}
         for alias in ("C002",)
-    ] + [{"facts": [{
+    ] + [{"facts": [{"memory_scope": "The fixture memory.",
         "member_claim_aliases": ["C002"], "text": other.text, "state": "current",
         "section_key": "preferences_working_style", "confidence": 0.9, "reason": "Separate activity.",
     }]}]
@@ -836,7 +836,7 @@ async def test_large_new_claim_sets_are_grouped_incrementally(tmp_path):
         if label == "dream-fact-synthesis":
             call_counts["synthesis"] += 1
             batch = claims[:12] if call_counts["synthesis"] == 1 else claims[12:]
-            return {"facts": [{
+            return {"facts": [{"memory_scope": "The fixture memory.",
                 "member_claim_aliases": [f"C{index:03d}"],
                 "state": "current", "section_key": "preferences_working_style",
                 "text": item.text, "confidence": 0.9, "reason": "Distinct memory.",
@@ -901,3 +901,43 @@ async def test_approve_supersession_mutates_claims_and_reruns_resolver(tmp_path)
     assert artifacts.get_claim("new").links == [{"relation": "supersedes", "target": "old"}]
     assert {item.fact_id for item in artifacts.list_consolidated_facts()} == {"fact-new"}
     resolver.resolve.assert_awaited_once()
+
+
+def test_claim_evidence_carries_only_cited_occurrence_anchors(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    item = claim("dated", "An event happened last Saturday.", "2026-09-08T18:00:00Z")
+    placement = place(artifacts, item)
+    source_id = item.provenance[0].source_id
+    cited_id = item.provenance[0].segment_ids[0]
+    artifacts.save_source(SourceDocument(source_id, "agent_conversation", "s", item.recorded_at,
+        "2026-02-12", ["user"], [SourceSegment(cited_id, 0, item.text, timestamp="2026-02-12T10:00:00Z"),
+                                 SourceSegment("uncited", 1, "Unrelated text.", timestamp="2025-01-01")]))
+    resolver = FactResolver(AsyncMock(), artifacts)
+    rendered = resolver._claims_text({"C001": item}, {item.claim_id: placement}, {}, {})
+    assert "2026-02-12T10:00:00Z" in rendered
+    assert item.recorded_at not in rendered
+    assert "2025-01-01" not in rendered
+    assert resolver._source_times(item) == [{"source_id": source_id, "occurred_at": "2026-02-12",
+                                           "segments": [{"segment_id": cited_id, "timestamp": "2026-02-12T10:00:00Z"}]}]
+
+
+@pytest.mark.asyncio
+async def test_candidate_selection_receives_canonical_members_and_source_times(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    old = claim("old", "The user's workshop is on Tuesday.", "2026-09-08")
+    new = claim("new", "The user's workshop has eight seats.", "2026-09-09")
+    placements = {c.claim_id: place(artifacts, c) for c in (old, new)}
+    source_id = old.provenance[0].source_id
+    artifacts.save_source(SourceDocument(source_id, "agent_conversation", "s", "2026-09-08",
+        "2026-02-12", [], [SourceSegment(old.provenance[0].segment_ids[0], 0, "Original source words.",
+                                         timestamp="2026-02-12T10:00:00Z")]))
+    existing = fact(old)
+    existing.text = "An over-broad display sentence that omits the schedule."
+    llm = AsyncMock()
+    llm.call_structured.return_value = {"decisions": {"C001": {"candidate_fact_ids": ["X001"], "reason": "Same workshop."}}}
+    selected = await FactResolver(llm, artifacts)._select_prior_facts(
+        [new], placements, [existing], {"you": artifacts.get_entity("you")})
+    user = llm.call_structured.call_args.args[1]
+    assert old.text in user and "2026-02-12T10:00:00Z" in user
+    assert "Original source words." not in user
+    assert selected == {new.claim_id: {existing.fact_id}}

@@ -73,3 +73,28 @@ async def test_grounded_synthesis(tmp_path, monkeypatch, name, texts, count, exp
         assert len(result["facts"]) == count
     await check_meaning(memory, {"expected": expected, "forbidden": forbidden},
                         result["facts"], tmp_path / "meaning.json")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.getenv("MYCELIUM_RUN_SYNTHESIS_PROBES") != "1", reason="Opt-in host Ollama probes")
+async def test_repartitions_overbroad_existing_group(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path / "llm"))
+    memory = Mycelium(tmp_path / "store", config_path=Path(__file__).resolve().parents[1] / "mycelium.toml")
+    texts = ["Rina enjoys making ceramics.", "Rina likes working with clay.",
+             "Rina finished a vase on May 3.", "The vase Rina finished on May 3 has a blue glaze.",
+             "Rina met a potter at the June fair.", "The potter Rina met at the June fair taught her a glazing method.",
+             "Rina plans to take a ceramics course in October."]
+    claims = {f"C{i:03d}": text for i, text in enumerate(texts, 1)}
+    canonical = {alias: {"text": text, "temporal_status": "past" if alias in {"C003", "C004", "C005", "C006"} else "current",
+                         "temporal": None} for alias, text in claims.items()}
+    system, user = prompts.fact_synthesis_prompt("Rina (person)", json.dumps(canonical),
+        "An existing display fact groups C001 through C006 into one long sentence.", "[]",
+        "profile: preferences and plans; history: completed occurrences")
+    response = await memory.llm.call_structured(system, user,
+        fact_synthesis_output_model(claims, ["profile", "history"]), num_predict=4096, dump_success=True)
+    (tmp_path / "response.json").write_text(json.dumps(response, indent=2))
+    assert {frozenset(f["member_claim_aliases"]) for f in response["facts"]} == {
+        frozenset(members) for members in [["C001", "C002"], ["C003", "C004"], ["C005", "C006"], ["C007"]]}
+    assert all(f["state"] == "history" for f in response["facts"]
+               if {"C003", "C005"}.intersection(f["member_claim_aliases"]))

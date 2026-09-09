@@ -300,6 +300,7 @@ def fact_synthesis_output_model(
     fact = create_model(
         "SynthesizedFact",
         __config__=ConfigDict(extra="forbid"),
+        memory_scope=(str, Field(min_length=1)),
         member_claim_aliases=(
             list[alias_type],
             Field(min_length=1, max_length=len(claim_texts)),

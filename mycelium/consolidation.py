@@ -41,12 +41,13 @@ class ClaimRouter:
         *,
         dream_run_id: str = "unpersisted",
         seed_entities: Iterable[EntityRecord] = (),
+        seed_identity_decisions: Iterable[EntityResolutionDecision] = (),
         participant_source_ids: set[str] | None = None,
     ) -> RoutingResult:
         """Route bounded source cohorts so one malformed identity plan stays local."""
         result = RoutingResult()
         seeds = list(seed_entities)
-        pending_decisions: dict[str, EntityResolutionDecision] = {}
+        staged_decisions = {d.decision_id: d for d in seed_identity_decisions}
         for unit_evidence in self._identity_units(evidence):
             unit = self._work_unit(unit_evidence, dream_run_id)
             partial = await self._route_unit(
@@ -55,15 +56,14 @@ class ClaimRouter:
                 seed_entities=seeds,
                 participant_source_ids=participant_source_ids,
                 work_unit=unit,
-                seed_identity_decisions=pending_decisions.values(),
+                seed_identity_decisions=staged_decisions.values(),
             )
             self._merge_result(result, partial)
             seeds.extend(partial.new_entities)
-            pending_decisions.update({
+            staged_decisions.update({
                 decision.decision_id: decision
                 for decision in partial.entity_decisions
                 if decision.decision_type == "entity_creation"
-                and decision.review_state == "review_required"
             })
         return result
 
@@ -88,16 +88,17 @@ class ClaimRouter:
         work_unit.attempt_count += 1
         work_unit.status = "pending"
         now = datetime.now().astimezone().isoformat()
+        seed_identity_decisions = list(seed_identity_decisions)
         pending = [
             *self.artifacts.list_entity_resolution_decisions(review_state="review_required"),
-            *seed_identity_decisions,
+            *(d for d in seed_identity_decisions if d.review_state == "review_required"),
         ]
         try:
             if work_unit.entity_plan:
                 plan = schema.model_validate(work_unit.entity_plan).model_dump()
             else:
                 system, user = identity_plan_prompt(
-                    self.formatter.entity_planning_catalog(planned.values()),
+                    self.formatter.entity_planning_catalog(planned.values(), seed_identity_decisions),
                     self.formatter.format_evidence(aliases, participants),
                     self.formatter.identity_review_catalog(aliases),
                     self.formatter.format_pending_identity_proposals(pending),
@@ -225,7 +226,8 @@ class ClaimRouter:
                 "supporting_claims": [], "identity_blocker_ids": blockers.get(alias, []),
                 "confidence": routing["confidence"],
                 "reason": routing["reason"] + "\n" + "\n".join(
-                    f"Page {entity_id} ({page['section_key']}): {page['reason']}"
+                    f"Page {entity_id} ({page['section_key']}; {page['relevance']}): "
+                    f"{page['subject_evidence']} — {page['reason']}"
                     for entity_id, page in routing.get("pages", {}).items()
                 ),
             }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Iterable
+import json
 
 from mycelium.artifacts import (
     ArtifactStore,
@@ -47,7 +48,11 @@ class RoutingFormatter:
             lines.append("- none yet")
         return "\n".join(lines)
 
-    def entity_planning_catalog(self, entities: Iterable[EntityRecord]) -> str:
+    def entity_planning_catalog(
+        self, entities: Iterable[EntityRecord], staged_decisions: Iterable[EntityResolutionDecision] = (),
+    ) -> str:
+        decisions = {d.decision_id: d for d in self.artifacts.list_entity_resolution_decisions()}
+        decisions.update({d.decision_id: d for d in staged_decisions})
         lines = ["Existing canonical entities and grounded page facts:"]
         found = False
         for entity in sorted(entities, key=lambda item: item.entity_id):
@@ -60,6 +65,24 @@ class RoutingFormatter:
                 f"title={entity.title!r}; aliases={aliases}; "
                 f"page_state={entity.materialization_state}"
             )
+            accepted = sorted(
+                (d for d in decisions.values() if d.entity_id == entity.entity_id and d.review_state == "accepted"),
+                key=lambda d: (d.created_at, d.decision_id),
+            )
+            # Bound presentation while retaining founding evidence and recent resolutions.
+            selected = {d.decision_id: d for d in [*accepted[:1], *accepted[-3:]]}
+            grounding = []
+            for decision in selected.values():
+                claims = []
+                for claim_id in decision.identity_evidence_claim_ids:
+                    claim = self.artifacts.get_claim(claim_id)
+                    claims.append({"claim_id": claim.claim_id, "text": claim.text,
+                                   "provenance": [{"source_id": p.source_id, "segment_ids": p.segment_ids}
+                                                  for p in claim.provenance]})
+                grounding.append({"decision_id": decision.decision_id, "reason": decision.reason,
+                                  "claims": claims})
+            if grounding:
+                lines.append("  identity_grounding=" + json.dumps(grounding, ensure_ascii=False))
             facts = self.artifacts.list_consolidated_facts(
                 owner_entity_id=entity.entity_id,
             )

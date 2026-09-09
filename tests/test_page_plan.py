@@ -14,8 +14,8 @@ def test_page_choices_survive_structured_response_roundtrip(second_section):
         "route_kind": "general", "owner_entity": "you", "reason": "Grounded placements.",
         "confidence": 0.9,
         "pages": {
-            "you": {"section_key": "priorities_plans", "reason": "Personal goal."},
-            "project-1": {"section_key": second_section, "reason": "Explicit page decision."},
+            "you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "priorities_plans", "reason": "Personal goal."},
+            "project-1": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": second_section, "reason": "Explicit page decision."},
         },
     }}}
     # No network request: exercise the parser/serializer that previously dropped
@@ -27,7 +27,23 @@ def test_page_choices_survive_structured_response_roundtrip(second_section):
 
 def test_no_eligible_pages_requires_deferral():
     schema = page_plan_model(["C001"], {})
-    decision = {"route_kind": "deferred", "confidence": 1.0, "reason": "No eligible identity."}
+    decision = {"pages": {}, "owner_entity": "", "route_kind": "deferred", "confidence": 1.0, "reason": "No eligible identity."}
     schema.model_validate({"decisions": {"C001": decision}})
     with pytest.raises(ValidationError):
         schema.model_validate({"decisions": {"C001": {**decision, "route_kind": "general"}}})
+
+
+def test_incidental_relevance_cannot_select_a_page():
+    schema = page_plan_model(["C001"], {"you": "you"})
+    page = {"subject_evidence": "No statement about this subject.",
+            "relevance": "incidental_or_unrelated", "section_key": "profile", "reason": "Incidental."}
+    decision = {"pages": {"you": page}, "owner_entity": "you", "route_kind": "general",
+                "reason": "An invalid selection.", "confidence": 1.0}
+    with pytest.raises(ValidationError, match="subject evidence"):
+        schema.model_validate({"decisions": {"C001": decision}})
+    page["section_key"] = "not_selected"
+    decision.update(owner_entity="", route_kind="deferred")
+    schema.model_validate({"decisions": {"C001": decision}})
+    decision["owner_entity"] = "you"
+    with pytest.raises(ValidationError, match="Deferred"):
+        schema.model_validate({"decisions": {"C001": decision}})

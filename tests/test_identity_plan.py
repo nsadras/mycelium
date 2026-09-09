@@ -122,8 +122,8 @@ def test_shared_source_text_is_included_once_with_each_claim_reference(tmp_path)
 
 def route(owner="you"):
     return {"decisions": {"C001": {"route_kind": "general", "owner_entity": owner,
-            "pages": {"you": {"section_key": "not_selected", "reason": "External subject."},
-                      owner: {"section_key": "overview", "reason": "Useful statement."}},
+            "pages": {"you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "incidental_or_unrelated", "section_key": "not_selected", "reason": "External subject."},
+                      owner: {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "overview", "reason": "Useful statement."}},
             "reason": "Source-grounded owner.", "confidence": 1.0}}}
 
 
@@ -204,3 +204,21 @@ async def test_identity_candidates_survive_routing_and_repository_roundtrip(tmp_
     stored.candidate_entity_ids = ["missing"]
     with pytest.raises(FileNotFoundError):
         memory.artifacts.save_entity_resolution_decision(stored)
+
+
+def test_identity_catalog_retains_staged_founding_evidence(tmp_path):
+    from mycelium.artifacts import EntityResolutionDecision, EntityRecord
+    memory, _, _, evidence = setup_router(tmp_path)
+    entity = EntityRecord("project-new", "project", "Exhibit", "exhibit", [], "active", "2026-09-04", "2026-09-04")
+    decision = EntityResolutionDecision("d1", "entity_creation", entity.entity_id, "project", entity.title,
+        ["s1"], ["c1"], ["seg1"], 0.9, "Founding subject evidence.", "accepted", "build", "2026-09-04",
+        identity_evidence_claim_ids=["c1"])
+    formatter = RoutingFormatter(memory.artifacts)
+    assert evidence[0].claim.text not in formatter.entity_planning_catalog([entity])
+    rendered = formatter.entity_planning_catalog([entity], [decision])
+    assert evidence[0].claim.text in rendered
+    assert '"claim_id": "c1"' in rendered
+    assert '"source_id": "s1"' in rendered
+    assert '"segment_ids": ["seg1"]' in rendered
+    assert decision.reason in rendered
+    assert memory.artifacts.list_entity_resolution_decisions() == []

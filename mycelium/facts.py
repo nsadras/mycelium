@@ -405,7 +405,7 @@ class FactResolver:
                 system,
                 user,
                 truth_schema,
-                num_predict=2048,
+                num_predict=8192,
                 debug_label="dream-fact-truth",
             )
             decision = truth_schema.model_validate(response).model_dump()[
@@ -507,12 +507,7 @@ class FactResolver:
         # Review owns these exact claim IDs. Presentation must neither rewrite
         # protected facts nor hide other claims by grouping them with held ones.
         canonical = {
-            alias: {
-                "text": display_claim_text(claim),
-                "temporal_status": claim.temporal_status,
-                "temporal": temporal_record(claim.facets),
-                "source_times": self._source_times(claim),
-            }
+            alias: self._canonical_record(claim)
             for alias, claim in aliases.items()
             if claim.claim_id not in pending_incoming | preserved_member_ids
         }
@@ -565,7 +560,7 @@ class FactResolver:
                 linked_entity_ids=linked,
                 synthesis_origin="manual" if manual else "model",
                 confidence=prior.confidence if manual else group["confidence"],
-                reason=prior.reason if manual else group["reason"],
+                reason=prior.reason if manual else f"Scope: {group['memory_scope']}. {group['reason']}",
                 created_at=prior.created_at if prior else now,
                 updated_at=now,
                 manual_text=manual,
@@ -622,11 +617,15 @@ class FactResolver:
                     aliases,
                     aliases_for_chunk,
                 )
-                prior_text = "\n".join(
-                    f"[{alias}] state={fact.state}; section={fact.section_key}; "
-                    f"text={fact.text}"
-                    for alias, fact in aliases_for_chunk.items()
-                )
+                prior_blocks = []
+                for alias, fact in aliases_for_chunk.items():
+                    members = [self._canonical_record(self.artifacts.get_claim(cid))
+                               for cid in fact.member_claim_ids]
+                    prior_blocks.append(
+                        f"[{alias}] state={fact.state}; section={fact.section_key}; "
+                        f"text={fact.text}; members={json.dumps(members, ensure_ascii=False)}"
+                    )
+                prior_text = "\n".join(prior_blocks)
                 system, user = prompts.fact_candidate_selection_prompt(
                     incoming_text,
                     prior_text,
@@ -658,6 +657,10 @@ class FactResolver:
     @staticmethod
     def _owner_text(owner: EntityRecord) -> str:
         return f"id={owner.entity_id}; type={owner.entity_type}; title={owner.title}"
+
+    def _canonical_record(self, claim: MemoryClaim) -> dict:
+        return {"text": display_claim_text(claim), "temporal_status": claim.temporal_status,
+                "temporal": temporal_record(claim.facets), "source_times": self._source_times(claim)}
 
     def _source_times(self, claim: MemoryClaim) -> list[dict]:
         """Carry cited occurrence anchors, never ingestion wall-clock time."""

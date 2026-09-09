@@ -4047,3 +4047,35 @@ one prose-similarity summary.
 - Final prompt regression sweep: 17 direct extraction/admission cases passed in 193.97s at
   `benchmark_runs/cumulative-contracts-20260908/extraction-final-regression`, including large and multi-party
   batches, contextual replies, uncertainty, questions, and tool observations.
+
+## 2026-09-08 — Ground cumulative organization in subject and memory scope
+
+- Placement now emits a complete page grid, including on deferred decisions. Each destination has source-backed
+  subject evidence and model-declared relevance before section selection. Exact schema invariants reject selected
+  incidental/unrelated pages and invalid owners. The relevance evidence is preserved in placement explanations.
+  Initial union-based prototypes escaped into deferral even with positive reasons; a complete grid removed that
+  short branch. An attribution probe was clarified because explicitly asserting a reading interaction can itself
+  describe its participants. The final neutral probe and all 5 existing placement regressions passed.
+- Identity catalogs retain accepted founding and recent resolution evidence, including canonical claim text and
+  exact source/segment citations. Staged decisions survive source work units and scope revision; unresolved proposals
+  remain distinct from accepted grounding. Additional identity prompt wording regressed distinct ambiguous actors
+  and was removed. The smaller grounding-only repair passed both ambiguity probes/replays and the staged unnamed
+  identity router case (3 tests in 26.62s). Its existing ID and page placement were preserved.
+- Candidate selection now sees canonical fact members and their source times, rather than only the old summary.
+  Synthesis declares concrete memory scope before membership/prose and may split old over-broad groups. Scope is
+  retained in fact reasons. Required membership, singleton fidelity, manual corrections, and review isolation remain.
+  Initial generic scope labels plus unknown temporal input still produced incorrect current state; concrete scope
+  and explicit temporal input passed before integration. Nine existing synthesis probes passed in 58.63s; the
+  explicit over-broad-group repartition regression passed in 12.49s. Structural fixtures were updated before acceptance.
+- Truth comparisons now have an 8192-token generation ceiling for per-target scope explanations. A real 16-target
+  probe returned all comparisons and no false conflict (1715 generated tokens), documenting why the former 2048
+  ceiling leaves little room for growth. Historical context size itself is still not fully bounded.
+- Final full backend: 389 passed, 79 deselected in 16.07s. Subsequent focused checks and targeted Ruff/diff checks
+  passed after the budget/formatting cleanup. No server or benchmark job was started.
+- Public capture/build/restart/retrieval replay: all 3 builds completed without failures, 18 claims retained as
+  13 facts, membership/coverage checks and semantic retention/retrieval judgments passed in 296.70s at
+  `benchmark_runs/cumulative-contracts-20260908/final-cumulative-replay`. This run preceded only the final narrow
+  extraction refusal wording and truth output-budget increase, which have their own direct/build validations.
+- New handoff: `planning/cumulative_quality_repairs_2026_09_08.md`. It records limitations, including a still-imperfect
+  temporal classification of ongoing tenure and the absence of a separate briefing/detail layer. LoCoMo QA and
+  corpus-scale semantic coverage remain for the user's next fresh benchmark run; old stores were not rebuilt.

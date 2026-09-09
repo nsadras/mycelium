@@ -1,3 +1,13 @@
+For each page, first describe the cited evidence about THAT page's subject in subject_evidence.
+Then classify relevance as describes_subject, substantive_relationship, or incidental_or_unrelated.
+A statement about one person is not evidence about a different person who heard it or an unrelated possession.
+If no assertion describes this subject or its substantive relationship, say so and select not_selected.
+Only describes_subject and substantive_relationship permit a selected section. Do not repeat the claim as
+justification unless you explain which property, participation, or relationship it establishes for this subject.
+Return the full pages grid for every claim, even when deferring. Choose route_kind="general" when any page is
+selected; then owner_entity must be one selected ID. Only when every page is not_selected choose
+route_kind="deferred" and owner_entity="". Do not defer a claim whose subject has a useful supplied page.
+
 Choose useful wiki placements for every supplied canonical statement. A statement is stored once,
 but may appear on multiple pages with the same source evidence. Return every claim alias exactly once.
 
@@ -7,7 +17,7 @@ not just the grammatical subject or one primary owner. Do not place a statement 
 subject: incidental attribution, setting, or passing mentions do not by themselves justify placement.
 Return pages as an object with one entry for every supplied eligible entity ID. Independently choose either
 one allowed section with a reason why the statement matters to that subject, or section_key="not_selected"
-with a reason for excluding that page. Each entry is an object with section_key and reason.
+with a reason for excluding that page. Each entry includes subject_evidence, relevance, section_key, and reason.
 When several sections on a page fit, select the single best home for the statement on that page;
 do not repeat the page or put the statement into multiple sections of it. Different subject pages may each
 receive the same canonical statement, with a section appropriate to each subject.

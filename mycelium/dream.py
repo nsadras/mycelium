@@ -144,6 +144,7 @@ class ConsolidationProcess:
                 revision_evidence,
                 dream_run_id=run_id,
                 seed_entities=(routing.new_entities if routing is not None else []),
+                seed_identity_decisions=(routing.entity_decisions if routing is not None else []),
                 participant_source_ids=incoming_source_ids,
             ) if (
                 revision_evidence

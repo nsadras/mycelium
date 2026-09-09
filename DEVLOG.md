@@ -4003,3 +4003,12 @@ one prose-similarity summary.
 - Wiki-baseline output also shows its existing checkpoint duration (capture/build plus snapshot copy).
 - Extended the bounded-session runner test with a controlled clock to verify individual rather than cumulative
   durations. Benchmark test module: 25 passed; targeted Ruff and diff checks clean. No real benchmark was launched.
+
+## 2026-09-08 — Retry HTTP timeouts in Ollama calls
+
+- Both chat and structured response handlers now catch HTTPX TimeoutException through their existing bounded retry
+  loops, covering read/connect/write/pool timeouts. Exhaustion preserves the original exception. Timeout duration
+  and benchmark checkpointing are unchanged.
+- Client tests: 36 passed; targeted Ruff and diff checks passed. New failure-injection cases exercise recovery and
+  exhaustion in both entry points. An initial test omitted the required structured schema; corrected before acceptance.
+- No model or server process was started and no benchmark was rerun for this transport change.

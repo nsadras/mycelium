@@ -1,8 +1,10 @@
 import json
 from types import SimpleNamespace
 from copy import deepcopy
+from unittest.mock import AsyncMock
 
 import pytest
+from httpx import ConnectTimeout, PoolTimeout, ReadTimeout, WriteTimeout
 from ollama import web_search
 from pydantic import BaseModel, RootModel
 
@@ -16,6 +18,42 @@ def snapshot_call(kwargs):
     if "tools" in snap and snap["tools"] is not None:
         snap["tools"] = list(snap["tools"])
     return snap
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("structured", [False, True], ids=["messages", "structured"])
+@pytest.mark.parametrize("timeout_type", [ReadTimeout, ConnectTimeout, WriteTimeout, PoolTimeout])
+@pytest.mark.parametrize("recovers", [True, False], ids=["recovers", "exhausted"])
+async def test_http_timeouts_use_bounded_retries(structured, timeout_type, recovers):
+    class Answer(BaseModel):
+        answer: str
+
+    client = OllamaClient(url="http://localhost:11434", model="test-model")
+    timeout = timeout_type("injected timeout")
+    response = SimpleNamespace(message=SimpleNamespace(content='{"answer": "recovered"}'))
+    client.client = SimpleNamespace(chat=AsyncMock(side_effect=[
+        timeout, response if recovers else timeout,
+    ]))
+
+    async def invoke():
+        if structured:
+            return await client.call_structured("system", "question", Answer, max_retries=2)
+        return await client.call_messages(
+            [{"role": "user", "content": "question"}], max_retries=2, enable_tools=False
+        )
+
+    if recovers:
+        result = await invoke()
+        if structured:
+            assert result == {"answer": "recovered"}
+        else:
+            assert result.content == '{"answer": "recovered"}'
+    else:
+        with pytest.raises(timeout_type) as caught:
+            await invoke()
+        assert caught.value is timeout
+
+    assert client.client.chat.await_count == 2
 
 
 class FakeSdkClient:

@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Union, Optional
 
 from dotenv import load_dotenv
+from httpx import TimeoutException
 from ollama import AsyncClient, RequestError, ResponseError, web_fetch, web_search
 from pydantic import BaseModel, ValidationError
 
@@ -194,7 +195,7 @@ class OllamaClient:
                     metadata=metadata,
                 )
 
-            except (RequestError, ResponseError) as e:
+            except (RequestError, ResponseError, TimeoutException) as e:
                 latency_ms = int((time.time() - start_time) * 1000)
                 self._log_call(
                     call_id,
@@ -620,7 +621,7 @@ class OllamaClient:
                     ]
                     continue
 
-            except (RequestError, ResponseError) as e:
+            except (RequestError, ResponseError, TimeoutException) as e:
                 latency_ms = int((time.time() - start_time) * 1000)
                 self._log_call(call_id, attempt + 1, system, user, str(e), latency_ms, False)
                 if attempt == max_retries - 1:

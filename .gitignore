@@ -154,6 +154,7 @@ cython_debug/
 .vscode/
 
 # Project specific
+planning/
 smoke_test_store/
 agent_memory/
 mycelium_store/
@@ -163,3 +164,4 @@ test_outputs/
 mnemos_store/
 AMI/
 *.tuxedo-lock
+todo.txt

@@ -113,15 +113,7 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
     llm = AsyncMock()
     llm.call_structured.return_value = {
         "claims": [
-            {"temporal_status": "unknown",
-                "text": "Ollama version 1.2 supports asynchronous web search.",
-                "claim_type": "observation",
-                "predicate": "supports",
-                "evidence_modality": "tool",
-                "about": [{"entity": "Ollama"}],
-                "segment_ids": ["source-placeholder"],
-                "facets": {"version": "1.2"},
-            }
+            {'temporal_status': 'unknown', 'text': 'Ollama version 1.2 supports asynchronous web search.', 'claim_type': 'observation', 'predicate': None, 'evidence_modality': 'tool', 'about': [{'entity': 'Ollama', 'role': 'subject'}], 'segment_ids': ['source-placeholder'], 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}
         ],
     }
     encoder = Encoder(llm, log_store, Config.defaults(), artifacts)
@@ -289,7 +281,8 @@ async def test_concurrent_chats_in_different_sessions_preserve_both(
         llm=SimpleNamespace(call_messages=call_messages),
         config=SimpleNamespace(
             context_budget_tokens=32768,
-            llm=SimpleNamespace(context_window_tokens=32768),
+            llm=SimpleNamespace(context_window_tokens=32768, reasoning_enabled=True,
+                                reasoning_output_tokens=16384),
             retrieval=Config.defaults().retrieval,
         ),
         retriever=SimpleNamespace(),

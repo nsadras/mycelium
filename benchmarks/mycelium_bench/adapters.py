@@ -10,6 +10,7 @@ from typing import Any, Literal, Protocol
 
 from mycelium.context import render_memory_context
 from mycelium.core import Mycelium
+from mycelium.config import Config, LLMConfig
 from mycelium.artifacts import ArtifactStore, MemoryClaim, SourceSegment
 from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
@@ -65,11 +66,20 @@ class MemorySystem(Protocol):
 
 class OllamaQaClient:
     def __init__(
-        self, model: str, url: str, temperature: float = 0.0, timeout: int = 120
+        self, model: str, url: str, temperature: float | None = None, timeout: int | None = None,
+        llm_config: LLMConfig | None = None,
     ) -> None:
         self.model = model
+        settings = llm_config or LLMConfig()
         self.llm = OllamaClient(
-            url=url, model=model, temperature=temperature, timeout=timeout
+            url=url, model=model,
+            temperature=settings.temperature if temperature is None else temperature,
+            timeout=settings.timeout_seconds if timeout is None else timeout,
+            top_p=settings.top_p, top_k=settings.top_k,
+            context_window_tokens=settings.context_window_tokens,
+            reasoning_enabled=settings.reasoning_enabled,
+            reasoning_output_tokens=settings.reasoning_output_tokens,
+            reasoning_format=settings.reasoning_format,
         )
 
     async def answer(
@@ -411,7 +421,7 @@ class MyceliumMemorySystem:
             raise ValueError(
                 "Memory tool evidence budget must be smaller than the benchmark context budget"
             )
-        initial_budget = min(self.context_budget_tokens, self.qa_client.llm.context_window_tokens - 4096 - 3072) - tool_evidence_budget
+        initial_budget = min(self.context_budget_tokens, self.qa_client.llm.context_window_tokens - self.qa_client.llm.output_budget(4096, think=True) - 3072) - tool_evidence_budget
         try:
             retrieval = await mem.retrieve_context(
                 RetrievalRequest(
@@ -725,7 +735,8 @@ def build_memory_system(
         raise ValueError("--frozen-store and --replay-store are mutually exclusive")
     if frozen_store is not None and not frozen_store.is_dir():
         raise ValueError(f"Frozen store does not exist: {frozen_store}")
-    qa_client = OllamaQaClient(model=qa_model, url=ollama_url)
+    qa_client = OllamaQaClient(model=qa_model, url=ollama_url,
+                              llm_config=Config.from_toml(config_path or Path("mycelium.toml")).llm)
     qa_client.llm.trace_path = run_dir / "diagnostics" / "qa-calls.jsonl"
     if system_name == "mycelium":
         return MyceliumMemorySystem(

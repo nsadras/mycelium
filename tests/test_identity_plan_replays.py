@@ -91,7 +91,7 @@ async def test_identity_plan_real_model(tmp_path, monkeypatch, mode, case):
         (tmp_path / "calls.json").write_text(json.dumps(list(memory.llm._call_log), indent=2, default=str))
     (tmp_path / "response.json").write_text(json.dumps(response, indent=2))
     print(case, tmp_path, json.dumps(response), flush=True)
-    nodes = {n["node_id"]: n for n in planned_subjects(response)}
+    nodes = {n["node_id"]: n for n in planned_subjects(response, {e.entity_id: e for e in memory.artifacts.list_entities()})}
     participants = {p: n["node_id"] for n in nodes.values() for p in n["participant_evidence"]}
     if case in {"user", "project"}:
         assert nodes[participants["P001"]]["entity_id"] == "you"

@@ -144,7 +144,6 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
         "decisions": {
             "M001": {
                 "disposition": "include",
-                "confidence": 0.95,
                 "reason": "It answers the question.",
             }
         }

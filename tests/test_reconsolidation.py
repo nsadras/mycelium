@@ -126,58 +126,24 @@ def staged_fact_responses(
         if changes_by_incoming
         else sorted(plan["assignments"])
     )
-    truth_responses = [
-        {"decisions": {
-            alias: (
-                {
-                    "disposition": "truth_change",
-                    "relation": changes_by_incoming[alias]["relation"],
-                    "target_claim_aliases": changes_by_incoming[alias][
-                        "target_claim_aliases"
-                    ],
-                    "durable_field": changes_by_incoming[alias].get(
-                        "durable_field", "tested durable field"
-                    ),
-                    "prior_state": changes_by_incoming[alias].get(
-                        "prior_state", "prior state"
-                    ),
-                    "incoming_state": changes_by_incoming[alias].get(
-                        "incoming_state", "incoming state"
-                    ),
-                    "transition_evidence": changes_by_incoming[alias].get(
-                        "transition_evidence", "The test establishes a transition."
-                    ),
-                    "explanation": changes_by_incoming[alias]["explanation"],
-                    "confidence": changes_by_incoming[alias]["confidence"],
-                }
-                if alias in changes_by_incoming
-                else {
-                    "disposition": "no_change",
-                    "reason": "No accepted truth is changed.",
-                    "confidence": 0.9,
-                }
-            )
-        }}
-        for alias in incoming_aliases
-    ]
     targets = set(plan["assignments"]) - set(incoming_aliases)
+    responses = []
     if targets:
-        for response in truth_responses:
-            for decision in response["decisions"].values():
-                decision["scope"] = {target: scope_record() for target in targets}
-    else:
-        truth_responses = []
-    responses = truth_responses + [{
-        "facts": [{"memory_scope": "The fixture memory.",
-            **{key: value for key, value in fact.items() if key != "fact_key"},
-            "member_claim_aliases": [alias for alias, assignment in plan["assignments"].items()
-                                     if assignment["fact_key"] == fact["fact_key"]],
-        } for fact in plan["facts"]],
-    }]
-    for response in responses:
-        for group in response.get("facts", []):
-            if len(group["member_claim_aliases"]) == 1:
-                group["text"] = None
+        for alias in incoming_aliases:
+            change = changes_by_incoming.get(alias)
+            responses.append({
+                "comparisons":[{"target":target,"scope":"same","reason":"The fixture establishes shared scope."} for target in sorted(targets)],
+                "relation":change["relation"] if change else "no_change",
+                "targets":change["target_claim_aliases"] if change else [],
+                "reason":change["explanation"] if change else "Compatible information.",
+            })
+    groups=[]
+    for fact in plan["facts"]:
+        members=[alias for alias,assignment in plan["assignments"].items() if assignment["fact_key"]==fact["fact_key"]]
+        groups.append({"memory_scope":"The fixture memory.","member_claim_aliases":members,
+                       "state":fact["state"],"section_key":fact["section_key"],
+                       "text":None if len(members)==1 else fact["text"]})
+    responses.append({"facts":groups})
     if candidate_fact_aliases is not None:
         responses[0:0] = [
             {"decisions": {f"C{index:03d}": {
@@ -189,28 +155,13 @@ def staged_fact_responses(
 
 
 def test_truth_schema_separates_incoming_from_prior_targets():
-    schema = fact_truth_output_model(["C002"], ["C001"])
-
-    valid = {"decisions": {"C002": {
-        "disposition": "truth_change",
-        "relation": "supersedes",
-        "target_claim_aliases": ["C001"],
-        "scope": {"C001": scope_record()},
-        "durable_field": "preferred drink",
-        "prior_state": "tea",
-        "incoming_state": "coffee",
-        "transition_evidence": "The incoming claim explicitly says now.",
-        "explanation": "The incoming evidence explicitly replaces the prior state.",
-        "confidence": 0.9,
-    }}}
-    assert schema.model_validate(valid).decisions.C002.disposition == "truth_change"
-
-    invalid = {"decisions": {"C002": {
-        **valid["decisions"]["C002"],
-        "target_claim_aliases": ["C002"],
-    }}}
+    schema = fact_truth_output_model(["C001"])
+    valid = {"comparisons":[{"target":"C001","scope":"same","reason":"Same state."}],
+             "relation":"supersedes","targets":["C001"],"reason":"The incoming evidence replaces the prior state."}
+    assert schema.model_validate(valid).relation == "supersedes"
     with pytest.raises(ValidationError):
-        schema.model_validate(invalid)
+        schema.model_validate({**valid,"targets":["C002"]})
+
 
 
 def test_fact_candidate_schema_requires_exact_claim_and_fact_aliases():
@@ -320,18 +271,11 @@ async def test_synthesis_uses_corrected_claim_not_original_source(tmp_path):
     llm = AsyncMock(context_window_tokens=32768)
 
     async def respond(_system, user, _schema, **kwargs):
-        if kwargs["debug_label"] == "dream-fact-truth":
-            return {"decisions": {alias: {"disposition": "no_change", "confidence": 0.9,
-                                         "reason": "No prior state is changed."}
-                                  for alias in _schema.model_fields["decisions"].annotation.model_fields}}
         assert kwargs["debug_label"] == "dream-fact-synthesis"
         assert corrected.text in user and related.text in user
         assert "I prefer tea." not in user
         assert corrected.recorded_at not in user
-        return {"facts": [{"memory_scope": "The fixture memory.", "member_claim_aliases": ["C001", "C002"], "state": "current",
-                           "section_key": "preferences_working_style",
-                           "text": "The user prefers coffee and drinks it each morning.",
-                           "confidence": 0.9, "reason": "Compatible canonical statements."}]}
+        return {"facts": [{'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001', 'C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': 'The user prefers coffee and drinks it each morning.'}]}
 
     llm.call_structured.side_effect = respond
     result = await FactResolver(llm, artifacts).resolve(
@@ -361,13 +305,7 @@ async def test_synthesis_receives_only_manual_previous_presentations(tmp_path, m
         assert kwargs["debug_label"] == "dream-fact-synthesis"
         assert old.text in user and new.text in user
         assert (previous.text in user) == manual
-        return {"facts": [{
-            "memory_scope": "The user's update preference.",
-            "member_claim_aliases": ["C001", "C002"], "state": "current",
-            "section_key": "preferences_working_style",
-            "text": "The user prefers concise written updates.",
-            "confidence": 0.9, "reason": "Compatible canonical details.",
-        }]}
+        return {"facts": [{'memory_scope': "The user's update preference.", 'member_claim_aliases': ['C001', 'C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': 'The user prefers concise written updates.'}]}
 
     llm.call_structured.side_effect = respond
     result = await FactResolver(llm, artifacts)._resolve_owner_step(
@@ -594,26 +532,8 @@ async def test_truth_changes_are_decided_sequentially_and_cannot_compete(tmp_pat
             "candidate_fact_ids": ["X001"],
             "reason": "The fact may be the prior bicycle state.",
         }}},
-        {"decisions": {"C002": {
-            "disposition": "truth_change",
-            "relation": "supersedes",
-            "target_claim_aliases": ["C001"],
-        "scope": {"C001": scope_record()},
-            "durable_field": "preferred drink",
-            "prior_state": "tea",
-            "incoming_state": "coffee",
-            "transition_evidence": "The incoming claim explicitly replaces the preference.",
-            "explanation": "The new color replaces the old color.",
-            "confidence": 0.95,
-        }}},
-        {"facts": [{"memory_scope": "The fixture memory.",
-                "member_claim_aliases": ["C003"],
-                "state": "current",
-                "section_key": "preferences_working_style",
-                "text": None,
-                "confidence": 0.9,
-                "reason": "Independent event; review-held state is outside presentation input.",
-        }]},
+        {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'supersedes', 'targets': ['C001'], 'reason': 'The new color replaces the old color.'},
+        {"facts": [{'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C003'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -652,27 +572,8 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path
             "candidate_fact_ids": ["X001"],
             "reason": "The prior preference may express the same durable state.",
         }}},
-        {"decisions": {"C002": {
-            "disposition": "no_change",
-            "reason": "The evidence does not explicitly replace the prior preference.",
-            "scope": {"C001": scope_record()},
-            "confidence": 0.8,
-        }}},
-        {"facts": [{"memory_scope": "The fixture memory.",
-            "member_claim_aliases": ["C001"],
-            "state": "current",
-            "section_key": "preferences_working_style",
-            "text": None,
-            "confidence": 0.9,
-            "reason": "Existing preference.",
-        }, {"memory_scope": "The fixture memory.",
-                "member_claim_aliases": ["C002"],
-                "state": "current",
-                "section_key": "preferences_working_style",
-                "text": None,
-                "confidence": 0.9,
-                "reason": "Independent incoming preference.",
-        }]},
+        {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'targets': [], 'reason': 'The evidence does not explicitly replace the prior preference.'},
+        {"facts": [{'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}, {'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -703,16 +604,8 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
             "candidate_fact_ids": ["X001"],
             "reason": "The prior fact may express the same durable state.",
         }}},
-        {"decisions": {"C002": {
-            "disposition": "no_change",
-            "reason": "No change proposed by this test decision.",
-            "scope": {"C001": scope_record()},
-            "confidence": 0.9,
-        }}},
-        {"facts": [{"memory_scope": "The fixture memory.", "member_claim_aliases": ["C002"],
-                    "state": "current", "section_key": "preferences_working_style",
-                    "text": None, "confidence": 0.9,
-                    "reason": "Invalidly omit the existing claim."}]},
+        {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'targets': [], 'reason': 'No change proposed by this test decision.'},
+        {"facts": [{'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -749,12 +642,9 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
         {"decisions": {alias: {"candidate_fact_ids": ["X001"], "reason": "Candidate for review."}}}
         for alias in ("C001",)
     ] + [
-        {"decisions": {alias: {"disposition": "no_change", "reason": "No new proposal.", "confidence": 0.9, "scope": {"C001": scope_record("distinct")}}}}
+        {'comparisons': [{'target': 'C001', 'scope': 'distinct', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'targets': [], 'reason': 'No new proposal.'}
         for alias in ("C002",)
-    ] + [{"facts": [{"memory_scope": "The fixture memory.",
-        "member_claim_aliases": ["C002"], "text": None, "state": "current",
-        "section_key": "preferences_working_style", "confidence": 0.9, "reason": "Separate activity.",
-    }]}]
+    ] + [{"facts": [{'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'text': None, 'state': 'current', 'section_key': 'preferences_working_style'}]}]
 
     result = await FactResolver(llm, artifacts).resolve(
         placements, affected_entity_ids={"you"}, incoming_claim_ids={"pending", "other"},
@@ -897,11 +787,7 @@ async def test_large_new_claim_sets_are_grouped_incrementally(tmp_path):
         if label == "dream-fact-synthesis":
             call_counts["synthesis"] += 1
             batch = claims[:12] if call_counts["synthesis"] == 1 else claims[12:]
-            return {"facts": [{"memory_scope": "The fixture memory.",
-                "member_claim_aliases": [f"C{index:03d}"],
-                "state": "current", "section_key": "preferences_working_style",
-                "text": None, "confidence": 0.9, "reason": "Distinct memory.",
-            } for index, item in enumerate(batch, 1)]}
+            return {"facts": [{'memory_scope': 'The fixture memory.', 'member_claim_aliases': [f'C{index:03d}'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None} for index, item in enumerate(batch, 1)]}
         raise AssertionError(f"Unexpected model call: {label}")
 
     llm.call_structured.side_effect = respond

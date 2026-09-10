@@ -1,3 +1,4 @@
+from mycelium.budget import output_contract
 import json
 from types import SimpleNamespace
 from copy import deepcopy
@@ -188,7 +189,7 @@ async def test_call_messages_uses_explicit_message_history():
     assert fake_sdk.chat_calls[0]["messages"] == messages
     assert fake_sdk.chat_calls[0]["stream"] is False
     assert fake_sdk.chat_calls[0]["format"] is None
-    assert fake_sdk.chat_calls[0]["options"] == {"temperature": 0.3, "num_ctx": 32768, "num_predict": 4096}
+    assert fake_sdk.chat_calls[0]["options"] == {"temperature": 0.3, "top_p": 0.95, "top_k": 64, "num_ctx": 32768, "num_predict": 16384}
     assert len(fake_sdk.chat_calls[0]["tools"]) == 2
     assert fake_sdk.chat_calls[0]["think"] is True
     assert fake_sdk.generate_calls == []
@@ -226,6 +227,8 @@ async def test_call_messages_passes_generation_options():
     assert response.metadata["eval_count"] == 12
     assert fake_sdk.chat_calls[0]["options"] == {
         "temperature": 0.3,
+        "top_p": 0.95,
+        "top_k": 64,
         "num_ctx": 32768,
         "num_predict": 512,
     }
@@ -398,12 +401,12 @@ async def test_call_structured_passes_schema_to_sdk_and_parses_content():
             "model": "test-model",
             "messages": [
                 {"role": "system", "content": "system prompt"},
-                {"role": "user", "content": "user prompt"},
+                {"role": "user", "content": output_contract("user prompt", schema)},
             ],
             "think": False,
             "stream": False,
             "format": schema,
-            "options": {"temperature": 0.0, "num_ctx": 32768, "num_predict": 4096},
+            "options": {"temperature": 1.0, "top_p": 0.95, "top_k": 64, "num_ctx": 32768, "num_predict": 4096},
         }
     ]
     assert fake_sdk.generate_calls == []
@@ -528,7 +531,7 @@ async def test_call_structured_uses_configured_context_window():
 @pytest.mark.asyncio
 async def test_call_structured_debug_dumps_successful_response(tmp_path, monkeypatch):
     client = OllamaClient("http://localhost:11434", "test-model")
-    fake_sdk = FakeSdkClient('{"answer": "yes"}', done_reason="length", eval_count=8192)
+    fake_sdk = FakeSdkClient('{"answer": "yes"}', done_reason="stop", eval_count=8192)
     client.client = fake_sdk
     monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path))
 
@@ -544,7 +547,7 @@ async def test_call_structured_debug_dumps_successful_response(tmp_path, monkeyp
     assert response == {"answer": "yes"}
     dump_path = next(tmp_path.glob("structured-success-wiki-rewrite-person-jon-*-attempt-1.json"))
     dump = json.loads(dump_path.read_text(encoding="utf-8"))
-    assert dump["metadata"]["done_reason"] == "length"
+    assert dump["metadata"]["done_reason"] == "stop"
     assert dump["metadata"]["eval_count"] == 8192
     assert dump["options"]["num_predict"] == 8192
     assert dump["response"] == '{"answer": "yes"}'
@@ -575,7 +578,7 @@ async def test_call_structured_debug_dumps_failed_partial_response(tmp_path, mon
     assert dump["metadata"]["eval_count"] == 4096
     assert dump["messages"] == [
         {"role": "system", "content": "system prompt"},
-        {"role": "user", "content": "user prompt"},
+        {"role": "user", "content": output_contract("user prompt", schema)},
     ]
     assert dump["format"] == schema
 
@@ -705,3 +708,114 @@ async def test_deterministic_bad_request_is_not_retried(structured):
         else:
             await client.call_messages([{"role": "user", "content": "u"}], enable_tools=False)
     assert client.client.chat.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['prompt', 'native'])
+async def test_reasoning_uses_configured_sampling_schema_and_output_reserve(mode):
+    client = OllamaClient('http://localhost:11434', 'test-model', temperature=0.8,
+                          top_p=0.9, top_k=40, context_window_tokens=65536,
+                          reasoning_output_tokens=32768, reasoning_format=mode)
+    sdk = FakeSdkClient('{"answer":"yes"}', thinking='reasoning')
+    client.client = sdk
+    result = await client.call_structured('system', 'evidence', AnswerOutput, think=True, num_predict=8192)
+    assert result == {'answer': 'yes'}
+    request = sdk.chat_calls[0]
+    assert request['think'] is True
+    assert request['options'] == {'temperature': 0.8, 'top_p': 0.9, 'top_k': 40,
+                                  'num_ctx': 65536, 'num_predict': 32768}
+    assert request['format'] == (None if mode == 'prompt' else AnswerOutput.model_json_schema())
+    assert request['messages'][1]['content'] == output_contract('evidence', AnswerOutput.model_json_schema())
+
+
+@pytest.mark.asyncio
+async def test_reasoning_schema_validation_retries_without_switching_modes_or_replaying_thoughts():
+    class SequentialSdk:
+        def __init__(self):
+            self.calls = []
+        async def chat(self, **kwargs):
+            self.calls.append(snapshot_call(kwargs))
+            text = '{"wrong":true}' if len(self.calls) == 1 else '{"answer":"yes"}'
+            return SimpleNamespace(message=SimpleNamespace(content=text, thinking='private reasoning'), done_reason='stop')
+    client = OllamaClient('http://localhost:11434', 'test-model')
+    sdk = SequentialSdk()
+    client.client = sdk
+    assert await client.call_structured('system', 'evidence', AnswerOutput, think=True) == {'answer': 'yes'}
+    assert len(sdk.calls) == 2
+    assert all(c['think'] and c['format'] is None for c in sdk.calls)
+    retry = sdk.calls[1]['messages']
+    assert retry[:2] == sdk.calls[0]['messages']
+    assert retry[2] == {'role': 'assistant', 'content': '{"wrong":true}'}
+    assert 'ValidationError' in retry[3]['content']
+    assert 'private reasoning' not in json.dumps(retry)
+
+
+@pytest.mark.asyncio
+async def test_reasoning_budget_includes_schema_text_before_inference():
+    from mycelium.budget import ContextBudgetError
+    from pydantic import Field
+    class LargeContract(BaseModel):
+        answer: str = Field(description='schema detail ' * 2000)
+    client = OllamaClient('http://localhost:11434', 'test-model',
+                          context_window_tokens=8192, reasoning_output_tokens=4096)
+    sdk = FakeSdkClient('{"answer":"yes"}')
+    client.client = sdk
+    with pytest.raises(ContextBudgetError):
+        await client.call_structured('system', 'small input', LargeContract, think=True)
+    assert not sdk.chat_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('structured', [True, False])
+async def test_output_limit_is_not_accepted_or_retried_with_the_same_budget(structured):
+    client = OllamaClient('http://localhost:11434', 'test-model')
+    sdk = FakeSdkClient('{"answer":"yes"}', done_reason='length')
+    client.client = sdk
+    with pytest.raises(ValueError, match='exhausted its token allowance'):
+        if structured:
+            await client.call_structured('system', 'evidence', AnswerOutput, think=True)
+        else:
+            await client.call_messages([{'role': 'user', 'content': 'question'}], think=True)
+    assert len(sdk.chat_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_disabled_reasoning_uses_native_schema_and_normal_budget():
+    client = OllamaClient('http://localhost:11434', 'test-model', reasoning_enabled=False)
+    sdk = FakeSdkClient('{"answer":"yes"}')
+    client.client = sdk
+    await client.call_structured('system', 'evidence', AnswerOutput, think=True, num_predict=8192)
+    assert sdk.chat_calls[0]['think'] is False
+    assert sdk.chat_calls[0]['format'] == AnswerOutput.model_json_schema()
+    assert sdk.chat_calls[0]['options']['num_predict'] == 8192
+
+
+@pytest.mark.asyncio
+async def test_prompt_reasoning_requires_model_validation():
+    client = OllamaClient('http://localhost:11434', 'test-model')
+    sdk = FakeSdkClient('{}')
+    client.client = sdk
+    with pytest.raises(ValueError, match='Pydantic response model'):
+        await client.call_structured('system', 'evidence', {'type': 'object'}, think=True)
+    assert not sdk.chat_calls
+
+
+def test_structured_parser_preserves_required_null_fields():
+    from pydantic import BaseModel
+
+    class Decision(BaseModel):
+        time: str | None
+
+    client = OllamaClient('http://localhost:11434', 'gemma4:12b')
+    parsed = client._parse_structured_response('{"time":null}', Decision)
+    assert parsed == {"time": None}
+    assert Decision.model_validate(parsed).time is None
+
+
+def test_structured_preflight_counts_the_same_grounded_schema_as_the_request():
+    from mycelium.budget import request_tokens
+    schema = AnswerOutput.model_json_schema()
+    messages = [{"role": "system", "content": "Decide using the evidence."},
+                {"role": "user", "content": "Evidence"}]
+    actual = [messages[0], {"role": "user", "content": output_contract("Evidence", schema)}]
+    assert request_tokens(messages, schema=schema) == request_tokens(actual)

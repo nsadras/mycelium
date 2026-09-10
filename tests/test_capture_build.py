@@ -86,7 +86,7 @@ async def test_combined_batch_replays_validated_output_after_interrupted_claim_w
     response = {
         "source_only": [],
         "claims": [
-            {"temporal_status": "unknown", "text": text, "about": [{"entity": "user"}], "segment_ids": [segment_id]}
+            {'temporal_status': 'unknown', 'text': text, 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': [segment_id], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}
             for text in ("The user prefers tea.", "The user avoids coffee.")
         ],
     }
@@ -107,6 +107,9 @@ async def test_combined_batch_replays_validated_output_after_interrupted_claim_w
     episode = memory.artifacts.list_episodes()[0]
     assert episode.extraction_batches[0].status == "failed"
     assert episode.extraction_batches[0].response is not None
+    assert episode.extraction_batches[0].response["claims"][0]["facets"] == {
+        "when": None, "deadline": None, "inference_basis": None,
+    }
     assert len(memory.artifacts.list_claims()) == 1
     published = memory.artifacts.list_claims()[0]
     published.status = "superseded"  # A user correction between publication and retry.
@@ -148,12 +151,7 @@ async def test_cross_turn_context_citations_keep_original_source_identity(tmp_pa
         return {
             "source_only": [],
             "claims": [
-                {"temporal_status": "unknown",
-                    "text": "The user will lead the workshop.",
-                    "about": [{"entity": "user"}],
-                    "segment_ids": [new_segment],
-                    "context_segment_ids": [prior_segment],
-                }
+                {'temporal_status': 'unknown', 'text': 'The user will lead the workshop.', 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': [new_segment], 'context_segment_ids': [prior_segment], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}
             ]
         }
 
@@ -161,6 +159,7 @@ async def test_cross_turn_context_citations_keep_original_source_identity(tmp_pa
         call_structured=AsyncMock(side_effect=response)
     )
     await memory.encoder.extract_pending(set(current.source_ids))
+    assert memory.encoder.llm.call_structured.await_args.kwargs["think"] is True
     claim = memory.artifacts.list_claims()[0]
     assert {(p.source_id, tuple(p.segment_ids)) for p in claim.provenance} == {
         (current.source_ids[0], (new_segment,)),

@@ -6,9 +6,22 @@ import tomllib
 class LLMConfig:
     url: str = 'http://localhost:11434'
     model: str = 'gemma4:latest'
-    temperature: float = 0.1
-    timeout_seconds: int = 120
-    context_window_tokens: int = 32768
+    temperature: float = 1.0
+    top_p: float = 0.95
+    top_k: int = 64
+    timeout_seconds: int = 900
+    context_window_tokens: int = 65536
+    reasoning_enabled: bool = True
+    reasoning_output_tokens: int = 32768
+    reasoning_format: str = "prompt"
+
+    def __post_init__(self):
+        if type(self.reasoning_enabled) is not bool:
+            raise ValueError("reasoning_enabled must be a boolean")
+        if self.reasoning_output_tokens <= 0:
+            raise ValueError("reasoning_output_tokens must be positive")
+        if self.reasoning_format not in {"prompt", "native"}:
+            raise ValueError("reasoning_format must be prompt or native")
 
 @dataclass
 class RetrievalConfig:
@@ -39,10 +52,15 @@ class Config:
         llm_data = data.get('llm', {})
         llm = LLMConfig(
             url=llm_data.get('url', 'http://localhost:11434'),
-            model=llm_data.get('model', 'gemma3:12b'),
-            temperature=llm_data.get('temperature', 0.2),
-            timeout_seconds=llm_data.get('timeout_seconds', 120),
-            context_window_tokens=int(llm_data.get('context_window_tokens', 32768)),
+            model=llm_data.get('model', 'gemma4:latest'),
+            temperature=float(llm_data.get('temperature', 1.0)),
+            top_p=float(llm_data.get('top_p', 0.95)),
+            top_k=int(llm_data.get('top_k', 64)),
+            timeout_seconds=int(llm_data.get('timeout_seconds', 900)),
+            context_window_tokens=int(llm_data.get('context_window_tokens', 65536)),
+            reasoning_enabled=llm_data.get('reasoning_enabled', True),
+            reasoning_output_tokens=int(llm_data.get('reasoning_output_tokens', 32768)),
+            reasoning_format=str(llm_data.get('reasoning_format', 'prompt')),
         )
         
         retrieval_data = data.get('retrieval', {})

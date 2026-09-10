@@ -1,8 +1,15 @@
 [llm]
 model = "gemma4:12b"
 url = "http://localhost:11434"
-temperature = 0.2
-context_window_tokens = 32768
+temperature = 1.0
+top_p = 0.95
+top_k = 64
+timeout_seconds = 900
+context_window_tokens = 65536
+reasoning_enabled = true
+reasoning_output_tokens = 32768
+# Keep reasoning and final JSON in one generation; Pydantic still validates it.
+reasoning_format = "prompt"
 
 [session]
 context_budget_tokens = 32768
@@ -31,4 +38,4 @@ model = "pyannote/speaker-diarization-community-1"
 [engram.summary]
 model = "gemma4:12b"
 url = "http://localhost:11434"
-temperature = 0.1
+temperature = 1.0

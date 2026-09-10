@@ -1,4 +1,3 @@
-from tests.test_cumulative_quality import scope_record
 import json
 from datetime import datetime
 from dataclasses import replace
@@ -109,45 +108,37 @@ def split_scope_plan(plan: dict, *, other_entities=()) -> list[dict]:
     }
     routing = {"decisions": {
         alias: (
-            {"route_kind": "deferred", "owner_entity": "",
-             "pages": {},
-             "confidence": decision["confidence"], "reason": decision["reason"]}
+            {"owner_entity": "", "pages": {}, "reason": decision["reason"]}
             if decision.get("disposition") != "canonical"
             or stable(decision.get("owner_entity", "")) in provisional_candidates
             else {
-                "route_kind": "general",
                 "owner_entity": stable(decision["owner_entity"]),
                 "pages": {
-
-                    **{target: {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": default_section(target.split("-")[0], "unknown", None),
-                     "reason": decision["reason"]}
+                    target: {"section_key": default_section(target.split("-")[0], "unknown", None),
+                             "reason": decision["reason"]}
                     for target in dict.fromkeys([
                         stable(decision["owner_entity"]),
                         *[stable(e) for e in decision.get("linked_entities", [])],
                     ])
-                    },
                 },
-                "confidence": decision["confidence"], "reason": decision["reason"],
+                "reason": None,
             }
         ) for alias, decision in assignments.items()
     }}
-    subjects = [{
-        "node_id": c["candidate_id"], "title": c["title"], "entity_type": c["entity_type"],
-        "resolution": "new" if c["type_adjudication"] == "accepted" else "review_required",
-        "entity_id": "", "aliases": [], "supporting_evidence": c["supporting_evidence"],
-        "participant_evidence": c["participant_evidence"], "candidate_entity_ids": [],
-        "reason": c["reason"], "confidence": c["confidence"],
-    } for c in candidates]
-    for alias, p in plan.get("participants", {}).items():
-        if not any(alias in s["participant_evidence"] for s in subjects):
-            target = p["entity"]
-            subjects.append({
-                "node_id": target, "title": "You" if target == "you" else target,
-                "entity_type": "you" if target == "you" else "person",
-                "resolution": "existing", "entity_id": target, "aliases": [],
-                "supporting_evidence": [alias], "participant_evidence": [alias],
-                "candidate_entity_ids": [], "reason": p["reason"], "confidence": p["confidence"],
-            })
+    subjects = []
+    for c in candidates:
+        node = {"title": c["title"], "entity_type": c["entity_type"],
+                "resolution": "new" if c["type_adjudication"] == "accepted" else "review_required",
+                "aliases": [], "supporting_evidence": c["supporting_evidence"],
+                "participant_evidence": c["participant_evidence"], "reason": c["reason"]}
+        if node["resolution"] == "review_required":
+            node["candidate_entity_ids"] = []
+        subjects.append(node)
+    for alias, participant in plan.get("participants", {}).items():
+        if not any(alias in node["participant_evidence"] for node in subjects):
+            subjects.append({"resolution": "existing", "entity_id": participant["entity"], "title": None,
+                             "aliases": [], "supporting_evidence": [alias],
+                             "participant_evidence": [alias], "reason": participant["reason"]})
     return [{"subjects": subjects}, routing]
 
 
@@ -156,13 +147,16 @@ def use_existing_identity(responses, entity_id, *, title, aliases):
     proposed_id = f"{node['entity_type']}-{slugify(node['title'])}"
     if proposed_id != entity_id:
         for decision in responses[1]["decisions"].values():
-            if decision["route_kind"] != "general":
+            if not decision["pages"]:
                 continue
             proposed = decision["pages"].pop(proposed_id, None)
             if entity_id not in decision["pages"] and proposed is not None:
                 decision["pages"][entity_id] = proposed
             if decision["owner_entity"] == proposed_id:
                 decision["owner_entity"] = entity_id
+    node.pop("title")
+    node.pop("entity_type")
+    node.pop("candidate_entity_ids", None)
     node.update(resolution="existing", entity_id=entity_id, title=title, aliases=aliases)
     return responses
 
@@ -291,53 +285,21 @@ def fact_resolution_plan(
         if changes_by_incoming
         else sorted({alias for aliases, _, _ in facts.values() for alias in aliases})
     )
-    responses = [
-        {"decisions": {
-            alias: (
-                {
-                    "disposition": "truth_change",
-                    "relation": changes_by_incoming[alias]["relation"],
-                    "target_claim_aliases": changes_by_incoming[alias][
-                        "target_claim_aliases"
-                    ],
-                    "durable_field": changes_by_incoming[alias].get(
-                        "durable_field", "tested durable field"
-                    ),
-                    "prior_state": changes_by_incoming[alias].get(
-                        "prior_state", "prior state"
-                    ),
-                    "incoming_state": changes_by_incoming[alias].get(
-                        "incoming_state", "incoming state"
-                    ),
-                    "transition_evidence": changes_by_incoming[alias].get(
-                        "transition_evidence", "The test establishes a transition."
-                    ),
-                    "explanation": changes_by_incoming[alias]["explanation"],
-                    "confidence": changes_by_incoming[alias]["confidence"],
-                }
-                if alias in changes_by_incoming
-                else {
-                    "disposition": "no_change",
-                    "reason": "No accepted truth is changed.",
-                    "confidence": 0.9,
-                }
-            )
-        }}
-        for alias in incoming_aliases
-    ] + [{"facts": [{"memory_scope": "The fixture memory.",
-        "member_claim_aliases": aliases, "state": "current",
-        "section_key": section, "text": None if len(aliases) == 1 else text, "confidence": 0.9,
-        "reason": "Source-grounded test resolution.",
-    } for aliases, text, section in facts.values()]}]
-
-
     targets = set(target_aliases or ()) | {target for change in truth_changes or [] for target in change["target_claim_aliases"]}
+    responses = []
     if targets:
-        for response in responses:
-            for decision in response.get("decisions", {}).values():
-                decision["scope"] = {target: scope_record() for target in targets}
-    else:
-        responses = [response for response in responses if "facts" in response]
+        for alias in incoming_aliases:
+            change = changes_by_incoming.get(alias)
+            responses.append({
+                "comparisons": [{"target":target,"scope":"same","reason":"The fixture establishes shared scope."} for target in sorted(targets)],
+                "relation": change["relation"] if change else "no_change",
+                "targets": change["target_claim_aliases"] if change else [],
+                "reason": change["explanation"] if change else "Compatible information.",
+            })
+    responses.append({"facts":[{
+        "memory_scope":"The fixture memory.", "member_claim_aliases":aliases,
+        "state":"current", "section_key":section, "text":None if len(aliases)==1 else text,
+    } for aliases,text,section in facts.values()]})
     return responses
 
 
@@ -449,21 +411,21 @@ def test_revision_cannot_overwrite_identity_blocked_deferral():
 
 def test_claim_routing_contract_requires_exact_claims_and_registry_values():
     schema = page_plan_model(["C001", "C002"], {"you": "you", "project-cedar": "project"})
-    decision = {"route_kind": "general", "owner_entity": "you",
-                "pages": {"you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "profile", "reason": "Personal fact."},
+    decision = {"owner_entity": "you",
+                "pages": {"you": {"section_key": "profile", "reason": "Personal fact."},
                           },
-                "confidence": 0.9, "reason": "Useful placement."}
+                "reason": None}
     valid = {"decisions": {"C001": decision, "C002": decision}}
     assert set(schema.model_validate(valid).decisions.model_dump()) == {"C001", "C002"}
     with pytest.raises(ValidationError):
         schema.model_validate({"decisions": {"C001": decision}})
     for pages in [
-        {}, {**decision["pages"], "missing": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "profile", "reason": "Invalid ID."}},
-        {**decision["pages"], "you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "invalid", "reason": "Invalid section."}},
-        {**decision["pages"], "you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "people_organizations", "reason": "Wrong entity type's section."}},
+        {}, {**decision["pages"], "missing": {"section_key": "profile", "reason": "Invalid ID."}},
+        {**decision["pages"], "you": {"section_key": "invalid", "reason": "Invalid section."}},
+        {**decision["pages"], "you": {"section_key": "people_organizations", "reason": "Wrong entity type's section."}},
         {**decision["pages"], "you": [decision["pages"]["you"], decision["pages"]["you"]]},
-        {**decision["pages"], "you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "incidental_or_unrelated", "section_key": "not_selected", "reason": "Missing primary."}},
-        {**decision["pages"], "you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": ["profile", "current_context"], "reason": "Two sections."}},
+        {**decision["pages"], "you": {"section_key": "not_selected", "reason": "Missing primary."}},
+        {**decision["pages"], "you": {"section_key": ["profile", "current_context"], "reason": "Two sections."}},
     ]:
         with pytest.raises(ValidationError):
             schema.model_validate({"decisions": {"C001": {**decision, "pages": pages}, "C002": decision}})
@@ -571,11 +533,9 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
             return {"decisions": {}}
         return {"decisions": {
             alias: {
-                "route_kind": "general",
                 "owner_entity": "you",
-                "pages": {"you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "profile", "reason": "Personal fact."}},
-                "confidence": 0.9,
-                "reason": "The claim changes the user's durable preferences.",
+                "pages": {"you": {"section_key": "profile", "reason": "Personal fact."}},
+                "reason": None,
             }
             for alias in fields
         }}
@@ -1375,6 +1335,7 @@ async def test_ambiguous_subject_type_is_deferred_for_identity_review(tmp_path):
     responses[0]["subjects"][0].update({
         "resolution": "review_required",
         "reason": "Project and Series are both materially plausible.",
+        "candidate_entity_ids": [],
     })
     llm.call_structured.side_effect = responses[:1]
 

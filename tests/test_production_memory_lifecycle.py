@@ -53,22 +53,12 @@ class DeterministicProductionModel:
                 }
                 for segment_id in segment_ids[1:]
             ],
-                "claims": [{
-                    "text": "The user will send the Cedar brief tomorrow.",
-                    "claim_type": "commitment", "predicate": "send_brief",
-                    "evidence_modality": "speech", "temporal_status": "future",
-                    "temporal_anchor_segment_id": segment_id,
-                    "about": [{"entity": "user", "role": "subject"}],
-                    "segment_ids": [segment_id], "speaker": "user",
-                    "evidence_type": "explicit", "confidence": 0.95,
-                    "facets": {"when": "tomorrow"},
-                }],
+                "claims": [{'text': 'The user will send the Cedar brief tomorrow.', 'claim_type': 'commitment', 'predicate': None, 'evidence_modality': 'speech', 'temporal_status': 'future', 'temporal_anchor_segment_id': segment_id, 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': [segment_id], 'facets': {'when': 'tomorrow', 'deadline': None, 'inference_basis': None}}],
             }
         decisions_model = output_type.model_fields["decisions"].annotation
         return {"decisions": {
             alias: {
                 "disposition": self.context_disposition,
-                "confidence": 1.0,
                 "reason": (
                     "The candidate directly supports the request."
                     if self.context_disposition == "include"

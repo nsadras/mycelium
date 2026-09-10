@@ -406,43 +406,36 @@ class FactResolver:
                 incoming_claim_text,
                 json.dumps(prior_decisions, ensure_ascii=False, sort_keys=True),
             )
-            truth_schema = fact_truth_output_model([incoming_alias], target_aliases)
+            truth_schema = fact_truth_output_model(target_aliases)
             response = await self.llm.call_structured(
                 system,
                 user,
                 truth_schema,
                 num_predict=8192,
                 debug_label="dream-fact-truth",
+                think=True,
             )
-            decision = truth_schema.model_validate(response).model_dump()[
-                "decisions"
-            ][incoming_alias]
+            decision = truth_schema.model_validate(response).model_dump()
             adjudications[incoming_alias] = decision
             prior_decision = {
                 "incoming_claim_alias": incoming_alias,
-                "disposition": decision["disposition"],
+                "relation": decision["relation"],
+                "target_claim_aliases": decision["targets"],
             }
-            if decision["disposition"] == "truth_change":
-                reserved_target_aliases.update(decision["target_claim_aliases"])
-                prior_decision.update({
-                    "relation": decision["relation"],
-                    "target_claim_aliases": decision["target_claim_aliases"],
-                })
+            reserved_target_aliases.update(decision["targets"])
             prior_decisions.append(prior_decision)
         changes = [
             {
                 "relation": decision["relation"],
                 "incoming_claim_aliases": [alias],
-                "target_claim_aliases": decision["target_claim_aliases"],
-                "durable_field": decision["durable_field"],
-                "prior_state": decision["prior_state"],
-                "incoming_state": decision["incoming_state"],
-                "transition_evidence": decision["transition_evidence"],
-                "explanation": decision["explanation"] + "\nScope comparisons: " + json.dumps(decision["scope"], ensure_ascii=False),
-                "confidence": decision["confidence"],
+                "target_claim_aliases": decision["targets"],
+                "prior_state": "\n".join(display_claim_text(aliases[t]) for t in decision["targets"]),
+                "incoming_state": display_claim_text(aliases[alias]),
+                "explanation": decision["reason"] + "\nComparisons: " + json.dumps(decision["comparisons"], ensure_ascii=False),
+                "confidence": aliases[alias].confidence,
             }
             for alias, decision in adjudications.items()
-            if decision["disposition"] == "truth_change"
+            if decision["relation"] != "no_change"
         ]
         self._validate_truth_changes(changes, aliases, incoming_claim_ids)
 
@@ -486,10 +479,8 @@ class FactResolver:
                             for linked_id in placements[claim_id].linked_entity_ids
                         ),
                     }),
-                    durable_field=change["durable_field"],
                     prior_state=change["prior_state"],
                     incoming_state=change["incoming_state"],
-                    transition_evidence=change["transition_evidence"],
                 ))
         existing_pending = [
             proposal
@@ -539,6 +530,7 @@ class FactResolver:
             response = schema.model_validate(await self.llm.call_structured(
                 system, user, schema, num_predict=8192,
                 debug_label="dream-fact-synthesis",
+                think=True,
             )).model_dump()
             groups = [(group, group["member_claim_aliases"]) for group in response["facts"]]
         for group, member_aliases in groups:
@@ -570,8 +562,8 @@ class FactResolver:
                 state=group["state"],
                 linked_entity_ids=linked,
                 synthesis_origin="manual" if manual else "model",
-                confidence=prior.confidence if manual else group["confidence"],
-                reason=prior.reason if manual else f"Scope: {group['memory_scope']}. {group['reason']}",
+                confidence=prior.confidence if manual else min(member.confidence for member in members),
+                reason=prior.reason if manual else group["memory_scope"],
                 created_at=prior.created_at if prior else now,
                 updated_at=now,
                 manual_text=manual,

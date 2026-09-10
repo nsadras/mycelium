@@ -18,7 +18,7 @@ from mycelium.ontology import (
 from mycelium.structured_outputs import (
     ExtractedClaimOutput,
 )
-from mycelium.identity_plan import IdentitySubject
+from mycelium.identity_plan import identity_plan_model
 from server.api.memory_artifacts import get_ontology
 
 
@@ -39,12 +39,10 @@ def test_ontology_registry_is_internally_complete() -> None:
 
 def test_structured_model_contracts_derive_from_the_ontology() -> None:
     claim_schema = ExtractedClaimOutput.model_json_schema()
-    identity_type_schema = IdentitySubject.model_json_schema()
+    identity_type_schema = identity_plan_model(["C001"], {}, {}).model_json_schema()["$defs"]["NewIdentity"]
 
     assert set(claim_schema["properties"]["claim_type"]["enum"]) == set(CLAIM_TYPES)
-    assert set(identity_type_schema["properties"]["entity_type"]["enum"]) == set(
-        ENTITY_TYPES
-    )
+    assert set(identity_type_schema["properties"]["entity_type"]["enum"]) == set(ENTITY_TYPES) - {"you"}
 
 
 def test_subject_representation_registry_is_internally_complete() -> None:

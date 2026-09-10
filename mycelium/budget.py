@@ -6,11 +6,25 @@ class ContextBudgetError(ValueError):
     """The complete request cannot fit without dropping evidence."""
 
 
+def output_contract(user: str, schema) -> str:
+    return (
+        user
+        + "\n\nOUTPUT CONTRACT (JSON Schema)\n"
+        + json.dumps(schema, ensure_ascii=False)
+        + "\n\nReturn the completed result for the supplied evidence as one JSON value matching this contract."
+    )
+
+
 def request_tokens(messages, schema=None, tools=None) -> int:
     """Estimate the actual envelopes, structured schema, and tool definitions."""
-    payload = {"messages": messages}
     if schema:
-        payload["format"] = schema
+        messages = [dict(message) for message in messages]
+        if not messages or messages[-1].get("role") != "user":
+            raise ValueError(
+                "Structured prompt estimation requires a final user message"
+            )
+        messages[-1]["content"] = output_contract(messages[-1]["content"], schema)
+    payload = {"messages": messages}
     if tools:
         payload["tools"] = tools
     return count_tokens(json.dumps(payload, ensure_ascii=False, default=str))

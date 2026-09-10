@@ -46,8 +46,7 @@ def extraction_response(claims, source_only_segment_ids=()):
 
 def test_combined_extraction_enforces_exact_accounting_and_citations():
     schema = extraction_output_model(["a", "b"], ["prior"])
-    claim = {"temporal_status": "unknown", "text": "Ava prefers tea.", "about": [{"entity": "Ava"}],
-             "segment_ids": ["a"], "context_segment_ids": ["prior"]}
+    claim = {'temporal_status': 'unknown', 'text': 'Ava prefers tea.', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': ['a'], 'context_segment_ids': ['prior'], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}
     valid = extraction_response([claim], ["b"])
     assert schema.model_validate(valid).claims[0].context_segment_ids == ["prior"]
     import copy
@@ -76,14 +75,7 @@ def test_combined_extraction_enforces_exact_accounting_and_citations():
 async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
     llm = AsyncMock()
     llm.call_structured.return_value = extraction_response([
-            {
-                "text": "Ava prefers tea.",
-                "claim_type": "preference", "predicate": "prefers",
-                "evidence_modality": "speech", "temporal_status": "atemporal",
-                "about": [{"entity": "Ava", "role": "person"}],
-                "segment_ids": ["source-fixed-later"],
-                "confidence": 0.9, "facets": {"object": "tea"},
-            }
+            {'text': 'Ava prefers tea.', 'claim_type': 'preference', 'predicate': None, 'evidence_modality': 'speech', 'temporal_status': 'atemporal', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': ['source-fixed-later'], 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}
     ])
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts)
@@ -108,7 +100,7 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
     assert episode.extraction_status == "complete"
     assert claim.provenance[0].segment_ids == [source.segments[0].segment_id]
     assert claim.claim_type == "preference"
-    assert claim.predicate == "prefers"
+    assert claim.predicate is None
     assert claim.evidence_modality == "speech"
     assert claim.temporal_status == "atemporal"
     assert artifacts.coverage_report()["segment_coverage"] == 1.0
@@ -122,13 +114,7 @@ async def test_encoder_preserves_repeated_claims_as_separate_source_events(tmp_p
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{"temporal_status": "unknown",
-                "text": "Ava prefers tea.",
-                "claim_type": "preference",
-                "predicate": "prefers",
-                "about": [{"entity": "Ava"}],
-                "segment_ids": [segment_id],
-            }])
+        return extraction_response([{'temporal_status': 'unknown', 'text': 'Ava prefers tea.', 'claim_type': 'preference', 'predicate': None, 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [segment_id], 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}])
 
     llm.call_structured.side_effect = response
     for session_id in ("session-1", "session-2"):
@@ -152,12 +138,12 @@ async def test_encoder_preserves_repeated_claims_as_separate_source_events(tmp_p
     [
         (
             "agent_conversation", "USER: Please avoid meetings before 10am.",
-            "Nitin prefers meetings at or after 10am.", "preference", "prefers_meeting_time",
+            "Nitin prefers meetings at or after 10am.", "preference", None,
             "recurring",
         ),
         (
             "meeting_transcript", "[M1] (2024-01-10) Ava: I will send the report Friday.",
-            "Ava committed to sending the report Friday.", "commitment", "send_report",
+            "Ava committed to sending the report Friday.", "commitment", None,
             "future",
         ),
     ],
@@ -177,17 +163,7 @@ async def test_encoder_persists_general_semantics_across_source_types(
             for part in user.split("[")[1:]
             if part.startswith("source-")
         )
-        return extraction_response([{
-                "text": text,
-                "claim_type": claim_type,
-                "predicate": predicate,
-                "evidence_modality": "speech",
-                "temporal_status": temporal_status,
-                "about": [{"entity": text.split()[0]}],
-                "segment_ids": [segment_id],
-                "confidence": 0.9,
-                "facets": {},
-            }])
+        return extraction_response([{'text': text, 'claim_type': claim_type, 'predicate': predicate, 'evidence_modality': 'speech', 'temporal_status': temporal_status, 'about': [{'entity': text.split()[0], 'role': 'subject'}], 'segment_ids': [segment_id], 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}])
 
     llm.call_structured.side_effect = response
     await capture_and_extract(encoder,
@@ -215,14 +191,7 @@ async def test_meeting_encoder_anchors_deadline_to_meeting_time(tmp_path):
             for part in user.split("[")[1:]
             if part.startswith("source-")
         )
-        return extraction_response([{
-                "text": "Ava committed to sending the report by Friday.",
-                "claim_type": "commitment",
-                "temporal_status": "future",
-                "about": [{"entity": "Ava"}],
-                "segment_ids": [segment_id],
-                "facets": {"deadline": "Friday"},
-            }])
+        return extraction_response([{'text': 'Ava committed to sending the report by Friday.', 'claim_type': 'commitment', 'temporal_status': 'future', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [segment_id], 'facets': {'when': None, 'deadline': 'Friday', 'inference_basis': None}, 'evidence_modality': 'unknown'}])
 
     llm.call_structured.side_effect = response
     await capture_and_extract(encoder,
@@ -255,15 +224,7 @@ async def test_chat_claim_uses_its_cited_message_as_temporal_anchor(tmp_path):
             if part.startswith("source-")
         ]
         original_ids[:] = segment_ids
-        return extraction_response([{
-                "text": "Ava will finish the report tomorrow.",
-                "claim_type": "commitment",
-                "temporal_status": "future",
-                "about": [{"entity": "Ava"}],
-                "segment_ids": [original_ids[1]],
-                "temporal_anchor_segment_id": original_ids[1],
-                "facets": {"deadline": "tomorrow"},
-            }], [original_ids[0]])
+        return extraction_response([{'text': 'Ava will finish the report tomorrow.', 'claim_type': 'commitment', 'temporal_status': 'future', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [original_ids[1]], 'temporal_anchor_segment_id': original_ids[1], 'facets': {'when': None, 'deadline': 'tomorrow', 'inference_basis': None}, 'evidence_modality': 'unknown'}], [original_ids[0]])
 
     llm.call_structured.side_effect = response
     await capture_and_extract(encoder,
@@ -305,14 +266,7 @@ async def test_single_cited_source_time_anchors_relative_phrase_without_model_ch
             for part in user.split("[")[1:]
             if part.startswith("source-")
         )
-        return extraction_response([{
-            "text": "Ava will finish the report tomorrow.",
-            "claim_type": "commitment",
-            "temporal_status": "future",
-            "about": [{"entity": "Ava"}],
-            "segment_ids": [segment_id],
-            "facets": {"deadline": "tomorrow"},
-        }])
+        return extraction_response([{'text': 'Ava will finish the report tomorrow.', 'claim_type': 'commitment', 'temporal_status': 'future', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [segment_id], 'facets': {'when': None, 'deadline': 'tomorrow', 'inference_basis': None}, 'evidence_modality': 'unknown'}])
 
     llm.call_structured.side_effect = response
     await capture_and_extract(encoder,
@@ -333,7 +287,7 @@ async def test_single_cited_source_time_anchors_relative_phrase_without_model_ch
 
 
 @pytest.mark.asyncio
-async def test_chat_relative_time_stays_unresolved_with_wrong_anchor_segment(tmp_path):
+async def test_chat_rejects_time_anchor_outside_claim_citations(tmp_path):
     llm = AsyncMock()
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
@@ -349,19 +303,7 @@ async def test_chat_relative_time_stays_unresolved_with_wrong_anchor_segment(tmp
             if part.startswith("source-")
         ]
         original_ids[:] = segment_ids
-        return extraction_response([{"temporal_status": "unknown",
-                "text": "The conversation includes earlier context.",
-                "about": [{"entity": "conversation"}],
-                "segment_ids": [original_ids[0]],
-            }, {
-                "text": "Ava will finish the report tomorrow.",
-                "claim_type": "commitment",
-                "temporal_status": "future",
-                "about": [{"entity": "Ava"}],
-                "segment_ids": [original_ids[1]],
-                "temporal_anchor_segment_id": original_ids[0],
-                "facets": {"deadline": "tomorrow"},
-            }])
+        return extraction_response([{'temporal_status': 'unknown', 'text': 'The conversation includes earlier context.', 'about': [{'entity': 'conversation', 'role': 'subject'}], 'segment_ids': [original_ids[0]], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}, {'text': 'Ava will finish the report tomorrow.', 'claim_type': 'commitment', 'temporal_status': 'future', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [original_ids[1]], 'temporal_anchor_segment_id': original_ids[0], 'facets': {'when': None, 'deadline': 'tomorrow', 'inference_basis': None}, 'evidence_modality': 'unknown'}])
 
     llm.call_structured.side_effect = response
     await capture_and_extract(encoder,
@@ -382,13 +324,11 @@ async def test_chat_relative_time_stays_unresolved_with_wrong_anchor_segment(tmp
         ],
     )
 
-    target = next(
-        claim for claim in artifacts.list_claims()
-        if claim.text == "Ava will finish the report tomorrow."
-    )
-    temporal = target.facets["temporal"]
-    assert temporal["status"] == "unresolved"
-    assert temporal["anchor"] is None
+    assert artifacts.list_claims() == []
+    episode = artifacts.list_episodes()[0]
+    assert episode.extraction_status != "complete"
+    assert "time anchor" in episode.extraction_batches[0].last_error
+
 
 
 @pytest.mark.asyncio
@@ -408,14 +348,7 @@ async def test_encoder_rejects_claim_without_explicit_about_entity(tmp_path):
             for part in user.split("[")[1:]
             if not part.startswith(("TARGET ", "CONTEXT "))
         ]
-        return extraction_response([{"temporal_status": "unknown",
-                "text": "Ava enjoys teaching dance.",
-                "about": [],
-                "segment_ids": segment_ids,
-                "evidence_type": "inferred",
-                "confidence": 0.9,
-                "facets": {},
-            }])
+        return extraction_response([{'temporal_status': 'unknown', 'text': 'Ava enjoys teaching dance.', 'about': [], 'segment_ids': segment_ids, 'facets': {'when': None, 'deadline': None, 'inference_basis': None}, 'claim_type': 'unknown', 'evidence_modality': 'unknown'}])
 
     llm.call_structured.side_effect = response
     await capture_and_extract(encoder,
@@ -451,13 +384,7 @@ async def test_encoder_retries_failed_combined_batch(tmp_path):
         claim_attempts += 1
         if claim_attempts == 1:
             raise ValueError("temporary malformed claim response")
-        return extraction_response([{"temporal_status": "unknown",
-            "text": "Ava prefers tea.",
-            "claim_type": "preference",
-            "predicate": "prefers",
-            "about": [{"entity": "Ava"}],
-            "segment_ids": [segment_id],
-        }])
+        return extraction_response([{'temporal_status': 'unknown', 'text': 'Ava prefers tea.', 'claim_type': 'preference', 'predicate': None, 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [segment_id], 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}])
 
     llm.call_structured.side_effect = response
     await capture_and_extract(encoder,
@@ -502,15 +429,7 @@ async def test_encoder_records_inference_only_on_provenance(tmp_path):
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{"temporal_status": "unknown",
-                "text": "Ava is Clara's grandmother.",
-                "about": [{"entity": "Ava", "role": "subject"}],
-                "segment_ids": [segment_id],
-                "evidence_type": "inferred",
-                "evidence_modality": "speech",
-                "confidence": 0.7,
-                "facets": {"inference_basis": "Ava's son Ben has a daughter named Clara."},
-            }])
+        return extraction_response([{'temporal_status': 'unknown', 'text': "Ava is Clara's grandmother.", 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [segment_id], 'evidence_modality': 'speech', 'facets': {'when': None, 'deadline': None, 'inference_basis': "Ava's son Ben has a daughter named Clara."}, 'claim_type': 'unknown'}])
 
     llm.call_structured.side_effect = response
     await capture_and_extract(encoder,
@@ -537,12 +456,7 @@ async def test_encoder_records_uncovered_segments_without_repair(tmp_path):
 
     async def response(system, user, output_type, **kwargs):
         segment_ids = [part.split("]", 1)[0] for part in user.split("[")[1:]]
-        return extraction_response([{"temporal_status": "unknown",
-                "text": "Ava likes tea.",
-                "about": [{"entity": "Ava"}],
-                "segment_ids": [segment_ids[0]],
-                "facets": {"object": "tea"},
-            }])
+        return extraction_response([{'temporal_status': 'unknown', 'text': 'Ava likes tea.', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [segment_ids[0]], 'facets': {'when': None, 'deadline': None, 'inference_basis': None}, 'claim_type': 'unknown', 'evidence_modality': 'unknown'}])
 
     llm.call_structured.side_effect = response
     await capture_and_extract(encoder,
@@ -631,12 +545,7 @@ async def test_encoder_does_not_lexically_reject_model_valid_claim_text(tmp_path
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{"temporal_status": "unknown",
-                "text": "I prefer tea.",
-                "about": [{"entity": "Ava"}],
-                "segment_ids": [segment_id],
-                "facets": {"object": "tea"},
-            }])
+        return extraction_response([{'temporal_status': 'unknown', 'text': 'I prefer tea.', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [segment_id], 'facets': {'when': None, 'deadline': None, 'inference_basis': None}, 'claim_type': 'unknown', 'evidence_modality': 'unknown'}])
 
     llm.call_structured.side_effect = response
     await capture_and_extract(encoder,
@@ -664,12 +573,7 @@ async def test_encoder_persists_contract_output_without_final_normalization(tmp_
 
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{"temporal_status": "unknown",
-                "text": "My store is doing great!",
-                "about": [{"entity": "Ava"}],
-                "segment_ids": [segment_id],
-                "facets": {},
-            }])
+        return extraction_response([{'temporal_status': 'unknown', 'text': 'My store is doing great!', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [segment_id], 'facets': {'when': None, 'deadline': None, 'inference_basis': None}, 'claim_type': 'unknown', 'evidence_modality': 'unknown'}])
 
     llm.call_structured.side_effect = response
     await capture_and_extract(encoder,
@@ -735,12 +639,7 @@ async def test_encoder_routes_image_urls_through_semantic_coverage(tmp_path):
             if "source_only" in output_type.model_fields
             else source_ids[:1]
         )
-        claim = {"temporal_status": "unknown",
-                "text": "Ava shared a painting.",
-                "about": [{"entity": "Ava"}],
-                "segment_ids": [target_ids[0]],
-                "facets": {},
-            }
+        claim = {'temporal_status': 'unknown', 'text': 'Ava shared a painting.', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [target_ids[0]], 'facets': {'when': None, 'deadline': None, 'inference_basis': None}, 'claim_type': 'unknown', 'evidence_modality': 'unknown'}
         return extraction_response([claim], target_ids[1:])
 
     llm.call_structured.side_effect = response
@@ -801,6 +700,7 @@ async def test_encoder_batches_large_initial_extractions(tmp_path):
     )
 
     assert llm.call_structured.call_count == 2
+    assert [call.kwargs["think"] for call in llm.call_structured.await_args_list] == [False, True]
     assert artifacts.list_episodes()[0].extraction_status == "complete"
 
 
@@ -1105,13 +1005,7 @@ async def test_ingestion_idempotency_key_reuses_one_source_episode_claim_and_log
 
     async def response(_system, user, output_type, **_kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{"temporal_status": "unknown",
-            "text": "Ava prefers tea.",
-            "claim_type": "preference",
-            "predicate": "prefers",
-            "about": [{"entity": "Ava"}],
-            "segment_ids": [segment_id],
-        }])
+        return extraction_response([{'temporal_status': 'unknown', 'text': 'Ava prefers tea.', 'claim_type': 'preference', 'predicate': None, 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [segment_id], 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}])
 
     llm.call_structured.side_effect = response
     first = await capture_and_extract(encoder,
@@ -1146,12 +1040,7 @@ async def test_ingestion_retry_repairs_claim_saved_before_episode_checkpoint(
 
     async def response(_system, user, output_type, **_kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        return extraction_response([{"temporal_status": "unknown",
-            "text": "Ava prefers tea.",
-            "claim_type": "preference",
-            "about": [{"entity": "Ava"}],
-            "segment_ids": [segment_id],
-        }])
+        return extraction_response([{'temporal_status': 'unknown', 'text': 'Ava prefers tea.', 'claim_type': 'preference', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [segment_id], 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}])
 
     llm.call_structured.side_effect = response
     original_save_claim = artifacts.save_claim

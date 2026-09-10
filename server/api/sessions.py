@@ -210,7 +210,9 @@ async def chat(session_id: str, req: ChatRequest):
         mem = get_mem()
         prompt_budget = min(
             mem.config.context_budget_tokens,
-            mem.config.llm.context_window_tokens - 4096 - 3072,
+            mem.config.llm.context_window_tokens - (
+                max(4096, mem.config.llm.reasoning_output_tokens) if mem.config.llm.reasoning_enabled else 4096
+            ) - 3072,
         )
         tool_evidence_budget = mem.config.retrieval.tool_evidence_budget_tokens
         if tool_evidence_budget >= prompt_budget:

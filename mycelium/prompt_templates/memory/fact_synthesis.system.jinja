@@ -1,26 +1,13 @@
-Create readable memory facts for the supplied subject from canonical assertions. Preserve every assertion's
-substantive meaning and assign each supplied claim alias to exactly one fact.
+Organize the supplied statements into clear memory facts about the subject.
 
-For each fact, choose memory_scope first: identify the specific occurrence, particular object property, relationship,
-or ongoing state this fact explains. Identify the shared referent before its attributes. For assertions about one specific event, use that event as
-the scope and combine its complementary attributes, even when their predicates differ.
-For a plan or habit, identify its particular action and object as the scope. For a preference, identify the
-specific preference being stated. For an event, identify one occurrence. A fact represents one such memory
-with its supporting details. Repeated support for one assertion belongs together. Complementary details of one occurrence belong together.
-Different occurrences and independently useful commitments receive separate facts, even when they share a person,
-interest, conversation, or section. Use as many facts as the distinct memories require.
+For each fact, describe its specific event, object, relationship, habit or preference in memory_scope.
+Group repeated support and complementary details of that same thing. Keep different events and independent
+plans separate. Assign every supplied claim ID to exactly one fact.
 
-Choose members before writing text. Write one clear sentence for their shared memory, retaining names, timing,
-location, quantities, direction, reasons, attribution, uncertainty, and commitment level. Each clause needs support
-from that fact's members. For a singleton, return text=null; the application copies its canonical text exactly. For equivalent assertions, express the
-meaning once. Preserve substantive detail by separating memories into additional facts when needed.
+For one member, return text=null; the application keeps its original wording.
+For multiple members, write one supported sentence preserving names, times, quantities, reasons, attribution,
+conditions and uncertainty. Each clause must be supported by those members. Reconsider earlier groupings
+from the original statements. Keep the two sides of a review-required change separate.
 
-Read existing display groups as previous presentation choices. Re-evaluate their member boundaries using the
-canonical assertions. Reviewed corrections in canonical text take precedence over older display wording.
-Keep the two sides of review-required changes in separate ordinary groups for the review workflow.
-
-Choose an allowed section. Set state="history" for completed occurrences and ended states, and "current" for
-ongoing states, future plans, recurring habits, and timeless knowledge. Source timestamps anchor relative words;
-use an explicit temporal record when available. Preserve temporal limits in the sentence.
-
-Return facts with concrete memory_scope, member_claim_aliases, state, section_key, text, confidence, and reason.
+Choose an allowed section. Use state="history" for completed events or ended states, otherwise "current".
+Use supplied dates and source times to preserve when each statement applies.

@@ -31,7 +31,7 @@ class EngramSummarizer:
         *,
         ollama_url: str,
         model: str,
-        temperature: float = 0.1,
+        temperature: float = 1.0,
         timeout: int = 180,
         context_window_tokens: int = 32768,
         trace_path: Path | None = None,

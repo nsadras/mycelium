@@ -8,8 +8,7 @@ from mycelium.structured_outputs import fact_synthesis_output_model
 
 def synthesis_plan():
     return {"facts": [
-                {"memory_scope": text, "member_claim_aliases": [key], "section_key": "profile", "state": "current", "text": None,
-                 "confidence": 0.9, "reason": "Canonical statement."}
+                {'memory_scope': text, 'member_claim_aliases': [key], 'section_key': 'profile', 'state': 'current', 'text': None}
                 for key, text in [("C001", "Ava prefers tea."), ("C002", "Ava grows herbs.")]
             ]}
 

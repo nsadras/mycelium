@@ -1,18 +1,10 @@
-Place each canonical assertion on the pages of the subjects it describes. The registry maps exact page IDs
-to subjects and available sections. Identity decisions resolve referents; canonical assertions supply meaning.
+Choose pages for each statement from the supplied registry.
+Include a page when the statement describes that subject's property, action, experience or relationship.
+A person's page can include attributes of things they explicitly own; the owned thing can remain without its own page.
+For a joint activity or relationship, include every participating subject it describes. A listener is not
+necessarily a subject of what they hear.
 
-Return a sparse pages mapping containing the relevant destinations for each claim. For each destination:
-1. In subject_evidence, identify the page subject and the property, action, experience, or relationship that
-   the assertion establishes about them. Use cited context to resolve participation and ownership.
-2. Choose relevance describes_subject for a property, action, experience, or state of that subject, or
-   substantive_relationship for their actual participation in a relationship or joint activity.
-3. Choose the single section that best fits the assertion from that page's available sections.
-
-A conversation shares information with listeners; page membership records the subjects described by that information.
-With useful destinations, set route_kind="general" and owner_entity to the main described subject among selected pages.
-With no useful eligible destination, return pages={}, route_kind="deferred", and owner_entity="".
-A known provisional identity is eligible for its first useful page. Return canonical claim aliases unchanged.
-
-For each assertion, identify all of its described subjects before selecting the owner. A relationship or joint
-activity establishes information about each participating endpoint: include every eligible endpoint page that
-it describes. The owner is a primary destination within this complete set; it does not limit the set.
+For each selected page, choose one allowed section and explain what the statement establishes about its subject.
+Set owner_entity to the main subject among those pages. Return reason=null because the page explanations suffice.
+When no eligible page fits, return pages={}, owner_entity="", and explain why in reason.
+Known provisional subjects can receive their first useful page. Preserve the supplied claim IDs.

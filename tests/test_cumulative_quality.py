@@ -21,35 +21,18 @@ def scope_record(relation="same"):
 
 
 def test_truth_change_requires_same_scope():
-    schema = fact_truth_output_model(["C003"], ["C001", "C002"])
-    decision = {
-        "disposition": "truth_change",
-        "relation": "contradicts",
-        "target_claim_aliases": ["C001"],
-        "durable_field": "color",
-        "prior_state": "blue",
-        "incoming_state": "green",
-        "transition_evidence": "An explicit correction",
-        "explanation": "Same object and time",
-        "confidence": 0.9,
-        "scope": {"C001": scope_record(), "C002": scope_record("distinct")},
-    }
-    schema.model_validate({"decisions": {"C003": decision}})
-    decision["target_claim_aliases"] = ["C002"]
+    schema = fact_truth_output_model(["C001", "C002"])
+    decision = {"comparisons":[{"target":"C001","scope":"same","reason":"Same object."},
+                               {"target":"C002","scope":"distinct","reason":"Another object."}],
+                "relation":"contradicts","targets":["C001"],"reason":"Same object and time."}
+    schema.model_validate(decision)
     with pytest.raises(ValidationError, match="same scope"):
-        schema.model_validate({"decisions": {"C003": decision}})
+        schema.model_validate({**decision,"targets":["C002"]})
 
 
 def test_truth_schema_establishes_scope_before_verdict():
-    schema = fact_truth_output_model(["C002"], ["C001"]).model_json_schema()
-    branches = [
-        definition["properties"]
-        for definition in schema["$defs"].values()
-        if "disposition" in definition.get("properties", {})
-    ]
-    assert len(branches) == 2
-    for fields in branches:
-        assert list(fields).index("scope") < list(fields).index("disposition")
+    schema = fact_truth_output_model(["C001"]).model_json_schema()
+    assert list(schema["properties"])[0] == "comparisons"
 
 
 TEMPORAL_CASES = [
@@ -130,18 +113,18 @@ async def test_temporal_scope_contract(
         json.dumps({"C002": record(new, newtime)}),
         "[]",
     )
-    schema = fact_truth_output_model(["C002"], ["C001"])
+    schema = fact_truth_output_model(["C001"])
     result = await memory.llm.call_structured(
-        system, user, schema, num_predict=2048, dump_success=True
+        system, user, schema, num_predict=2048, dump_success=True, think=True
     )
     (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
-    assert result["decisions"]["C002"]["disposition"] == expected
+    assert ("truth_change" if result["relation"] != "no_change" else "no_change") == expected
 
 
 def test_extraction_requires_explicit_temporal_classification():
     from mycelium.structured_outputs import extraction_output_model
     schema = extraction_output_model(["s1"])
-    claim = {"text": "A stored assertion.", "about": [{"entity": "user"}], "segment_ids": ["s1"]}
+    claim = {'text': 'A stored assertion.', 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': ['s1'], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}
     with pytest.raises(ValidationError, match="temporal_status"):
         schema.model_validate({"claims": [claim], "source_only": []})
     claim["temporal_status"] = "unknown"

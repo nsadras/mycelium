@@ -10,8 +10,6 @@ def page_plan_model(evidence_aliases, entity_types):
     page = create_model(
         "SelectedPage",
         __config__=ConfigDict(extra="forbid"),
-        subject_evidence=(str, Field(min_length=1)),
-        relevance=(Literal["describes_subject", "substantive_relationship"], ...),
         section_key=(
             Literal.__getitem__(
                 tuple(
@@ -36,9 +34,7 @@ def page_plan_model(evidence_aliases, entity_types):
         model_config = ConfigDict(extra="forbid")
         pages: pages_model
         owner_entity: Literal.__getitem__((*entity_types, ""))
-        route_kind: Literal["general", "deferred"]
-        reason: str = Field(min_length=1)
-        confidence: float = Field(ge=0, le=1)
+        reason: str | None
 
         @model_validator(mode="after")
         def validate_destinations(self):
@@ -50,10 +46,16 @@ def page_plan_model(evidence_aliases, entity_types):
                     raise ValueError(
                         "The section must belong to the selected entity type"
                     )
-            if self.route_kind == "general" and self.owner_entity not in selected:
+            if selected and self.owner_entity not in selected:
                 raise ValueError("The primary owner must be a selected page")
-            if self.route_kind == "deferred" and (selected or self.owner_entity):
-                raise ValueError("Deferred claims must have no selected pages or owner")
+            if not selected and (self.owner_entity or not self.reason):
+                raise ValueError(
+                    "An empty destination set requires no owner and a reason"
+                )
+            if selected and self.reason is not None:
+                raise ValueError(
+                    "Selected pages carry their own explanations; the overall reason is null"
+                )
             return self
 
     decisions = create_model(

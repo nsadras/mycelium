@@ -8,9 +8,10 @@ from mycelium import prompts
 
 
 @pytest.mark.parametrize("source_type", ["agent_conversation", "meeting_transcript", "multi_party_conversation", "tool_observation"])
-def test_conversation_admission_does_not_override_tool_policy(source_type):
+def test_extraction_includes_the_policy_for_its_source(source_type):
     system, _ = prompts.claim_extraction_prompt(source_type, "source-test", [], "")
-    assert ("Durable memory does not mean a permanent condition" in system) == (source_type != "tool_observation")
+    policy = render_prompt(prompts._EXTRACTION_POLICY_TEMPLATES[source_type])
+    assert system.endswith("Policy for this source: " + policy)
 
 
 def test_every_prompt_is_an_external_strict_jinja_template() -> None:

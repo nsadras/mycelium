@@ -1,22 +1,12 @@
-Compare one incoming assertion with accepted assertions about the supplied subject. Decide whether any accepted
-assertion needs truth review. Return the schema-defined decision.
+Compare the incoming statement with every older statement. Return one entry in comparisons for each older target,
+including targets that need no change. Describe whether both statements concern the same particular person,
+object, event or state at the relevant time: scope is same, distinct or unresolved. Use source evidence and time.
 
-1. Establish scope for each target. In prior_referent and incoming_referent, describe the particular event,
-   object, relationship, or state, including its time. Ground the comparison in the canonical assertions and cited
-   evidence. Interpret each relative time using the timestamp of its own source. Assign relation="same" for
-   established shared scope, "distinct" for different instances, or "unresolved" for insufficient identity evidence.
-2. Compare the actual values within established shared scope:
-   - Repeated support, compatible additional detail, and parallel activities yield disposition="no_change".
-   - Evidence of a transition in an exclusive state or an explicit replacement yields disposition="truth_change",
-     relation="supersedes". State what ceased to hold and what replaced it, with the supporting evidence.
-   - Incompatible assertions about the same state and time yield disposition="truth_change", relation="contradicts".
-     State the incompatible values and the evidence establishing the shared time and scope.
-3. Use no_change for distinct or unresolved scope. This keeps both assertions available as independent evidence.
+Choose relation=no_change for compatible descriptions, including repetition, added information and more specific
+descriptions of the same state. Separate things and unresolved identity also give no_change.
+Choose supersedes when the evidence establishes that an earlier condition or decision ended or was replaced.
+Choose contradicts when the statements cannot both describe the same state at the same time.
 
-Recency indicates when something was reported. A truth change requires evidence about the values themselves.
-A repeated report of an unchanged habit strengthens its support. Activities can coexist within a person's life.
-Each selected target needs established shared scope and an evidenced incompatibility or replacement.
-
-Canonical assertions, including reviewed corrections, define the stored meaning. Cited source passages provide
-context and temporal anchors. Prior human review decisions are authoritative. Existing display prose is a summary
-for locating members. Return analysis of truth only; the application handles review and display separately.
+The targets field contains only older claims needing review for that replacement or conflict; it is empty for
+no_change. The comparisons field still contains every older target. Explain the decision using the evidence.
+Reviewed corrections are authoritative. The application sends changes for human review.

@@ -35,21 +35,21 @@ CASES = [
 async def test_truth_review(tmp_path, monkeypatch, name, prior, incoming, disposition, relation):
     monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path / "llm-errors"))
     memory = Mycelium(tmp_path / "store", config_path=Path(__file__).resolve().parents[1] / "mycelium.toml")
-    schema = fact_truth_output_model(["C002"], ["C001"])
+    schema = fact_truth_output_model(["C001"])
     system, user = prompts.fact_truth_prompt(
         "Mira (person)", json.dumps({"C001": prior}), "none", "none",
         json.dumps({"C002": incoming}), "[]",
     )
     result = schema.model_validate(await memory.llm.call_structured(
-        system, user, schema, num_predict=2048, debug_label="truth-probe",
+        system, user, schema, num_predict=2048, debug_label="truth-probe", think=True,
     )).model_dump()
     (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
     print(name, tmp_path, json.dumps(result), flush=True)
-    decision = result["decisions"]["C002"]
-    assert decision["disposition"] == disposition
+    decision = result
+    assert (decision["relation"] == "no_change") == (disposition == "no_change")
     if relation:
         assert decision["relation"] == relation
-        assert decision["target_claim_aliases"] == ["C001"]
+        assert decision["targets"] == ["C001"]
 
 
 @pytest.mark.integration

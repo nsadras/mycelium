@@ -396,14 +396,16 @@ class Encoder:
                     source.source_type, source.source_id, list(source.participants),
                     self._render_claim_segments(batch), context=self._render_segments(supplied_context),
                 )
-                return system, user, schema, neighbors
+                return system, user, schema, neighbors, bool(supplied_context)
 
             def fits(batch):
-                system, user, schema, _ = request_for(batch)
+                system, user, schema, _, think = request_for(batch)
+                output_tokens = (max(8192, self.config.llm.reasoning_output_tokens)
+                                 if think and self.config.llm.reasoning_enabled else 8192)
                 try:
                     require_request_budget(
                         [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                        context_window=self.config.llm.context_window_tokens, output_tokens=8192,
+                        context_window=self.config.llm.context_window_tokens, output_tokens=output_tokens,
                         schema=schema.model_json_schema(),
                     )
                     return True
@@ -432,15 +434,15 @@ class Encoder:
                 state.last_error = None
                 batch_ids = {segment.segment_id for segment in batch}
                 try:
-                    system, user, claim_model, neighbors = request_for(batch)
+                    system, user, claim_model, neighbors, think = request_for(batch)
                     if state.response is None:
                         response = await self.llm.call_structured(
-                            system, user, claim_model, num_predict=8192,
+                            system, user, claim_model, num_predict=8192, think=think,
                             debug_label=f"claim-extraction-{source.source_id}-batch-{batch_index}",
                         )
                     else:
                         response = state.response
-                    response = claim_model.model_validate(response).model_dump(exclude_none=True)
+                    response = claim_model.model_validate(response).model_dump()
                     staged_claims = self._build_extracted_claims(
                         source, response, state.batch_id,
                         context_sources=[*context_sources, replace(source, segments=neighbors)]
@@ -569,10 +571,8 @@ class Encoder:
             about = list(raw["about"])
             raw_modality = str(raw.get("evidence_modality") or "unknown").strip().lower()
             facets = dict(raw.get("facets", {}) or {})
-            is_inferred = (
-                raw.get("evidence_type") == "inferred"
-                and bool(str(facets.get("inference_basis") or "").strip())
-            )
+            # The model declares an inference by supplying its evidence basis.
+            is_inferred = facets.get("inference_basis") is not None
             cited_segments = [
                 segment for segment in source.segments
                 if segment.segment_id in segment_ids
@@ -627,12 +627,11 @@ class Encoder:
                     source_id=source.source_id,
                     segment_ids=segment_ids,
                     raw_log_entry_id=source.raw_log_entry_id,
-                    speaker=source_speakers[0] if len(source_speakers) == 1 else raw.get("speaker"),
+                    speaker=source_speakers[0] if len(source_speakers) == 1 else None,
                     evidence_type="inferred" if is_inferred else "explicit",
                 ), *context_provenance],
                 recorded_at=source.recorded_at,
-                confidence=max(0.0, min(1.0, float(raw.get("confidence", 0.8)))),
-                slot=str(raw["slot"]).strip() if raw.get("slot") else None,
+                confidence=0.8,
                 facets=normalize_temporal_facets(
                     facets, temporal_anchor, claim_text
                 ),

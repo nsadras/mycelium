@@ -2,7 +2,7 @@
 
 from collections import Counter
 from collections.abc import Collection, Mapping
-from typing import Annotated, Any, Literal, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
@@ -12,29 +12,41 @@ from mycelium.ontology import (
 
 
 class ExtractedEntityOutput(BaseModel):
-    entity: str
-    role: str | None = None
+    model_config = ConfigDict(extra="forbid")
+    entity: str = Field(min_length=1)
+    role: Literal["subject", "owner", "participant"]
+
+
+class ExtractedDetails(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    when: str | None = Field(
+        description="Time words stated for the event or state; null if absent"
+    )
+    deadline: str | None = Field(
+        description="Latest permissible completion time explicitly imposed by the source; a scheduled day alone gives when, with deadline null"
+    )
+    inference_basis: str | None = Field(
+        description="Evidence for an inferred assertion; null for a directly stated assertion"
+    )
 
 
 class ExtractedClaimOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    text: str = Field(min_length=1, max_length=1000)
-    claim_type: ClaimType = "unknown"
-    predicate: str | None = None
-    evidence_modality: Literal["speech", "visual", "tool", "mixed", "unknown"] = (
-        "speech"
+    text: str = Field(
+        min_length=1,
+        max_length=1000,
+        description="Complete statement with names, qualifications and referenced details. State accepting or declining a proposal explicitly.",
     )
+    claim_type: ClaimType
+    predicate: Literal["project_role"] | None = None
+    evidence_modality: Literal["speech", "visual", "tool", "mixed", "unknown"]
     temporal_status: Literal[
         "past", "current", "future", "recurring", "atemporal", "unknown"
     ]
     temporal_anchor_segment_id: str | None = None
     about: list[ExtractedEntityOutput] = Field(min_length=1, max_length=12)
     segment_ids: list[str] = Field(min_length=1, max_length=32)
-    speaker: str | None = None
-    evidence_type: Literal["explicit", "inferred"] = "explicit"
-    confidence: float = 0.8
-    slot: str | None = None
-    facets: dict = Field(default_factory=dict)
+    facets: ExtractedDetails
 
 
 def extraction_output_model(
@@ -69,10 +81,17 @@ def extraction_output_model(
         **fields,
     )
     evidence_order = ["segment_ids", *fields, "temporal_status", "facets"]
-    ordered_fields = [*evidence_order, *(name for name in claim.model_fields if name not in evidence_order)]
+    ordered_fields = [
+        *evidence_order,
+        *(name for name in claim.model_fields if name not in evidence_order),
+    ]
     claim = create_model(
-        "EvidenceFirstStatement", __config__=ConfigDict(extra="forbid"),
-        **{name: (claim.model_fields[name].annotation, claim.model_fields[name]) for name in ordered_fields},
+        "EvidenceFirstStatement",
+        __config__=ConfigDict(extra="forbid"),
+        **{
+            name: (claim.model_fields[name].annotation, claim.model_fields[name])
+            for name in ordered_fields
+        },
     )
     base = create_model(
         "ExtractionResponse",
@@ -84,6 +103,14 @@ def extraction_output_model(
     class ExactExtractionResponse(base):
         @model_validator(mode="after")
         def validate_accounting(self):
+            for claim in self.claims:
+                if (
+                    claim.temporal_anchor_segment_id is not None
+                    and claim.temporal_anchor_segment_id not in claim.segment_ids
+                ):
+                    raise ValueError(
+                        "A time anchor must be one of the claim's cited new segments"
+                    )
             remainder = [d.segment_id for d in self.source_only]
             cited = {s for c in self.claims for s in c.segment_ids}
             if len(remainder) != len(set(remainder)):
@@ -110,7 +137,6 @@ class GroundedAnswerOutput(BaseModel):
 class AssistantContextCandidateDecisionOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     disposition: Literal["include", "exclude"]
-    confidence: float = Field(ge=0.0, le=1.0)
     reason: str = Field(min_length=1, max_length=500)
 
 
@@ -139,131 +165,49 @@ class FactCandidateSelectionOutput(BaseModel):
     reason: str = Field(min_length=1, max_length=800)
 
 
-class FactScopeComparison(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    prior_referent: str = Field(min_length=1)
-    incoming_referent: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
-    relation: Literal["same", "distinct", "unresolved"]
-
-
-class FactTruthNoChangeOutput(BaseModel):
-    """An incoming claim that does not change an accepted truth."""
-
-    model_config = ConfigDict(extra="forbid")
-    disposition: Literal["no_change"]
-    reason: str = Field(min_length=1, max_length=800)
-    confidence: float = Field(ge=0.0, le=1.0)
-
-
-class FactTruthChangeOutput(BaseModel):
-    """An unsafe truth change that must be reviewed before claim mutation."""
-
-    model_config = ConfigDict(extra="forbid")
-    disposition: Literal["truth_change"]
-    relation: Literal["contradicts", "supersedes"]
-    target_claim_aliases: list[str] = Field(min_length=1, max_length=48)
-    durable_field: str = Field(min_length=1, max_length=200)
-    prior_state: str = Field(min_length=1, max_length=300)
-    incoming_state: str = Field(min_length=1, max_length=300)
-    transition_evidence: str = Field(min_length=1, max_length=500)
-    explanation: str = Field(min_length=1, max_length=800)
-    confidence: float = Field(ge=0.0, le=1.0)
-
-
-def fact_truth_output_model(
-    incoming_claim_aliases: Collection[str],
-    target_claim_aliases: Collection[str],
-) -> type[BaseModel]:
-    """Build one exact truth adjudication for every incoming claim alias."""
-    incoming = tuple(
-        dict.fromkeys(str(value) for value in incoming_claim_aliases if value)
-    )
-    targets = tuple(
-        dict.fromkeys(str(value) for value in target_claim_aliases if value)
-    )
-    if not incoming:
-        raise ValueError("Fact truth resolution requires incoming claim aliases")
-    decision_fields: dict[str, Any] = {}
-    scope_fields = {}
-    if targets:
-        scope_model = create_model(
-            "TargetScopes",
-            __config__=ConfigDict(extra="forbid"),
-            **{alias: (FactScopeComparison, ...) for alias in targets},
-        )
-        scope_fields["scope"] = (scope_model, ...)
-    for alias in incoming:
-        # Inherited Pydantic fields precede new fields. Assemble the branch fields
-        # explicitly so the model establishes scope before emitting its verdict.
-        no_change = create_model(
-            f"{alias}FactTruthNoChange",
-            __config__=ConfigDict(extra="forbid"),
-            **scope_fields,
-            **{
-                name: (field.annotation, field)
-                for name, field in FactTruthNoChangeOutput.model_fields.items()
-            },
-        )
-        if not targets:
-            decision_fields[alias] = (no_change, ...)
-            continue
-        target_type = Literal.__getitem__(targets)
-        truth_change = create_model(
-            f"{alias}FactTruthChange",
-            __config__=ConfigDict(extra="forbid"),
-            **scope_fields,
-            **{
-                name: (field.annotation, field)
-                for name, field in FactTruthChangeOutput.model_fields.items()
-                if name != "target_claim_aliases"
-            },
-            target_claim_aliases=(
-                list[target_type],  # type: ignore[valid-type]
-                Field(min_length=1, max_length=len(targets)),
-            ),
-        )
-        decision_fields[alias] = (
-            Annotated[
-                Union[no_change, truth_change],
-                Field(discriminator="disposition"),
-            ],
-            ...,
-        )
-    decisions_model = create_model(
-        "ExactFactTruthDecisions",
+def fact_truth_output_model(target_claim_aliases: Collection[str]) -> type[BaseModel]:
+    """One incoming statement, with an explicit comparison for every older target."""
+    targets = tuple(dict.fromkeys(target_claim_aliases))
+    if not targets:
+        raise ValueError("Truth review requires older targets")
+    target_type = Literal.__getitem__(targets)
+    comparison = create_model(
+        "Comparison",
         __config__=ConfigDict(extra="forbid"),
-        **decision_fields,
+        target=(target_type, ...),
+        scope=(Literal["same", "distinct", "unresolved"], ...),
+        reason=(str, Field(min_length=1, max_length=500)),
     )
-    base_model = create_model(
-        "ExactFactTruthPlan",
+    base = create_model(
+        "TruthDecision",
         __config__=ConfigDict(extra="forbid"),
-        decisions=(decisions_model, ...),
+        comparisons=(
+            list[comparison],
+            Field(min_length=len(targets), max_length=len(targets)),
+        ),
+        relation=(Literal["no_change", "contradicts", "supersedes"], ...),
+        targets=(list[target_type], Field(max_length=len(targets))),
+        reason=(str, Field(min_length=1, max_length=800)),
     )
 
-    class ExactFactTruthPlan(base_model):  # type: ignore[valid-type, misc]
+    class ExactTruthDecision(base):
         @model_validator(mode="after")
-        def validate_noncompeting_targets(self):
-            changed_targets: set[str] = set()
-            for decision in self.decisions:
-                if decision[1].disposition != "truth_change":
-                    continue
-                decision_targets = set(decision[1].target_claim_aliases)
-                if any(
-                    getattr(decision[1].scope, target).relation != "same"
-                    for target in decision_targets
-                ):
-                    raise ValueError(
-                        "Truth changes require model-established same scope for every target"
-                    )
-                if changed_targets & decision_targets:
-                    raise ValueError(
-                        "Incoming truth changes cannot compete for the same target claim"
-                    )
-                changed_targets.update(decision_targets)
+        def validate_targets(self):
+            compared = [c.target for c in self.comparisons]
+            if len(set(compared)) != len(compared) or set(compared) != set(targets):
+                raise ValueError("Compare every older target exactly once")
+            if len(set(self.targets)) != len(self.targets):
+                raise ValueError("Changed targets must be unique")
+            if (self.relation == "no_change") != (not self.targets):
+                raise ValueError(
+                    "A change requires targets; no_change requires an empty targets list"
+                )
+            scopes = {c.target: c.scope for c in self.comparisons}
+            if any(scopes[t] != "same" for t in self.targets):
+                raise ValueError("Changed targets require established same scope")
             return self
 
-    return ExactFactTruthPlan
+    return ExactTruthDecision
 
 
 def fact_candidate_selection_output_model(
@@ -319,16 +263,7 @@ def fact_synthesis_output_model(
         state=(Literal["current", "history"], ...),
         section_key=(section_type, ...),
         text=(str | None, Field(max_length=1000)),
-        confidence=(float, Field(ge=0.0, le=1.0)),
-        reason=(str, Field(min_length=1, max_length=800)),
     )
-    singleton = create_model("CanonicalSingleton", __base__=fact,
-        member_claim_aliases=(list[alias_type], Field(min_length=1, max_length=1)),
-        text=(type(None), None))
-    combined = create_model("CombinedMemory", __base__=fact,
-        member_claim_aliases=(list[alias_type], Field(min_length=2, max_length=len(claim_texts))),
-        text=(str, Field(min_length=1, max_length=1000)))
-    fact = singleton if len(claim_texts) == 1 else Union[singleton, combined]
     base = create_model(
         "FactSynthesis",
         __config__=ConfigDict(extra="forbid"),
@@ -353,7 +288,9 @@ def fact_synthesis_output_model(
             for fact in self.facts:
                 members = fact.member_claim_aliases
                 if len(members) == 1 and fact.text is not None:
-                    raise ValueError("Singleton text is rendered by the application; return null")
+                    raise ValueError(
+                        "Singleton text is rendered by the application; return null"
+                    )
                 if len(members) > 1 and not fact.text:
                     raise ValueError("Multi-claim groups require synthesized text")
                 for change in truth_changes:

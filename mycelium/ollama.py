@@ -16,7 +16,7 @@ from httpx import TimeoutException
 from ollama import AsyncClient, RequestError, ResponseError, web_fetch, web_search
 from pydantic import BaseModel, ValidationError
 from ollama._utils import convert_function_to_tool
-from mycelium.budget import require_request_budget
+from mycelium.budget import require_request_budget, output_contract
 
 logger = logging.getLogger(__name__)
 LLM_DEBUG_DIR_ENV = "MYCELIUM_LLM_DEBUG_DIR"
@@ -70,20 +70,36 @@ class OllamaClient:
         self,
         url: str,
         model: str,
-        temperature: float = 0.1,
-        timeout: int = 120,
+        temperature: float = 1.0,
+        timeout: int = 900,
         context_window_tokens: int = 32768,
         trace_path: Path | None = None,
+        top_p: float = 0.95,
+        top_k: int = 64,
+        reasoning_enabled: bool = True,
+        reasoning_output_tokens: int = 16384,
+        reasoning_format: str = "prompt",
     ) -> None:
         load_dotenv()
         self.url = url.rstrip('/')
         self.model = model
         self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.reasoning_enabled = reasoning_enabled
+        self.reasoning_output_tokens = reasoning_output_tokens
+        if reasoning_output_tokens <= 0 or reasoning_format not in {"prompt", "native"}:
+            raise ValueError("Reasoning requires a positive token reserve and prompt/native format")
+        self.reasoning_format = reasoning_format
         self.timeout = timeout
         self.context_window_tokens = context_window_tokens
         self.trace_path = trace_path
         self.client = AsyncClient(host=self.url, timeout=self.timeout)
         self._call_log: deque[dict[str, Any]] = deque(maxlen=LLM_CALL_LOG_LIMIT)
+
+    def output_budget(self, requested: int, *, think: bool) -> int:
+        """Reserve generation space for reasoning as well as the final answer."""
+        return max(requested, self.reasoning_output_tokens) if think and self.reasoning_enabled else requested
 
     def _extract_json(self, content: str) -> Union[dict, list]:
         """
@@ -141,11 +157,12 @@ class OllamaClient:
         """
         call_id = str(uuid.uuid4())[:8]
         temp = temperature if temperature is not None else self.temperature
-        options = {"temperature": temp, "num_ctx": self.context_window_tokens, "num_predict": 4096}
+        think = self.reasoning_enabled and (bool(enable_tools) if think is None else think)
+        options = {"temperature": temp, "top_p": self.top_p, "top_k": self.top_k,
+                   "num_ctx": self.context_window_tokens,
+                   "num_predict": self.output_budget(num_predict if num_predict is not None else 4096, think=think)}
         if num_ctx is not None:
             options["num_ctx"] = num_ctx
-        if num_predict is not None:
-            options["num_predict"] = num_predict
         endpoint = f"{self.url}/api/chat"
         working_messages = [dict(message) for message in messages]
         tool_events: list[ToolEvent] = []
@@ -277,9 +294,13 @@ class OllamaClient:
                                stage=f"chat-round-{round_idx + 1}")
                 raise
             metadata = self._response_metadata(response)
+            metadata.update(think=think_enabled, output_token_limit=options["num_predict"],
+                            context_window_tokens=options["num_ctx"])
             self._log_call(call_id, attempt_index, "", "", "",
-                           int((time.monotonic() - round_started) * 1000), True, metadata,
+                           int((time.monotonic() - round_started) * 1000), metadata.get("done_reason") != "length", metadata,
                            stage=f"chat-round-{round_idx + 1}")
+            if metadata.get("done_reason") == "length":
+                raise ValueError("Generation exhausted its token allowance; increase the output reserve before retrying")
             assistant_message = self._assistant_message_dict(response)
             content = assistant_message.get("content", "").strip()
             tool_calls = assistant_message.get("tool_calls", [])
@@ -529,8 +550,8 @@ class OllamaClient:
             parsed_model = response_model.model_validate(extracted)
 
         if getattr(parsed_model, "__pydantic_root_model__", False):
-            return parsed_model.model_dump(exclude_none=True)
-        return parsed_model.model_dump(exclude_none=True)
+            return parsed_model.model_dump()
+        return parsed_model.model_dump()
                     
     async def call_structured(
         self,
@@ -541,14 +562,25 @@ class OllamaClient:
         num_predict: int = 4096,
         dump_success: bool = False,
         debug_label: str | None = None,
+        think: bool = False,
     ) -> Union[dict, list]:
         """
-        Uses Ollama's chat API with native JSON Schema support.
+        Validate one structured decision. Reasoning uses a schema-grounded,
+        uninterrupted generation by default, avoiding Ollama's format restart.
+        Native constrained reasoning is an explicit configuration choice.
         """
         call_id = str(uuid.uuid4())[:8]
         output_format, response_model = self._structured_format(schema)
+        think = think and self.reasoning_enabled
+        if think and response_model is None and self.reasoning_format == "prompt":
+            raise ValueError("Prompt-constrained reasoning requires a Pydantic response model")
+        num_predict = self.output_budget(num_predict, think=think)
+        user = output_contract(user, output_format)
+        api_format = None if think and self.reasoning_format == "prompt" else output_format
         options = {
-            "temperature": 0.0,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
             "num_ctx": self.context_window_tokens,
             "num_predict": num_predict,
         }
@@ -560,7 +592,7 @@ class OllamaClient:
 
         for attempt in range(max_retries):
             require_request_budget(messages, context_window=self.context_window_tokens,
-                                   output_tokens=num_predict, schema=output_format)
+                                   output_tokens=num_predict)
             start_time = time.time()
             self._log_request(
                 call_id=call_id,
@@ -569,24 +601,34 @@ class OllamaClient:
                 endpoint=endpoint,
                 model=self.model,
                 messages=messages,
-                output_format=output_format,
+                output_format=api_format,
                 options=options,
             )
             try:
                 response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
                     model=self.model,
                     messages=messages,
-                    think=False,
+                    think=think,
                     stream=False,
-                    format=output_format,
+                    format=api_format,
                     options=options,
                 )
                 assistant_message = self._assistant_message_dict(response)
                 content = str(assistant_message.get("content", "")).strip()
                 metadata = self._response_metadata(response)
+                metadata.update(
+                    think=think,
+                    structured_output_mode="native" if api_format is not None else "prompt",
+                    output_token_limit=num_predict,
+                    context_window_tokens=self.context_window_tokens,
+                    thinking_chars=len(str(assistant_message.get("thinking", "") or "")),
+                    content_chars=len(content),
+                )
                 latency_ms = int((time.time() - start_time) * 1000)
 
                 try:
+                    if metadata.get("done_reason") == "length":
+                        raise ValueError("Generation exhausted its token allowance; increase the output reserve before retrying")
                     parsed = self._parse_structured_response(content, response_model)
                     self._log_call(call_id, attempt + 1, system, user, content, latency_ms, True, metadata, stage=debug_label or "structured")
                     if dump_success:
@@ -622,7 +664,7 @@ class OllamaClient:
                         metadata=metadata,
                         error=parse_exc,
                     )
-                    if attempt == max_retries - 1:
+                    if attempt == max_retries - 1 or metadata.get("done_reason") == "length":
                         metadata_text = f"; metadata={metadata}" if metadata else ""
                         debug_text = (
                             f"; debug_dump={debug_dump_path}"
@@ -631,7 +673,7 @@ class OllamaClient:
                         )
                         raise ValueError(
                             "Structured response did not satisfy its contract after "
-                            f"{max_retries} attempts; final_error="
+                            f"{attempt + 1} attempts; final_error="
                             f"{type(parse_exc).__name__}: {parse_exc}"
                             f"{metadata_text}{debug_text}"
                         ) from parse_exc
@@ -697,7 +739,8 @@ class OllamaClient:
             "endpoint": endpoint,
             "model": model,
             "messages": messages,
-            "format": output_format,
+            "format": None if metadata.get("structured_output_mode") == "prompt" else output_format,
+            "validation_schema": output_format,
             "options": options,
             "metadata": metadata,
             "assistant_message": assistant_message,
@@ -746,7 +789,8 @@ class OllamaClient:
             "endpoint": endpoint,
             "model": model,
             "messages": messages,
-            "format": output_format,
+            "format": None if metadata.get("structured_output_mode") == "prompt" else output_format,
+            "validation_schema": output_format,
             "options": options,
             "metadata": metadata,
             "assistant_message": assistant_message,

@@ -59,6 +59,11 @@ class Mycelium:
             timeout=self.config.llm.timeout_seconds,
             context_window_tokens=self.config.llm.context_window_tokens,
             trace_path=self.store_path / "diagnostics" / "llm-calls.jsonl",
+            top_p=self.config.llm.top_p,
+            top_k=self.config.llm.top_k,
+            reasoning_enabled=self.config.llm.reasoning_enabled,
+            reasoning_output_tokens=self.config.llm.reasoning_output_tokens,
+            reasoning_format=self.config.llm.reasoning_format,
         )
         self.encoder = Encoder(self.llm, self._log_store, self.config, self.artifacts)
         self.short_term_memory = ShortTermMemoryQueue(self.artifacts)

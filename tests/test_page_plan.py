@@ -11,11 +11,10 @@ from mycelium.page_plan import page_plan_model
 def test_page_choices_survive_structured_response_roundtrip(second_section):
     schema = page_plan_model(["C001"], {"you": "you", "project-1": "project"})
     response = {"decisions": {"C001": {
-        "route_kind": "general", "owner_entity": "you", "reason": "Grounded placements.",
-        "confidence": 0.9,
+        "owner_entity": "you", "reason": None,
         "pages": {
-            "you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "priorities_plans", "reason": "Personal goal."},
-            "project-1": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": second_section, "reason": "Explicit page decision."},
+            "you": {"section_key": "priorities_plans", "reason": "Personal goal."},
+            "project-1": {"section_key": second_section, "reason": "Explicit page decision."},
         },
     }}}
     if second_section == "not_selected":
@@ -29,23 +28,23 @@ def test_page_choices_survive_structured_response_roundtrip(second_section):
 
 def test_no_eligible_pages_requires_deferral():
     schema = page_plan_model(["C001"], {})
-    decision = {"pages": {}, "owner_entity": "", "route_kind": "deferred", "confidence": 1.0, "reason": "No eligible identity."}
+    decision = {"pages": {}, "owner_entity": "", "reason": "No eligible identity."}
     schema.model_validate({"decisions": {"C001": decision}})
     with pytest.raises(ValidationError):
-        schema.model_validate({"decisions": {"C001": {**decision, "route_kind": "general"}}})
+        schema.model_validate({"decisions": {"C001": {**decision, "reason": None}}})
 
 
-def test_incidental_relevance_cannot_select_a_page():
+def test_selection_requires_valid_owner_and_destination_reason():
     schema = page_plan_model(["C001"], {"you": "you"})
-    page = {"subject_evidence": "No statement about this subject.",
-            "relevance": "incidental_or_unrelated", "section_key": "profile", "reason": "Incidental."}
-    decision = {"pages": {"you": page}, "owner_entity": "you", "route_kind": "general",
-                "reason": "An invalid selection.", "confidence": 1.0}
-    with pytest.raises(ValidationError, match="relevance"):
+    decision = {"pages": {"you": {"section_key": "profile", "reason": "Personal statement."}},
+                "owner_entity": "", "reason": None}
+    with pytest.raises(ValidationError, match="primary owner"):
         schema.model_validate({"decisions": {"C001": decision}})
-    decision["pages"] = {}
-    decision.update(owner_entity="", route_kind="deferred")
-    schema.model_validate({"decisions": {"C001": decision}})
     decision["owner_entity"] = "you"
-    with pytest.raises(ValidationError, match="Deferred"):
+    schema.model_validate({"decisions": {"C001": decision}})
+    decision["pages"] = {}
+    decision["reason"] = "No supported destination."
+    with pytest.raises(ValidationError, match="no owner"):
         schema.model_validate({"decisions": {"C001": decision}})
+    decision["owner_entity"] = ""
+    schema.model_validate({"decisions": {"C001": decision}})

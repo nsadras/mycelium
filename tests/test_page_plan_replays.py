@@ -46,7 +46,7 @@ async def test_page_plan_real_model(tmp_path, case, monkeypatch):
     (tmp_path / "response.json").write_text(json.dumps(response, indent=2))
     print(case, json.dumps(response), flush=True)
     decision = response["decisions"]["C001"]
-    assert decision["route_kind"] == "general"
+    assert decision["pages"]
     expected = {"you"} if case == "multiple_sections" else ({"o1"} if case == "incidental" else {"p1", "o1"})
     assert {key for key, value in decision["pages"].items() if value["section_key"] != "not_selected"} == expected
 
@@ -80,7 +80,7 @@ async def test_page_plan_with_larger_registry(tmp_path, monkeypatch):
     (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
     for alias, expected in zip(evidence, [{person}, {organization}, {person, organization}, {person, organization}]):
         decision = result["decisions"][alias]
-        assert decision["route_kind"] == "general"
+        assert decision["pages"]
         selected = {key for key, value in decision["pages"].items() if value["section_key"] != "not_selected"}
         assert selected == expected
         assert decision["owner_entity"] in selected

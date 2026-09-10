@@ -109,7 +109,7 @@ class ClaimRouter:
                     system, user, schema, num_predict=8192, debug_label="dream-identity-plan",
                 )).model_dump()
             # Explicit human identity references are authoritative exact-ID constraints.
-            for node in planned_subjects(plan):
+            for node in planned_subjects(plan, planned):
                 reviewed = {
                     ref.entity_id for alias in node["supporting_evidence"] if alias in aliases
                     for ref in self.artifacts.list_entity_references(
@@ -127,7 +127,7 @@ class ClaimRouter:
 
         resolved = []
         blockers: dict[str, list[str]] = {}
-        for node in planned_subjects(plan):
+        for node in planned_subjects(plan, planned):
             support = [aliases[a] for a in node["supporting_evidence"] if a in aliases]
             participant_support = [participants[p] for p in node["participant_evidence"]]
             entity = None
@@ -171,7 +171,7 @@ class ClaimRouter:
                     *[seg.segment_id for s, name, role in participant_support for seg in s.segments
                       if seg.speaker == name and seg.role == role],
                 }),
-                confidence=node["confidence"], reason=node["reason"],
+                confidence=min((item.claim.confidence for item in support), default=0.8), reason=node["reason"],
                 review_state="accepted" if entity else "review_required",
                 dream_run_id=dream_run_id, created_at=now,
             )
@@ -191,7 +191,7 @@ class ClaimRouter:
             })
 
         routable = {e.entity_id: e.entity_type for e in planned.values() if e.status == "active"}
-        routings = {a: {"route_kind": "deferred", "confidence": 1.0,
+        routings = {a: {"pages": {}, "owner_entity": "",
                        "reason": "A supporting identity requires review."} for a in blockers}
         batches = list(self._alias_batches(
             {a: item for a, item in aliases.items() if a not in blockers},
@@ -226,10 +226,9 @@ class ClaimRouter:
                     item, f"Claim routing failed: {type(exc).__name__}: {exc}"
                 ) for item in batch.values())
         for alias, routing in routings.items():
-            kind = routing["route_kind"]
+            kind = "general" if routing["pages"] else "deferred"
             destinations = {
                 entity_id: page["section_key"] for entity_id, page in routing.get("pages", {}).items()
-                if page["section_key"] != "not_selected"
             }
             normalized = {
                 "disposition": "deferred" if kind == "deferred" else "canonical",
@@ -239,11 +238,10 @@ class ClaimRouter:
                 "object_entities": [], "contextual_entities": [], "relationship_kind": "none",
                 "page_sections": destinations,
                 "supporting_claims": [], "identity_blocker_ids": blockers.get(alias, []),
-                "confidence": routing["confidence"],
-                "reason": routing["reason"] + "\n" + "\n".join(
-                    f"Page {entity_id} ({page['section_key']}; {page['relevance']}): "
-                    f"{page['subject_evidence']} — {page['reason']}"
-                    for entity_id, page in routing.get("pages", {}).items()
+                "confidence": aliases[alias].claim.confidence,
+                "reason": routing["reason"] if kind == "deferred" else "\n".join(
+                    f"Page {entity_id} ({page['section_key']}): {page['reason']}"
+                    for entity_id, page in routing["pages"].items()
                 ),
             }
             route = self._route_decision(alias, aliases[alias], normalized, aliases, planned, {}, {})

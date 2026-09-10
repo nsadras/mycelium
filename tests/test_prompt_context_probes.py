@@ -148,17 +148,17 @@ async def test_truth_in_mixed_history(
     result = await memory.llm.call_structured(
         system,
         user,
-        fact_truth_output_model(["C009"], targets),
+        fact_truth_output_model(targets),
         num_predict=8192,
-        dump_success=True,
+        dump_success=True, think=True,
     )
     (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
-    decision = result["decisions"]["C009"]
-    assert decision["disposition"] == expected
+    decision = result
+    assert (decision["relation"] == "no_change") == (expected == "no_change")
     if scope:
-        assert decision["scope"]["C001"]["relation"] == scope
+        assert {c["target"]: c["scope"] for c in decision["comparisons"]}["C001"] == scope
     if expected == "truth_change":
-        assert decision["target_claim_aliases"] == ["C001"]
+        assert decision["targets"] == ["C001"]
 
 
 @pytest.mark.asyncio
@@ -209,7 +209,7 @@ async def test_synthesis_mixed_history(tmp_path, monkeypatch):
             {a: r["text"] for a, r in canonical.items()}, ["profile", "history"]
         ),
         num_predict=8192,
-        dump_success=True,
+        dump_success=True, think=True,
     )
     (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
     assert {frozenset(f["member_claim_aliases"]) for f in result["facts"]} == set(

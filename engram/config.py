@@ -23,7 +23,7 @@ class EngramConfig:
     hf_token: str | None = None
     ollama_model: str = "gemma4:12b"
     ollama_url: str = "http://localhost:11434"
-    summary_temperature: float = 0.1
+    summary_temperature: float = 1.0
     summary_context_window_tokens: int = 32768
 
     @property
@@ -74,7 +74,7 @@ class EngramConfig:
             hf_token=os.getenv("HF_TOKEN") or diarization_data.get("hf_token"),
             ollama_model=summary_data.get("model", llm_data.get("model", "gemma4:12b")),
             ollama_url=summary_data.get("url", llm_data.get("url", "http://localhost:11434")),
-            summary_temperature=float(summary_data.get("temperature", 0.1)),
+            summary_temperature=float(summary_data.get("temperature", 1.0)),
             summary_context_window_tokens=int(
                 summary_data.get(
                     "context_window_tokens",

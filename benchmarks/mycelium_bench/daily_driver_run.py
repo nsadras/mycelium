@@ -566,8 +566,7 @@ async def _run_checkpoint_probes(
     qa = OllamaQaClient(
         model=memory.config.llm.model,
         url=memory.config.llm.url,
-        temperature=0.0,
-        timeout=memory.config.llm.timeout_seconds,
+        llm_config=memory.config.llm,
     )
     rows: list[dict[str, Any]] = []
     for probe in probes:

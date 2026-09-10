@@ -13,10 +13,22 @@ from mycelium.identity_plan import identity_plan_model
 
 
 def subject(**changes):
-    return {"node_id": "n1", "title": "You", "entity_type": "you", "resolution": "existing",
-            "entity_id": "you", "aliases": [], "supporting_evidence": ["C001"],
-            "participant_evidence": ["P001"], "candidate_entity_ids": [],
-            "reason": "Explicit identity evidence.", "confidence": 1.0, **changes}
+    value = {"title": "You", "entity_type": "you", "resolution": "existing",
+             "entity_id": "you", "aliases": [], "supporting_evidence": ["C001"],
+             "participant_evidence": ["P001"], "candidate_entity_ids": [],
+             "reason": "Explicit identity evidence.", **changes}
+    fields = {"reason", "aliases", "supporting_evidence", "participant_evidence"}
+    if changes.get("node_id") != "you":
+        fields.add("resolution")
+        if value["resolution"] == "existing":
+            fields.update(("entity_id", "title"))
+            value["title"] = changes.get("title")
+        else:
+            fields.update(("title", "entity_type"))
+            if value["resolution"] == "review_required":
+                fields.add("candidate_entity_ids")
+    return {key: value[key] for key in fields}
+
 
 
 @pytest.mark.parametrize("changes", [
@@ -29,14 +41,14 @@ def subject(**changes):
 def test_identity_contract_rejects_invalid_ids_and_user_binding(changes):
     schema = identity_plan_model(["C001"], {"P001": "user"}, {"you": "you"})
     with pytest.raises(ValidationError):
-        schema.model_validate({"subjects": [], "user": subject(**{"node_id": "you", **changes})})
+        schema.model_validate({"subjects": [], "user": {**subject(node_id="you"), **changes}})
 
 
 def test_declared_user_is_required_separately_from_other_subjects():
     schema = identity_plan_model(["C001"], {"P001": "user"}, {"you": "you"})
     plan = schema.model_validate({"subjects": [], "user": subject(node_id="you")})
     assert list(schema.model_json_schema()["properties"]) == ["user", "subjects"]
-    assert plan.user.entity_id == "you"
+    assert plan.user.participant_evidence == ["P001"]
     with pytest.raises(ValidationError):
         schema.model_validate({"subjects": []})
 
@@ -163,10 +175,10 @@ def test_page_catalog_limits_sections_to_supplied_active_types(tmp_path):
 
 
 def route(owner="you"):
-    return {"decisions": {"C001": {"route_kind": "general", "owner_entity": owner,
-            "pages": {
-                      owner: {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "overview", "reason": "Useful statement."}},
-            "reason": "Source-grounded owner.", "confidence": 1.0}}}
+    return {"decisions": {"C001": {"owner_entity": owner,
+            "pages": {owner: {"section_key": "overview", "reason": "Useful statement."}},
+            "reason": None}}}
+
 
 
 @pytest.mark.asyncio

@@ -15,12 +15,10 @@ def test_context_selection_schema_requires_every_exact_candidate():
     valid = {"decisions": {
         "M001": {
             "disposition": "include",
-            "confidence": 0.9,
             "reason": "This record directly answers the request.",
         },
         "M002": {
             "disposition": "exclude",
-            "confidence": 0.9,
             "reason": "This record does not help answer the request.",
         },
     }}
@@ -38,12 +36,10 @@ async def test_context_selector_can_abstain_from_every_candidate():
     llm.call_structured.return_value = {"decisions": {
         "M001": {
             "disposition": "exclude",
-            "confidence": 1.0,
             "reason": "The record is unrelated.",
         },
         "M002": {
             "disposition": "exclude",
-            "confidence": 1.0,
             "reason": "The record is also unrelated.",
         },
     }}
@@ -78,7 +74,7 @@ async def test_admission_batches_complete_records_without_truncating_tail():
     async def select(system, user, schema, **kwargs):
         seen.append(user)
         aliases = schema.model_fields["decisions"].annotation.model_fields
-        return {"decisions": {alias: {"disposition": "include", "confidence": 1.0,
+        return {"decisions": {alias: {"disposition": "include",
                                       "reason": "Supported candidate."} for alias in aliases}}
     llm.call_structured.side_effect = select
     candidates = [AssistantContextCandidate(str(i), "claim", "Record", "material " * 1500 + f"TAIL-{i}")

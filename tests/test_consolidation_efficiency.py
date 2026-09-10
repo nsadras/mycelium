@@ -100,15 +100,7 @@ async def test_new_memories_do_not_require_empty_target_truth_calls(tmp_path):
         assert kwargs["debug_label"] == "dream-fact-synthesis"
         return {
             "facts": [
-                {
-                    "memory_scope": "An independent observation.",
-                    "member_claim_aliases": [f"C{i:03d}"],
-                    "state": "current",
-                    "section_key": "preferences_working_style",
-                    "text": None,
-                    "confidence": 1.0,
-                    "reason": "Canonical singleton.",
-                }
+                {'memory_scope': 'An independent observation.', 'member_claim_aliases': [f'C{i:03d}'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}
                 for i, c in enumerate(incoming, 1)
             ]
         }

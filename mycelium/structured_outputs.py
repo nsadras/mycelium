@@ -194,10 +194,16 @@ def fact_truth_output_model(
         )
         scope_fields["scope"] = (scope_model, ...)
     for alias in incoming:
+        # Inherited Pydantic fields precede new fields. Assemble the branch fields
+        # explicitly so the model establishes scope before emitting its verdict.
         no_change = create_model(
             f"{alias}FactTruthNoChange",
-            __base__=FactTruthNoChangeOutput,
+            __config__=ConfigDict(extra="forbid"),
             **scope_fields,
+            **{
+                name: (field.annotation, field)
+                for name, field in FactTruthNoChangeOutput.model_fields.items()
+            },
         )
         if not targets:
             decision_fields[alias] = (no_change, ...)
@@ -205,8 +211,13 @@ def fact_truth_output_model(
         target_type = Literal.__getitem__(targets)
         truth_change = create_model(
             f"{alias}FactTruthChange",
-            __base__=FactTruthChangeOutput,
+            __config__=ConfigDict(extra="forbid"),
             **scope_fields,
+            **{
+                name: (field.annotation, field)
+                for name, field in FactTruthChangeOutput.model_fields.items()
+                if name != "target_claim_aliases"
+            },
             target_claim_aliases=(
                 list[target_type],  # type: ignore[valid-type]
                 Field(min_length=1, max_length=len(targets)),
@@ -307,10 +318,17 @@ def fact_synthesis_output_model(
         ),
         state=(Literal["current", "history"], ...),
         section_key=(section_type, ...),
-        text=(str, Field(min_length=1, max_length=1000)),
+        text=(str | None, Field(max_length=1000)),
         confidence=(float, Field(ge=0.0, le=1.0)),
         reason=(str, Field(min_length=1, max_length=800)),
     )
+    singleton = create_model("CanonicalSingleton", __base__=fact,
+        member_claim_aliases=(list[alias_type], Field(min_length=1, max_length=1)),
+        text=(type(None), None))
+    combined = create_model("CombinedMemory", __base__=fact,
+        member_claim_aliases=(list[alias_type], Field(min_length=2, max_length=len(claim_texts))),
+        text=(str, Field(min_length=1, max_length=1000)))
+    fact = singleton if len(claim_texts) == 1 else Union[singleton, combined]
     base = create_model(
         "FactSynthesis",
         __config__=ConfigDict(extra="forbid"),
@@ -334,11 +352,10 @@ def fact_synthesis_output_model(
                 )
             for fact in self.facts:
                 members = fact.member_claim_aliases
-                if len(members) == 1 and fact.text != claim_texts[members[0]]:
-                    raise ValueError(
-                        f"Singleton {members[0]} must copy the canonical claim text exactly: "
-                        f"{claim_texts[members[0]]!r}"
-                    )
+                if len(members) == 1 and fact.text is not None:
+                    raise ValueError("Singleton text is rendered by the application; return null")
+                if len(members) > 1 and not fact.text:
+                    raise ValueError("Multi-claim groups require synthesized text")
                 for change in truth_changes:
                     if set(members) & set(change["incoming_claim_aliases"]) and set(
                         members

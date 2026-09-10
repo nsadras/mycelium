@@ -8,7 +8,7 @@ from mycelium.structured_outputs import fact_synthesis_output_model
 
 def synthesis_plan():
     return {"facts": [
-                {"memory_scope": text, "member_claim_aliases": [key], "section_key": "profile", "state": "current", "text": text,
+                {"memory_scope": text, "member_claim_aliases": [key], "section_key": "profile", "state": "current", "text": None,
                  "confidence": 0.9, "reason": "Canonical statement."}
                 for key, text in [("C001", "Ava prefers tea."), ("C002", "Ava grows herbs.")]
             ]}
@@ -36,7 +36,7 @@ def test_synthesis_requires_complete_grounded_projection(damage):
     elif damage == "wrong_section":
         response["facts"][0]["section_key"] = "invented"
     elif damage == "cross_group_text":
-        response["facts"][0]["text"] = response["facts"][1]["text"]
+        response["facts"][0]["text"] = "Ava grows herbs."
     else:
         response["facts"][0]["text"] = "Ava prefers coffee."
     with pytest.raises(ValidationError):
@@ -53,3 +53,18 @@ def test_synthesis_keeps_review_required_sides_separate():
     response["facts"] = [{**response["facts"][0], "member_claim_aliases": ["C001", "C002"]}]
     with pytest.raises(ValidationError):
         schema.model_validate(response)
+
+
+@pytest.mark.parametrize("count", [1, 2, 5])
+def test_synthesis_schema_has_feasible_array_bounds(count):
+    schema = fact_synthesis_output_model({f"C{i:03d}": f"Assertion {i}." for i in range(count)}, ["profile"])
+    def check(value):
+        if isinstance(value, dict):
+            if "minItems" in value and "maxItems" in value:
+                assert value["minItems"] <= value["maxItems"]
+            for child in value.values():
+                check(child)
+        elif isinstance(value, list):
+            for child in value:
+                check(child)
+    check(schema.model_json_schema())

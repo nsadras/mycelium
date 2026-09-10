@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import re
 import time
 import hashlib
@@ -36,8 +38,37 @@ async def run_locomo(
         samples = samples[:max_samples]
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "run_manifest.json"
+    config_path = getattr(system, "config_path", None)
+    settings = {
+        "dataset_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
+        "system": system.name, "prediction_key": prediction_key,
+        "max_samples": max_samples, "max_questions": max_questions,
+        "max_sessions": max_sessions, "questions_per_category": questions_per_category,
+        "sample_index": sample_index,
+        "qa_model": getattr(getattr(system, "qa_client", None), "model", None),
+        **{key: str(getattr(system, key, None)) for key in (
+            "memory_model", "context_budget_tokens", "dream_policy", "memory_profile",
+            "replay_store", "frozen_store", "replay_assignments",
+        )},
+        "config_sha256": hashlib.sha256(Path(config_path).read_bytes()).hexdigest()
+            if config_path else None,
+    }
+    manifest = read_json_if_exists(manifest_path, default=None)
+    if manifest is not None and manifest["settings"] != settings:
+        raise ValueError("Run settings differ from the checkpoint; use a fresh output directory")
+    if manifest is None:
+        if (output_dir / "predictions.json").exists():
+            raise ValueError("Existing predictions have no run manifest; use a fresh output directory")
+        manifest = {"settings": settings, "status": "running"}
+    manifest["status"] = "running"
+    write_json(manifest_path, manifest)
+    checkpoint_dir = output_dir / "questions"
+    checkpoint_dir.mkdir(exist_ok=True)
+    checkpoints = [json.loads(path.read_text()) for path in sorted(checkpoint_dir.glob("*.json"))]
+    completed_questions = {(row["sample_id"], row["question_index"]): row for row in checkpoints}
     predictions = read_json_if_exists(output_dir / "predictions.json", default=[])
-    flat_rows = read_jsonl_if_exists(output_dir / "predictions.jsonl")
+    flat_rows = checkpoints.copy()
     completed_sample_ids = {str(sample.get("sample_id")) for sample in predictions}
     started = time.perf_counter()
 
@@ -109,6 +140,12 @@ async def run_locomo(
             }
             if system.name == "gold_evidence":
                 answer_metadata["gold_evidence"] = qa.get("evidence") or []
+            prior = completed_questions.get((sample_id, question_index))
+            if prior is not None:
+                qa[prediction_key] = prior["prediction"]
+                qa[f"{prediction_key}_score"] = round(prior["score"], 4)
+                qa[f"{prediction_key}_metadata"] = prior["metadata"]
+                continue
             answer = await system.answer(
                 question,
                 answer_metadata,
@@ -138,6 +175,13 @@ async def run_locomo(
                 }
             )
 
+            row = flat_rows[-1]
+            checkpoint_id = hashlib.sha256(f"{sample_id}:{question_index}".encode()).hexdigest()
+            write_json(checkpoint_dir / f"{checkpoint_id}.json", row)
+            completed_questions[(sample_id, question_index)] = row
+            manifest.update(sample_id=sample_id, phase="qa", completed_questions=len(completed_questions))
+            write_json(manifest_path, manifest)
+
         predictions.append(output_sample)
         completed_sample_ids.add(sample_id)
         write_json(output_dir / "predictions.json", predictions)
@@ -151,6 +195,8 @@ async def run_locomo(
     write_json(output_dir / "predictions.json", predictions)
     write_jsonl(output_dir / "predictions.jsonl", flat_rows)
     write_json(output_dir / "summary.json", summary)
+    manifest.update(status="complete", completed_questions=len(completed_questions))
+    write_json(manifest_path, manifest)
     return summary
 
 
@@ -415,15 +461,32 @@ def mean(values: Any) -> float:
 
 def write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _atomic_text(path, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
-        encoding="utf-8",
-    )
+    _atomic_text(path, "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+
+
+def _atomic_text(path: Path, text: str) -> None:
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=".checkpoint-", delete=False) as stream:
+            temporary = stream.name
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def read_json_if_exists(path: Path, default: Any) -> Any:

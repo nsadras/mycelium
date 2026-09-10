@@ -785,7 +785,9 @@ async def test_encoder_batches_large_initial_extractions(tmp_path):
     ]
 
     async def response(system, user, output_type, **kwargs):
-        segment_ids = [part.split("]", 1)[0] for part in user.split("[")[1:]]
+        from typing import get_args
+        item_type = get_args(output_type.model_fields["source_only"].annotation)[0]
+        segment_ids = list(get_args(item_type.model_fields["segment_id"].annotation))
         assert len(segment_ids) <= 48
         return extraction_response([], segment_ids)
 
@@ -1207,3 +1209,15 @@ async def test_ingestion_key_rejects_different_input(tmp_path):
         await capture_and_extract(encoder,
             "Different transcript", "session-1", idempotency_key="stable-key"
         )
+
+
+def test_cached_json_returns_independent_values_and_observes_in_place_edits(tmp_path):
+    import json
+    from mycelium.artifacts import ArtifactStore
+    path = tmp_path / "record.json"
+    path.write_text('{"values": [1]}')
+    first = ArtifactStore._read(path)
+    first["values"].append(2)
+    assert ArtifactStore._read(path) == {"values": [1]}
+    path.write_text(json.dumps({"values": [3, 4]}))
+    assert ArtifactStore._read(path) == {"values": [3, 4]}

@@ -45,23 +45,15 @@ def test_one_budget_bounds_system_recent_transcript_and_memory():
     assert fitted_request == "What is the current Orchid decision?"
 
 
-def test_prompt_budget_accepts_an_oversized_current_message():
-    current = "discarded beginning " * 200 + "essential final request"
-    budget = 400
-
-    messages, selected_evidence, fitted_request = build_chat_prompt(
-        {"transcript": []},
-        current,
-        MemoryEvidence(),
-        budget_tokens=budget,
-        workspace_search_limit=3,
-        workspace_evidence_budget_tokens=6000,
-    )
-
-    assert count_message_tokens(messages) <= budget
-    assert selected_evidence.records == ()
-    assert fitted_request.endswith("essential final request")
-    assert fitted_request != current
+def test_prompt_budget_rejects_oversized_request_without_silent_truncation():
+    import pytest
+    from mycelium.budget import ContextBudgetError
+    with pytest.raises(ContextBudgetError, match="shorten or split"):
+        build_chat_prompt(
+            {"transcript": []}, "long request " * 500, MemoryEvidence(),
+            budget_tokens=400, workspace_search_limit=3,
+            workspace_evidence_budget_tokens=6000,
+        )
 
 
 def test_prompt_budget_can_drop_memory_that_does_not_fit_after_recent_thread():
@@ -113,3 +105,19 @@ def test_prompt_fits_individual_unowned_and_same_subject_records():
     assert count_message_tokens(messages) <= 650
     assert "claim-large" not in messages[-1]["content"]
     assert "claim-unowned" in messages[-1]["content"]
+
+
+def test_current_request_is_rendered_once_and_history_is_complete_turns():
+    current = "Please find the final delivery date."
+    record = {"transcript": [message for i in range(10) for message in (
+        {"role": "user", "content": f"Question {i} " * 20},
+        {"role": "assistant", "content": f"Answer {i} " * 20},
+    )]}
+    messages, _, request = build_chat_prompt(record, current, MemoryEvidence(), budget_tokens=700,
+                                            workspace_search_limit=3, workspace_evidence_budget_tokens=200)
+    assert request == current
+    assert messages[-1]["content"].count(current) == 1
+    history = messages[1:-1]
+    assert len(history) % 2 == 0
+    assert all(history[i]["role"] == "user" and history[i+1]["role"] == "assistant"
+               for i in range(0, len(history), 2))

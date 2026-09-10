@@ -906,3 +906,30 @@ async def test_assignment_replay_preserves_routes_and_rebuilds_pages(tmp_path):
     assert system.mem.wiki.get("jon").page_type == "person"
     assert system.mem.log_store.get(source.raw_log_entry_id).consolidated is True
     assert system.stats()["dream_runs"] == 0
+
+
+@pytest.mark.asyncio
+async def test_locomo_resumes_each_durable_question_and_rejects_changed_settings(tmp_path):
+    samples = json.loads(Path("tests/fixtures/locomo_tiny.json").read_text())
+    samples[0]["qa"] *= 3
+    data = tmp_path / "data.json"
+    data.write_text(json.dumps(samples))
+    output = tmp_path / "run"
+    class Interrupted(FakeMemorySystem):
+        calls = 0
+        async def answer(self, question, metadata=None):
+            self.calls += 1
+            if self.calls == 2:
+                raise TimeoutError("interrupted inference")
+            return await super().answer(question, metadata)
+    with pytest.raises(TimeoutError):
+        await run_locomo(data_path=data, output_dir=output, system=Interrupted(), prediction_key="answer")
+    assert len(list((output / "questions").glob("*.json"))) == 1
+    system = FakeMemorySystem()
+    system.answer = AsyncMock(wraps=system.answer)
+    result = await run_locomo(data_path=data, output_dir=output, system=system, prediction_key="answer")
+    assert result["count"] == 3
+    assert system.answer.await_count == 2
+    assert json.loads((output / "run_manifest.json").read_text())["status"] == "complete"
+    with pytest.raises(ValueError, match="settings differ"):
+        await run_locomo(data_path=data, output_dir=output, system=system, prediction_key="answer", max_questions=1)

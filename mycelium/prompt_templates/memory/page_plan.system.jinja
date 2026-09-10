@@ -1,33 +1,18 @@
-For each page, first describe the cited evidence about THAT page's subject in subject_evidence.
-Then classify relevance as describes_subject, substantive_relationship, or incidental_or_unrelated.
-A statement about one person is not evidence about a different person who heard it or an unrelated possession.
-If no assertion describes this subject or its substantive relationship, say so and select not_selected.
-Only describes_subject and substantive_relationship permit a selected section. Do not repeat the claim as
-justification unless you explain which property, participation, or relationship it establishes for this subject.
-Return the full pages grid for every claim, even when deferring. Choose route_kind="general" when any page is
-selected; then owner_entity must be one selected ID. Only when every page is not_selected choose
-route_kind="deferred" and owner_entity="". Do not defer a claim whose subject has a useful supplied page.
+Place each canonical assertion on the pages of the subjects it describes. The registry maps exact page IDs
+to subjects and available sections. Identity decisions resolve referents; canonical assertions supply meaning.
 
-Choose useful wiki placements for every supplied canonical statement. A statement is stored once,
-but may appear on multiple pages with the same source evidence. Return every claim alias exactly once.
+Return a sparse pages mapping containing the relevant destinations for each claim. For each destination:
+1. In subject_evidence, identify the page subject and the property, action, experience, or relationship that
+   the assertion establishes about them. Use cited context to resolve participation and ownership.
+2. Choose relevance describes_subject for a property, action, experience, or state of that subject, or
+   substantive_relationship for their actual participation in a relationship or joint activity.
+3. Choose the single section that best fits the assertion from that page's available sections.
 
-For a general route, choose the pages whose subject is meaningfully described by the statement.
-A substantive relationship can update the records of multiple subjects. Include each such page,
-not just the grammatical subject or one primary owner. Do not place a statement on every mentioned
-subject: incidental attribution, setting, or passing mentions do not by themselves justify placement.
-Return pages as an object with one entry for every supplied eligible entity ID. Independently choose either
-one allowed section with a reason why the statement matters to that subject, or section_key="not_selected"
-with a reason for excluding that page. Each entry includes subject_evidence, relevance, section_key, and reason.
-When several sections on a page fit, select the single best home for the statement on that page;
-do not repeat the page or put the statement into multiple sections of it. Different subject pages may each
-receive the same canonical statement, with a section appropriate to each subject.
-Decide all useful destinations first, independently for each substantively described subject. A relationship
-can establish something about each endpoint; do not stop after finding one good destination.
-Then select owner_entity from those destinations as the primary synthesis grouping, not as an exclusive
-right to display the statement. Do not duplicate or rewrite the underlying statement here.
+A conversation shares information with listeners; page membership records the subjects described by that information.
+With useful destinations, set route_kind="general" and owner_entity to the main described subject among selected pages.
+With no useful eligible destination, return pages={}, route_kind="deferred", and owner_entity="".
+A known provisional identity is eligible for its first useful page. Return canonical claim aliases unchanged.
 
-All resolved identities are eligible, including identities that have no page yet. A useful placement
-creates the page; identifying a subject without placing any statements does not create an empty page.
-Use deferred only when no supplied identity is a reliable, useful destination. Do not invent identities,
-IDs, claims, or sections. Preserve explicit identity decisions. External tool observations are research
-about their subjects, not personal assertions about the configured user.
+For each assertion, identify all of its described subjects before selecting the owner. A relationship or joint
+activity establishes information about each participating endpoint: include every eligible endpoint page that
+it describes. The owner is a primary destination within this complete set; it does not limit the set.

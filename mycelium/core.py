@@ -58,6 +58,7 @@ class Mycelium:
             temperature=self.config.llm.temperature,
             timeout=self.config.llm.timeout_seconds,
             context_window_tokens=self.config.llm.context_window_tokens,
+            trace_path=self.store_path / "diagnostics" / "llm-calls.jsonl",
         )
         self.encoder = Encoder(self.llm, self._log_store, self.config, self.artifacts)
         self.short_term_memory = ShortTermMemoryQueue(self.artifacts)
@@ -80,6 +81,7 @@ class Mycelium:
                     self.config.llm.url,
                     self.config.retrieval.embedding_model,
                     timeout=self.config.llm.timeout_seconds,
+                    trace_path=self.store_path / "diagnostics" / "embedding-calls.jsonl",
                 ),
                 candidate_limit=self.config.retrieval.candidate_limit,
             ),

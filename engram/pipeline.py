@@ -41,9 +41,11 @@ class EngramService:
                 model=self.config.ollama_model,
                 temperature=self.config.summary_temperature,
                 context_window_tokens=self.config.summary_context_window_tokens,
+                trace_path=self.config.store_path / "diagnostics" / "llm-calls.jsonl",
             )
         )
         self._processing_tasks: dict[str, asyncio.Task[Meeting]] = {}
+        self._processing_lock = asyncio.Lock()
 
     def start_processing(self, meeting_id: str) -> asyncio.Task[Meeting]:
         existing = self._processing_tasks.get(meeting_id)
@@ -74,6 +76,11 @@ class EngramService:
         return recovered
 
     async def process_meeting(self, meeting_id: str) -> Meeting:
+        # Speech models share the same device; bound their lifetime to one job.
+        async with self._processing_lock:
+            return await self._process_meeting(meeting_id)
+
+    async def _process_meeting(self, meeting_id: str) -> Meeting:
         meeting = self.store.get_meeting(meeting_id)
         if meeting.status not in {"ready", "processing", "transcribing", "failed"}:
             return meeting
@@ -85,8 +92,7 @@ class EngramService:
 
         try:
             transcribed = await asyncio.to_thread(
-                self.transcriber_factory().transcribe_audio,
-                meeting.audio_path,
+                lambda: self.transcriber_factory().transcribe_audio(meeting.audio_path),
             )
             transcript_segments = [
                 TranscriptSegment(

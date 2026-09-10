@@ -1,42 +1,26 @@
-For each display fact, first name its memory_scope: the particular occurrence, object property, relationship,
-or state whose compatible details belong together. Then choose members and write the text. A person's broad
-interest is not a single occurrence encompassing all activities in that interest. Different accomplishments,
-encounters, intentions, and continuing preferences remain independently readable memories even when related.
-Existing groups may be split: reconsider every supplied member from its canonical evidence, not the old sentence's
-boundaries. Merge repeated support for the same assertion without repeating its wording. Keep complementary
-details of one occurrence together, but split independent propositions into separate facts instead of making a
-long catalogue sentence. Never drop detail to achieve brevity. Preserve every claim exactly once.
-Source times anchor relative expressions; do not treat the reporting date as an event date.
-memory_scope must identify the concrete memory, not merely label it "occurrence" or "preference". For completed
-occurrences classified past in the canonical records, use state="history" as well as the appropriate section.
+Create readable memory facts for the supplied subject from canonical assertions. Preserve every assertion's
+substantive meaning and assign each supplied claim alias to exactly one fact.
 
-Organize canonical stored statements into concise, source-grounded wiki display facts for one subject.
+For each fact, choose memory_scope first: identify the specific occurrence, particular object property, relationship,
+or ongoing state this fact explains. Identify the shared referent before its attributes. For assertions about one specific event, use that event as
+the scope and combine its complementary attributes, even when their predicates differ.
+For a plan or habit, identify its particular action and object as the scope. For a preference, identify the
+specific preference being stated. For an event, identify one occurrence. A fact represents one such memory
+with its supporting details. Repeated support for one assertion belongs together. Complementary details of one occurrence belong together.
+Different occurrences and independently useful commitments receive separate facts, even when they share a person,
+interest, conversation, or section. Use as many facts as the distinct memories require.
 
-Return a facts list. Each fact declares its member_claim_aliases, section, state, text, confidence, and reason.
-Every supplied claim alias must appear in exactly one fact's members. Do not invent fact IDs or repeat assignments.
-Group equivalent assertions or compatible details of the same memory; keep distinct events, preferences, and states
-separate. Sharing a subject or topic alone is not enough to combine statements. Preserve every member's substantive
-detail, including uncertainty, negation, quantities, reasons, dates, and whether something is considered or committed.
-Do not turn a possibility into a plan, an intention into an outcome, or separate observations into a causal story.
+Choose members before writing text. Write one clear sentence for their shared memory, retaining names, timing,
+location, quantities, direction, reasons, attribution, uncertainty, and commitment level. Each clause needs support
+from that fact's members. For a singleton, return text=null; the application copies its canonical text exactly. For equivalent assertions, express the
+meaning once. Preserve substantive detail by separating memories into additional facts when needed.
 
-Decide membership before writing sentences. Complementary attributes of the same event, object, or state belong
-together when one faithful sentence can retain every detail. Independent evidence for the same state accumulates
-in that same display memory. Do not default to one group per input statement. Compatible details may be joined as
-coordinate clauses; combining them does not require claiming causation or making a stronger inference.
+Read existing display groups as previous presentation choices. Re-evaluate their member boundaries using the
+canonical assertions. Reviewed corrections in canonical text take precedence over older display wording.
+Keep the two sides of review-required changes in separate ordinary groups for the review workflow.
 
-For a singleton group, copy its canonical claim text exactly. For equivalent statements, prefer one complete canonical
-wording; for complementary details, write a concise sentence supported entirely by that group's members. No detail
-may come from another group's statements. Existing display facts guide continuity, not evidence or new truth.
-Reviewed corrections in the canonical claims are authoritative; do not restore different wording from raw sources.
+Choose an allowed section. Set state="history" for completed occurrences and ended states, and "current" for
+ongoing states, future plans, recurring habits, and timeless knowledge. Source timestamps anchor relative words;
+use an explicit temporal record when available. Preserve temporal limits in the sentence.
 
-Keep the incoming and target sides of supplied review-required truth changes in distinct groups. Do not settle them,
-discard either side, or declare an accepted truth superseded. Truth review and statement mutation happen elsewhere.
-The review UI presents disagreements separately. Do not add an extra conflict-summary group, repeat either side's
-members, or write meta-statements about the claims. Each canonical statement belongs to one ordinary display group.
-Choose one supplied section per fact. Use history for explicitly completed/past knowledge, otherwise current for
-current, future, recurring, or timeless knowledge. Preserve the original temporal scope in the text.
-
-Canonical claim text and its structured temporal record are the evidence for this presentation, not the raw transcript.
-A resolved calendar date may clarify relative wording in a multi-claim synthesis; an unresolved relative expression
-remains supported as stated. Unknown temporal classification does not cancel tense in the canonical text.
-Linked identities supply navigation context only; their presence is not evidence for additional assertions.
+Return facts with concrete memory_scope, member_claim_aliases, state, section_key, text, confidence, and reason.

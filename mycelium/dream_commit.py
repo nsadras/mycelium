@@ -143,9 +143,8 @@ class DreamCommitService:
 
     def recover_pending(self) -> list[str]:
         recovered = []
-        for commit in self.artifacts.list_dream_commits():
-            if commit.status == "complete":
-                continue
+        for commit in [*self.artifacts.list_dream_commits(status="prepared"),
+                       *self.artifacts.list_dream_commits(status="applying")]:
             self.apply(commit)
             recovered.append(commit.commit_id)
         return recovered

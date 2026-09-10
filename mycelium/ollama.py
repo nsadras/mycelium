@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 from httpx import TimeoutException
 from ollama import AsyncClient, RequestError, ResponseError, web_fetch, web_search
 from pydantic import BaseModel, ValidationError
+from ollama._utils import convert_function_to_tool
+from mycelium.budget import require_request_budget
 
 logger = logging.getLogger(__name__)
 LLM_DEBUG_DIR_ENV = "MYCELIUM_LLM_DEBUG_DIR"
@@ -71,6 +73,7 @@ class OllamaClient:
         temperature: float = 0.1,
         timeout: int = 120,
         context_window_tokens: int = 32768,
+        trace_path: Path | None = None,
     ) -> None:
         load_dotenv()
         self.url = url.rstrip('/')
@@ -78,6 +81,7 @@ class OllamaClient:
         self.temperature = temperature
         self.timeout = timeout
         self.context_window_tokens = context_window_tokens
+        self.trace_path = trace_path
         self.client = AsyncClient(host=self.url, timeout=self.timeout)
         self._call_log: deque[dict[str, Any]] = deque(maxlen=LLM_CALL_LOG_LIMIT)
 
@@ -137,7 +141,7 @@ class OllamaClient:
         """
         call_id = str(uuid.uuid4())[:8]
         temp = temperature if temperature is not None else self.temperature
-        options = {"temperature": temp}
+        options = {"temperature": temp, "num_ctx": self.context_window_tokens, "num_predict": 4096}
         if num_ctx is not None:
             options["num_ctx"] = num_ctx
         if num_predict is not None:
@@ -177,6 +181,13 @@ class OllamaClient:
                     ),
                     replacement_context_content=replacement_context_content,
                 )
+                metadata = dict(metadata)
+                for key in ("total_duration", "load_duration", "prompt_eval_count",
+                            "prompt_eval_duration", "eval_count", "eval_duration"):
+                    values = [step.metadata[key] for step in execution_trace if key in step.metadata]
+                    if values:
+                        metadata[key] = sum(values)
+                metadata["inference_rounds"] = len(execution_trace)
                 latency_ms = int((time.time() - start_time) * 1000)
                 self._log_call(
                     call_id,
@@ -206,7 +217,10 @@ class OllamaClient:
                     latency_ms,
                     False,
                 )
-                if attempt == max_retries - 1:
+                if attempt == max_retries - 1 or (
+                    isinstance(e, ResponseError) and e.status_code is not None
+                    and 400 <= e.status_code < 500 and e.status_code not in {408, 429}
+                ):
                     raise
 
         raise ValueError("Failed to get chat response from Ollama")
@@ -238,20 +252,34 @@ class OllamaClient:
             if enable_tools and tool_definitions is not None
             else [web_search, web_fetch] if enable_tools else None
         )
+        tools = [convert_function_to_tool(t).model_dump(exclude_none=True)
+                 if callable(t) else t for t in tools] if tools else None
         think_enabled = think if think is not None else bool(enable_tools)
         current_result_message_by_key: dict[str, int] = {}
         context_replaced = False
         for round_idx in range(max_tool_rounds + 1):
-            response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
-                model=self.model,
-                messages=messages,
-                tools=tools,
-                think=think_enabled,
-                stream=False,
-                format=None,
-                options=options,
-            )
+            require_request_budget(messages, context_window=options["num_ctx"],
+                                   output_tokens=options["num_predict"], tools=tools)
+            round_started = time.monotonic()
+            try:
+                response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
+                    model=self.model,
+                    messages=messages,
+                    tools=tools,
+                    think=think_enabled,
+                    stream=False,
+                    format=None,
+                    options=options,
+                )
+            except (RequestError, ResponseError, TimeoutException):
+                self._log_call(call_id, attempt_index, "", "", "",
+                               int((time.monotonic() - round_started) * 1000), False,
+                               stage=f"chat-round-{round_idx + 1}")
+                raise
             metadata = self._response_metadata(response)
+            self._log_call(call_id, attempt_index, "", "", "",
+                           int((time.monotonic() - round_started) * 1000), True, metadata,
+                           stage=f"chat-round-{round_idx + 1}")
             assistant_message = self._assistant_message_dict(response)
             content = assistant_message.get("content", "").strip()
             tool_calls = assistant_message.get("tool_calls", [])
@@ -531,6 +559,8 @@ class OllamaClient:
         ]
 
         for attempt in range(max_retries):
+            require_request_budget(messages, context_window=self.context_window_tokens,
+                                   output_tokens=num_predict, schema=output_format)
             start_time = time.time()
             self._log_request(
                 call_id=call_id,
@@ -558,7 +588,7 @@ class OllamaClient:
 
                 try:
                     parsed = self._parse_structured_response(content, response_model)
-                    self._log_call(call_id, attempt + 1, system, user, content, latency_ms, True, metadata)
+                    self._log_call(call_id, attempt + 1, system, user, content, latency_ms, True, metadata, stage=debug_label or "structured")
                     if dump_success:
                         self._dump_structured_success(
                             call_id=call_id,
@@ -577,7 +607,7 @@ class OllamaClient:
                         )
                     return parsed
                 except (json.JSONDecodeError, ValidationError, ValueError) as parse_exc:
-                    self._log_call(call_id, attempt + 1, system, user, content, latency_ms, False, metadata)
+                    self._log_call(call_id, attempt + 1, system, user, content, latency_ms, False, metadata, stage=debug_label or "structured")
                     debug_dump_path = self._dump_structured_failure(
                         call_id=call_id,
                         attempt=attempt + 1,
@@ -623,8 +653,11 @@ class OllamaClient:
 
             except (RequestError, ResponseError, TimeoutException) as e:
                 latency_ms = int((time.time() - start_time) * 1000)
-                self._log_call(call_id, attempt + 1, system, user, str(e), latency_ms, False)
-                if attempt == max_retries - 1:
+                self._log_call(call_id, attempt + 1, system, user, str(e), latency_ms, False, stage=debug_label or "structured")
+                if attempt == max_retries - 1 or (
+                    isinstance(e, ResponseError) and e.status_code is not None
+                    and 400 <= e.status_code < 500 and e.status_code not in {408, 429}
+                ):
                     raise
 
         raise ValueError("Failed to get structured response from Ollama")
@@ -784,9 +817,13 @@ class OllamaClient:
         latency_ms: int,
         success: bool,
         metadata: dict[str, Any] | None = None,
+        *,
+        stage: str | None = None,
     ) -> None:
         entry = {
             "timestamp": time.time(),
+            "stage": stage or "chat",
+            "model": self.model,
             "call_id": call_id,
             "attempt": attempt,
             "system_chars": len(system),
@@ -796,5 +833,15 @@ class OllamaClient:
             "success": success,
             "metadata": metadata or {},
         }
-        self._call_log.append(entry)
+        # The UI keeps operation summaries; the durable trace counts actual inference attempts.
+        if not (stage or "").startswith("chat-round-"):
+            self._call_log.append(entry)
+        if self.trace_path is not None and stage is not None:
+            try:
+                self.trace_path.parent.mkdir(parents=True, exist_ok=True)
+                with self.trace_path.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            except OSError:
+                # Diagnostic I/O must not discard a completed model response.
+                logger.warning("Could not persist LLM timing record", exc_info=True)
         logger.info("LLM response %s", json.dumps(entry, ensure_ascii=False))

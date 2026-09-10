@@ -7,6 +7,8 @@ import os
 import re
 import tempfile
 import uuid
+from functools import lru_cache
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -59,9 +61,16 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
             os.unlink(temp_name)
 
 
+@lru_cache(maxsize=256)
+def _cached_json(path: Path, revision: tuple[int, int, int]) -> dict[str, Any]:
+    with path.open(encoding="utf-8") as stream:
+        return json.load(stream)
+
+
 class ArtifactStore:
     def __init__(self, root: Path):
         self.root = root
+        self._lookup_indexes = {}
         self.sources_dir = root / "sources"
         self.episodes_dir = root / "episodes"
         self.claims_dir = root / "claims"
@@ -389,7 +398,7 @@ class ArtifactStore:
     ) -> list[ClaimEntityReference]:
         values = [
             self.get_entity_reference(path.stem)
-            for path in sorted(self.entity_references_dir.glob("*.json"))
+            for path in self._lookup_paths(self.entity_references_dir, "claim_id" if claim_id is not None else "entity_id", claim_id if claim_id is not None else entity_id)
         ]
         return [
             item for item in values
@@ -507,7 +516,7 @@ class ArtifactStore:
     ) -> list[ConsolidatedFact]:
         values = [
             self.get_consolidated_fact(path.stem)
-            for path in sorted(self.consolidated_facts_dir.glob("*.json"))
+            for path in self._lookup_paths(self.consolidated_facts_dir, "owner_entity_id", owner_entity_id)
         ]
         return [
             item for item in values
@@ -516,8 +525,8 @@ class ArtifactStore:
 
     def facts_for_claim(self, claim_id: str) -> list[ConsolidatedFact]:
         return [
-            fact for fact in self.list_consolidated_facts()
-            if claim_id in fact.member_claim_ids
+            self.get_consolidated_fact(path.stem)
+            for path in self._lookup_paths(self.consolidated_facts_dir, "member_claim_ids", claim_id)
         ]
 
     def delete_consolidated_fact(self, fact_id: str) -> None:
@@ -571,7 +580,7 @@ class ArtifactStore:
     def list_dream_commits(self, *, status: str | None = None) -> list[DreamCommit]:
         commits = [
             self.get_dream_commit(path.stem)
-            for path in sorted(self.dream_commits_dir.glob("*.json"))
+            for path in self._lookup_paths(self.dream_commits_dir, "status", status)
         ]
         return [
             commit for commit in commits
@@ -842,9 +851,30 @@ class ArtifactStore:
 
         return coverage_report(self)
 
+    def _lookup_paths(self, directory: Path, field: str, value: str | None) -> list[Path]:
+        # File metadata also detects external in-place edits. Only exact schema IDs
+        # and states are indexed; the decoded cache never owns mutable artifacts.
+        paths = sorted(directory.glob("*.json"))
+        if value is None:
+            return paths
+        revision = tuple((path.name, path.stat().st_mtime_ns, path.stat().st_size) for path in paths)
+        key = (directory, field)
+        cached = self._lookup_indexes.get(key)
+        if cached is None or cached[0] != revision:
+            lookup = {}
+            for path in paths:
+                selected = self._read(path).get(field)
+                values = selected if isinstance(selected, list) else [selected]
+                for item in values:
+                    lookup.setdefault(item, []).append(path)
+            cached = (revision, lookup)
+            self._lookup_indexes[key] = cached
+        return cached[1].get(value, [])
+
     @staticmethod
     def _read(path: Path) -> dict[str, Any]:
-        if not path.exists():
-            raise FileNotFoundError(path)
-        with open(path, "r", encoding="utf-8") as handle:
-            return json.load(handle)
+        stat = path.stat()
+        if stat.st_size > 262144:
+            with path.open(encoding="utf-8") as stream:
+                return json.load(stream)
+        return deepcopy(_cached_json(path, (stat.st_mtime_ns, stat.st_size, stat.st_ino)))

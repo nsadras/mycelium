@@ -1,4 +1,5 @@
 from tests.test_cumulative_quality import scope_record
+import json
 from datetime import datetime
 from dataclasses import replace
 from unittest.mock import AsyncMock, Mock
@@ -106,20 +107,10 @@ def split_scope_plan(plan: dict, *, other_entities=()) -> list[dict]:
         for candidate in candidates
         if candidate["confidence"] < 0.7
     }
-    eligible = {"you", *other_entities} | {
-        stable(candidate["candidate_id"]) for candidate in candidates
-        if candidate["type_adjudication"] == "accepted"
-    } | {
-        stable(entity_id) for decision in assignments.values()
-        for entity_id in [decision.get("owner_entity", ""), *decision.get("linked_entities", [])]
-        if entity_id
-    }
-
     routing = {"decisions": {
         alias: (
             {"route_kind": "deferred", "owner_entity": "",
-             "pages": {eid: {"subject_evidence": "No relevant assertion.", "relevance": "incidental_or_unrelated",
-                             "section_key": "not_selected", "reason": "No useful destination."} for eid in eligible},
+             "pages": {},
              "confidence": decision["confidence"], "reason": decision["reason"]}
             if decision.get("disposition") != "canonical"
             or stable(decision.get("owner_entity", "")) in provisional_candidates
@@ -127,8 +118,7 @@ def split_scope_plan(plan: dict, *, other_entities=()) -> list[dict]:
                 "route_kind": "general",
                 "owner_entity": stable(decision["owner_entity"]),
                 "pages": {
-                    **{entity_id: {"subject_evidence": "Explicit fixture subject decision.", "relevance": "incidental_or_unrelated", "section_key": "not_selected", "reason": "Not a selected subject."}
-                       for entity_id in eligible},
+
                     **{target: {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": default_section(target.split("-")[0], "unknown", None),
                      "reason": decision["reason"]}
                     for target in dict.fromkeys([
@@ -336,7 +326,7 @@ def fact_resolution_plan(
         for alias in incoming_aliases
     ] + [{"facts": [{"memory_scope": "The fixture memory.",
         "member_claim_aliases": aliases, "state": "current",
-        "section_key": section, "text": text, "confidence": 0.9,
+        "section_key": section, "text": None if len(aliases) == 1 else text, "confidence": 0.9,
         "reason": "Source-grounded test resolution.",
     } for aliases, text, section in facts.values()]}]
 
@@ -346,6 +336,8 @@ def fact_resolution_plan(
         for response in responses:
             for decision in response.get("decisions", {}).values():
                 decision["scope"] = {target: scope_record() for target in targets}
+    else:
+        responses = [response for response in responses if "facts" in response]
     return responses
 
 
@@ -422,11 +414,11 @@ def test_claim_decision_batches_preserve_every_alias_once():
 
 
 @pytest.mark.parametrize("entity_count", [1, 2, 8, 16, 40])
-def test_routing_batches_bound_the_page_decision_grid(entity_count):
+def test_routing_batches_preserve_claims_without_a_page_matrix(entity_count):
     aliases = {f"C{i:03d}": object() for i in range(1, 30)}
     batches = list(ClaimRouter._alias_batches(aliases, entity_count=entity_count))
     assert [alias for batch in batches for alias in batch] == list(aliases)
-    assert all(len(batch) * entity_count <= max(32, entity_count) for batch in batches)
+    assert [len(batch) for batch in batches] == [24, 5]
     assert all(batch for batch in batches)
 
 
@@ -459,7 +451,7 @@ def test_claim_routing_contract_requires_exact_claims_and_registry_values():
     schema = page_plan_model(["C001", "C002"], {"you": "you", "project-cedar": "project"})
     decision = {"route_kind": "general", "owner_entity": "you",
                 "pages": {"you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "profile", "reason": "Personal fact."},
-                          "project-cedar": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "incidental_or_unrelated", "section_key": "not_selected", "reason": "Not about the project."}},
+                          },
                 "confidence": 0.9, "reason": "Useful placement."}
     valid = {"decisions": {"C001": decision, "C002": decision}}
     assert set(schema.model_validate(valid).decisions.model_dump()) == {"C001", "C002"}
@@ -635,19 +627,20 @@ def test_scope_evidence_preserves_extracted_roles_and_stable_references(tmp_path
         {"C001": ClaimEvidence(item, source)}, {}
     )
 
-    assert "'A relative'[role=subject]" in rendered
-    assert "'Recurring endeavor'[role=owner]" in rendered
-    assert "stable_entity_references=context:you" in rendered
-    assert "source_title=none" in rendered
-    assert f"[{source.segments[0].segment_id}]" in rendered
-    assert source.segments[0].content in rendered
+    payload = json.loads(rendered)
+    assert payload["claims"]["C001"]["about"] == item.about
+    assert payload["claims"]["C001"]["identity_references"] == [
+        {"role": "context", "entity_id": "you", "origin": "scope"}
+    ]
+    segment = payload["sources"][source.source_id]["segments"][source.segments[0].segment_id]
+    assert segment["text"] == source.segments[0].content
 
 
 def build_dream(tmp_path, *, llm_response: dict):
     wiki = WikiStore(tmp_path / "wiki")
     logs = LogStore(tmp_path / "logs")
     artifacts = ArtifactStore(tmp_path / "artifacts")
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     if "assignments" in llm_response:
         set_scope_response(llm, llm_response)
     else:

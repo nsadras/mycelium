@@ -412,3 +412,31 @@ def test_meeting_audio_api_returns_not_found_without_recording(tmp_path, monkeyp
 
     assert no_recording.status_code == 404
     assert missing_meeting.status_code == 404
+
+
+def test_diarizer_assigns_speakers_to_original_asr_without_transcribing(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from engram.diarize import WhisperXDiarizer
+    from engram.config import EngramConfig
+    from engram.models import TranscriptSegment
+    seen = {}
+    def assign(labels, transcript):
+        seen.update(transcript)
+        for segment in transcript["segments"]:
+            segment["speaker"] = "Speaker 1"
+        return transcript
+    monkeypatch.setitem(sys.modules, "whisperx", SimpleNamespace(
+        load_audio=lambda path: path, assign_word_speakers=assign,
+    ))
+    monkeypatch.setitem(sys.modules, "whisperx.diarize", SimpleNamespace(
+        DiarizationPipeline=lambda **kwargs: lambda audio: "labels",
+    ))
+    config = EngramConfig(whisper_device="cpu")
+    original = TranscriptSegment(id=None, meeting_id="meeting", segment_index=0,
+                                 start_seconds=1.5, end_seconds=3.0, text="The exact original wording.")
+    result = WhisperXDiarizer(config).diarize("audio.wav", [original])
+    assert result[0].text == original.text
+    assert result[0].start_seconds == original.start_seconds
+    assert result[0].end_seconds == original.end_seconds
+    assert result[0].speaker == "Speaker 1"

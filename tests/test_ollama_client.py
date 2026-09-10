@@ -188,7 +188,7 @@ async def test_call_messages_uses_explicit_message_history():
     assert fake_sdk.chat_calls[0]["messages"] == messages
     assert fake_sdk.chat_calls[0]["stream"] is False
     assert fake_sdk.chat_calls[0]["format"] is None
-    assert fake_sdk.chat_calls[0]["options"] == {"temperature": 0.3}
+    assert fake_sdk.chat_calls[0]["options"] == {"temperature": 0.3, "num_ctx": 32768, "num_predict": 4096}
     assert len(fake_sdk.chat_calls[0]["tools"]) == 2
     assert fake_sdk.chat_calls[0]["think"] is True
     assert fake_sdk.generate_calls == []
@@ -619,3 +619,89 @@ async def test_call_structured_final_error_preserves_contract_failure(monkeypatc
         await client.call_structured(
             "system prompt", "user prompt", AnswerOutput, max_retries=1
         )
+
+
+@pytest.mark.asyncio
+async def test_timing_trace_persists_attempts_and_stage_without_prompt_content(
+    tmp_path,
+):
+    class Result(BaseModel):
+        value: int
+
+    path = tmp_path / "diagnostics" / "llm-calls.jsonl"
+    client = OllamaClient(url="http://localhost:11434", model="test", trace_path=path)
+    client.client = SequencedFakeSdkClient(["{}", '{"value":2}'])
+    result = await client.call_structured(
+        "private system text",
+        "private source text",
+        Result,
+        debug_label="dream-fact-candidate-selection",
+    )
+    assert result == {"value": 2}
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [r["attempt"] for r in records] == [1, 2]
+    assert [r["success"] for r in records] == [False, True]
+    assert len({r["call_id"] for r in records}) == 1
+    assert all(r["stage"] == "dream-fact-candidate-selection" for r in records)
+    assert all(r["metadata"]["eval_count"] == 5 for r in records)
+    assert "private" not in path.read_text()
+    restarted = OllamaClient(
+        url="http://localhost:11434", model="test", trace_path=path
+    )
+    restarted._log_call("next", 1, "", "", "", 10, True, stage="dream-fact-truth")
+    assert len(path.read_text().splitlines()) == 3
+
+
+@pytest.mark.asyncio
+async def test_trace_write_failure_does_not_discard_model_result(tmp_path, caplog):
+    class Result(BaseModel):
+        value: int
+
+    blocked = tmp_path / "file"
+    blocked.write_text("not a directory")
+    client = OllamaClient(
+        url="http://localhost:11434", model="test", trace_path=blocked / "trace.jsonl"
+    )
+    client.client = FakeSdkClient('{"value":2}')
+    assert await client.call_structured("s", "u", Result) == {"value": 2}
+    assert "Could not persist LLM timing record" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_complete_request_budget_rejects_schema_before_inference():
+    from mycelium.budget import ContextBudgetError
+    client = OllamaClient("http://localhost:11434", "test", context_window_tokens=12000)
+    client.client = FakeSdkClient('{}')
+    with pytest.raises(ContextBudgetError):
+        await client.call_structured("s", "u", {"description": "large schema " * 10000})
+    assert client.client.chat_calls == []
+
+
+@pytest.mark.asyncio
+async def test_chat_trace_counts_actual_rounds_once(tmp_path):
+    path = tmp_path / "calls.jsonl"
+    client = OllamaClient("http://localhost:11434", "test", trace_path=path)
+    client.client = FakeSdkClient("hello", eval_count=12)
+    response = await client.call_messages([{"role": "user", "content": "question"}], enable_tools=False)
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["stage"] == "chat-round-1"
+    assert response.metadata["eval_count"] == 12
+    assert response.metadata["inference_rounds"] == 1
+    assert len(client._call_log) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("structured", [False, True])
+async def test_deterministic_bad_request_is_not_retried(structured):
+    from ollama import ResponseError
+    from unittest.mock import AsyncMock
+    client = OllamaClient("http://localhost:11434", "test")
+    client.client = AsyncMock()
+    client.client.chat.side_effect = ResponseError("invalid grammar", status_code=400)
+    with pytest.raises(ResponseError):
+        if structured:
+            await client.call_structured("s", "u", AnswerOutput)
+        else:
+            await client.call_messages([{"role": "user", "content": "u"}], enable_tools=False)
+    assert client.client.chat.await_count == 1

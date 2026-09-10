@@ -17,6 +17,8 @@ from mycelium.artifacts import (
     ReconsolidationProposal,
     temporal_record,
 )
+from mycelium.batching import structured_input_budget
+from mycelium.budget import request_tokens
 from mycelium.ollama import OllamaClient
 from mycelium.ontology import default_section, entity_type_definition
 from mycelium.projection import display_claim_text
@@ -372,6 +374,10 @@ class FactResolver:
                 if claim_id in alias_for_claim
                 and alias_for_claim[claim_id] not in reserved_target_aliases
             })
+            # Truth changes require an existing target. An empty target domain
+            # has no possible change to adjudicate; canonical synthesis can proceed.
+            if not target_aliases:
+                continue
             decision_aliases = {
                 alias: aliases[alias]
                 for alias in [incoming_alias, *target_aliases]
@@ -387,7 +393,7 @@ class FactResolver:
                 placements,
                 alias_for_entity,
                 entities,
-            ) if target_aliases else "none"
+            )
             decision_relations_text = self._relations_text(
                 owner_id,
                 {claim.claim_id: alias for alias, claim in decision_aliases.items()},
@@ -513,12 +519,16 @@ class FactResolver:
         }
         groups = []
         if canonical:
+            # Canonical members contain the evidence. Previous model-written
+            # display groups bias repartitioning toward their old boundaries.
+            # Only explicit manual presentation constraints belong in this input.
             presentation_existing = [
                 fact for fact in existing
-                if not set(fact.member_claim_ids) & (pending_incoming | preserved_member_ids)
+                if fact.manual_text
+                and not set(fact.member_claim_ids) & (pending_incoming | preserved_member_ids)
             ]
             system, user = prompts.fact_synthesis_prompt(
-                owner_text, json.dumps(canonical, ensure_ascii=False),
+                owner_text, json.dumps(canonical, ensure_ascii=False, indent=2),
                 self._existing_facts_text(presentation_existing, alias_for_claim), "[]",
                 "\n".join(f"{section.key}: {section.description}" for section in definition.sections),
             )
@@ -552,7 +562,8 @@ class FactResolver:
             manual = prior is not None and prior.manual_text
             output.facts.append(ConsolidatedFact(
                 fact_id=prior.fact_id if prior else f"fact-{uuid.uuid4().hex[:12]}",
-                text=prior.text if manual else group["text"],
+                text=(prior.text if manual else display_claim_text(members[0])
+                      if len(members) == 1 else group["text"]),
                 member_claim_ids=sorted(member_ids),
                 owner_entity_id=owner_id,
                 section_key=section,
@@ -588,62 +599,95 @@ class FactResolver:
         entities: dict[str, EntityRecord],
         chunk_size: int = 12,
     ) -> dict[str, set[str]]:
-        fact_aliases = {
-            fact.fact_id: f"X{index:03d}"
-            for index, fact in enumerate(existing, start=1)
-        }
-        selected: dict[str, set[str]] = {
-            claim.claim_id: set() for claim in incoming
-        }
-        for claim_index, claim in enumerate(incoming, start=1):
-            claim_alias = f"C{claim_index:03d}"
-            aliases = {claim_alias: claim}
-            linked_ids = sorted(
-                placements[claim.claim_id].linked_entity_ids
-            )
-            alias_for_entity = {
-                entity_id: f"E{index:03d}"
-                for index, entity_id in enumerate(linked_ids, start=1)
-            }
-            incoming_text = self._claims_text(
-                aliases, placements, alias_for_entity, entities
-            )
-            for start in range(0, len(existing), chunk_size):
-                chunk = existing[start:start + chunk_size]
-                aliases_for_chunk = {
-                    fact_aliases[fact.fact_id]: fact for fact in chunk
-                }
-                output_model = fact_candidate_selection_output_model(
-                    aliases,
-                    aliases_for_chunk,
-                )
-                prior_blocks = []
-                for alias, fact in aliases_for_chunk.items():
-                    members = [self._canonical_record(self.artifacts.get_claim(cid))
-                               for cid in fact.member_claim_ids]
-                    prior_blocks.append(
-                        f"[{alias}] state={fact.state}; section={fact.section_key}; "
-                        f"text={fact.text}; members={json.dumps(members, ensure_ascii=False)}"
+        """Compare complete claim/fact pairs once, sharing history across new claims."""
+        selected = {claim.claim_id: set() for claim in incoming}
+        if not incoming or not existing:
+            return selected
+        if chunk_size < 1:
+            raise ValueError("Candidate chunk size must be positive")
+        input_budget = structured_input_budget(self.llm.context_window_tokens, 2048)
+        fact_aliases = {f"X{i:03d}": fact for i, fact in enumerate(existing, 1)}
+        prior_blocks = {}
+        canonical = {}
+        for alias, fact in fact_aliases.items():
+            for claim_id in fact.member_claim_ids:
+                if claim_id not in canonical:
+                    canonical[claim_id] = self._canonical_record(
+                        self.artifacts.get_claim(claim_id)
                     )
-                prior_text = "\n".join(prior_blocks)
-                system, user = prompts.fact_candidate_selection_prompt(
-                    incoming_text,
-                    prior_text,
-                )
-                response = await self.llm.call_structured(
+            members = [canonical[claim_id] for claim_id in fact.member_claim_ids]
+            prior_blocks[alias] = (
+                f"[{alias}] state={fact.state}; section={fact.section_key}; "
+                f"text={fact.text}; members={json.dumps(members, ensure_ascii=False)}"
+            )
+
+        async def compare(claims, candidates):
+            linked_ids = sorted(
+                {
+                    eid
+                    for claim in claims.values()
+                    for eid in placements[claim.claim_id].linked_entity_ids
+                }
+            )
+            incoming_text = self._claims_text(
+                claims,
+                placements,
+                {eid: f"E{i:03d}" for i, eid in enumerate(linked_ids, 1)},
+                entities,
+            )
+            system, user = prompts.fact_candidate_selection_prompt(
+                incoming_text,
+                "\n".join(prior_blocks[alias] for alias in candidates),
+            )
+            schema = fact_candidate_selection_output_model(claims, candidates)
+            tokens = request_tokens(
+                [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                schema=schema.model_json_schema(),
+            )
+            if tokens > input_budget:
+                # Split exact input sets without dropping evidence or deciding relevance.
+                if len(candidates) > 1:
+                    pairs = list(candidates.items())
+                    middle = len(pairs) // 2
+                    await compare(claims, dict(pairs[:middle]))
+                    await compare(claims, dict(pairs[middle:]))
+                elif len(claims) > 1:
+                    pairs = list(claims.items())
+                    middle = len(pairs) // 2
+                    await compare(dict(pairs[:middle]), candidates)
+                    await compare(dict(pairs[middle:]), candidates)
+                else:
+                    raise ValueError(
+                        "A complete candidate claim/fact pair exceeds the selection input budget "
+                        f"({tokens} > {input_budget}); evidence was not truncated"
+                    )
+                return
+            response = schema.model_validate(
+                await self.llm.call_structured(
                     system,
                     user,
-                    output_model,
+                    schema,
                     num_predict=2048,
                     debug_label="dream-fact-candidate-selection",
                 )
-                decision = output_model.model_validate(response).model_dump()[
-                    "decisions"
-                ][claim_alias]
+            ).model_dump()["decisions"]
+            for alias, claim in claims.items():
                 selected[claim.claim_id].update(
-                    aliases_for_chunk[alias].fact_id
-                    for alias in decision["candidate_fact_ids"]
+                    candidates[fact_alias].fact_id
+                    for fact_alias in response[alias]["candidate_fact_ids"]
                 )
+
+        prior_pairs = list(fact_aliases.items())
+        for begin in range(0, len(incoming), self._MAX_ADDITIONS_WITH_HISTORY):
+            aliases = {
+                f"C{i:03d}": claim
+                for i, claim in enumerate(
+                    incoming[begin : begin + self._MAX_ADDITIONS_WITH_HISTORY],
+                    begin + 1,
+                )
+            }
+            for start in range(0, len(prior_pairs), chunk_size):
+                await compare(aliases, dict(prior_pairs[start : start + chunk_size]))
         return selected
 
     @staticmethod
@@ -685,71 +729,93 @@ class FactResolver:
         alias_for_entity: dict[str, str],
         entities: dict[str, EntityRecord],
     ) -> str:
-        blocks = []
+        claims, sources = {}, {}
         for alias, claim in aliases.items():
-            placement = placements[claim.claim_id]
-            linked = [
-                alias_for_entity[entity_id]
-                for entity_id in placement.linked_entity_ids
-                if entity_id in alias_for_entity
-            ]
-            block = (
-                f"[{alias}] id={claim.claim_id}; type={claim.claim_type}; "
-                f"predicate={claim.predicate or 'unknown'}; temporal_status={claim.temporal_status}; "
-                f"temporal={json.dumps(temporal_record(claim.facets), sort_keys=True)}; "
-                f"source_times={json.dumps(self._source_times(claim), sort_keys=True)}; "
-                f"linked_entities={json.dumps(linked)}\nclaim={claim.text}"
-            )
-            evidence = []
+            citations = []
             for provenance in claim.provenance:
-                try:
-                    source = self.artifacts.get_source(provenance.source_id)
-                    segments = {
-                        segment.segment_id: segment for segment in source.segments
-                    }
-                except FileNotFoundError:
-                    segments = {}
-                for segment_id in provenance.segment_ids:
-                    segment = segments.get(segment_id)
-                    evidence.append({
+                citations.extend(
+                    {
                         "source_id": provenance.source_id,
-                        "segment_id": segment_id,
+                        "segment_id": sid,
                         "speaker": provenance.speaker,
                         "evidence_type": provenance.evidence_type,
-                        "text": segment.content if segment else None,
-                    })
-            block += "\nevidence=" + json.dumps(
-                evidence, ensure_ascii=False, sort_keys=True
-            )
-            blocks.append(block)
-        linked_registry = []
-        used_entity_ids = {
-            entity_id
-            for claim in aliases.values()
-            for entity_id in placements[claim.claim_id].linked_entity_ids
-        }
-        for entity_id, alias in alias_for_entity.items():
-            if entity_id not in used_entity_ids:
-                continue
-            entity = entities.get(entity_id)
-            if entity is not None:
-                linked_registry.append(
-                    f"[{alias}] id={entity.entity_id}; type={entity.entity_type}; title={entity.title}"
+                    }
+                    for sid in provenance.segment_ids
                 )
-        registry = "\n".join(linked_registry) or "none"
-        return "LINKED ENTITY REGISTRY\n" + registry + "\n\n" + "\n\n".join(blocks)
+                try:
+                    source = self.artifacts.get_source(provenance.source_id)
+                except FileNotFoundError:
+                    continue
+                entry = sources.setdefault(
+                    source.source_id,
+                    {
+                        "source_type": source.source_type,
+                        "occurred_at": source.occurred_at,
+                        "segments": {},
+                    },
+                )
+                for segment in source.segments:
+                    if segment.segment_id in provenance.segment_ids:
+                        entry["segments"][segment.segment_id] = {
+                            "speaker": segment.speaker,
+                            "role": segment.role,
+                            "timestamp": segment.timestamp,
+                            "text": segment.content,
+                        }
+            claims[alias] = {
+                "claim_id": claim.claim_id,
+                "claim_type": claim.claim_type,
+                "predicate": claim.predicate,
+                "text": claim.text,
+                "temporal_status": claim.temporal_status,
+                "temporal": temporal_record(claim.facets),
+                "citations": citations,
+                "linked_entities": [
+                    alias_for_entity[e]
+                    for e in placements[claim.claim_id].linked_entity_ids
+                    if e in alias_for_entity
+                ],
+            }
+        used = {
+            e for c in aliases.values() for e in placements[c.claim_id].linked_entity_ids
+        }
+        registry = {
+            alias: {
+                "entity_id": eid,
+                "entity_type": entities[eid].entity_type,
+                "title": entities[eid].title,
+            }
+            for eid, alias in alias_for_entity.items()
+            if eid in used and eid in entities
+        }
+        return json.dumps(
+            {"claims": claims, "linked_entities": registry, "sources": sources},
+            ensure_ascii=False,
+            indent=2,
+        )
 
     @staticmethod
     def _existing_facts_text(
         facts: list[ConsolidatedFact], alias_for_claim: dict[str, str]
     ) -> str:
-        if not facts:
-            return "none"
-        return "\n".join(
-            f"[X{index:03d}] id={fact.fact_id}; state={fact.state}; "
-            f"section={fact.section_key}; claims={json.dumps([alias_for_claim[c] for c in fact.member_claim_ids if c in alias_for_claim])}; "
-            f"manual_text={fact.manual_text}; text={fact.text}"
-            for index, fact in enumerate(facts, start=1)
+        return json.dumps(
+            {
+                f"X{i:03d}": {
+                    "fact_id": f.fact_id,
+                    "state": f.state,
+                    "section": f.section_key,
+                    "member_claim_aliases": [
+                        alias_for_claim[c]
+                        for c in f.member_claim_ids
+                        if c in alias_for_claim
+                    ],
+                    "manual_text": f.manual_text,
+                    "text": f.text,
+                }
+                for i, f in enumerate(facts, 1)
+            },
+            ensure_ascii=False,
+            indent=2,
         )
 
     def _relations_text(

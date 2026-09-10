@@ -20,6 +20,7 @@ class DeterministicProductionModel:
     """Schema-aware fake used only to exercise the real server/storage path."""
 
     def __init__(self) -> None:
+        self.context_window_tokens = 32768
         self.generation_started = asyncio.Event()
         self.finish_generation = asyncio.Event()
         self.messages: list[list[dict]] = []

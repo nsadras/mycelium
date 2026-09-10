@@ -1,4 +1,5 @@
 from tests.test_cumulative_quality import scope_record
+import json
 from datetime import datetime
 from dataclasses import replace
 from unittest.mock import AsyncMock
@@ -164,6 +165,8 @@ def staged_fact_responses(
         for response in truth_responses:
             for decision in response["decisions"].values():
                 decision["scope"] = {target: scope_record() for target in targets}
+    else:
+        truth_responses = []
     responses = truth_responses + [{
         "facts": [{"memory_scope": "The fixture memory.",
             **{key: value for key, value in fact.items() if key != "fact_key"},
@@ -171,13 +174,16 @@ def staged_fact_responses(
                                      if assignment["fact_key"] == fact["fact_key"]],
         } for fact in plan["facts"]],
     }]
+    for response in responses:
+        for group in response.get("facts", []):
+            if len(group["member_claim_aliases"]) == 1:
+                group["text"] = None
     if candidate_fact_aliases is not None:
         responses[0:0] = [
             {"decisions": {f"C{index:03d}": {
                 "candidate_fact_ids": candidate_fact_aliases,
                 "reason": "The prior fact may express the same durable state.",
-            }}}
-            for index, _alias in enumerate(incoming_aliases, start=1)
+            } for index, _alias in enumerate(incoming_aliases, start=1)}}
         ]
     return responses
 
@@ -242,6 +248,29 @@ def test_fact_prompt_does_not_expose_recording_time_as_event_evidence(tmp_path):
     assert item.recorded_at not in rendered
 
 
+def test_truth_input_deduplicates_source_text_and_keeps_claim_citations(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    first = claim("first", "The user prefers written updates.", "2026-09-09")
+    second = claim("second", "The user prefers concise updates.", "2026-09-09")
+    second.provenance = list(first.provenance)
+    source_id = first.provenance[0].source_id
+    segment_id = first.provenance[0].segment_ids[0]
+    artifacts.save_source(SourceDocument(
+        source_id, "agent_conversation", "s", "2026-09-09", "2026-02-12", ["user"],
+        [SourceSegment(segment_id, 0, "Please send short written updates.", "user", "user")],
+    ))
+    placements = {c.claim_id: place(artifacts, c) for c in (first, second)}
+    rendered = FactResolver(AsyncMock(), artifacts)._claims_text(
+        {"C001": first, "C002": second}, placements, {}, {},
+    )
+    payload = json.loads(rendered)
+    assert rendered.count("Please send short written updates.") == 1
+    assert payload["sources"][source_id]["occurred_at"] == "2026-02-12"
+    for alias in ("C001", "C002"):
+        assert payload["claims"][alias]["citations"][0]["source_id"] == source_id
+        assert payload["claims"][alias]["citations"][0]["segment_id"] == segment_id
+
+
 
 @pytest.mark.asyncio
 async def test_owner_plan_groups_independent_support(tmp_path):
@@ -249,7 +278,7 @@ async def test_owner_plan_groups_independent_support(tmp_path):
     first = claim("first", "The user prefers written updates.", "2026-08-01T12:00:00")
     second = claim("second", "Written updates are preferred.", "2026-08-02T12:00:00")
     placements = [place(artifacts, first), place(artifacts, second)]
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = staged_fact_responses({
         "assignments": {"C001": {"fact_key": "F001"}, "C002": {"fact_key": "F001"}},
         "facts": [{
@@ -288,7 +317,7 @@ async def test_synthesis_uses_corrected_claim_not_original_source(tmp_path):
         recorded_at=corrected.recorded_at, occurred_at=None, participants=["user"],
         segments=[SourceSegment(evidence.segment_ids[0], 0, "I prefer tea.", "user", "user")],
     ))
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
 
     async def respond(_system, user, _schema, **kwargs):
         if kwargs["debug_label"] == "dream-fact-truth":
@@ -315,12 +344,50 @@ async def test_synthesis_uses_corrected_claim_not_original_source(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("manual", [False, True])
+async def test_synthesis_receives_only_manual_previous_presentations(tmp_path, manual):
+    artifacts = setup_owner(tmp_path)
+    old = claim("old", "The user prefers written updates.", "2026-08-01")
+    new = claim("new", "The user prefers concise updates.", "2026-08-02")
+    placements = {c.claim_id: place(artifacts, c) for c in (old, new)}
+    previous = replace(fact(old), text="Previous presentation wording.", manual_text=manual)
+    llm = AsyncMock(context_window_tokens=32768)
+
+    async def respond(_system, user, schema, **kwargs):
+        if kwargs["debug_label"] == "dream-fact-candidate-selection":
+            return {"decisions": {alias: {
+                "candidate_fact_ids": ["X001"], "reason": "Related canonical members."
+            } for alias in schema.model_fields["decisions"].annotation.model_fields}}
+        assert kwargs["debug_label"] == "dream-fact-synthesis"
+        assert old.text in user and new.text in user
+        assert (previous.text in user) == manual
+        return {"facts": [{
+            "memory_scope": "The user's update preference.",
+            "member_claim_aliases": ["C001", "C002"], "state": "current",
+            "section_key": "preferences_working_style",
+            "text": "The user prefers concise written updates.",
+            "confidence": 0.9, "reason": "Compatible canonical details.",
+        }]}
+
+    llm.call_structured.side_effect = respond
+    result = await FactResolver(llm, artifacts)._resolve_owner_step(
+        "you", [old, new], placements, [previous], set(), "test",
+        {"you": artifacts.get_entity("you")},
+    )
+    assert result.facts[0].member_claim_ids == ["new", "old"]
+    assert result.facts[0].manual_text == manual
+    assert result.facts[0].text == (
+        previous.text if manual else "The user prefers concise written updates."
+    )
+
+
+@pytest.mark.asyncio
 async def test_synthesis_keeps_distinct_claim_groups(tmp_path):
     artifacts = setup_owner(tmp_path)
     first = claim("first", "The user joined a cooking class.", "2026-08-01T12:00:00")
     second = claim("second", "The user began exercising.", "2026-08-02T12:00:00")
     placements = [place(artifacts, first), place(artifacts, second)]
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = staged_fact_responses({
         "assignments": {
             "C001": {"fact_key": "F001"},
@@ -385,7 +452,7 @@ async def test_grouped_project_roles_preserve_each_claims_exact_project_link(tmp
         )
         artifacts.save_placement(placement)
         placements.append(placement)
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = staged_fact_responses({
         "assignments": {
             "C001": {"fact_key": "F001"},
@@ -428,7 +495,7 @@ async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_p
     placements = [place(artifacts, old), place(artifacts, new)]
     old_fact = fact(old)
     artifacts.save_consolidated_fact(old_fact)
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = staged_fact_responses({
         "assignments": {"C001": {"fact_key": "F001"}, "C002": {"fact_key": "F002"}},
         "facts": [
@@ -476,7 +543,7 @@ async def test_repeated_evidence_joins_and_preserves_the_existing_fact(tmp_path)
     placements = [place(artifacts, item) for item in (old, repeated)]
     old_fact = fact(old)
     artifacts.save_consolidated_fact(old_fact)
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = staged_fact_responses({
         "assignments": {
             "C001": {"fact_key": "F001"},
@@ -518,13 +585,12 @@ async def test_truth_changes_are_decided_sequentially_and_cannot_compete(tmp_pat
     )
     placements = [place(artifacts, item) for item in (old, first, support)]
     artifacts.save_consolidated_fact(fact(old))
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = [
         {"decisions": {"C001": {
             "candidate_fact_ids": ["X001"],
             "reason": "The fact may be the prior bicycle state.",
-        }}},
-        {"decisions": {"C002": {
+        }, "C002": {
             "candidate_fact_ids": ["X001"],
             "reason": "The fact may be the prior bicycle state.",
         }}},
@@ -540,16 +606,11 @@ async def test_truth_changes_are_decided_sequentially_and_cannot_compete(tmp_pat
             "explanation": "The new color replaces the old color.",
             "confidence": 0.95,
         }}},
-        {"decisions": {"C003": {
-            "disposition": "no_change",
-            "reason": "The changed target was already claimed by an earlier decision.",
-            "confidence": 0.95,
-        }}},
         {"facts": [{"memory_scope": "The fixture memory.",
                 "member_claim_aliases": ["C003"],
                 "state": "current",
                 "section_key": "preferences_working_style",
-                "text": support.text,
+                "text": None,
                 "confidence": 0.9,
                 "reason": "Independent event; review-held state is outside presentation input.",
         }]},
@@ -569,7 +630,7 @@ async def test_truth_changes_are_decided_sequentially_and_cannot_compete(tmp_pat
         call for call in llm.call_structured.await_args_list
         if call.kwargs.get("debug_label") == "dream-fact-truth"
     ]
-    assert len(truth_calls) == 2
+    assert len(truth_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -585,7 +646,7 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path
     unrelated_fact = fact(unrelated)
     artifacts.save_consolidated_fact(old_fact)
     artifacts.save_consolidated_fact(unrelated_fact)
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = [
         {"decisions": {"C001": {
             "candidate_fact_ids": ["X001"],
@@ -601,14 +662,14 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path
             "member_claim_aliases": ["C001"],
             "state": "current",
             "section_key": "preferences_working_style",
-            "text": old.text,
+            "text": None,
             "confidence": 0.9,
             "reason": "Existing preference.",
         }, {"memory_scope": "The fixture memory.",
                 "member_claim_aliases": ["C002"],
                 "state": "current",
                 "section_key": "preferences_working_style",
-                "text": new.text,
+                "text": None,
                 "confidence": 0.9,
                 "reason": "Independent incoming preference.",
         }]},
@@ -636,7 +697,7 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
     placements = [place(artifacts, old), place(artifacts, new)]
     old_fact = fact(old)
     artifacts.save_consolidated_fact(old_fact)
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = [
         {"decisions": {"C001": {
             "candidate_fact_ids": ["X001"],
@@ -650,7 +711,7 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
         }}},
         {"facts": [{"memory_scope": "The fixture memory.", "member_claim_aliases": ["C002"],
                     "state": "current", "section_key": "preferences_working_style",
-                    "text": new.text, "confidence": 0.9,
+                    "text": None, "confidence": 0.9,
                     "reason": "Invalidly omit the existing claim."}]},
     ]
 
@@ -683,7 +744,7 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
         explanation="An explicit color replacement awaits review.", confidence=0.9,
         dream_run_id="earlier", created_at=old.recorded_at, affected_entity_ids=["you"],
     ))
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = [
         {"decisions": {alias: {"candidate_fact_ids": ["X001"], "reason": "Candidate for review."}}}
         for alias in ("C001",)
@@ -691,7 +752,7 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
         {"decisions": {alias: {"disposition": "no_change", "reason": "No new proposal.", "confidence": 0.9, "scope": {"C001": scope_record("distinct")}}}}
         for alias in ("C002",)
     ] + [{"facts": [{"memory_scope": "The fixture memory.",
-        "member_claim_aliases": ["C002"], "text": other.text, "state": "current",
+        "member_claim_aliases": ["C002"], "text": None, "state": "current",
         "section_key": "preferences_working_style", "confidence": 0.9, "reason": "Separate activity.",
     }]}]
 
@@ -725,7 +786,7 @@ async def test_pending_review_alone_does_not_trigger_more_model_work(tmp_path):
         proposed_relation="supersedes", explanation="Awaiting review.", confidence=0.9,
         dream_run_id="earlier", created_at=old.recorded_at, affected_entity_ids=["you"],
     ))
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     resolver = FactResolver(llm, artifacts)
     result = await resolver.resolve(
         [], affected_entity_ids={"you"}, incoming_claim_ids=set(), dream_run_id="next",
@@ -811,7 +872,7 @@ async def test_large_new_claim_sets_are_grouped_incrementally(tmp_path):
         for index in range(1, 14)
     ]
     placements = [place(artifacts, item) for item in claims]
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     call_counts = {"truth": 0, "synthesis": 0}
 
     async def respond(_system, _user, _schema, **kwargs):
@@ -839,7 +900,7 @@ async def test_large_new_claim_sets_are_grouped_incrementally(tmp_path):
             return {"facts": [{"memory_scope": "The fixture memory.",
                 "member_claim_aliases": [f"C{index:03d}"],
                 "state": "current", "section_key": "preferences_working_style",
-                "text": item.text, "confidence": 0.9, "reason": "Distinct memory.",
+                "text": None, "confidence": 0.9, "reason": "Distinct memory.",
             } for index, item in enumerate(batch, 1)]}
         raise AssertionError(f"Unexpected model call: {label}")
 
@@ -933,7 +994,7 @@ async def test_candidate_selection_receives_canonical_members_and_source_times(t
                                          timestamp="2026-02-12T10:00:00Z")]))
     existing = fact(old)
     existing.text = "An over-broad display sentence that omits the schedule."
-    llm = AsyncMock()
+    llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.return_value = {"decisions": {"C001": {"candidate_fact_ids": ["X001"], "reason": "Same workshop."}}}
     selected = await FactResolver(llm, artifacts)._select_prior_facts(
         [new], placements, [existing], {"you": artifacts.get_entity("you")})

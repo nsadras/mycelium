@@ -4079,3 +4079,131 @@ one prose-similarity summary.
 - New handoff: `planning/cumulative_quality_repairs_2026_09_08.md`. It records limitations, including a still-imperfect
   temporal classification of ongoing tenure and the absence of a separate briefing/detail layer. LoCoMo QA and
   corpus-scale semantic coverage remain for the user's next fresh benchmark run; old stores were not rebuilt.
+
+## 2026-09-09 — Audit prompt clarity and remove presentation bias from synthesis
+
+- Audited all six memory-construction calls, assistant context selection, chat/benchmark QA, and Engram summary
+  inputs. Findings and remaining limitations: `planning/prompt_context_audit_2026_09_09.md`. The active memory
+  templates have no few-shot demonstrations; repetition and evidence/presentation boundaries were the larger issues.
+- Staged candidate templates and input formatters outside production and probed configured host `gemma4:12b` before
+  integration. `benchmark_runs/prompt-clarity-20260909/candidate-contracts`: 34 passed, four semantic failures
+  (synthesis over-splitting, duplicate bound-user identity, two ambiguous identity cases), and one transport timeout.
+  The first harness invocation failed before model calls because its pytest temp parent did not exist; it was fixed.
+  Concurrent candidate suites increased request queueing; final verification ran serially. Timeouts are not counted
+  as semantic evidence against a prompt or the model.
+- The shorter identity prompt was withheld. With the original identity instructions and new JSON evidence,
+  `input-regressions` passed all ten identity probes/replays and four temporal cases. That run totaled 29 passes
+  and two extraction regressions: strengthened consideration and admission of a question without personal facts.
+  The shorter extraction template was also withheld. No lexical fallback or post-hoc source-only override was added.
+- Accepted concise affirmative placement/truth/synthesis templates: 443/539/565 words became 253/260/311.
+  Placement's registry exposes exact page subjects and only their active types' section definitions. On the latest
+  four-person registry, its catalog changed from 919 to 328 estimated project-tokenizer tokens. Identity/placement
+  evidence now uses JSON with canonical claims, participant aliases, and shared source records. Cross-source cited
+  context, source titles when present, and missing-source citation references are retained. No recording timestamps
+  are promoted to occurrence evidence.
+- Pydantic inheritance had placed truth verdicts before dynamically added scope comparisons, contrary to the
+  prompt's requested order. Both output branches now declare scope first while preserving exact alias and shared-
+  scope validation. `refined-contracts`: 22 passed; its one failed mixed-history synthesis probe remained useful
+  evidence of broad grouping. Four truth probes cover repeated habits, relative dates across different months,
+  compatible activities, and an exclusive-state replacement amid unrelated historical claims.
+- Controlled synthesis experiment: a neutral 14-claim set produced eight groups with old over-broad display prose,
+  incorrectly merging independent plans and routines. The identical original system prompt produced the correct
+  ten groups when that prose was removed. The shorter final prompt also produced ten groups with canonical-only
+  evidence. Requests/responses are in `synthesis-controls`; the two original-system hashes match. Wording-only
+  refinement (`synthesis-refinement`) still merged plans, so it was not treated as sufficient.
+- Synthesis now receives canonical members and explicit manual presentation constraints, excluding previous
+  automatically generated display groups. Their evidence remains in canonical members; ordinary fact-ID reuse,
+  manual presentation preservation, and pending-review isolation remain. Truth/selection claim inputs and existing-
+  fact records are JSON; cited text is deduplicated by exact source/segment IDs, with each claim retaining citations.
+- Final direct/in-situ validation at `benchmark_runs/prompt-clarity-20260909/final-input-replay`: all six checks passed
+  in 264.43s. The four mixed-history truth checks used the actual candidate production input formatter, followed by
+  the 14-claim synthesis check and a public capture/build/restart/retrieval replay. All three builds completed with
+  no failures or truth-review proposals; 18 claims remained represented as 12 facts, with semantic retention and
+  bicycle-detail retrieval checks passing. Candidate fact-input methods were integrated after their direct probes;
+  the replay used those same methods and the accepted production prompts.
+- Backend regression: 395 passed, 85 opt-in checks deselected. An old display-string assertion was updated to verify
+  the JSON evidence contract. Targeted Ruff and diff checks passed. Original LoCoMo artifacts were not rebuilt,
+  and no server or benchmark job was started. Changes are uncommitted.
+- Follow-up: aggregate historical input/schema budgets and full-cohort identity decisions in placement batches
+  remain open. Focused passes do not establish corpus-scale coverage/correctness; the user's next fresh LoCoMo run
+  should reassess wiki quality and complete QA.
+
+## 2026-09-09 — Consolidation efficiency with coverage checks
+
+- Investigated safe batching and bounded semantic retrieval before integration. Configured host `gemma4:12b`
+  selected all expected matches in a neutral 4-incoming/84-prior paired probe: 28 calls / 52.75 s previously,
+  7 calls / 34.54 s batched. Production selection schema and prompt were used. Evidence lives under
+  `benchmark_runs/consolidation-efficiency-20260909/batch-contract/`.
+- Bounded embedding shortlist was deliberately withheld: three narrow queries retrieved their expected match
+  first, but a broad correction needed 28 historical records and top-24 retained only 24. Top-12 retained 12;
+  top-48 happened to retain all 28. The production structured selector independently confirmed the 28-record
+  scope and excluded the unrelated measured property. Increasing the cutoff to fit this example would not
+  establish completeness. See `shortlist-recall/embedding-recall.json`; no lexical fallback or lossy cutoff shipped.
+- Integrated four-incoming/twelve-prior comparisons, caching canonical records within each selection operation.
+  Input budgeting includes prompt and schema plus output/safety reserves. Exact input sets split recursively;
+  every pair is covered once. An irreducibly oversized pair fails explicitly without truncating evidence.
+- Removed truth calls with no eligible target aliases. Product invariant: a truth change requires an existing
+  target; the empty domain admits no change. Canonical synthesis still handles incoming claims, and nonempty
+  target domains retain model truth review and pending-proposal isolation.
+- Added durable per-store `diagnostics/llm-calls.jsonl`: stage, model, attempt/call ID, success, latency, character
+  counts, and native token/duration metadata. No raw prompts or responses are written there. Trace persistence
+  survives restarts and the in-memory deque limit; diagnostic I/O failure does not discard a completed response.
+- Initial integrated selection probes: narrow case passed; broad correction retained all 28 needed records but
+  over-selected twelve unrelated records. Preserved the strict specificity check. A concise affirmative prompt
+  explicitly matching subject/property and temporal/event scope passed both direct production-schema probes
+  before integration (2 passed in 37.40 s, `refined-selection-contract/`). No benchmark vocabulary entered product
+  code or prompts. Success dumps in subsequent probes preserve actual requests, responses, and reasoning fields.
+- Paired public capture/build/restart/retrieval replay, serial baseline then optimized: both passed. Baseline
+  restores the two pre-change methods and both use the original selection wording to isolate batching and
+  empty-target skipping. Total 193.11 -> 174.80 s (9.5%); summed Dream-model time 147.24 -> 130.32 s (11.5%).
+  Selection 12 calls / 28.96 s -> 4 / 15.57 s; truth 18 / 43.55 s -> 8 / 30.69 s; total attempts 49 -> 31.
+  All 18 claims remained represented across three successful builds with no proposals. Final facts 12 -> 13:
+  Spanish learning/practice remained separately displayed in the optimized run, so improved concision is not
+  established. Retention and bicycle retrieval semantic checks passed. Two optimized synthesis attempts failed
+  exact-singleton-text validation and recovered; failure dumps retained. See `paired-replay/comparison.json`.
+- Added structural tests for complete pair coverage, schema-inclusive budgets, oversize failure, empty truth
+  domains, and persistent retry traces; adjusted mocks to the actual context-window interface and removed obsolete
+  empty-target responses. First broad backend run exposed four outdated fixtures; fixing them yielded 401 passes,
+  87 opt-in tests deselected. Temporary out-of-tree harness runs emitted unregistered integration-marker warnings;
+  these were harness configuration warnings, not production/model failures.
+- Detailed assessment and next-run interpretation: `planning/consolidation_efficiency_2026_09_09.md`. Exhaustive
+  selection still grows with history; this is a measured reduction of avoidable work, not proof that long-session
+  cost is optimal. No full LoCoMo benchmark or server process was started; no commit was made.
+- Final integrated native validation: 6 passed in 323.91 s at
+  `benchmark_runs/consolidation-efficiency-20260909/final-native/`: both selection probes (exact narrow matches and
+  all 28 broad targets with no extras), compatible-plan/replacement/contradiction multi-build checks, and the final
+  three-build replay. Compatible plans created no proposal; actual changes retained pending supersedes/contradicts
+  proposals. The cumulative replay retained all 18 claims as 12 facts, no proposals, passing retention and retrieval
+  judgments. Two exact-singleton-text synthesis failures recovered; this remaining retry cost is documented rather
+  than hidden. Final backend: 401 passed, 87 deselected in 4.77 s; targeted Ruff and `git diff --check` passed.
+
+### 2026-09-09 — Static-audit remediation, validation in progress
+
+User authorized implementing the audit fixes, configured-model probes, small fresh benchmarks, artifact inspection, and committing after validation. The preexisting working-tree patch was saved at `/tmp/mycelium-audit-fixes/preexisting.patch`; unrelated user notes/assets remain untouched.
+
+- **Proved contracts before integration:** configured host `gemma4:12b`, production prompts/schema. Singleton synthesis first failed three times with only a nullable text field; explicit singleton/combined schema branches passed, including two independent future plans. The application now renders singleton canonical text. Evidence: `benchmark_runs/audit-fixes-20260909/direct-contracts/`, including failure dumps.
+- **Sparse placement:** the first candidate passed small cases but omitted relationship endpoints in a larger registry. It was not integrated. The revised positive instruction establishes all described subjects before choosing an owner. All five probes passed (shared, incidental, project, personal plan, eight-entry registry), then the sparse schema/prompt was integrated. Full request budgets split complete claim batches rather than shrinking according to an unrelated-page matrix. Evidence: `benchmark_runs/audit-fixes-20260909/placement-contracts/`; first failed response also saved under `/tmp/mycelium-audit-fixes/sparse-placement-first-failure.json`.
+- **Extraction:** the production prompt/schema resolved a new reply through a cited neighboring proposal, retaining cedar boards and next Saturday without treating the proposal as a new assertion. Evidence: `benchmark_runs/audit-fixes-20260909/adjacent-context/response.json`. Integrated complete-segment token batching, two adjacent context-only segments, and resume from persisted segment boundaries.
+- **Retrieval:** pending proposal IDs/status/relations/incoming and target claim IDs accompany evidence. Matched canonical assertions accompany display summaries. Limits count distinct records while retaining multiple matched members. Exact-ID source retrieval and request-local fact/review snapshots avoid repeated artifact deserialization.
+- **Index/storage:** incremental LanceDB merge/delete, bounded embedding batches, metadata-only vector reuse, unchanged-index revision checks; no unconditional table/FTS recreation. First native test caught the installed AsyncConnection's synchronous context-manager API; fixed and retested. Bounded JSON decoding cache returns deep copies, invalidates by file metadata, and excludes large payloads. Exact-ID/state lookup indexes reduce repeated deserialization; metadata scans remain. Pending commit recovery filters explicit prepared/applying states.
+- **Budgets/diagnostics:** complete request envelopes, schema/tool definitions, and output reserve checked at the Ollama boundary, including retries/tool rounds. Durable inference traces record individual chat rounds without counting the aggregate again; response usage sums successful rounds. Embedding and meeting-summary timing paths added. These are conservative cl100k estimates, not a Gemma tokenizer proof; oversized truth/identity/synthesis scopes still need explicit bounded decision contracts.
+- **Chat/Engram:** history fitting preserves complete contiguous turns; oversized current requests raise instead of silently truncating. Session GETs avoid metadata writes. Regression tests caught an accidentally removed create-session save and a conflation of input-budget vs model-window reserves; both fixed. Engram reuses original ASR text for timed speaker assignment, constructs transcribers off the event loop, and serializes meeting processing. Speech dependencies are absent in this Python environment, so no live ASR/diarization quality claim is made.
+- **LoCoMo durability:** each completed question has an atomic fsynced checkpoint. Resume reuses exact question indices and validates dataset/settings/model/config fingerprints; run manifest marks completion. Interruption test verifies one saved answer survives a second-question failure and only the two remaining questions rerun.
+- **Structural validation so far:** focused retrieval/synthesis/Engram/runtime: 64 passed; index/checkpoint/client: 68 passed; complete `pytest -q tests`: 407 passed, 87 opt-in skipped. Broad unscoped pytest discovery was stopped (only our test process) and replaced with explicit `tests/` discovery. No server was started or stopped.
+- **Fresh benchmark underway:** `benchmark_runs/audit-fixes-20260909-locomo-small/`, sample 9 (`conv-49`), first two sessions, three QA questions, configured model, real source extraction and per-session consolidation. Session times: 146.7s and 166.2s. These short-prefix times are not evidence about session-25 scaling; final quality inspection and native cumulative replay follow before commit.
+
+Validation follow-up:
+- Fresh sample 9 completed two builds and all three QA questions. 114/114 segments have dispositions; all 24 active claims are represented in 14 facts, with no pending extraction, held review, unresolved provenance, or repeated fact memberships. All six synthesis attempts succeeded. Source-level coverage is not complete: for example, Sam's never having visited Jasper was marked source-only. The earlier overnight prefix had 27 extracted claims (12+15), versus 24 (13+11) here; this is not a paired extraction experiment and does not establish a coverage improvement. Wiki prose retains some vague/redundant hobby-update statements. These limits must accompany any speed claim.
+- The neutral public three-build/restart/retrieval replay passed in 152.89s at `benchmark_runs/audit-fixes-20260909/cumulative-replay/`. Both retained-detail and bicycle retrieval semantic judgments passed. Prior integrated replay was 174.80s; one replay per version is insufficient to isolate timing variance.
+- Native retrieval plus the production assistant prompt kept the Lisbon move unresolved rather than treating it as accepted. Evidence and answer: `benchmark_runs/audit-fixes-20260909/native-review/`.
+- A bounded search-query contract was probed before integration: reference resolution retained choir rehearsal, while the counterexample switched to bicycle location. The first 2000-character schema was rejected by the host's grammar compiler; the compact 500-character schema passed. Preserved outputs: `benchmark_runs/audit-fixes-20260909/query-contract/`. Long queries now receive a model-formulated embedding query while original requests remain available to evidence admission. Deterministic HTTP 4xx errors (except timeout/rate limiting) are no longer retried.
+- Admission now budgets whole candidate records instead of prefix-truncating each at 1200 tokens. Over-budget sets split losslessly; all decisions retain exact candidate IDs. Chat retrieval gets bounded coherent history from preflight; oversized requests fail explicitly before retrieval, and initial prompts render the current request once.
+- Expanded same-source extraction context from two neighboring sentences to a bounded contiguous prefix, prioritizing recent source context over older sources. The quarter-window bound and whole-segment rule remain. This addresses referents farther back than two sentence segments without unbounded accumulation.
+- A second fresh LoCoMo sample (sample 1, one session/one QA) is in progress at `benchmark_runs/audit-fixes-20260909-locomo-second/` to check the final integration on different source material.
+
+Final checks before commit:
+- Second sample completed in 134.5s, with 13 claims and eight facts across Caroline/Melanie pages; all 51 segments accounted for, and the support-group date answer matched May 7, 2023. Inspected the source and both page bodies.
+- Final native long-query retrieval formulated “Mira's residence location and status of her move” and retained pending-review evidence. Real meeting summary preserved the room-twelve decision, Mira's Friday notes action, and unresolved projector availability. Evidence: `benchmark_runs/audit-fixes-20260909/final-native/`.
+- Final backend suite: **414 passed, 87 skipped in 5.22s**. Ruff passed; `git diff --check` passed. Opt-in skipped tests are not claimed as executed; configured-model runs are listed separately above.
+- Detailed quality findings, timing limitations, and larger unresolved audit items are documented in `planning/audit_fixes_2026_09_09.md`. In particular, broad identity/history review, multi-call truth/synthesis budgets, projection duplication, and session/UI storage redesign remain open.
+- Final staged review found the single-member synthesis schema still advertised an impossible combined-group array bound (min=2, max=1). A staged singleton-only schema passed a configured-model probe before integration; scope/membership were correct, though its explanatory reason was uninformative. Evidence: `benchmark_runs/audit-fixes-20260909/single-member/`. Added general feasible-array-bound checks for one, two, and five claims. Candidate selection now uses the same complete-request estimator as the LLM boundary. Final rerun: **417 passed, 87 skipped in 5.13s**, Ruff and whitespace checks passed.

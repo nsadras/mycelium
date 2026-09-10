@@ -139,6 +139,7 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
         )
     ]
     llm = AsyncMock()
+    llm.context_window_tokens = 32768
     llm.call_structured.return_value = {
         "decisions": {
             "M001": {
@@ -299,3 +300,38 @@ def test_retrieval_rejects_budget_smaller_than_evidence_envelope(compact_claim):
     builder, hit, _ = compact_claim
     with pytest.raises(ValueError, match="empty evidence envelope"):
         builder.build([hit], budget_tokens=0)
+
+
+def test_review_relationship_and_matched_claims_survive_fact_rendering(tmp_path):
+    from mycelium.artifacts import ReconsolidationProposal
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    wiki = WikiStore(tmp_path / "wiki")
+    entity = artifacts.create_entity("person", "Mira")
+    stamp = "2026-01-01T00:00:00+00:00"
+    claims = [MemoryClaim(cid, text, [], [], stamp, dream_disposition="routed") for cid, text in (
+        ("old", "Mira lives in Oslo."),
+        ("detail", "Mira practices cello on Saturday mornings."),
+        ("new", "Mira moved to Lisbon."),
+    )]
+    for claim in claims:
+        artifacts.save_claim(claim)
+    artifacts.save_consolidated_fact(ConsolidatedFact(
+        "summary", "Mira lives in Oslo and plays cello.", ["old", "detail"], entity.entity_id,
+        "profile", "current", [], "claim", 0.9, "summary", stamp, stamp,
+    ))
+    artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
+        "review", ["new"], ["old"], "supersedes", "Unresolved move", 0.7, "run", stamp,
+    ))
+    hits = [ClaimSearchHit(c.claim_id, c.text, "canonical", entity.entity_id, entity.title,
+                           entity.slug, "profile", 1.0) for c in claims]
+    builder = RetrievedContextBuilder(wiki, artifacts)
+    evidence = builder._memory_evidence(builder.distinct_hits(hits, limit=2))
+    assert len(evidence.records) == 2
+    summary = evidence.records[0]
+    assert {c.claim_id for c in summary.canonical_claims} == {"old", "detail"}
+    assert summary.reviews[0].incoming_claim_ids == ("new",)
+    assert evidence.records[1].reviews[0].target_claim_ids == ("old",)
+    rendered = render_memory_evidence(evidence)
+    assert "Saturday mornings" in rendered
+    assert "unresolved" in rendered
+    assert "pending" in rendered

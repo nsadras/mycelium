@@ -4,9 +4,9 @@ import json
 import re
 from typing import Any, List
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
-from mycelium.budget import count_tokens
+from mycelium.budget import count_tokens, require_request_budget, ContextBudgetError
 from mycelium.models import LogEntry
 from mycelium.operations import IngestionResult, SourceInput
 from mycelium.store import LogStore
@@ -367,14 +367,51 @@ class Encoder:
                     context_tokens += cost
             context_sources = selected_context
             context_segments = [seg for prior in context_sources for seg in prior.segments]
-            context = self._render_segments(context_segments)
             claim_ids: list[str] = list(episode.claim_ids)
             dispositions = {
                 item.segment_id: item for item in episode.segment_dispositions
             }
             extraction_errors: list[str] = []
-            batches = self._segment_batches(source.segments)
+            def request_for(batch):
+                start = next(i for i, seg in enumerate(source.segments) if seg.segment_id == batch[0].segment_id)
+                # Complete adjacent segments resolve replies across extraction boundaries.
+                neighbors = []
+                context_limit = self.config.llm.context_window_tokens // 4
+                for segment in reversed(source.segments[:start]):
+                    trial = [segment, *neighbors]
+                    if count_tokens(self._render_segments(trial)) > context_limit:
+                        break
+                    neighbors = trial
+                # The adjacent same-source context has priority over older sources.
+                supplied_context = list(neighbors)
+                for segment in reversed(context_segments):
+                    trial = [segment, *supplied_context]
+                    if count_tokens(self._render_segments(trial)) > context_limit:
+                        break
+                    supplied_context = trial
+                schema = extraction_output_model(
+                    [seg.segment_id for seg in batch], [seg.segment_id for seg in supplied_context],
+                )
+                system, user = prompts.claim_extraction_prompt(
+                    source.source_type, source.source_id, list(source.participants),
+                    self._render_claim_segments(batch), context=self._render_segments(supplied_context),
+                )
+                return system, user, schema, neighbors
+
+            def fits(batch):
+                system, user, schema, _ = request_for(batch)
+                try:
+                    require_request_budget(
+                        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                        context_window=self.config.llm.context_window_tokens, output_tokens=8192,
+                        schema=schema.model_json_schema(),
+                    )
+                    return True
+                except ContextBudgetError:
+                    return False
+
             if not episode.extraction_batches:
+                batches = self._segment_batches(source.segments, fits=fits)
                 episode.extraction_batches = [
                     ExtractionBatchState(
                         batch_id=f"{episode.episode_id}-batch-{batch_index}",
@@ -384,24 +421,19 @@ class Encoder:
                     for batch_index, batch in enumerate(batches, start=1)
                 ]
                 self.artifacts.save_episode(episode)
-            batch_by_index = {
-                state.batch_index: state for state in episode.extraction_batches
-            }
-
-            for batch_index, batch in enumerate(batches, start=1):
-                state = batch_by_index[batch_index]
+            segments_by_id = {seg.segment_id: seg for seg in source.segments}
+            # Persisted segment boundaries are the resume contract, even if budgets change.
+            for state in episode.extraction_batches:
+                batch_index = state.batch_index
+                batch = [segments_by_id[sid] for sid in state.segment_ids]
                 if state.status == "complete":
                     continue
                 state.attempt_count += 1
                 state.last_error = None
                 batch_ids = {segment.segment_id for segment in batch}
                 try:
-                    claim_model = extraction_output_model(batch_ids, [s.segment_id for s in context_segments])
+                    system, user, claim_model, neighbors = request_for(batch)
                     if state.response is None:
-                        system, user = prompts.claim_extraction_prompt(
-                            source.source_type, source.source_id, list(source.participants),
-                            self._render_claim_segments(batch), context=context,
-                        )
                         response = await self.llm.call_structured(
                             system, user, claim_model, num_predict=8192,
                             debug_label=f"claim-extraction-{source.source_id}-batch-{batch_index}",
@@ -410,7 +442,8 @@ class Encoder:
                         response = state.response
                     response = claim_model.model_validate(response).model_dump(exclude_none=True)
                     staged_claims = self._build_extracted_claims(
-                        source, response, state.batch_id, context_sources=context_sources
+                        source, response, state.batch_id,
+                        context_sources=[*context_sources, replace(source, segments=neighbors)]
                     )
                     # Persist validated output before publishing claims so a write
                     # interruption replays the same decision without a new model call.
@@ -501,12 +534,21 @@ class Encoder:
 
     @staticmethod
     def _segment_batches(
-        segments: list[SourceSegment], batch_size: int = 48
+        segments: list[SourceSegment], batch_size: int = 48, *, fits=None,
     ) -> list[list[SourceSegment]]:
-        return [
-            segments[index:index + batch_size]
-            for index in range(0, len(segments), batch_size)
-        ]
+        batches = []
+        current = []
+        for segment in segments:
+            trial = [*current, segment]
+            if current and (len(trial) > batch_size or (fits and not fits(trial))):
+                batches.append(current)
+                current = []
+            current.append(segment)
+            if fits and not fits(current):
+                raise ContextBudgetError("A complete source segment exceeds the extraction budget")
+        if current:
+            batches.append(current)
+        return batches
 
     def _build_extracted_claims(
         self,

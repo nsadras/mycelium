@@ -18,6 +18,8 @@ def test_page_choices_survive_structured_response_roundtrip(second_section):
             "project-1": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": second_section, "reason": "Explicit page decision."},
         },
     }}}
+    if second_section == "not_selected":
+        del response["decisions"]["C001"]["pages"]["project-1"]
     # No network request: exercise the parser/serializer that previously dropped
     # required null decisions, and the router's subsequent validation boundary.
     client = OllamaClient(url="http://localhost:11434", model="unused")
@@ -39,9 +41,9 @@ def test_incidental_relevance_cannot_select_a_page():
             "relevance": "incidental_or_unrelated", "section_key": "profile", "reason": "Incidental."}
     decision = {"pages": {"you": page}, "owner_entity": "you", "route_kind": "general",
                 "reason": "An invalid selection.", "confidence": 1.0}
-    with pytest.raises(ValidationError, match="subject evidence"):
+    with pytest.raises(ValidationError, match="relevance"):
         schema.model_validate({"decisions": {"C001": decision}})
-    page["section_key"] = "not_selected"
+    decision["pages"] = {}
     decision.update(owner_entity="", route_kind="deferred")
     schema.model_validate({"decisions": {"C001": decision}})
     decision["owner_entity"] = "you"

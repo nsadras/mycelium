@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from mycelium.artifacts import ArtifactStore
+from mycelium.budget import count_tokens
+from mycelium.search_query import SearchQueryOutput
+from mycelium.prompting import render_prompt
 from mycelium.claim_index import LanceClaimIndex
 from mycelium.context_selection import (
     AssistantContextCandidate,
@@ -32,19 +35,32 @@ class MemoryRetriever:
         self.initial_result_limit = initial_result_limit
         self.context_builder = RetrievedContextBuilder(wiki, artifacts)
 
+    async def _search_query(self, query: str) -> str:
+        # EmbeddingGemma has a smaller context than the chat model. Preserve the
+        # original request for admission; formulate bounded search text when needed.
+        if count_tokens(query) <= 1024:
+            return query
+        response = await self.llm.call_structured(
+            render_prompt("assistant/search_query.system.jinja"), query,
+            SearchQueryOutput, num_predict=512, debug_label="retrieval-query",
+        )
+        return SearchQueryOutput.model_validate(response).query
+
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
         budget_tokens = (
             request.budget_tokens
             if request.budget_tokens is not None
             else self.default_budget_tokens
         )
-        hits = await self.claim_index.search(request.query)
+        builder = RetrievedContextBuilder(self.context_builder.wiki, self.artifacts)
+        search_query = await self._search_query(request.query)
+        hits = await self.claim_index.search(search_query)
         candidates = [
             AssistantContextCandidate(
                 candidate_id=f"claim:{hit.claim_id}",
                 kind=f"{hit.memory_tier}_claim",
                 title=hit.owner_title or "Unassigned memory",
-                content=self.context_builder.admission_content(hit),
+                content=builder.admission_content(hit),
             )
             for hit in hits
         ]
@@ -55,8 +71,8 @@ class MemoryRetriever:
             value.removeprefix("claim:") for value in selection.selected_ids
         }
         admitted_hits = [hit for hit in hits if hit.claim_id in selected_ids]
-        selected_hits = admitted_hits[: self.initial_result_limit]
-        evidence = self.context_builder.build(
+        selected_hits = builder.distinct_hits(admitted_hits, self.initial_result_limit)
+        evidence = builder.build(
             selected_hits,
             budget_tokens=budget_tokens,
             more_available=len(admitted_hits) > len(selected_hits),
@@ -64,6 +80,7 @@ class MemoryRetriever:
         rendered = render_memory_evidence(evidence)
         trace = {
             "strategy": "lancedb_hybrid_claims_then_model_admission",
+            "search_query": search_query,
             "embedding_model": self.claim_index.embedder.model,
             "candidate_limit": self.claim_index.candidate_limit,
             "candidates": [
@@ -87,7 +104,7 @@ class MemoryRetriever:
             "selection_error": selection.error,
         }
         return RetrievalResult(
-            self.context_builder.page_references(evidence), evidence, rendered, trace
+            builder.page_references(evidence), evidence, rendered, trace
         )
 
     async def search_evidence(
@@ -99,17 +116,18 @@ class MemoryRetriever:
         exclude_claim_ids: set[str] | None = None,
     ) -> RetrievalResult:
         """Return additional ranked evidence without a separate model gate."""
+        builder = RetrievedContextBuilder(self.context_builder.wiki, self.artifacts)
         excluded = exclude_claim_ids or set()
-        hits = await self.claim_index.search(query, limit=limit + len(excluded))
+        hits = await self.claim_index.search(await self._search_query(query), limit=limit + len(excluded))
         available_hits = [hit for hit in hits if hit.claim_id not in excluded]
-        selected_hits = available_hits[:limit]
-        evidence = self.context_builder.build(
+        selected_hits = builder.distinct_hits(available_hits, limit)
+        evidence = builder.build(
             selected_hits,
             budget_tokens=budget_tokens,
             more_available=len(available_hits) > len(selected_hits),
         )
         return RetrievalResult(
-            self.context_builder.page_references(evidence),
+            builder.page_references(evidence),
             evidence,
             render_memory_evidence(evidence),
             {
@@ -127,6 +145,6 @@ class MemoryRetriever:
     def source_evidence(
         self, claim_ids: list[str], *, budget_tokens: int
     ) -> MemoryEvidence:
-        return self.context_builder.source_evidence(
+        return RetrievedContextBuilder(self.context_builder.wiki, self.artifacts).source_evidence(
             claim_ids, budget_tokens=budget_tokens
         )

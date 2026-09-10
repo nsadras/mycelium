@@ -119,7 +119,7 @@ class OllamaQaClient:
         )
         user = render_prompt(
             "assistant/memory_request.user.jinja",
-            memory_evidence=render_memory_workspace(tools.workspace.snapshot),
+            memory_evidence=render_memory_workspace(tools.workspace.snapshot, include_request=False),
             user_request=question,
         )
         messages = [
@@ -411,7 +411,7 @@ class MyceliumMemorySystem:
             raise ValueError(
                 "Memory tool evidence budget must be smaller than the benchmark context budget"
             )
-        initial_budget = self.context_budget_tokens - tool_evidence_budget
+        initial_budget = min(self.context_budget_tokens, self.qa_client.llm.context_window_tokens - 4096 - 3072) - tool_evidence_budget
         try:
             retrieval = await mem.retrieve_context(
                 RetrievalRequest(
@@ -726,6 +726,7 @@ def build_memory_system(
     if frozen_store is not None and not frozen_store.is_dir():
         raise ValueError(f"Frozen store does not exist: {frozen_store}")
     qa_client = OllamaQaClient(model=qa_model, url=ollama_url)
+    qa_client.llm.trace_path = run_dir / "diagnostics" / "qa-calls.jsonl"
     if system_name == "mycelium":
         return MyceliumMemorySystem(
             run_dir=run_dir,

@@ -1,10 +1,5 @@
-Existing fact members are the canonical evidence, including their temporal scope. Select a fact if any member may describe the same memory; a selected over-broad group can be repartitioned later.
-Find existing display facts that may describe the same memory as each incoming stored claim.
+Select existing facts that may describe the same memory as each incoming claim.
 
-A stored claim is a source-supported memory assertion. A display fact is a sentence already shown on the subject's
-wiki page. For each incoming claim alias, select any supplied fact that may express the same durable state,
-preference, commitment, relationship, plan, event, or previous value of a changed state. Return an empty list when no
-fact is relevant. A shared topic or similar wording is not enough.
+Assess each incoming claim independently using the canonical members of each existing fact. Relevance requires a matching subject and property, relationship, commitment, or event; use temporal and event scope to distinguish separate memories. A changed value can match the previous value of the same state. A correction covering multiple records can match every record within its stated scope.
 
-This step only narrows the candidates for later comparison. Do not decide whether claims contradict, replace, or
-belong in the same display fact. Explain each selection and return one schema-valid decision per incoming alias.
+Select a fact when at least one canonical member matches. Existing display prose is a summary; canonical members establish what the fact contains. For each incoming alias, return the relevant fact aliases and a brief explanation of the shared memory, or an empty list when none match. Truth review and display grouping happen in later steps.

@@ -12,10 +12,7 @@ from mycelium.artifacts import (
     SourceDocument,
 )
 from mycelium.consolidation_models import ClaimEvidence
-from mycelium.ontology import (
-    entity_type_prompt_catalog,
-    section_prompt_catalog,
-)
+from mycelium.ontology import entity_type_definition
 
 
 class RoutingFormatter:
@@ -26,27 +23,28 @@ class RoutingFormatter:
     def entity_catalog(
         entities: Iterable[EntityRecord], *, include_sections: bool
     ) -> str:
+        active = sorted(
+            (e for e in entities if e.status == "active"), key=lambda e: e.entity_id
+        )
+        payload = {
+            "pages": {
+                e.entity_id: {
+                    "subject": e.title,
+                    "entity_type": e.entity_type,
+                    "aliases": e.aliases,
+                    "page_state": e.materialization_state,
+                }
+                for e in active
+            }
+        }
         if include_sections:
-            lines = ["Typed page ontology:", section_prompt_catalog()]
-        else:
-            lines = [
-                "Typed entity ontology:",
-                entity_type_prompt_catalog(discoverable_only=True),
-            ]
-        lines.extend(["", "Existing canonical entities:"])
-        found = False
-        for entity in sorted(entities, key=lambda item: item.entity_id):
-            if entity.status != "active":
-                continue
-            found = True
-            aliases = ", ".join(entity.aliases) or "none"
-            lines.append(
-                f"- id={entity.entity_id}; type={entity.entity_type}; title={entity.title!r}; "
-                f"aliases={aliases}; page_state={entity.materialization_state}"
-            )
-        if not found:
-            lines.append("- none yet")
-        return "\n".join(lines)
+            payload["section_definitions"] = {
+                kind: {
+                    s.key: s.description for s in entity_type_definition(kind).sections
+                }
+                for kind in sorted({e.entity_type for e in active})
+            }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
 
     def entity_planning_catalog(
         self, entities: Iterable[EntityRecord], staged_decisions: Iterable[EntityResolutionDecision] = (),
@@ -165,70 +163,68 @@ class RoutingFormatter:
         aliases: dict[str, ClaimEvidence],
         participants: dict[str, tuple[SourceDocument, str, str | None]],
     ) -> str:
-        blocks = []
-        source_blocks = {}
+        claims, sources = {}, {}
         for alias, item in aliases.items():
             claim = item.claim
-            cited_segment_ids = {
-                segment_id
-                for provenance in claim.provenance
-                if provenance.source_id == item.source.source_id
-                for segment_id in provenance.segment_ids
-            }
-            references = []
-            for segment in item.source.segments:
-                if segment.segment_id not in cited_segment_ids:
-                    continue
-                key = (item.source.source_id, segment.segment_id)
-                label = f"source_id={key[0]}; segment_id={key[1]}"
-                text = (f"[{segment.segment_id}] role={segment.role or 'unknown'}; "
-                        f"{f'{segment.speaker}: ' if segment.speaker else ''}{segment.content}")
-                source_blocks[key] = f"[{label}]\n{text}"
-                references.append(label)
-            source_evidence = " | ".join(references) or "none"
-            source_title = str(item.source.metadata.get("title") or "").strip()
-            entities = (
-                ", ".join(
-                    f"{str(value.get('entity'))!r}[role={str(value.get('role') or 'unspecified')}]"
-                    for value in claim.about
-                    if value.get("entity")
+            citations = []
+            for provenance in claim.provenance:
+                citations.extend(
+                    {"source_id": provenance.source_id, "segment_id": sid}
+                    for sid in provenance.segment_ids
                 )
-                or "unknown"
-            )
-            stable_references = (
-                ", ".join(
-                    f"{reference.role}:{reference.entity_id or 'unresolved'}"
-                    for reference in self.artifacts.list_entity_references(
+                try:
+                    source = (
+                        item.source
+                        if provenance.source_id == item.source.source_id
+                        else self.artifacts.get_source(provenance.source_id)
+                    )
+                except FileNotFoundError:
+                    continue
+                entry = sources.setdefault(
+                    source.source_id,
+                    {
+                        "source_type": source.source_type,
+                        "occurred_at": source.occurred_at,
+                        "segments": {},
+                    },
+                )
+                if source.metadata.get("title"):
+                    entry["title"] = source.metadata["title"]
+                by_id = {s.segment_id: s for s in source.segments}
+                for sid in provenance.segment_ids:
+                    if sid in by_id:
+                        seg = by_id[sid]
+                        entry["segments"][sid] = {
+                            "speaker": seg.speaker,
+                            "role": seg.role,
+                            "timestamp": seg.timestamp,
+                            "text": seg.content,
+                        }
+            claims[alias] = {
+                "text": claim.text,
+                "claim_id": claim.claim_id,
+                "claim_type": claim.claim_type,
+                "about": claim.about,
+                "temporal_status": claim.temporal_status,
+                "facets": claim.facets,
+                "evidence_modality": claim.evidence_modality,
+                "citations": citations,
+                "identity_references": [
+                    {"role": r.role, "entity_id": r.entity_id, "origin": r.origin}
+                    for r in self.artifacts.list_entity_references(
                         claim_id=claim.claim_id, status="active"
                     )
-                )
-                or "none"
-            )
-            facets = "; ".join(
-                f"{key}={value}"
-                for key, value in sorted(claim.facets.items())
-                if value not in (None, "", [], {})
-            )
-            blocks.append(
-                f"[EVIDENCE {alias}]\nclaim_type={claim.claim_type}; "
-                f"extracted_entity_mentions={entities}; stable_entity_references={stable_references}; "
-                f"temporal_status={claim.temporal_status}; source_id={item.source.source_id}; "
-                f"source_type={item.source.source_type}; occurred_at={item.source.occurred_at or 'unknown'}; "
-                f"participants={','.join(item.source.participants) or 'none'}; "
-                f"source_title={source_title or 'none'}; "
-                f"evidence_modality={claim.evidence_modality}\nclaim={claim.text}\n"
-                f"cited_source_evidence={source_evidence}\n"
-                f"qualifiers={facets or 'none'}"
-            )
-        if participants:
-            blocks.append("[SOURCE-DECLARED PARTICIPANTS]")
-            blocks.extend(
-                f"[{alias}] name={name!r}; source_id={source.source_id}; "
-                f"speaker_role={role or 'participant'}; "
-                f"occurred_at={source.occurred_at or 'unknown'}"
-                for alias, (source, name, role) in participants.items()
-            )
-        if source_blocks:
-            blocks.append("[CITED SOURCE SEGMENTS: shared evidence, included once per exact source/segment ID]")
-            blocks.extend(source_blocks.values())
-        return "\n\n".join(blocks)
+                ],
+            }
+        return json.dumps(
+            {
+                "claims": claims,
+                "participants": {
+                    a: {"name": name, "role": role, "source_id": s.source_id}
+                    for a, (s, name, role) in participants.items()
+                },
+                "sources": sources,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )

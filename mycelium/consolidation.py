@@ -22,6 +22,7 @@ from mycelium.artifacts import (
     IdentityWorkUnit,
 )
 from mycelium.ollama import OllamaClient
+from mycelium.budget import require_request_budget, ContextBudgetError
 from mycelium.identity_plan import identity_plan_model, identity_plan_prompt, planned_subjects, declared_user_bindings
 from mycelium.page_plan import page_plan_model, page_plan_prompt
 
@@ -192,16 +193,30 @@ class ClaimRouter:
         routable = {e.entity_id: e.entity_type for e in planned.values() if e.status == "active"}
         routings = {a: {"route_kind": "deferred", "confidence": 1.0,
                        "reason": "A supporting identity requires review."} for a in blockers}
-        for batch in self._alias_batches(
+        batches = list(self._alias_batches(
             {a: item for a, item in aliases.items() if a not in blockers},
             entity_count=len(routable),
-        ):
+        ))
+        while batches:
+            batch = batches.pop(0)
             routing_model = page_plan_model(batch, routable)
             system, user = page_plan_prompt(
                 self.formatter.entity_catalog(planned.values(), include_sections=True),
                 json.dumps(resolved, ensure_ascii=False),
                 self.formatter.format_evidence(batch, self.resolution.participants_for_evidence(batch, participants)),
             )
+            try:
+                require_request_budget(
+                    [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                    context_window=getattr(self.llm, "context_window_tokens", 32768),
+                    output_tokens=8192, schema=routing_model.model_json_schema(),
+                )
+            except ContextBudgetError:
+                if len(batch) > 1:
+                    items = list(batch.items())
+                    midpoint = len(items) // 2
+                    batches[:0] = [dict(items[:midpoint]), dict(items[midpoint:])]
+                    continue
             try:
                 routings.update(routing_model.model_validate(await self.llm.call_structured(
                     system, user, routing_model, num_predict=8192, debug_label="dream-claim-routing",
@@ -452,7 +467,6 @@ class ClaimRouter:
         aliases: dict[str, ClaimEvidence], size: int = 24, *, entity_count: int = 1,
     ) -> Iterable[dict[str, ClaimEvidence]]:
         """Bound claim/page decisions, preserving every claim and eligible page."""
-        size = min(size, max(1, 32 // max(1, entity_count)))
         items = list(aliases.items())
         for start in range(0, len(items), size):
             yield dict(items[start:start + size])

@@ -6,7 +6,7 @@ import uuid
 
 from ollama import web_fetch, web_search
 
-from mycelium.budget import count_message_tokens, count_tokens, truncate_text_tokens
+from mycelium.budget import count_message_tokens, ContextBudgetError
 from mycelium.memory_tools import MEMORY_TOOL_DEFINITIONS, MemoryToolset
 from mycelium.operations import MemoryEvidence, MemoryWorkspace, RetrievalRequest
 from mycelium.prompting import render_prompt
@@ -20,7 +20,6 @@ from server.runtime import (
     get_session_lock,
     iso_now,
     load_meta,
-    recent_thread_context,
     save_meta,
 )
 
@@ -61,6 +60,8 @@ def build_chat_prompt(
         raise ValueError("Assistant prompt budget must be positive")
     history = chat_history_messages(record, current_message)[:-1]
     recent_start = max(0, len(history) - 4)
+    while recent_start < len(history) and history[recent_start]["role"] != "user":
+        recent_start += 1
     selected_history = history[recent_start:]
     selected_evidence = MemoryEvidence(
         more_available=evidence.more_available
@@ -82,7 +83,7 @@ def build_chat_prompt(
         )
         request = render_prompt(
             "assistant/memory_request.user.jinja",
-            memory_evidence=render_memory_workspace(workspace),
+            memory_evidence=render_memory_workspace(workspace, include_request=False),
             user_request=user_content,
         )
         return [
@@ -94,30 +95,12 @@ def build_chat_prompt(
     messages = assemble(selected_history, selected_evidence, current_message)
     while selected_history and count_message_tokens(messages) > budget_tokens:
         selected_history.pop(0)
+        while selected_history and selected_history[0]["role"] != "user":
+            selected_history.pop(0)
         messages = assemble(selected_history, selected_evidence, current_message)
 
     if count_message_tokens(messages) > budget_tokens:
-        low = 0
-        high = count_tokens(current_message)
-        fitted_message = ""
-        fitted_messages = assemble([], selected_evidence, fitted_message)
-        while low <= high:
-            midpoint = (low + high) // 2
-            candidate = truncate_text_tokens(current_message, midpoint, keep_end=True)
-            trial = assemble([], selected_evidence, candidate)
-            if count_message_tokens(trial) <= budget_tokens:
-                fitted_message = candidate
-                fitted_messages = trial
-                low = midpoint + 1
-            else:
-                high = midpoint - 1
-        current_message = fitted_message
-        messages = fitted_messages
-        if count_message_tokens(messages) > budget_tokens:
-            raise ValueError(
-                "Assistant prompt budget is smaller than the system prompt"
-            )
-        selected_history = []
+        raise ContextBudgetError("The current request exceeds the assistant context budget; shorten or split it")
 
     selected_evidence = fit_memory_evidence(
         evidence,
@@ -128,12 +111,14 @@ def build_chat_prompt(
     )
     messages = assemble(selected_history, selected_evidence, current_message)
 
-    for item in reversed(history[:recent_start]):
-        trial_history = [item, *selected_history]
+    older = history[:recent_start]
+    turn_starts = [i for i, item in enumerate(older) if item["role"] == "user"]
+    for start in reversed(turn_starts):
+        trial_history = [*older[start:], *selected_history]
         trial = assemble(trial_history, selected_evidence, current_message)
-        if count_message_tokens(trial) <= budget_tokens:
-            selected_history = trial_history
-            messages = trial
+        if count_message_tokens(trial) > budget_tokens:
+            break
+        messages = trial
 
     return messages, selected_evidence, current_message
 
@@ -172,7 +157,6 @@ async def list_sessions():
         meta = load_meta()
         for session_id, record in meta.items():
             ensure_session_record(record, session_id)
-        save_meta(meta)
     return [{"id": k, "query": v["query"]} for k, v in meta.items()]
 
 
@@ -194,7 +178,6 @@ async def get_session(session_id: str):
         if session_id not in meta:
             raise HTTPException(status_code=404, detail="Session not found")
         ensure_session_record(meta[session_id], session_id)
-        save_meta(meta)
     return {"id": session_id, **meta[session_id]}
 
 
@@ -225,25 +208,31 @@ async def chat(session_id: str, req: ChatRequest):
             record = ensure_session_record(meta[session_id], session_id)
 
         mem = get_mem()
-        thread_context = recent_thread_context(record)
-        retrieval_query = render_prompt(
-            "assistant/retrieval_query.user.jinja",
-            chat_topic=record["query"],
-            recent_thread=thread_context,
-            no_prior_turns="(no prior turns)",
-            user_message=req.message,
-        )
-
         prompt_budget = min(
             mem.config.context_budget_tokens,
-            mem.config.llm.context_window_tokens,
+            mem.config.llm.context_window_tokens - 4096 - 3072,
         )
         tool_evidence_budget = mem.config.retrieval.tool_evidence_budget_tokens
         if tool_evidence_budget >= prompt_budget:
             raise ValueError(
                 "Memory tool evidence budget must be smaller than the assistant prompt budget"
             )
+        # Reserve output, schema/tool envelopes, and room for tool evidence.
         initial_prompt_budget = prompt_budget - tool_evidence_budget
+        try:
+            preflight_messages, _, _ = build_chat_prompt(
+                record, req.message, MemoryEvidence(), budget_tokens=initial_prompt_budget,
+                workspace_search_limit=mem.config.retrieval.tool_search_limit,
+                workspace_evidence_budget_tokens=tool_evidence_budget,
+            )
+        except ContextBudgetError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        retrieval_query = render_prompt(
+            "assistant/retrieval_query.user.jinja", chat_topic=record["query"],
+            recent_thread="\n".join(f"{item['role']}: {item['content']}"
+                                    for item in preflight_messages[1:-1]),
+            no_prior_turns="(no prior turns)", user_message=req.message,
+        )
         retrieval = await mem.retrieve_context(
             RetrievalRequest(
                 query=retrieval_query,

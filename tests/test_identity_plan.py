@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -113,16 +114,57 @@ def test_shared_source_text_is_included_once_with_each_claim_reference(tmp_path)
          "C003": ClaimEvidence(third, other_source)}, {},
     )
     assert rendered.count(item.source.segments[0].content) == 1
-    assert rendered.count("cited_source_evidence=source_id=s1; segment_id=seg1") == 2
-    assert "cited_source_evidence=source_id=s2; segment_id=seg1" in rendered
-    assert "[source_id=s1; segment_id=seg1]" in rendered
-    assert "[source_id=s2; segment_id=seg1]" in rendered
-    assert other_source.segments[0].content in rendered
+    payload = json.loads(rendered)
+    for alias in ("C001", "C002"):
+        assert payload["claims"][alias]["citations"] == [
+            {"source_id": "s1", "segment_id": "seg1"}
+        ]
+    assert payload["claims"]["C003"]["citations"] == [
+        {"source_id": "s2", "segment_id": "seg1"}
+    ]
+    assert payload["sources"]["s1"]["segments"]["seg1"]["text"] == item.source.segments[0].content
+    assert payload["sources"]["s2"]["segments"]["seg1"]["text"] == other_source.segments[0].content
+
+
+def test_routing_evidence_retains_cross_source_context_and_missing_citations(tmp_path):
+    memory, _, _, evidence = setup_router(tmp_path)
+    item = evidence[0]
+    context = SourceDocument(
+        "s2", "agent_conversation", "earlier", "2026-09-05", "2026-08-20", ["user"],
+        [SourceSegment("seg1", 0, "The exhibit will be at the library.", role="user",
+                       timestamp="2026-08-20")],
+        metadata={"title": "Planning discussion"},
+    )
+    memory.artifacts.save_source(context)
+    item.claim.provenance.extend([
+        ClaimProvenance("s2", ["seg1"]),
+        ClaimProvenance("missing-source", ["seg1"]),
+    ])
+    rendered = RoutingFormatter(memory.artifacts).format_evidence({"C001": item}, {})
+    payload = json.loads(rendered)
+    assert payload["sources"]["s2"]["segments"]["seg1"]["text"] == context.segments[0].content
+    assert payload["sources"]["s2"]["occurred_at"] == "2026-08-20"
+    assert payload["sources"]["s2"]["title"] == "Planning discussion"
+    assert context.recorded_at not in rendered
+    assert payload["claims"]["C001"]["citations"] == [
+        {"source_id": "s1", "segment_id": "seg1"},
+        {"source_id": "s2", "segment_id": "seg1"},
+        {"source_id": "missing-source", "segment_id": "seg1"},
+    ]
+
+
+def test_page_catalog_limits_sections_to_supplied_active_types(tmp_path):
+    memory, _, _, _ = setup_router(tmp_path)
+    person = memory.artifacts.create_entity("person", "Avery")
+    payload = json.loads(RoutingFormatter.entity_catalog([person], include_sections=True))
+    assert set(payload["pages"]) == {person.entity_id}
+    assert payload["pages"][person.entity_id]["subject"] == person.title
+    assert set(payload["section_definitions"]) == {"person"}
 
 
 def route(owner="you"):
     return {"decisions": {"C001": {"route_kind": "general", "owner_entity": owner,
-            "pages": {"you": {"subject_evidence": "Explicit fixture subject decision.", "relevance": "incidental_or_unrelated", "section_key": "not_selected", "reason": "External subject."},
+            "pages": {
                       owner: {"subject_evidence": "Explicit fixture subject decision.", "relevance": "describes_subject", "section_key": "overview", "reason": "Useful statement."}},
             "reason": "Source-grounded owner.", "confidence": 1.0}}}
 
@@ -130,6 +172,7 @@ def route(owner="you"):
 @pytest.mark.asyncio
 async def test_retry_reuses_plan_and_allocated_identity_after_partial_commit(tmp_path):
     memory, llm, router, evidence = setup_router(tmp_path)
+    llm.context_window_tokens = 32768
     plan = {"subjects": [subject(title="Exhibit", entity_type="project", resolution="new",
                                 entity_id="", participant_evidence=[])]}
     llm.call_structured.side_effect = [plan, ValueError("interrupted routing")]
@@ -150,6 +193,7 @@ async def test_retry_reuses_plan_and_allocated_identity_after_partial_commit(tmp
 @pytest.mark.asyncio
 async def test_human_identity_cannot_be_overridden_by_new_plan(tmp_path):
     memory, llm, router, evidence = setup_router(tmp_path)
+    llm.context_window_tokens = 32768
     memory.artifacts.save_entity_reference(ClaimEntityReference(
         reference_id="review1", claim_id="c1", role="identity_subject", entity_id="you",
         surface=None, origin="manual",
@@ -166,6 +210,7 @@ async def test_human_identity_cannot_be_overridden_by_new_plan(tmp_path):
 @pytest.mark.asyncio
 async def test_invented_candidate_fails_without_creating_entities_or_routing(tmp_path):
     memory, llm, router, evidence = setup_router(tmp_path)
+    llm.context_window_tokens = 32768
     llm.call_structured.return_value = {"subjects": [subject(
         title="Workshop", entity_type="organization", resolution="review_required",
         entity_id="", participant_evidence=[], candidate_entity_ids=["invented"],
@@ -183,6 +228,7 @@ async def test_identity_candidates_survive_routing_and_repository_roundtrip(tmp_
     from mycelium.artifacts import EntityRecord
 
     memory, llm, router, evidence = setup_router(tmp_path)
+    llm.context_window_tokens = 32768
     for entity_id in ["person-a", "person-b"]:
         memory.artifacts.save_entity(EntityRecord(
             entity_id, "person", entity_id, entity_id, [], "active", "2026-09-07", "2026-09-07",

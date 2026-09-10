@@ -56,6 +56,21 @@ class EvidenceTime:
 
 
 @dataclass(frozen=True)
+class EvidenceClaim:
+    claim_id: str
+    text: str
+
+
+@dataclass(frozen=True)
+class EvidenceReview:
+    proposal_id: str
+    status: str
+    relation: str
+    incoming_claim_ids: tuple[str, ...]
+    target_claim_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class EvidenceRecord:
     record_id: str
     record_type: Literal["claim", "fact"]
@@ -66,6 +81,8 @@ class EvidenceRecord:
     state: str | None = None
     temporal: tuple[EvidenceTime, ...] = ()
     citations: tuple[EvidenceCitation, ...] = ()
+    canonical_claims: tuple[EvidenceClaim, ...] = ()
+    reviews: tuple[EvidenceReview, ...] = ()
 
 
 @dataclass(frozen=True)

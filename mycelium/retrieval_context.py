@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from functools import cached_property
 from dataclasses import replace
 from html import escape
 from typing import Callable, Literal
 
 from mycelium.artifacts import (
     ArtifactStore,
-    ConsolidatedFact,
     MemoryClaim,
     SourceSegment,
 )
@@ -17,6 +17,8 @@ from mycelium.budget import count_tokens
 from mycelium.claim_index import ClaimSearchHit
 from mycelium.operations import (
     EvidenceCitation,
+    EvidenceClaim,
+    EvidenceReview,
     EvidenceRecord,
     EvidenceSegment,
     EvidenceSource,
@@ -55,7 +57,7 @@ def render_memory_evidence(evidence: MemoryEvidence) -> str:
     return _render_evidence_envelope("memory-evidence", evidence)
 
 
-def render_memory_workspace(workspace: MemoryWorkspace) -> str:
+def render_memory_workspace(workspace: MemoryWorkspace, *, include_request: bool = True) -> str:
     """Render the one current accumulated evidence workspace for an agent round."""
     operation_lines: list[str] = []
     if workspace.operations:
@@ -83,7 +85,7 @@ def render_memory_workspace(workspace: MemoryWorkspace) -> str:
         workspace.evidence,
         attributes={"revision": str(workspace.revision)},
         preamble=(
-            f"Original request: {_text(workspace.request)}",
+            *([f"Original request: {_text(workspace.request)}"] if include_request else []),
             f"Remaining searches: {workspace.remaining_searches}",
             f"Remaining evidence tokens: {workspace.remaining_evidence_tokens}",
             "",
@@ -175,6 +177,17 @@ def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
             lines.append(f"State: {_text(record.state)}")
         lines.append("Supporting claims:")
         lines.extend(f"- `{_text(value)}`" for value in record.claim_ids)
+        if record.canonical_claims:
+            lines.append("Matched canonical assertions:")
+            lines.extend(f"- `{_text(c.claim_id)}`: {_text(c.text)}" for c in record.canonical_claims)
+        for review in record.reviews:
+            lines.append(
+                f"Review `{_text(review.proposal_id)}`: {_text(review.status)}; "
+                f"relation: {_text(review.relation)}; incoming claims: "
+                + ", ".join(_text(c) for c in review.incoming_claim_ids)
+                + "; target claims: " + ", ".join(_text(c) for c in review.target_claim_ids)
+                + ". This relationship is unresolved; incoming claims do not establish a replacement."
+            )
         if record.temporal:
             lines.append("Timing:")
             for value in record.temporal:
@@ -261,6 +274,37 @@ class RetrievedContextBuilder:
         self.wiki = wiki
         self.artifacts = artifacts
 
+    @cached_property
+    def facts_by_claim(self):
+        result = defaultdict(list)
+        for fact in self.artifacts.list_consolidated_facts():
+            for claim_id in fact.member_claim_ids:
+                result[claim_id].append(fact)
+        return result
+
+    @cached_property
+    def reviews_by_claim(self):
+        result = defaultdict(list)
+        for p in self.artifacts.list_reconsolidation_proposals(status="pending"):
+            review = EvidenceReview(p.proposal_id, p.status, p.proposed_relation,
+                                    tuple(p.incoming_claim_ids), tuple(p.target_claim_ids))
+            for claim_id in {*p.incoming_claim_ids, *p.target_claim_ids}:
+                result[claim_id].append(review)
+        return result
+
+    def distinct_hits(self, hits, limit):
+        selected, seen = [], set()
+        for hit in hits:
+            ids = {f.fact_id for f in self.facts_by_claim.get(hit.claim_id, [])} or {hit.claim_id}
+            if ids <= seen:
+                selected.append(hit)
+                continue
+            if len(seen) >= limit:
+                continue
+            selected.append(hit)
+            seen.update(ids)
+        return selected
+
     def build(
         self,
         hits: list[ClaimSearchHit],
@@ -308,11 +352,9 @@ class RetrievedContextBuilder:
             return hit.claim_text
 
         lines = [f"Claim: {claim.text}", *self._timing_lines([claim])]
-        facts = [
-            fact
-            for fact in self.artifacts.list_consolidated_facts()
-            if hit.claim_id in fact.member_claim_ids
-        ]
+        facts = self.facts_by_claim.get(hit.claim_id, [])
+        for review in self.reviews_by_claim.get(hit.claim_id, []):
+            lines.append(f"Unresolved review: {review}")
         if facts:
             lines.append("Consolidated representations:")
             lines.extend(
@@ -325,10 +367,14 @@ class RetrievedContextBuilder:
         self, claim_ids: list[str], *, budget_tokens: int
     ) -> MemoryEvidence:
         """Return bounded structured source evidence for exact active claim IDs."""
-        claims = {
-            claim.claim_id: claim
-            for claim in self.artifacts.list_claims(status="active")
-        }
+        claims = {}
+        for claim_id in dict.fromkeys(claim_ids):
+            try:
+                claim = self.artifacts.get_claim(claim_id)
+            except FileNotFoundError:
+                continue
+            if claim.status == "active":
+                claims[claim_id] = claim
         return self._structured_source_evidence(
             [
                 claims[claim_id]
@@ -339,11 +385,15 @@ class RetrievedContextBuilder:
         )
 
     def _memory_evidence(self, hits: list[ClaimSearchHit]) -> MemoryEvidence:
-        claims = {claim.claim_id: claim for claim in self.artifacts.list_claims()}
-        facts_by_claim: dict[str, list[ConsolidatedFact]] = defaultdict(list)
-        for fact in self.artifacts.list_consolidated_facts():
-            for claim_id in fact.member_claim_ids:
-                facts_by_claim[claim_id].append(fact)
+        matched_ids = {hit.claim_id for hit in hits}
+        facts_by_claim = self.facts_by_claim
+        wanted = matched_ids | {cid for hit in hits for f in facts_by_claim.get(hit.claim_id, []) for cid in f.member_claim_ids}
+        claims = {}
+        for cid in wanted:
+            try:
+                claims[cid] = self.artifacts.get_claim(cid)
+            except FileNotFoundError:
+                continue
 
         records: list[EvidenceRecord] = []
         seen_record_ids: set[str] = set()
@@ -371,6 +421,7 @@ class RetrievedContextBuilder:
                             claim_ids=tuple(fact.member_claim_ids),
                             state=fact.state,
                             claims=members,
+                            matched_claim_ids=matched_ids,
                         )
                     )
                     seen_record_ids.add(fact.fact_id)
@@ -405,6 +456,7 @@ class RetrievedContextBuilder:
         claim_ids: tuple[str, ...],
         state: str | None,
         claims: list[MemoryClaim],
+        matched_claim_ids: set[str] | None = None,
     ) -> EvidenceRecord:
         temporal: list[EvidenceTime] = []
         citations: list[EvidenceCitation] = []
@@ -452,6 +504,10 @@ class RetrievedContextBuilder:
             state=state,
             temporal=tuple(temporal),
             citations=tuple(citations),
+            canonical_claims=tuple(EvidenceClaim(c.claim_id, c.text) for c in claims
+                                  if matched_claim_ids is None or c.claim_id in matched_claim_ids),
+            reviews=tuple({r.proposal_id: r for cid in claim_ids
+                           for r in self.reviews_by_claim.get(cid, [])}.values()),
         )
 
     def _entity_title(self, entity_id: str | None) -> str | None:

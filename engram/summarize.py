@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
@@ -33,6 +34,7 @@ class EngramSummarizer:
         temperature: float = 0.1,
         timeout: int = 180,
         context_window_tokens: int = 32768,
+        trace_path: Path | None = None,
     ) -> None:
         self.llm = OllamaClient(
             url=ollama_url,
@@ -40,6 +42,7 @@ class EngramSummarizer:
             temperature=temperature,
             timeout=timeout,
             context_window_tokens=context_window_tokens,
+            trace_path=trace_path,
         )
         self.context_window_tokens = context_window_tokens
 
@@ -59,7 +62,7 @@ class EngramSummarizer:
 
         input_budget = structured_input_budget(
             self.context_window_tokens, num_predict=4096
-        )
+        ) - count_tokens(json.dumps(MeetingSummaryOutput.model_json_schema())) - 256
         if count_tokens(f"{system}\n{prompt(transcript)}") <= input_budget:
             output = await self._summarize_prompt(
                 system, prompt(transcript), num_predict=4096
@@ -101,6 +104,7 @@ class EngramSummarizer:
             user,
             MeetingSummaryOutput,
             num_predict=num_predict,
+            debug_label="meeting-summary",
         )
         if isinstance(response, MeetingSummaryOutput):
             return response
@@ -114,7 +118,7 @@ class EngramSummarizer:
         system = render_prompt("engram/reduction.system.jinja")
         input_budget = structured_input_budget(
             self.context_window_tokens, num_predict=4096
-        )
+        ) - count_tokens(json.dumps(MeetingSummaryOutput.model_json_schema())) - 256
         current = summaries
         while len(current) > 1:
             serialized = [item.model_dump_json() for item in current]

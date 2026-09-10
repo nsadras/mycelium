@@ -40,6 +40,18 @@ def test_truth_change_requires_same_scope():
         schema.model_validate({"decisions": {"C003": decision}})
 
 
+def test_truth_schema_establishes_scope_before_verdict():
+    schema = fact_truth_output_model(["C002"], ["C001"]).model_json_schema()
+    branches = [
+        definition["properties"]
+        for definition in schema["$defs"].values()
+        if "disposition" in definition.get("properties", {})
+    ]
+    assert len(branches) == 2
+    for fields in branches:
+        assert list(fields).index("scope") < list(fields).index("disposition")
+
+
 TEMPORAL_CASES = [
     (
         "separate_occurrences",

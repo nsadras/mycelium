@@ -16,12 +16,13 @@ class WhisperXDiarizer:
             raise RuntimeError("WhisperX is not installed. Install Engram diarization dependencies.") from exc
 
         device = self.config.resolved_whisper_device()
-        compute_type = self.config.resolved_whisper_compute_type(device)
-        model = whisperx.load_model(self.config.whisper_model, device, compute_type=compute_type)
         audio = whisperx.load_audio(audio_path)
-        result = model.transcribe(audio, batch_size=self.config.whisper_batch_size)
-        align_model, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
-        aligned = whisperx.align(result["segments"], align_model, metadata, audio, device, return_char_alignments=False)
+        # Reuse canonical ASR segments. Speaker assignment uses their audio-time
+        # intervals; it does not need another transcription or text alignment.
+        aligned = {"segments": [
+            {"start": s.start_seconds, "end": s.end_seconds, "text": s.text}
+            for s in fallback_segments
+        ]}
         diarize_model = DiarizationPipeline(
             model_name=self.config.pyannote_model,
             token=self.config.hf_token,

@@ -7,7 +7,7 @@ import pytest
 
 from mycelium import Mycelium, prompts
 from mycelium.structured_outputs import fact_synthesis_output_model
-from tests.test_extraction_replays import check_meaning
+from tests.model_probe_helpers import check_meaning
 
 
 CASES = [
@@ -64,15 +64,23 @@ async def test_grounded_synthesis(tmp_path, monkeypatch, name, texts, count, exp
         "profile: interests and ongoing knowledge\nhistory: past events\nneeds_review: unresolved memory",
     )
     result = schema.model_validate(await memory.llm.call_structured(
-        system, user, schema, num_predict=4096, debug_label="synthesis-probe",
+        system, user, schema, num_predict=8192, think=True, debug_label="synthesis-probe",
     )).model_dump()
     (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
     # The modality case tests faithful uncertainty, not a mandatory compression
     # ratio. Keeping its two assertions separate is a valid conservative choice.
     if count is not None:
         assert len(result["facts"]) == count
+    # Production renders singleton facts from their canonical claims. Judge
+    # that displayed text, not the null placeholder or the memory-scope label.
+    statements = [
+        claims[group["member_claim_aliases"][0]]
+        if len(group["member_claim_aliases"]) == 1 else group["text"]
+        for group in result["facts"]
+    ]
+    (tmp_path / "statements.json").write_text(json.dumps(statements, indent=2))
     await check_meaning(memory, {"expected": expected, "forbidden": forbidden},
-                        result["facts"], tmp_path / "meaning.json")
+                        statements, tmp_path / "meaning.json")
 
 
 @pytest.mark.integration
@@ -92,7 +100,8 @@ async def test_repartitions_overbroad_existing_group(tmp_path, monkeypatch):
         "An existing display fact groups C001 through C006 into one long sentence.", "[]",
         "profile: preferences and plans; history: completed occurrences")
     response = await memory.llm.call_structured(system, user,
-        fact_synthesis_output_model(claims, ["profile", "history"]), num_predict=4096, dump_success=True)
+        fact_synthesis_output_model(claims, ["profile", "history"]),
+        num_predict=8192, think=True, dump_success=True)
     (tmp_path / "response.json").write_text(json.dumps(response, indent=2))
     assert {frozenset(f["member_claim_aliases"]) for f in response["facts"]} == {
         frozenset(members) for members in [["C001", "C002"], ["C003", "C004"], ["C005", "C006"], ["C007"]]}

@@ -1,4 +1,4 @@
-"""Controlled, opt-in host-model reasoning experiment; no product behavior changes."""
+"""Historical 2026-09-09 reasoning experiment; see benchmarks/README.md."""
 from __future__ import annotations
 
 import argparse
@@ -18,16 +18,12 @@ from mycelium import Mycelium, SourceInput, prompts
 from mycelium.budget import count_tokens, require_request_budget
 from mycelium.structured_outputs import extraction_output_model
 from benchmarks.mycelium_bench.locomo import iter_locomo_sessions
+from benchmarks.probe_support import write
 
 ROOT = Path("benchmark_runs/reasoning-comparison-20260909")
 OUTPUT_TOKENS = 16384
 CONTEXT_TOKENS = 32768
 TEMPERATURE = 0.0
-
-
-def write(path, value):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False, default=str))
 
 
 class RecordedTransport:

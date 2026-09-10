@@ -1,9 +1,5 @@
 """Typed entry points for production memory prompt templates."""
 
-from mycelium.ontology import (
-    CLAIM_TYPES,
-    EXTRACTION_SUBJECT_POLICY,
-)
 from mycelium.prompting import render_prompt, render_prompt_pair
 
 
@@ -81,8 +77,6 @@ def claim_extraction_prompt(
         "memory/extraction",
         source_type=source_type,
         source_policy=render_prompt(policy_template),
-        subject_policy=EXTRACTION_SUBJECT_POLICY,
-        claim_types=CLAIM_TYPES,
         source_id=source_id,
         participants=participants,
         segments=segments,

@@ -89,25 +89,6 @@ class RoutingFormatter:
             lines.append("- none yet")
         return "\n".join(lines)
 
-    @staticmethod
-    def format_subject_candidates(
-        aliases: dict[str, ClaimEvidence],
-        participants: dict[str, tuple[SourceDocument, str, str | None]],
-    ) -> str:
-        """Expose extraction-declared referents without making a new decision."""
-        lines = [
-            f"- {alias}: name={str(mention.get('entity'))!r}; "
-            f"role={str(mention.get('role') or 'unspecified')}"
-            for alias, item in aliases.items()
-            for mention in item.claim.about
-            if mention.get("entity")
-        ]
-        lines.extend(
-            f"- {alias}: name={name!r}; role=source_participant"
-            for alias, (_, name, _) in participants.items()
-        )
-        return "\n".join(lines) or "- none"
-
     def identity_review_catalog(
         self, aliases: dict[str, ClaimEvidence]
     ) -> str:

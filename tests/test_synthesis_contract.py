@@ -14,7 +14,7 @@ def synthesis_plan():
 
 
 @pytest.mark.parametrize("damage", ["missing_claim", "unknown_claim", "missing_fact", "duplicate_member",
-                                    "duplicate_fact", "wrong_section", "cross_group_text", "rewrite"])
+                                    "duplicate_fact", "wrong_section", "singleton_text"])
 def test_synthesis_requires_complete_grounded_projection(damage):
     schema = fact_synthesis_output_model(
         {"C001": "Ava prefers tea.", "C002": "Ava grows herbs."}, ["profile"],
@@ -34,8 +34,6 @@ def test_synthesis_requires_complete_grounded_projection(damage):
         response["facts"][1] = deepcopy(response["facts"][0])
     elif damage == "wrong_section":
         response["facts"][0]["section_key"] = "invented"
-    elif damage == "cross_group_text":
-        response["facts"][0]["text"] = "Ava grows herbs."
     else:
         response["facts"][0]["text"] = "Ava prefers coffee."
     with pytest.raises(ValidationError):
@@ -43,14 +41,20 @@ def test_synthesis_requires_complete_grounded_projection(damage):
 
 
 def test_synthesis_keeps_review_required_sides_separate():
+    claims = {"C001": "Ava prefers tea.", "C002": "Ava grows herbs."}
     schema = fact_synthesis_output_model(
-        {"C001": "Ava prefers tea.", "C002": "Ava grows herbs."}, ["profile"],
+        claims, ["profile"],
         [{"incoming_claim_aliases": ["C002"], "target_claim_aliases": ["C001"]}],
     )
     response = synthesis_plan()
     schema.model_validate(response)
-    response["facts"] = [{**response["facts"][0], "member_claim_aliases": ["C001", "C002"]}]
-    with pytest.raises(ValidationError):
+    response["facts"] = [{
+        **response["facts"][0],
+        "member_claim_aliases": ["C001", "C002"],
+        "text": "Ava prefers tea and grows herbs.",
+    }]
+    fact_synthesis_output_model(claims, ["profile"]).model_validate(response)
+    with pytest.raises(ValidationError, match="Truth-change sides cannot share a fact"):
         schema.model_validate(response)
 
 

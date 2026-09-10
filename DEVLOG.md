@@ -1,5 +1,14 @@
 # Development Log
 
+## 2026-09-10 — Static unused-code and test cleanup
+
+- Removed confirmed dead helpers/files and obsolete test scaffolding; repaired misleading synthesis/identity rejection tests and stale model-probe reasoning, singleton projection, and nullable serialization. Simplified fixtures and extracted shared test/benchmark helpers. Maintained probe runners now use fresh outputs rather than silently reusing dated results.
+- Active production prompts and decision schemas remain unchanged. Retained uncertain public API candidates and historical experiment artifacts. Details and pending validation: `planning/unused_cleanup_2026_09_10.md` and `benchmarks/README.md`.
+- User explicitly requested no code execution. Reviewed text, references, and diffs only; no imports, tests, collection, lint/type checks, model calls, benchmarks, or servers run. Runtime/model validation remains pending. No commit made.
+- Subsequent user authorization: verify and commit. Full host-access test directory passed (427 passed/87 skipped, 5.68s); Ruff, whitespace checks, and UI production build passed. The sandbox suite attempt stalled and was interrupted. Benchmark imports, seven-case callback collection, and unique output paths passed; two real Gemma context-selection smoke calls passed and existing output reuse was rejected before inference (`benchmark_runs/contract-simplification-20260910T073847Z-9ed453ca/`).
+- Selected host Gemma validation: 6 passed/2 failed in 972.07s, under `benchmark_runs/cleanup-validation-20260910/`. Both synthesis probes, direct refusal extraction, refusal pipeline replay, and shared/incidental page probes passed. Both replay stores represent all two claims; refusal also passed restart/retrieval. Initial probe setup lacked the basetemp parent directory and failed before inference; corrected before the actual run. Logs and coverage inspection saved with `artifact-review.json`.
+- Model validation is not entirely green. Accepted-reference direct extraction cited a valid earlier-context time anchor that the unchanged schema forbids; retry exhausted 32,768 tokens after 412.8s without final output. Refusal replay reproduced the anchor error but recovered. Accepted replay retained acceptance, time, and citations, but its combined tentative/accepted wording failed the wiki semantic judge; restart/retrieval for that case were not reached. Documented both follow-ups without weakening assertions or changing production semantic contracts. See the cleanup report for exact artifacts and proposed investigation boundaries.
+
 ## 2026-08-28 — Externalize model prompts as strict Jinja templates
 
 - Added one strict Jinja rendering boundary in `mycelium.prompting`. Undefined variables fail closed, templates are

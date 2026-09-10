@@ -42,13 +42,15 @@ async def test_page_plan_real_model(tmp_path, case, monkeypatch):
     system, user = page_plan_prompt(formatter.entity_catalog(entities, include_sections=True),
                                     "Resolved identities are listed above.",
                                     formatter.format_evidence({"C001": ClaimEvidence(claim, source)}, {}))
-    response = schema.model_validate(await memory.llm.call_structured(system, user, schema)).model_dump(exclude_none=True)
-    (tmp_path / "response.json").write_text(json.dumps(response, indent=2))
+    response = schema.model_validate(await memory.llm.call_structured(system, user, schema)).model_dump()
+    response_path = tmp_path / "response.json"
+    response_path.write_text(json.dumps(response, indent=2))
+    assert schema.model_validate_json(response_path.read_text()).model_dump() == response
     print(case, json.dumps(response), flush=True)
     decision = response["decisions"]["C001"]
     assert decision["pages"]
     expected = {"you"} if case == "multiple_sections" else ({"o1"} if case == "incidental" else {"p1", "o1"})
-    assert {key for key, value in decision["pages"].items() if value["section_key"] != "not_selected"} == expected
+    assert set(decision["pages"]) == expected
 
 
 @pytest.mark.integration
@@ -81,6 +83,6 @@ async def test_page_plan_with_larger_registry(tmp_path, monkeypatch):
     for alias, expected in zip(evidence, [{person}, {organization}, {person, organization}, {person, organization}]):
         decision = result["decisions"][alias]
         assert decision["pages"]
-        selected = {key for key, value in decision["pages"].items() if value["section_key"] != "not_selected"}
+        selected = set(decision["pages"])
         assert selected == expected
         assert decision["owner_entity"] in selected

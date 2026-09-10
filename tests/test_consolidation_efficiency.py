@@ -11,7 +11,7 @@ import pytest
 from mycelium.batching import structured_input_budget
 from mycelium.budget import count_tokens
 from mycelium.facts import FactResolver
-from tests.test_reconsolidation import claim, fact, place, setup_owner
+from tests.memory_helpers import claim, fact, place, setup_owner
 
 
 def selection_fixture(

@@ -2,12 +2,12 @@
 import asyncio
 import json
 import time
-from pathlib import Path
 from pydantic import BaseModel
+from benchmarks.probe_support import fresh_run_root
 from mycelium import prompts
 from mycelium.structured_outputs import extraction_output_model, fact_truth_output_model, fact_synthesis_output_model
 
-ROOT = Path("benchmark_runs/reasoning-policy-20260909/probes")
+ROOT = fresh_run_root("reasoning-policy") / "probes"
 SCHEMA_PREFIX = "\n\nReturn one JSON value conforming to this output schema:\n"
 
 async def call(name, system, user, schema, *, think=True, native=False):
@@ -15,8 +15,9 @@ async def call(name, system, user, schema, *, think=True, native=False):
     from pydantic import ValidationError
     original_path = ROOT / f"{name}.json"
     validation_path = ROOT / f"{name}-validation.json"
-    if validation_path.exists():
-        return json.loads(validation_path.read_text())
+    if validation_path.exists() or original_path.exists():
+        raise ValueError(f"Use a fresh probe output directory: {ROOT}")
+    print(f"Output: {ROOT}", flush=True)
     shape = schema.model_json_schema()
     base_messages = [{"role":"system","content":system},
         {"role":"user","content":user + SCHEMA_PREFIX + json.dumps(shape, ensure_ascii=False)}]
@@ -31,15 +32,12 @@ async def call(name, system, user, schema, *, think=True, native=False):
     try:
         for attempt in range(1,4):
             path = original_path if attempt == 1 else ROOT / f"{name}-attempt-{attempt}.json"
-            if path.exists():
-                record = json.loads(path.read_text())
-            else:
-                record = {"request":request}
-                path.write_text(json.dumps(record,indent=2))
-                start = time.monotonic()
-                response = await client.client.chat(**request)
-                record.update(response=response.model_dump(mode="json",exclude_none=True), seconds=time.monotonic()-start)
-                path.write_text(json.dumps(record,indent=2))
+            record = {"request":request}
+            path.write_text(json.dumps(record,indent=2))
+            start = time.monotonic()
+            response = await client.client.chat(**request)
+            record.update(response=response.model_dump(mode="json",exclude_none=True), seconds=time.monotonic()-start)
+            path.write_text(json.dumps(record,indent=2))
             content = record["response"]["message"].get("content", "")
             try:
                 result = client._parse_structured_response(content, schema)
@@ -65,7 +63,7 @@ class Record(BaseModel):
 class Records(BaseModel):
     records: list[Record]
 
-async def main():
+async def run_contracts(call):
     records = [{"id":f"S{i}","text":t} for i,t in enumerate([
         "Lena repairs bicycles.", "Lena owns two cats.", "Lena studies geology.",
         "Lena joined a choir in April.", "Lena grows herbs.", "Lena prefers written updates."],1)]
@@ -93,4 +91,4 @@ async def main():
     await call("synthesis",system,user,fact_synthesis_output_model(claims,["history","plans"]))
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run_contracts(call))

@@ -9,7 +9,7 @@ import pytest
 
 from mycelium import Mycelium, prompts
 from mycelium.structured_outputs import fact_truth_output_model
-from tests.test_extraction_replays import capture
+from tests.model_probe_helpers import capture
 
 
 CASES = [

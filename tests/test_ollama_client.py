@@ -152,22 +152,6 @@ class RepeatedToolSdkClient:
         })
 
 
-class FakeWebClient:
-    def web_search(self, query: str, max_results: int = 3):
-        return {
-            "results": [
-                {
-                    "title": "Result One",
-                    "url": "https://example.com/one",
-                    "content": f"result for {query}\\nsecond line",
-                }
-            ]
-        }
-
-    def web_fetch(self, url: str):
-        return f"content for {url}"
-
-
 @pytest.mark.asyncio
 async def test_call_messages_uses_explicit_message_history():
     client = OllamaClient("http://localhost:11434", "test-model", temperature=0.3)

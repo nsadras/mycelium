@@ -10,53 +10,15 @@ from pathlib import Path
 from ollama import AsyncClient
 
 from benchmarks import reasoning_contract_probes as probes
+from benchmarks.probe_support import RecordedSdk, fresh_run_root, write
 from mycelium import Mycelium, SourceInput
 from mycelium.artifacts import SourceSegment
 from mycelium.encoder import Encoder
 from mycelium.ollama import OllamaClient
 from mycelium.structured_outputs import extraction_output_model
 
-ROOT = Path("benchmark_runs/model-contract-comparison-20260909")
+ROOT = fresh_run_root("model-contract-comparison")
 MODELS = ("gemma4:12b", "qwen3.5:9b")
-
-
-def write(path, value):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False, default=str))
-
-
-class RecordedSdk:
-    def __init__(self, model, root):
-        self.model, self.root = model, root
-        self.sdk = AsyncClient(host="http://localhost:11434", timeout=900)
-        self.index = len(list(root.glob("*.json")))
-
-    async def chat(self, **request):
-        self.index += 1
-        options = {**request["options"], "seed": 17}
-        if self.model == "qwen3.5:9b":
-            options.update(temperature=1.0 if request.get("think") else 0.7,
-                           top_p=0.95 if request.get("think") else 0.8,
-                           top_k=20, min_p=0.0, presence_penalty=1.5,
-                           repeat_penalty=1.0)
-        request = {**request, "model": self.model, "options": options}
-        path = self.root / f"{self.index:04d}.json"
-        record = {"request": request}
-        write(path, record)
-        started = time.monotonic()
-        try:
-            response = await self.sdk.chat(**request)
-            record["response"] = response.model_dump(mode="json", exclude_none=True)
-            return response
-        except Exception as exc:
-            record["error"] = f"{type(exc).__name__}: {exc}"
-            raise
-        finally:
-            record["seconds"] = time.monotonic() - started
-            write(path, record)
-
-    async def close(self):
-        await self.sdk._client.aclose()
 
 
 async def contracts(model, root):
@@ -65,16 +27,11 @@ async def contracts(model, root):
     async def collect(name, system, user, schema, **kwargs):
         catalog[name] = (system, user, schema, kwargs)
 
-    original = probes.call
-    probes.call = collect
-    try:
-        await probes.main()
-    finally:
-        probes.call = original
+    await probes.run_contracts(collect)
     for name in ("extraction-native-False", "truth-changed", "truth-distinct", "synthesis"):
         target = root / name
-        if (target / "result.json").exists():
-            continue
+        if target.exists():
+            raise ValueError(f"Use a fresh contract output directory: {target}")
         system, user, schema, _ = catalog[name]
         think = name != "extraction-native-False"
         client = OllamaClient("http://localhost:11434", model, timeout=900,
@@ -98,10 +55,8 @@ async def contracts(model, root):
 
 
 async def cumulative(model, root):
-    if (root / "result.json").exists():
-        return
-    if (root / "store").exists():
-        raise ValueError(f"Interrupted store needs explicit review before replay: {root}")
+    if root.exists():
+        raise ValueError(f"Use a fresh cumulative output directory: {root}")
     batches = [
         ["I work as a librarian.", "I own a blue bicycle.", "I enjoy watercolor painting."],
         ["I have worked as a librarian for ten years.", "My bicycle has a wicker basket.",
@@ -157,6 +112,7 @@ async def cumulative(model, root):
 
 
 async def main():
+    print(f"Output: {ROOT}", flush=True)
     for model in MODELS:
         root = ROOT / model.replace(":", "-")
         sdk = AsyncClient(host="http://localhost:11434", timeout=900)
@@ -171,6 +127,7 @@ async def main():
 
 
 async def natural():
+    print(f"Output: {ROOT}", flush=True)
     source_path = Path("benchmark_runs/reasoning-policy-20260909-locomo/stores/conv-26/artifacts/sources/source-ed6698b588b14e40.json")
     source = json.loads(source_path.read_text())
     segments = [SourceSegment(**s) for s in source["segments"][:48]]
@@ -180,8 +137,8 @@ async def natural():
     schema = extraction_output_model([s.segment_id for s in segments])
     for model in MODELS:
         root = ROOT / model.replace(":", "-") / "natural-extraction"
-        if (root / "result.json").exists():
-            continue
+        if root.exists():
+            raise ValueError(f"Use a fresh extraction output directory: {root}")
         client = OllamaClient("http://localhost:11434", model, timeout=900,
                               context_window_tokens=65536, reasoning_output_tokens=32768)
         warmup = await client.client.chat(model=model,

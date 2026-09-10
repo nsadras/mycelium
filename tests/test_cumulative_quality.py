@@ -11,15 +11,6 @@ from mycelium import Mycelium, prompts
 from mycelium.structured_outputs import fact_truth_output_model
 
 
-def scope_record(relation="same"):
-    return {
-        "prior_referent": "The existing occurrence",
-        "incoming_referent": "The reported occurrence",
-        "reason": "The evidence establishes the declared scope.",
-        "relation": relation,
-    }
-
-
 def test_truth_change_requires_same_scope():
     schema = fact_truth_output_model(["C001", "C002"])
     decision = {"comparisons":[{"target":"C001","scope":"same","reason":"Same object."},
@@ -136,7 +127,7 @@ def test_extraction_requires_explicit_temporal_classification():
 @pytest.mark.skipif(os.getenv("MYCELIUM_RUN_CUMULATIVE_PROBES") != "1", reason="Opt-in host-model contracts")
 async def test_extraction_temporal_and_fidelity_contract(tmp_path, monkeypatch):
     from mycelium.structured_outputs import extraction_output_model
-    from tests.test_extraction_replays import check_meaning
+    from tests.model_probe_helpers import check_meaning
     monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path / "llm"))
     memory = Mycelium(tmp_path / "store", config_path=Path(__file__).resolve().parents[1] / "mycelium.toml")
     texts = [

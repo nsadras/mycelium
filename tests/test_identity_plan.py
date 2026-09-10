@@ -60,20 +60,27 @@ def test_identity_contract_rejects_duplicate_existing_identity():
                                            subject(node_id="n2", participant_evidence=[])]})
 
 
-@pytest.mark.parametrize("changes", [
-    {"resolution": "new", "entity_id": "entity-73"},
-    {"resolution": "new", "candidate_entity_ids": ["entity-73"]},
-    {"resolution": "existing", "entity_id": "unknown"},
-    {"resolution": "existing", "entity_id": "entity-73", "entity_type": "person"},
-    {"resolution": "review_required", "candidate_entity_ids": ["invented"]},
-    {"page": True},
+@pytest.mark.parametrize("resolution,changes,error_field,error_type", [
+    ("new", {"entity_id": "entity-73"}, "entity_id", "extra_forbidden"),
+    ("new", {"candidate_entity_ids": ["entity-73"]}, "candidate_entity_ids", "extra_forbidden"),
+    ("existing", {"entity_id": "unknown"}, "entity_id", "literal_error"),
+    ("existing", {"entity_type": "person"}, "entity_type", "extra_forbidden"),
+    ("review_required", {"candidate_entity_ids": ["invented"]}, "candidate_entity_ids", "literal_error"),
+    ("new", {"page": True}, "page", "extra_forbidden"),
 ])
-def test_resolution_variants_reject_impossible_states(changes):
+def test_resolution_variants_reject_impossible_states(resolution, changes, error_field, error_type):
     schema = identity_plan_model(["C001"], {}, {"you": "you", "entity-73": "organization"})
-    node = subject(title="Workshop", entity_type="organization", resolution="new",
-                   entity_id="", participant_evidence=[])
-    with pytest.raises(ValidationError):
+    node = subject(title="Workshop", entity_type="organization", resolution=resolution,
+                   entity_id="entity-73", participant_evidence=[])
+    schema.model_validate({"subjects": [node]})
+    with pytest.raises(ValidationError) as error:
         schema.model_validate({"subjects": [{**node, **changes}]})
+    variant = {"new": "NewIdentity", "existing": "ExistingIdentity",
+               "review_required": "UnresolvedIdentity"}[resolution]
+    relevant_errors = [item for item in error.value.errors() if item["loc"][:3] == ("subjects", 0, variant)]
+    assert len(relevant_errors) == 1
+    assert relevant_errors[0]["loc"][3] == error_field
+    assert relevant_errors[0]["type"] == error_type
 
 
 @pytest.mark.parametrize("registry", [{}, {"you": "you"}, {"entity-73": "organization"}])

@@ -506,13 +506,6 @@ class OllamaClient:
                 return message.get("content", "")
         return ""
 
-    def _response_content(self, response: Any) -> str:
-        message = getattr(response, "message", None)
-        if isinstance(message, dict):
-            return str(message.get("content", "")).strip()
-        content = getattr(message, "content", "")
-        return str(content).strip()
-
     def _response_metadata(self, response: Any) -> dict[str, Any]:
         fields = (
             "done",

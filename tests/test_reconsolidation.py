@@ -1,4 +1,3 @@
-from tests.test_cumulative_quality import scope_record
 import json
 from datetime import datetime
 from dataclasses import replace
@@ -8,11 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from mycelium.artifacts import (
-    ArtifactStore,
     ClaimPlacement,
-    ClaimProvenance,
-    ConsolidatedFact,
-    MemoryClaim,
     ReconsolidationProposal,
     SourceDocument,
     SourceSegment,
@@ -26,63 +21,7 @@ from mycelium.structured_outputs import (
     fact_candidate_selection_output_model,
     fact_truth_output_model,
 )
-
-
-def claim(claim_id: str, text: str, recorded_at: str) -> MemoryClaim:
-    return MemoryClaim(
-        claim_id=claim_id,
-        text=text,
-        about=[{"entity": "user"}],
-        provenance=[ClaimProvenance(
-            source_id=f"source-{claim_id}",
-            segment_ids=[f"source-{claim_id}#seg-0001"],
-            raw_log_entry_id=f"log-{claim_id}",
-            speaker="user",
-        )],
-        recorded_at=recorded_at,
-        claim_type="preference",
-        predicate="prefers",
-        temporal_status="atemporal",
-    )
-
-
-def setup_owner(tmp_path):
-    artifacts = ArtifactStore(tmp_path / "artifacts")
-    artifacts.create_entity("you", "You")
-    return artifacts
-
-
-def place(artifacts: ArtifactStore, item: MemoryClaim) -> ClaimPlacement:
-    artifacts.save_claim(item)
-    placement = ClaimPlacement(
-        item.claim_id,
-        "you",
-        "preferences_working_style",
-        [],
-        "placed",
-        "test",
-        item.recorded_at,
-        item.recorded_at,
-    )
-    artifacts.save_placement(placement)
-    return placement
-
-
-def fact(item: MemoryClaim) -> ConsolidatedFact:
-    return ConsolidatedFact(
-        fact_id=f"fact-{item.claim_id}",
-        text=item.text,
-        member_claim_ids=[item.claim_id],
-        owner_entity_id="you",
-        section_key="preferences_working_style",
-        state="current",
-        linked_entity_ids=[],
-        synthesis_origin="claim",
-        confidence=item.confidence,
-        reason="test",
-        created_at=item.recorded_at,
-        updated_at=item.recorded_at,
-    )
+from tests.memory_helpers import claim, fact, place, setup_owner
 
 
 def test_coverage_distinguishes_review_holdback_from_missing_presentation(tmp_path):
@@ -108,50 +47,6 @@ def test_coverage_distinguishes_review_holdback_from_missing_presentation(tmp_pa
     assert report["repeated_fact_claim_ids"] == []
     artifacts.save_consolidated_fact(replace(fact(items["accepted"]), fact_id="duplicate"))
     assert artifacts.coverage_report()["repeated_fact_claim_ids"] == ["accepted"]
-
-
-def staged_fact_responses(
-    plan: dict,
-    *,
-    candidate_fact_aliases: list[str] | None = None,
-    incoming_aliases: list[str] | None = None,
-) -> list[dict]:
-    changes_by_incoming = {
-        alias: change
-        for change in plan["truth_changes"]
-        for alias in change["incoming_claim_aliases"]
-    }
-    incoming_aliases = incoming_aliases or (
-        sorted(changes_by_incoming)
-        if changes_by_incoming
-        else sorted(plan["assignments"])
-    )
-    targets = set(plan["assignments"]) - set(incoming_aliases)
-    responses = []
-    if targets:
-        for alias in incoming_aliases:
-            change = changes_by_incoming.get(alias)
-            responses.append({
-                "comparisons":[{"target":target,"scope":"same","reason":"The fixture establishes shared scope."} for target in sorted(targets)],
-                "relation":change["relation"] if change else "no_change",
-                "targets":change["target_claim_aliases"] if change else [],
-                "reason":change["explanation"] if change else "Compatible information.",
-            })
-    groups=[]
-    for fact in plan["facts"]:
-        members=[alias for alias,assignment in plan["assignments"].items() if assignment["fact_key"]==fact["fact_key"]]
-        groups.append({"memory_scope":"The fixture memory.","member_claim_aliases":members,
-                       "state":fact["state"],"section_key":fact["section_key"],
-                       "text":None if len(members)==1 else fact["text"]})
-    responses.append({"facts":groups})
-    if candidate_fact_aliases is not None:
-        responses[0:0] = [
-            {"decisions": {f"C{index:03d}": {
-                "candidate_fact_ids": candidate_fact_aliases,
-                "reason": "The prior fact may express the same durable state.",
-            } for index, _alias in enumerate(incoming_aliases, start=1)}}
-        ]
-    return responses
 
 
 def test_truth_schema_separates_incoming_from_prior_targets():
@@ -230,18 +125,15 @@ async def test_owner_plan_groups_independent_support(tmp_path):
     second = claim("second", "Written updates are preferred.", "2026-08-02T12:00:00")
     placements = [place(artifacts, first), place(artifacts, second)]
     llm = AsyncMock(context_window_tokens=32768)
-    llm.call_structured.side_effect = staged_fact_responses({
-        "assignments": {"C001": {"fact_key": "F001"}, "C002": {"fact_key": "F001"}},
+    llm.call_structured.side_effect = [{
         "facts": [{
-            "fact_key": "F001",
+            "member_claim_aliases": ["C001", "C002"],
+            "memory_scope": "Preferred update format.",
             "state": "current",
             "section_key": "preferences_working_style",
             "text": "The user prefers written updates.",
-            "confidence": 0.95,
-            "reason": "Independent support.",
         }],
-        "truth_changes": [],
-    })
+    }]
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -326,31 +218,24 @@ async def test_synthesis_keeps_distinct_claim_groups(tmp_path):
     second = claim("second", "The user began exercising.", "2026-08-02T12:00:00")
     placements = [place(artifacts, first), place(artifacts, second)]
     llm = AsyncMock(context_window_tokens=32768)
-    llm.call_structured.side_effect = staged_fact_responses({
-        "assignments": {
-            "C001": {"fact_key": "F001"},
-            "C002": {"fact_key": "F002"},
-        },
+    llm.call_structured.side_effect = [{
         "facts": [
             {
-                "fact_key": "F001",
+                "member_claim_aliases": ["C001"],
+                "memory_scope": "Cooking class.",
                 "state": "history",
                 "section_key": "preferences_working_style",
-                "text": first.text,
-                "confidence": 0.9,
-                "reason": "One source-grounded memory.",
+                "text": None,
             },
             {
-                "fact_key": "F002",
+                "member_claim_aliases": ["C002"],
+                "memory_scope": "Exercise.",
                 "state": "history",
                 "section_key": "preferences_working_style",
-                "text": second.text,
-                "confidence": 0.9,
-                "reason": "A distinct source-grounded memory.",
+                "text": None,
             },
         ],
-        "truth_changes": [],
-    })
+    }]
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -391,21 +276,15 @@ async def test_grouped_project_roles_preserve_each_claims_exact_project_link(tmp
         artifacts.save_placement(placement)
         placements.append(placement)
     llm = AsyncMock(context_window_tokens=32768)
-    llm.call_structured.side_effect = staged_fact_responses({
-        "assignments": {
-            "C001": {"fact_key": "F001"},
-            "C002": {"fact_key": "F001"},
-        },
+    llm.call_structured.side_effect = [{
         "facts": [{
-            "fact_key": "F001",
+            "member_claim_aliases": ["C001", "C002"],
+            "memory_scope": "Permit coordination responsibilities.",
             "state": "current",
             "section_key": "shared_projects",
             "text": "Rosa coordinates permits for two projects.",
-            "confidence": 0.9,
-            "reason": "Related responsibilities.",
         }],
-        "truth_changes": [],
-    })
+    }]
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -434,25 +313,18 @@ async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_p
     old_fact = fact(old)
     artifacts.save_consolidated_fact(old_fact)
     llm = AsyncMock(context_window_tokens=32768)
-    llm.call_structured.side_effect = staged_fact_responses({
-        "assignments": {"C001": {"fact_key": "F001"}, "C002": {"fact_key": "F002"}},
-        "facts": [
-            {"fact_key": "F001", "state": "current", "section_key": "preferences_working_style", "text": old.text, "confidence": 0.9, "reason": "Accepted state."},
-            {"fact_key": "F002", "state": "current", "section_key": "preferences_working_style", "text": new.text, "confidence": 0.9, "reason": "Proposed replacement."},
-        ],
-        "truth_changes": [{
+    llm.call_structured.side_effect = [
+        {"decisions": {"C001": {
+            "candidate_fact_ids": ["X001"],
+            "reason": "The prior fact describes the preference being replaced.",
+        }}},
+        {
+            "comparisons": [{"target": "C001", "scope": "same", "reason": "Same preference."}],
             "relation": "supersedes",
-            "incoming_claim_aliases": ["C002"],
-            "target_claim_aliases": ["C001"],
-        "scope": {"C001": scope_record()},
-            "durable_field": "bicycle color",
-            "prior_state": "blue",
-            "incoming_state": "green",
-            "transition_evidence": "The incoming claim explicitly says now.",
-            "explanation": "The newer statement explicitly replaces the old preference.",
-            "confidence": 0.92,
-        }],
-    }, candidate_fact_aliases=["X001"], incoming_aliases=["C002"])
+            "targets": ["C001"],
+            "reason": "The newer statement explicitly replaces the old preference.",
+        },
+    ]
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -482,21 +354,25 @@ async def test_repeated_evidence_joins_and_preserves_the_existing_fact(tmp_path)
     old_fact = fact(old)
     artifacts.save_consolidated_fact(old_fact)
     llm = AsyncMock(context_window_tokens=32768)
-    llm.call_structured.side_effect = staged_fact_responses({
-        "assignments": {
-            "C001": {"fact_key": "F001"},
-            "C002": {"fact_key": "F001"},
+    llm.call_structured.side_effect = [
+        {"decisions": {"C001": {
+            "candidate_fact_ids": ["X001"],
+            "reason": "The prior fact describes the same preference.",
+        }}},
+        {
+            "comparisons": [{"target": "C001", "scope": "same", "reason": "Same preference."}],
+            "relation": "no_change",
+            "targets": [],
+            "reason": "The new claim independently supports the existing state.",
         },
-        "facts": [{
-            "fact_key": "F001",
+        {"facts": [{
+            "member_claim_aliases": ["C001", "C002"],
+            "memory_scope": "Preferred update format.",
             "state": "current",
             "section_key": "preferences_working_style",
             "text": old.text,
-            "confidence": 0.95,
-            "reason": "The new claim independently supports the existing state.",
-        }],
-        "truth_changes": [],
-    }, candidate_fact_aliases=["X001"], incoming_aliases=["C002"])
+        }]},
+    ]
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,

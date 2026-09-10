@@ -373,18 +373,6 @@ class DreamPolicy:
         decision.reason = reason
         decision.page_slugs = list(page_slugs or [])
 
-    def persist_audit(
-        self,
-        run_id: str,
-        started_at: str,
-        raw_entries: list[LogEntry],
-        report: DreamReport,
-        decisions: dict[str, DreamClaimDecision],
-    ) -> None:
-        self.artifacts.persist_dream_audit(
-            self.build_audit(run_id, started_at, raw_entries, report, decisions)
-        )
-
     @staticmethod
     def build_audit(
         run_id: str,

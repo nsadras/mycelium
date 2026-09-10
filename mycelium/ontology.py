@@ -62,19 +62,6 @@ class SubjectScopeDefinition:
     page_state: str
 
 
-# These policies live beside the entity ontology so extraction, census, planning,
-# and routing share one authority for what enters the subject graph.
-
-
-EXTRACTION_SUBJECT_POLICY = """The `about` list is the complete set of named identities needed by later identity
-resolution and routing. Use `subject` for the primary person or identity whose action or state the sentence directly
-asserts. Use `owner` for a different durable identity when the proposition asserts that identity's own operations,
-requirements, plans, decisions, status, or history, even when a person performs the action. Use `participant` for
-another named relationship endpoint. A claim may have both a subject and an owner. Work that operates or changes a
-named Organization or Project belongs to that identity as owner. A personal commitment to visit, join, help, or
-volunteer with another identity belongs to the person; the other identity is a participant. Include every explicitly
-named durable identity in `about`."""
-
 SUBJECT_SCOPE_ONTOLOGY: tuple[SubjectScopeDefinition, ...] = (
     SubjectScopeDefinition(
         "materialized",
@@ -639,13 +626,6 @@ def entity_type_definition(entity_type: str) -> EntityTypeDefinition:
         raise ValueError(f"Unsupported entity type: {entity_type}") from exc
 
 
-def subject_scope_definition(scope: str) -> SubjectScopeDefinition:
-    try:
-        return SUBJECT_SCOPES_BY_KEY[scope]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported subject scope: {scope}") from exc
-
-
 def section_keys(entity_type: str) -> tuple[str, ...]:
     return entity_type_definition(entity_type).section_keys()
 
@@ -679,27 +659,6 @@ def default_section(
         raise ValueError(
             f"Unsupported claim type {claim_type!r} for {entity_type}"
         ) from exc
-
-
-def entity_type_prompt_catalog(*, discoverable_only: bool = False) -> str:
-    definitions = (
-        [item for item in ENTITY_ONTOLOGY if item.discoverable]
-        if discoverable_only
-        else ENTITY_ONTOLOGY
-    )
-    return "\n".join(
-        f"- {item.label} (`{item.key}`): {item.description}" for item in definitions
-    )
-
-
-def section_prompt_catalog() -> str:
-    lines: list[str] = []
-    for definition in ENTITY_ONTOLOGY:
-        sections = "; ".join(
-            f"{section.key}={section.description}" for section in definition.sections
-        )
-        lines.append(f"- type={definition.key}; sections: {sections}")
-    return "\n".join(lines)
 
 
 def ontology_response() -> dict:

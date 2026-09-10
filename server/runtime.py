@@ -222,11 +222,6 @@ async def append_tool_event_logs(
     return created_entries
 
 
-def recent_thread_context(record: dict[str, Any], limit: int = 8) -> str:
-    transcript = record.get("transcript", [])[-limit:]
-    return "\n".join(f"{m.get('role', '').upper()}: {m.get('content', '')}" for m in transcript)
-
-
 async def capture_saved_turns(session_id: str) -> None:
     """Capture uncaptured completed turns. Caller holds this session's lock.
 

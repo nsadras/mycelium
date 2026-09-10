@@ -1,7 +1,7 @@
 """Re-run compact production contracts against host Gemma.
 
-Historical pre-integration requests remain in the dated artifact directory.
-Set CONTRACT_PROBE_REVISION to a fresh name to evaluate the current contracts.
+Historical pre-integration requests remain in their dated artifact directories.
+Each invocation uses a fresh output directory and prints its path.
 """
 
 import asyncio
@@ -17,20 +17,19 @@ from mycelium import structured_outputs as contracts
 from mycelium.identity_plan import identity_plan_model
 from mycelium.page_plan import page_plan_model
 from mycelium.ontology import section_keys
-from benchmarks.model_contract_comparison import RecordedSdk, write
+from benchmarks.probe_support import RecordedSdk, fresh_run_root, write
 from mycelium import prompts
 from mycelium.ollama import OllamaClient
 
-ROOT = Path("benchmark_runs/contract-simplification-20260909") / os.getenv(
-    "CONTRACT_PROBE_REVISION", "."
-)
+ROOT = fresh_run_root("contract-simplification")
 PROMPTS = Path("mycelium/prompt_templates/memory")
 
 
 async def call(name, system, user, schema, think=False):
     root = ROOT / "probes" / name
-    if (root / "result.json").exists():
-        return
+    if root.exists():
+        raise ValueError(f"Use a fresh probe output directory: {root}")
+    print(f"Output: {root}", flush=True)
     client = OllamaClient(
         "http://localhost:11434",
         "gemma4:12b",

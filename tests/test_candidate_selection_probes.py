@@ -9,7 +9,7 @@ import pytest
 
 from mycelium import Mycelium
 from mycelium.facts import FactResolver
-from tests.test_reconsolidation import claim, fact, place
+from tests.memory_helpers import claim, fact, place
 
 pytestmark = [
     pytest.mark.integration,

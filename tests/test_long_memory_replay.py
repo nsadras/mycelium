@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from mycelium import Mycelium
-from tests.test_extraction_replays import capture, check_meaning
+from tests.model_probe_helpers import capture, check_meaning
 
 
 @pytest.mark.integration

@@ -28,7 +28,8 @@ settings, including reasoning. Their QA model defaults to `gemma4:latest` and
 memory model defaults to the QA model; examples pin both to `gemma4:12b`.
 Daily-driver defaults to `mycelium.toml` and uses its configured models.
 
-New runs write beneath `benchmark_runs/`. `--output-root` changes that location;
+This storage version requires fresh runs; old JSON stores remain offline artifacts and
+cannot be resumed or used as replay stores. New runs write beneath `benchmark_runs/`. `--output-root` changes that location;
 `--run-id my-experiment-v1` supplies a custom name. Otherwise names include a local
 timestamp: `<benchmark>-<system>-YYYYMMDD-HHMMSS`, or
 `daily-driver-<fixture>-YYYYMMDD-HHMMSS`. Choose distinct names for concurrent runs.
@@ -165,10 +166,13 @@ configs/data_conf/Test_Time_Learning/ICL/ICL_trec_fine.yaml
 
 ## Inspect results
 
+Each store contains canonical `memory.sqlite3`, generated `wiki/` and `logs/`, and
+model diagnostics. Export inspectable JSONL with `python -m mycelium.snapshots STORE EXPORT_DIR`.
+Snapshots use SQLite backup and exclude live locks and rebuildable indexes.
+
 LoCoMo writes `summary.json`, predictions, and per-case `stores/`; ordinary
 snapshots are under `snapshots/<sample-id>/session_N/`. MAB writes `results.json`
-and its summary alongside adapter artifacts. Daily-driver retains checkpoint
-stores/wiki, probe results, `comparison.json`, and `evaluation.json`; repeated
+and its summary alongside adapter artifacts. Daily-driver retains a complete `store/` backup and wiki at every checkpoint, plus probe results, `comparison.json`, and `evaluation.json`; repeated
 trials also produce `trial_summary.json`.
 
 Inspect useful evidence coverage, attribution and correctness, concise wiki prose,

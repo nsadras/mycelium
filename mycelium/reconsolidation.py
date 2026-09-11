@@ -54,16 +54,30 @@ class ReconsolidationReviewService:
 
     async def _transaction(self, action, proposal_id, reviewer_note):
         async with mutation_lock(self.artifacts.root):
-            transaction = LifecycleTransaction(self.artifacts.root, self.materializer.wiki.wiki_dir)
+            transaction = LifecycleTransaction(
+                self.artifacts.root, self.materializer.wiki.wiki_dir
+            )
             transaction.recover()
-            operation_id = transaction.operation_id(action, {"proposal_id": proposal_id, "reviewer_note": reviewer_note})
+            operation_id = transaction.operation_id(
+                action, {"proposal_id": proposal_id, "reviewer_note": reviewer_note}
+            )
             prior = transaction.completed(operation_id)
             if prior is not None:
-                return ReviewResult(ReconsolidationProposal(**prior["proposal"]), prior["pages_updated"], prior["pages_deleted"])
+                return ReviewResult(
+                    ReconsolidationProposal(**prior["proposal"]),
+                    prior["pages_updated"],
+                    prior["pages_deleted"],
+                )
             async with transaction.stage() as (paths, before):
-                artifacts = ArtifactStore(paths["artifacts"])
-                materializer = PageMaterializer(WikiStore(paths["wiki"]), artifacts, self.materializer.config)
-                service = ReconsolidationReviewService(artifacts, materializer, FactResolver(self.resolver.llm, artifacts))
+                artifacts = ArtifactStore(self.artifacts.root, db=paths["db"])
+                materializer = PageMaterializer(
+                    WikiStore(self.materializer.wiki.wiki_dir, db=paths["db"]),
+                    artifacts,
+                    self.materializer.config,
+                )
+                service = ReconsolidationReviewService(
+                    artifacts, materializer, FactResolver(self.resolver.llm, artifacts)
+                )
                 method = service._approve if action == "approve" else service._reject
                 result = await method(proposal_id, reviewer_note=reviewer_note)
                 transaction.publish(operation_id, paths, before, asdict(result))
@@ -81,9 +95,11 @@ class ReconsolidationReviewService:
         already_mutated = self._approved_relation_is_present(
             proposal, incoming, targets
         )
-        if any(claim.status != "active" for claim in incoming) or any(
-            claim.status != "active" for claim in targets
-        ) and not already_mutated:
+        if (
+            any(claim.status != "active" for claim in incoming)
+            or any(claim.status != "active" for claim in targets)
+            and not already_mutated
+        ):
             self._mark_stale(proposal, "A referenced claim is no longer active")
             raise ReviewConflictError("A referenced claim is no longer active")
         if proposal.status == "pending":
@@ -199,12 +215,13 @@ class ReconsolidationReviewService:
         for new_claim in incoming:
             for target in targets:
                 if proposal.proposed_relation == "contradicts":
-                    if (
-                        {"relation": "contradicts", "target": target.claim_id}
-                        not in new_claim.links
-                        or {"relation": "contradicts", "target": new_claim.claim_id}
-                        not in target.links
-                    ):
+                    if {
+                        "relation": "contradicts",
+                        "target": target.claim_id,
+                    } not in new_claim.links or {
+                        "relation": "contradicts",
+                        "target": new_claim.claim_id,
+                    } not in target.links:
                         return False
                 elif (
                     target.status != "superseded"

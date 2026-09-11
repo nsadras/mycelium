@@ -1,6 +1,6 @@
 """Explicit memory build and development reset endpoints."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from mycelium.lifecycle_transaction import mutation_lock
 from server.runtime import (
     clear_memory_store,
@@ -19,7 +19,11 @@ async def build_memory():
 
 @router.get("/build/status")
 async def build_status():
-    return get_mem().consolidation_status().as_dict()
+    mem = get_mem()
+    return {
+        **mem.consolidation_status().as_dict(),
+        "publication": mem.db.publication_status(),
+    }
 
 
 @router.post("/dev/clear")
@@ -32,3 +36,14 @@ async def clear_memory():
 async def rebuild_wiki():
     async with mutation_lock(get_mem().artifacts.root):
         return rebuild_wiki_store()
+
+
+@router.post("/build/publication/retry")
+async def retry_publication():
+    mem = get_mem()
+    async with mutation_lock(mem.artifacts.root):
+        try:
+            mem.db.publish()
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"publication": mem.db.publication_status()}

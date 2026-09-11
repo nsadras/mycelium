@@ -47,12 +47,18 @@ class Mycelium:
             self.config.llm.url = ollama_url
             self.config.context_budget_tokens = context_budget_tokens
 
+        from mycelium.database import database
+
+        self.db = database(self.store_path)
+        self.db.facade_clients += 1
+        self._closed = False
         self._init_store()
 
         self._wiki = WikiStore(self.store_path / "wiki")
         self._log_store = LogStore(self.store_path / "logs")
         self.artifacts = ArtifactStore(self.store_path / "artifacts")
         from mycelium.lifecycle_transaction import LifecycleTransaction
+
         LifecycleTransaction(self.artifacts.root, self._wiki.wiki_dir).recover()
         self._ensure_seed_profile(memory_profile)
         self.llm = OllamaClient(
@@ -89,7 +95,9 @@ class Mycelium:
                     self.config.llm.url,
                     self.config.retrieval.embedding_model,
                     timeout=self.config.llm.timeout_seconds,
-                    trace_path=self.store_path / "diagnostics" / "embedding-calls.jsonl",
+                    trace_path=self.store_path
+                    / "diagnostics"
+                    / "embedding-calls.jsonl",
                 ),
                 candidate_limit=self.config.retrieval.candidate_limit,
             ),
@@ -166,13 +174,20 @@ class Mycelium:
         self.store_path.mkdir(parents=True, exist_ok=True)
         (self.store_path / "wiki").mkdir(exist_ok=True)
         (self.store_path / "logs").mkdir(exist_ok=True)
-        (self.store_path / "artifacts").mkdir(exist_ok=True)
         (self.store_path / "wiki" / "_archive").mkdir(exist_ok=True)
 
-        index_path = self.store_path / "wiki" / "_index.md"
-        if not index_path.exists():
-            with open(index_path, "w", encoding="utf-8") as f:
-                f.write("# Wiki Index\n\n_last updated: never_\n\n## Pages\n")
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self.db.facade_clients -= 1
+            if self.db.facade_clients == 0:
+                self.db.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
     @property
     def wiki(self) -> WikiStore:

@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+from server import runtime
 import logging
 
 from dotenv import load_dotenv
@@ -10,7 +12,18 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="Mycelium API")
+
+@asynccontextmanager
+async def lifespan(app):
+    memory = runtime.get_mem()
+    try:
+        yield
+    finally:
+        memory.close()
+        runtime._mem = None
+
+
+app = FastAPI(title="Mycelium API", lifespan=lifespan)
 
 # Configure CORS for frontend communication
 app.add_middleware(
@@ -31,6 +44,8 @@ app.include_router(engram.router, prefix="/api/engram", tags=["engram"])
 async def root():
     return {"message": "Mycelium API is running"}
 
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    uvicorn.run(app, host="0.0.0.0", port=8000, workers=1)

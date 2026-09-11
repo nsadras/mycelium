@@ -1,7 +1,5 @@
-import shutil
-import os
-import tempfile
-import threading
+from dataclasses import asdict
+from mycelium.database import database
 import frontmatter
 from datetime import datetime
 from pathlib import Path
@@ -10,19 +8,14 @@ from typing import List, Optional
 from mycelium.models import Edge, LogEntry, UpdateLogEntry, WikiPage
 from mycelium.ontology import ENTITY_TYPES
 
+
 def _edge_to_dict(edge: Edge) -> dict:
-    return {
-        "target": edge.target,
-        "relation": edge.relation,
-        "weight": edge.weight
-    }
+    return {"target": edge.target, "relation": edge.relation, "weight": edge.weight}
+
 
 def _edge_from_dict(d: dict) -> Edge:
-    return Edge(
-        target=d["target"],
-        relation=d["relation"],
-        weight=d.get("weight", 1.0)
-    )
+    return Edge(target=d["target"], relation=d["relation"], weight=d.get("weight", 1.0))
+
 
 def _update_log_to_dict(log: UpdateLogEntry) -> dict:
     return {
@@ -33,29 +26,27 @@ def _update_log_to_dict(log: UpdateLogEntry) -> dict:
         "reason": log.reason,
     }
 
+
 def _update_log_from_dict(d: dict) -> UpdateLogEntry:
     return UpdateLogEntry(
         version=d["version"],
-        date=datetime.fromisoformat(d["date"]) if isinstance(d["date"], str) else d["date"],
+        date=datetime.fromisoformat(d["date"])
+        if isinstance(d["date"], str)
+        else d["date"],
         session_id=d["session_id"],
         trigger=d["trigger"],
         reason=d["reason"],
     )
 
+
 class WikiStore:
-    def __init__(self, wiki_dir: Path):
+    def __init__(self, wiki_dir: Path, *, db=None):
         self.wiki_dir = wiki_dir
         self.archive_dir = wiki_dir / "_archive"
-        
-        self.wiki_dir.mkdir(parents=True, exist_ok=True)
-        self.archive_dir.mkdir(parents=True, exist_ok=True)
+        self.db = db if db is not None else database(wiki_dir.parent)
 
     def get(self, slug: str) -> WikiPage:
-        path = self.wiki_dir / f"{slug}.md"
-        if not path.exists():
-            raise FileNotFoundError(f"Wiki page {slug} not found.")
-        
-        post = frontmatter.load(path)
+        post = frontmatter.loads(self.db.get("wiki", slug)["content"])
 
         if "page_type" not in post.metadata:
             raise ValueError(
@@ -71,14 +62,16 @@ class WikiStore:
                 f"Wiki page {slug} uses the pre-entity schema. "
                 "Clear and rebuild the wiki from canonical claims."
             )
-        
+
         related = [_edge_from_dict(r) for r in post.metadata.get("related", [])]
-        update_log = [_update_log_from_dict(u) for u in post.metadata.get("update_log", [])]
-        
+        update_log = [
+            _update_log_from_dict(u) for u in post.metadata.get("update_log", [])
+        ]
+
         created = post.metadata.get("created")
         if isinstance(created, str):
             created = datetime.fromisoformat(created)
-            
+
         last_updated = post.metadata.get("last_updated")
         if isinstance(last_updated, str):
             last_updated = datetime.fromisoformat(last_updated)
@@ -86,7 +79,7 @@ class WikiStore:
         now = datetime.now()
         created = created or now
         last_updated = last_updated or created
-            
+
         return WikiPage(
             slug=post.metadata.get("id", slug),
             title=post.metadata.get("title", slug),
@@ -106,13 +99,14 @@ class WikiStore:
         )
 
     def save(self, page: WikiPage) -> None:
-        path = self.wiki_dir / f"{page.slug}.md"
-        
+
         post = frontmatter.Post(page.content)
         post.metadata["id"] = page.slug
         post.metadata["title"] = page.title
         post.metadata["created"] = page.created.isoformat() if page.created else None
-        post.metadata["last_updated"] = page.last_updated.isoformat() if page.last_updated else None
+        post.metadata["last_updated"] = (
+            page.last_updated.isoformat() if page.last_updated else None
+        )
         post.metadata["version"] = page.version
         post.metadata["page_type"] = page.page_type
         post.metadata["tags"] = page.tags
@@ -123,9 +117,14 @@ class WikiStore:
         post.metadata["entity_status"] = page.entity_status
         post.metadata["aliases"] = page.aliases
         post.metadata["sections"] = page.sections
-        
-        with open(path, "wb") as f:
-            frontmatter.dump(post, f)
+
+        self._write(page.slug, frontmatter.dumps(post))
+
+    def _write(self, slug, content):
+        with self.db.transaction():
+            self.db.put("wiki", slug, {"content": content})
+            self.db.project(f"wiki/{slug}.md", content)
+        self.db.publish()
 
     def history(self, slug: str) -> List[UpdateLogEntry]:
         page = self.get(slug)
@@ -141,221 +140,132 @@ class WikiStore:
         return filtered
 
     def list_all(self) -> List[WikiPage]:
-        pages = []
-        for path in self.wiki_dir.glob("*.md"):
-            if path.name == "_index.md":
-                continue
-            pages.append(self.get(path.stem))
-        return pages
+        return [self.get(slug) for slug in self.db.ids("wiki") if slug != "_index"]
 
     def get_index(self) -> str:
-        path = self.wiki_dir / "_index.md"
-        if not path.exists():
+        try:
+            return self.db.get("wiki", "_index")["content"]
+        except FileNotFoundError:
             return ""
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
 
     def save_index(self, content: str) -> None:
-        path = self.wiki_dir / "_index.md"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
+        self._write("_index", content)
 
     def archive(self, slug: str) -> None:
-        src = self.wiki_dir / f"{slug}.md"
-        dst = self.archive_dir / f"{slug}.md"
-        if src.exists():
-            shutil.move(str(src), str(dst))
+        if self.exists(slug):
+            with self.db.transaction():
+                self.db.put("wiki-archive", slug, self.db.get("wiki", slug))
+                self.db.project(
+                    f"wiki/_archive/{slug}.md", self.db.get("wiki", slug)["content"]
+                )
+                self.delete(slug)
+            self.db.publish()
 
     def delete(self, slug: str) -> None:
-        path = self.wiki_dir / f"{slug}.md"
-        if path.exists():
-            path.unlink()
+        with self.db.transaction():
+            self.db.delete("wiki", slug)
+            self.db.project(f"wiki/{slug}.md", None)
+        self.db.publish()
 
     def exists(self, slug: str) -> bool:
-        return (self.wiki_dir / f"{slug}.md").exists()
+        try:
+            self.db.get("wiki", slug)
+            return True
+        except FileNotFoundError:
+            return False
+
 
 class LogStore:
-    def __init__(self, logs_dir: Path):
+    def __init__(self, logs_dir: Path, *, db=None):
         self.logs_dir = logs_dir
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
-        self._write_lock = threading.RLock()
+        self.db = db if db is not None else database(logs_dir.parent)
 
     def append(self, entry: LogEntry) -> None:
-        # e.g., entry.entry_id = "2026-05-10#entry-1", we want the date part
-        date_str = entry.entry_id.split("#")[0]
-        path = self.logs_dir / f"{date_str}.md"
-        
-        with self._write_lock:
-            existing = path.read_text(encoding="utf-8") if path.exists() else ""
-            entry_name = (
-                entry.entry_id.split("#")[1]
-                if "#" in entry.entry_id
-                else entry.entry_id
-            )
-            header_prefix = f"## {entry_name} — "
-            if any(line.startswith(header_prefix) for line in existing.splitlines()):
+        with self.db.transaction():
+            try:
+                self.get(entry.entry_id)
                 return
-            content = existing or f"# Log: {date_str}\n\n"
-            content += (
-                f"## {entry_name} — {entry.timestamp.strftime('%H:%M')}\n\n"
+            except FileNotFoundError:
+                pass
+            self._save(entry)
+        self.db.publish()
+
+    def _save(self, entry):
+        data = asdict(entry)
+        data["timestamp"] = entry.timestamp.isoformat()
+        data["date"] = entry.entry_id.split("#")[0]
+        try:
+            data["log_order"] = self.db.get("logs", entry.entry_id)["log_order"]
+        except FileNotFoundError:
+            data["log_order"] = self.db.revision("logs") + 1
+        self.db.put("logs", entry.entry_id, data)
+        self._project(data["date"])
+
+    def _project(self, date):
+        entries = [
+            self.get(identifier) for identifier in self.db.ids("logs", "date", date)
+        ]
+        entries.sort(key=lambda entry: self.db.get("logs", entry.entry_id)["log_order"])
+        text = f"# Log: {date}\n\n"
+        for entry in entries:
+            text += (
+                f"## {entry.entry_id.split('#')[-1]} — {entry.timestamp:%H:%M}\n\n"
                 f"**session_id:** {entry.session_id}  \n"
                 f"**durability:** {entry.durability}  \n"
-                f"**consolidated:** {str(entry.consolidated).lower()}  \n"
-                "\n"
+                f"**consolidated:** {str(entry.consolidated).lower()}  \n\n"
                 f"{entry.content.strip()}\n\n---\n\n"
             )
-            fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(content)
-                os.replace(temp_name, path)
-            finally:
-                if os.path.exists(temp_name):
-                    os.unlink(temp_name)
-
-    def get_unconsolidated(self, days: int | None = 7) -> List[LogEntry]:
-        return [entry for entry in self.list_entries(days=days) if not entry.consolidated]
-
-    def list_entries(self, days: int | None = 7) -> List[LogEntry]:
-        import re
-        import typing
-        from typing import Literal
-        entries = []
-        
-        log_files = sorted(self.logs_dir.glob("*.md"), reverse=True)
-        if days is not None:
-            log_files = log_files[:days]
-        
-        for path in log_files:
-            date_str = path.stem
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read()
-                
-            entry_header = re.compile(r"^## (?P<name>.+?) — (?P<time>\d{2}:\d{2})\s*$", re.MULTILINE)
-            matches = list(entry_header.finditer(content))
-            for idx, match in enumerate(matches):
-                section_start = match.end()
-                section_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(content)
-                section = content[section_start:section_end].strip()
-                if section.endswith("---"):
-                    section = section[:-3].rstrip()
-
-                lines = section.split("\n")
-                entry_name = match.group("name").strip()
-                time_str = match.group("time").strip()
-                
-                metadata: dict = {}
-                body_lines = []
-                in_body = False
-                
-                for line in lines:
-                    m = re.match(r"^\*\*([^*]+):\*\*\s*(.*)", line)
-                    if not in_body:
-                        if m:
-                            key = m.group(1).strip()
-                            val = m.group(2).strip()
-                            if val.endswith("  "):
-                                val = val[:-2]
-                            metadata[key] = val
-                        elif line.strip() == "" and len(metadata) > 0:
-                            # Only transition to body if we've seen at least some metadata
-                            in_body = True
-                    else:
-                        body_lines.append(line)
-                
-                if "consolidated" not in metadata:
-                    continue
-
-                is_consolidated = metadata.get("consolidated", "false").lower() == "true"
-                try:
-                    timestamp = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-                except ValueError:
-                    timestamp = datetime.now()
-                    
-                durability = typing.cast(
-                    Literal['ephemeral', 'session', 'durable'],
-                    metadata.get("durability", "durable"),
-                )
-                
-                entry = LogEntry(
-                    entry_id=f"{date_str}#{entry_name}",
-                    session_id=metadata.get("session_id", ""),
-                    timestamp=timestamp,
-                    content="\n".join(body_lines).strip(),
-                    durability=durability,
-                    consolidated=is_consolidated,
-                )
-                entries.append(entry)
-                    
-        return entries
+        self.db.project(f"logs/{date}.md", text if entries else None)
 
     def get(self, entry_id: str) -> LogEntry:
-        if "#" not in entry_id:
-            raise FileNotFoundError(f"Log entry {entry_id} not found.")
-
-        for entry in self.list_entries(days=None):
-            if entry.entry_id == entry_id:
-                return entry
-        raise FileNotFoundError(f"Log entry {entry_id} not found.")
+        data = self.db.get("logs", entry_id)
+        data.pop("date")
+        data.pop("log_order")
+        data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+        return LogEntry(**data)
 
     def get_many(self, entry_ids: List[str]) -> List[LogEntry]:
-        if not entry_ids:
-            return []
+        result = []
+        for identifier in entry_ids:
+            try:
+                result.append(self.get(identifier))
+            except FileNotFoundError:
+                pass
+        return result
 
-        wanted = set(entry_ids)
-        found: dict[str, LogEntry] = {}
-        for entry in self.list_entries(days=None):
-            if entry.entry_id in wanted:
-                found[entry.entry_id] = entry
-        return [found[entry_id] for entry_id in entry_ids if entry_id in found]
+    def list_entries(self, days: int | None = 7) -> List[LogEntry]:
+        entries = [self.get(identifier) for identifier in self.db.ids("logs")]
+        dates = sorted(
+            {entry.entry_id.split("#")[0] for entry in entries}, reverse=True
+        )
+        selected = set(dates if days is None else dates[:days])
+        date_rank = {date: index for index, date in enumerate(dates)}
+        return sorted(
+            (entry for entry in entries if entry.entry_id.split("#")[0] in selected),
+            key=lambda entry: (
+                date_rank[entry.entry_id.split("#")[0]],
+                self.db.get("logs", entry.entry_id)["log_order"],
+            ),
+        )
+
+    def get_unconsolidated(self, days: int | None = 7) -> List[LogEntry]:
+        return [entry for entry in self.list_entries(days) if not entry.consolidated]
 
     def mark_consolidated(self, entry_ids: List[str]) -> None:
-        # Note: This is an expensive operation since we rewrite the file.
-        # This is expected for plain-text storage.
-        from typing import Dict, Set
-        files_to_update: Dict[str, Set[str]] = {}
-        for eid in entry_ids:
-            if "#" in eid:
-                date_str = eid.split("#")[0]
-                if date_str not in files_to_update:
-                    files_to_update[date_str] = set()
-                files_to_update[date_str].add(eid)
-
-        for date_str, eids in files_to_update.items():
-            path = self.logs_dir / f"{date_str}.md"
-            if not path.exists():
-                continue
-                
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read()
-                
-            for eid in eids:
-                entry_name = eid.split("#")[1]
-                # Look for the specific entry section and replace consolidated: false with true
-                import re
-                # This regex looks for the specific entry header and its consolidated status
-                pattern = re.compile(r"(## " + re.escape(entry_name) + r" — .*?\n(?:.*?\n)*?\*\*consolidated:\*\* )false", re.MULTILINE)
-                content = pattern.sub(r"\g<1>true", content)
-                
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
+        with self.db.transaction():
+            for entry in self.get_many(entry_ids):
+                entry.consolidated = True
+                self._save(entry)
+        self.db.publish()
 
     def mark_unconsolidated(self, date_str: str) -> None:
-        path = self.logs_dir / f"{date_str}.md"
-        if not path.exists():
-            return
-            
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-            
-        import re
-        # Find all occurrences of **consolidated:** true and rewrite to false
-        pattern = re.compile(r"(\*\*consolidated:\*\* )true", re.MULTILINE)
-        content = pattern.sub(r"\g<1>false", content)
-        
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
+        with self.db.transaction():
+            for identifier in self.db.ids("logs", "date", date_str):
+                entry = self.get(identifier)
+                entry.consolidated = False
+                self._save(entry)
+        self.db.publish()
 
     def mark_all_unconsolidated(self) -> None:
-        for path in self.logs_dir.glob("*.md"):
-            self.mark_unconsolidated(path.stem)
+        for date in {entry.entry_id.split("#")[0] for entry in self.list_entries(None)}:
+            self.mark_unconsolidated(date)

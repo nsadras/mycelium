@@ -1,13 +1,11 @@
 """Artifact inspection endpoints."""
 
 from dataclasses import asdict
-
 from fastapi import APIRouter, HTTPException
-
 from mycelium.artifact_integrity import artifact_integrity
 from mycelium.ontology import ontology_response
 from server.api.memory_contracts import _stored_memory_file
-from server.runtime import get_mem, load_meta
+from server.runtime import get_mem, get_sessions
 
 router = APIRouter()
 
@@ -23,7 +21,6 @@ async def artifact_overview():
     claims = mem.artifacts.list_claims()
     entities = mem.artifacts.list_entities()
     identity_decisions = mem.artifacts.list_entity_resolution_decisions()
-    maturity_assessments = mem.artifacts.list_identity_maturity_assessments()
     organization_proposals = mem.artifacts.list_organization_proposals()
     reconsolidation_proposals = mem.artifacts.list_reconsolidation_proposals()
     coverage = mem.artifacts.coverage_report()
@@ -52,7 +49,7 @@ async def artifact_overview():
             "page_assignments": len(assigned),
             "assigned_claims": len(assigned),
             "multi_page_claims": 0,
-            "average_pages_per_claim": (1.0 if assigned else 0.0),
+            "average_pages_per_claim": 1.0 if assigned else 0.0,
             "max_pages_per_claim": 1 if assigned else 0,
         },
         "integrity": artifact_integrity(mem),
@@ -63,33 +60,26 @@ async def artifact_overview():
         "reconsolidation_proposals": proposal_status_counts,
         "organization_proposals": {
             status: sum(
-                proposal.status == status
-                for proposal in organization_proposals
+                (proposal.status == status for proposal in organization_proposals)
             )
-            for status in {
-                proposal.status
-                for proposal in organization_proposals
-            }
+            for status in {proposal.status for proposal in organization_proposals}
         },
         "review_inbox": {
             "identity_decisions": sum(
-                item.review_state == "review_required"
-                for item in identity_decisions
+                (item.review_state == "review_required" for item in identity_decisions)
             ),
             "organization_proposals": sum(
-                item.status == "pending" for item in organization_proposals
+                (item.status == "pending" for item in organization_proposals)
             ),
             "reconsolidation_proposals": sum(
-                item.status == "pending" for item in reconsolidation_proposals
+                (item.status == "pending" for item in reconsolidation_proposals)
             ),
             "provisional_entities": sum(
-                item.status == "active"
-                and item.materialization_state == "provisional"
-                for item in entities
-            ),
-            "maturity_review_required": sum(
-                item.effective_admission == "review_required"
-                for item in maturity_assessments
+                (
+                    item.status == "active"
+                    and item.materialization_state == "provisional"
+                    for item in entities
+                )
             ),
         },
         "archived_pages": len(list(mem.wiki.archive_dir.glob("*.md"))),
@@ -102,10 +92,10 @@ async def list_chat_episode_state():
         {
             "session_id": session_id,
             "query": record.get("query", "New session"),
-            "transcript_turns": len(record.get("transcript", [])),
+            "transcript_turns": record.get("message_count", 0),
             "captured_turns": record.get("captured_turns", 0),
         }
-        for session_id, record in load_meta().items()
+        for session_id, record in get_sessions().summaries().items()
     ]
 
 
@@ -144,21 +134,23 @@ async def get_artifact_source(source_id: str):
             (item for item in artifacts.list_episodes() if item.source_id == source_id),
             None,
         )
-        source_only = {
-            item.segment_id
-            for item in episode.segment_dispositions
-            if item.disposition == "source_only"
-        } if episode else set()
+        source_only = (
+            {
+                item.segment_id
+                for item in episode.segment_dispositions
+                if item.disposition == "source_only"
+            }
+            if episode
+            else set()
+        )
         return {
             **asdict(source),
             "segment_accounting": {
-                segment.segment_id: (
-                    "claimed"
-                    if segment.segment_id in claimed
-                    else "source_only"
-                    if segment.segment_id in source_only
-                    else "unaccounted"
-                )
+                segment.segment_id: "claimed"
+                if segment.segment_id in claimed
+                else "source_only"
+                if segment.segment_id in source_only
+                else "unaccounted"
                 for segment in source.segments
             },
         }
@@ -183,8 +175,10 @@ async def list_artifact_episodes():
             "segment_count": len(episode.segment_ids),
             "claim_count": len(episode.claim_ids),
             "source_only_segment_count": sum(
-                item.disposition == "source_only"
-                for item in episode.segment_dispositions
+                (
+                    item.disposition == "source_only"
+                    for item in episode.segment_dispositions
+                )
             ),
         }
         for episode in episodes
@@ -213,11 +207,9 @@ async def list_artifact_claims():
             "claim_type": claim.claim_type,
             "evidence_modality": claim.evidence_modality,
             "dream_disposition": claim.dream_disposition,
-            "placement": (
-                asdict(placement)
-                if (placement := artifacts.placement_for_claim(claim.claim_id))
-                else None
-            ),
+            "placement": asdict(placement)
+            if (placement := artifacts.placement_for_claim(claim.claim_id))
+            else None,
         }
         for claim in artifacts.list_claims()
     ]
@@ -232,9 +224,7 @@ async def get_artifact_claim(claim_id: str):
         return {
             **asdict(claim),
             "placement": asdict(placement) if placement else None,
-            "facts": [
-                asdict(fact) for fact in artifacts.facts_for_claim(claim_id)
-            ],
+            "facts": [asdict(fact) for fact in artifacts.facts_for_claim(claim_id)],
             "scope_decisions": [
                 asdict(item)
                 for item in artifacts.list_scope_decisions(claim_id=claim_id)
@@ -276,40 +266,10 @@ async def list_artifact_dream_runs():
 async def get_artifact_dream_run(run_id: str):
     try:
         artifacts = get_mem().artifacts
-        return {
-            **asdict(artifacts.get_dream_run(run_id)),
-            "identity_maturity_assessments": [
-                asdict(item)
-                for item in artifacts.list_identity_maturity_assessments(
-                    dream_run_id=run_id
-                )
-            ],
-        }
+        return {**asdict(artifacts.get_dream_run(run_id))}
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=404, detail="Dream run artifact not found"
-        ) from exc
-
-
-@router.get("/artifacts/identity-maturity-assessments")
-async def list_identity_maturity_assessments(dream_run_id: str | None = None):
-    return [
-        asdict(item)
-        for item in get_mem().artifacts.list_identity_maturity_assessments(
-            dream_run_id=dream_run_id
-        )
-    ]
-
-
-@router.get("/artifacts/identity-maturity-assessments/{assessment_id}")
-async def get_identity_maturity_assessment(assessment_id: str):
-    try:
-        return asdict(
-            get_mem().artifacts.get_identity_maturity_assessment(assessment_id)
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=404, detail="Identity maturity assessment not found"
         ) from exc
 
 
@@ -362,9 +322,7 @@ async def get_artifact_entity(entity_id: str):
             ],
             "facts": [
                 asdict(item)
-                for item in artifacts.list_consolidated_facts(
-                    owner_entity_id=entity_id
-                )
+                for item in artifacts.list_consolidated_facts(owner_entity_id=entity_id)
             ],
             "encounters": [
                 asdict(item) for item in artifacts.list_encounters(entity_id=entity_id)
@@ -375,19 +333,12 @@ async def get_artifact_entity(entity_id: str):
                     entity_id=entity_id
                 )
             ],
-            "maturity_assessments": [
-                asdict(item)
-                for item in artifacts.list_identity_maturity_assessments()
-                if item.entity_id == entity_id
-            ],
-            "page": (
-                {"slug": entity.slug, "exists": True}
-                if page_exists
-                else None
-            ),
+            "page": {"slug": entity.slug, "exists": True} if page_exists else None,
         }
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Entity artifact not found") from exc
+        raise HTTPException(
+            status_code=404, detail="Entity artifact not found"
+        ) from exc
 
 
 @router.get("/artifacts/placements")
@@ -406,9 +357,7 @@ async def list_scope_decisions(claim_id: str | None = None, status: str | None =
 
 
 @router.get("/artifacts/consolidated-facts")
-async def list_consolidated_facts(
-    owner_entity_id: str | None = None,
-):
+async def list_consolidated_facts(owner_entity_id: str | None = None):
     return [
         {
             "fact_id": item.fact_id,
@@ -462,11 +411,9 @@ async def list_stored_memory_files():
     mem = get_mem()
     index_path = mem.wiki.wiki_dir / "_index.md"
     return {
-        "wiki_index": (
-            {"filename": index_path.name, "size": index_path.stat().st_size}
-            if index_path.exists()
-            else None
-        ),
+        "wiki_index": {"filename": index_path.name, "size": index_path.stat().st_size}
+        if index_path.exists()
+        else None,
         "archived_pages": [
             {"filename": path.name, "size": path.stat().st_size}
             for path in sorted(mem.wiki.archive_dir.glob("*.md"))
@@ -476,7 +423,7 @@ async def list_stored_memory_files():
 
 @router.get("/artifacts/files/{group}/{filename}")
 async def get_stored_memory_file(group: str, filename: str):
-    if "/" in filename or "\\" in filename or not filename.endswith(".md"):
+    if "/" in filename or "\\" in filename or (not filename.endswith(".md")):
         raise HTTPException(status_code=400, detail="Invalid stored filename")
     mem = get_mem()
     if group == "index" and filename == "_index.md":

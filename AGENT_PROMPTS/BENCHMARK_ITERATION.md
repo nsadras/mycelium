@@ -18,7 +18,7 @@ and use a unique hypothesis-based run ID:
   --run-id locomo-sample2-hypothesis-v1
 ```
 
-Inspect `summary.json`, `predictions.jsonl`, and `stores/*/{artifacts,wiki}` under the resulting
+Inspect `summary.json`, `predictions.jsonl`, and `stores/*/{memory.sqlite3,wiki}` under the resulting
 `benchmark_runs/locomo-sample2-hypothesis-v1/` directory. Omit `--run-id` to generate
 `locomo-mycelium-YYYYMMDD-HHMMSS` automatically. Sample indexes are 1-based;
 omitting `--sample-index` runs all samples unless limited by `--max-samples`.

@@ -15,7 +15,6 @@ import api, {
   type EntityResolutionDecisionArtifact,
   type EpisodeArtifact,
   type EpisodeArtifactSummary,
-  type IdentityMaturityAssessmentArtifact,
   type MemoryClaimArtifact,
   type MemoryClaimArtifactSummary,
   type MemoryOntology,
@@ -43,7 +42,6 @@ export function useMemoryInspector(refreshKey: number, initialTarget?: Inspector
   const [identityDecisions, setIdentityDecisions] = useState<EntityResolutionDecisionArtifact[]>([]);
   const [organizationProposals, setOrganizationProposals] = useState<OrganizationProposalArtifact[]>([]);
   const [proposals, setProposals] = useState<ReconsolidationProposalArtifact[]>([]);
-  const [maturityAssessments, setMaturityAssessments] = useState<IdentityMaturityAssessmentArtifact[]>([]);
   const [ontology, setOntology] = useState<MemoryOntology | null>(null);
   const [dreamRuns, setDreamRuns] = useState<DreamRunArtifactSummary[]>([]);
   const [files, setFiles] = useState<StoredMemoryFiles | null>(null);
@@ -131,19 +129,17 @@ export function useMemoryInspector(refreshKey: number, initialTarget?: Inspector
             setSelectedEntityId((value) => availableId(value, response.data, (item) => item.entity_id));
           }
         } else if (activeTab === 'review') {
-          const [identityResponse, organizationResponse, reconciliationResponse, entityResponse, maturityResponse] = await Promise.all([
+          const [identityResponse, organizationResponse, reconciliationResponse, entityResponse] = await Promise.all([
             api.get<EntityResolutionDecisionArtifact[]>('/memory/artifacts/entity-resolution-decisions?review_state=review_required'),
             api.get<OrganizationProposalArtifact[]>('/memory/artifacts/organization-proposals?status=pending'),
             api.get<ReconsolidationProposalArtifact[]>('/memory/artifacts/reconsolidation-proposals'),
             api.get<EntityRecord[]>('/memory/artifacts/entities?status=active'),
-            api.get<IdentityMaturityAssessmentArtifact[]>('/memory/artifacts/identity-maturity-assessments'),
           ]);
           if (!cancelled) {
             setIdentityDecisions(identityResponse.data);
             setOrganizationProposals(organizationResponse.data.filter((item) => item.status === 'pending'));
             setProposals(reconciliationResponse.data.filter((item) => item.status === 'pending'));
             setEntities(entityResponse.data);
-            setMaturityAssessments(maturityResponse.data);
           }
         } else if (activeTab === 'identity') {
           const [response, entityResponse] = await Promise.all([
@@ -400,7 +396,7 @@ export function useMemoryInspector(refreshKey: number, initialTarget?: Inspector
     selectedSourceId, selectedChatId, selectedEpisodeId, selectedClaimId, selectedFactId,
     selectedEntityId, selectedIdentityDecisionId, selectedOrganizationProposalId, selectedDreamRunId, selectedProposalId, selectedFile,
     selectedSource, selectedEpisode, selectedClaim, selectedFact, selectedEntity, selectedDreamRun,
-    selectedProposal, maturityAssessments,
+    selectedProposal,
     proposalIncomingClaims: selectedProposal ? selectedProposal.incoming_claim_ids.map((id) => proposalClaims[id]).filter(Boolean) : [],
     proposalTargetClaims: selectedProposal ? selectedProposal.target_claim_ids.map((id) => proposalClaims[id]).filter(Boolean) : [],
     selectedOrganizationProposal: organizationProposals.find((item) => item.proposal_id === selectedOrganizationProposalId) ?? null,

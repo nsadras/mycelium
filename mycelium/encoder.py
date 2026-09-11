@@ -28,6 +28,7 @@ from mycelium.artifacts import (
     segment_transcript,
 )
 
+
 class Encoder:
     def __init__(
         self,
@@ -50,9 +51,7 @@ class Encoder:
             participants=list(source_input.participants),
             metadata=dict(source_input.metadata),
             segments=(
-                None
-                if source_input.segments is None
-                else list(source_input.segments)
+                None if source_input.segments is None else list(source_input.segments)
             ),
             idempotency_key=source_input.idempotency_key,
         )
@@ -61,22 +60,28 @@ class Encoder:
 
         entry_ids = {entry.entry_id for entry in entries}
         sources = [
-            source for source in self.artifacts.list_sources()
+            source
+            for source in self.artifacts.list_sources()
             if source.raw_log_entry_id in entry_ids
         ]
         source_ids = {source.source_id for source in sources}
         episodes = [
-            episode for episode in self.artifacts.list_episodes()
+            episode
+            for episode in self.artifacts.list_episodes()
             if episode.source_id in source_ids
         ]
-        claim_ids = tuple(dict.fromkeys(
-            claim_id for episode in episodes for claim_id in episode.claim_ids
-        ))
-        operation_ids = tuple(dict.fromkeys(
-            str(source.metadata["ingestion_operation_id"])
-            for source in sources
-            if source.metadata.get("ingestion_operation_id")
-        ))
+        claim_ids = tuple(
+            dict.fromkeys(
+                claim_id for episode in episodes for claim_id in episode.claim_ids
+            )
+        )
+        operation_ids = tuple(
+            dict.fromkeys(
+                str(source.metadata["ingestion_operation_id"])
+                for source in sources
+                if source.metadata.get("ingestion_operation_id")
+            )
+        )
         status = "captured"
         return IngestionResult(
             status=status,
@@ -99,120 +104,129 @@ class Encoder:
         segments: list[SourceSegment | dict[str, Any]] | None = None,
         idempotency_key: str | None = None,
     ) -> List[LogEntry]:
-        content = transcript.strip()
-        if not content:
-            return []
+        with self.artifacts.db.transaction():
+            content = transcript.strip()
+            if not content:
+                return []
 
-        input_digest = self._input_digest(
-            content,
-            session_id,
-            source_type,
-            occurred_at,
-            participants,
-            metadata,
-            segments,
-        )
-        ingestion_key = idempotency_key or f"generated:{uuid.uuid4()}"
-        operation_suffix = hashlib.sha256(
-            ingestion_key.encode("utf-8")
-        ).hexdigest()[:16]
-        operation_id = f"ingest-{operation_suffix}"
-        try:
-            operation = self.artifacts.get_ingestion_operation(operation_id)
-        except FileNotFoundError:
-            now = datetime.datetime.now().astimezone()
-            operation = IngestionOperation(
-                operation_id=operation_id,
-                idempotency_key=ingestion_key,
-                input_digest=input_digest,
-                entry_id=f"{now:%Y-%m-%d}#session-{operation_suffix}",
-                source_id=f"source-{operation_suffix}",
-                episode_id=f"episode-{operation_suffix}",
-                status="planned",
-                created_at=now.isoformat(),
-                updated_at=now.isoformat(),
+            input_digest = self._input_digest(
+                content,
+                session_id,
+                source_type,
+                occurred_at,
+                participants,
+                metadata,
+                segments,
             )
-            self.artifacts.save_ingestion_operation(operation)
-        if operation.idempotency_key != ingestion_key:
-            raise ValueError("Ingestion operation ID collision")
-        if operation.input_digest != input_digest:
-            raise ValueError(
-                "An ingestion idempotency key cannot be reused for different input"
-            )
-
-        now = datetime.datetime.fromisoformat(operation.created_at)
-        entry_id = operation.entry_id
-
-        entry = LogEntry(
-            entry_id=entry_id,
-            session_id=session_id,
-            timestamp=now,
-            content=(
-                "Raw conversation transcript. Treat this as canonical source evidence during dream "
-                "consolidation and retrieval.\n\n"
-                f"{content}"
-            ),
-            durability="durable",
-            consolidated=False,
-        )
-
-        self.log_store.append(entry)
-        try:
-            source = self.artifacts.get_source(operation.source_id)
-        except FileNotFoundError:
-            normalized_segments = self._normalize_segments(
-                segments, content, operation.source_id, source_type
-            )
-            if not normalized_segments:
-                error = (
-                    "A non-empty source transcript must produce at least one segment"
+            ingestion_key = idempotency_key or f"generated:{uuid.uuid4()}"
+            operation_suffix = hashlib.sha256(
+                ingestion_key.encode("utf-8")
+            ).hexdigest()[:16]
+            operation_id = f"ingest-{operation_suffix}"
+            try:
+                operation = self.artifacts.get_ingestion_operation(operation_id)
+            except FileNotFoundError:
+                now = datetime.datetime.now().astimezone()
+                operation = IngestionOperation(
+                    operation_id=operation_id,
+                    idempotency_key=ingestion_key,
+                    input_digest=input_digest,
+                    entry_id=f"{now:%Y-%m-%d}#session-{operation_suffix}",
+                    source_id=f"source-{operation_suffix}",
+                    episode_id=f"episode-{operation_suffix}",
+                    status="planned",
+                    created_at=now.isoformat(),
+                    updated_at=now.isoformat(),
                 )
-                operation.status = "failed"
-                operation.error = f"ValueError: {error}"
+                self.artifacts.save_ingestion_operation(operation)
+            if operation.idempotency_key != ingestion_key:
+                raise ValueError("Ingestion operation ID collision")
+            if operation.input_digest != input_digest:
+                raise ValueError(
+                    "An ingestion idempotency key cannot be reused for different input"
+                )
+
+            now = datetime.datetime.fromisoformat(operation.created_at)
+            entry_id = operation.entry_id
+
+            entry = LogEntry(
+                entry_id=entry_id,
+                session_id=session_id,
+                timestamp=now,
+                content=(
+                    "Raw conversation transcript. Treat this as canonical source evidence during dream "
+                    "consolidation and retrieval.\n\n"
+                    f"{content}"
+                ),
+                durability="durable",
+                consolidated=False,
+            )
+
+            self.log_store.append(entry)
+            try:
+                source = self.artifacts.get_source(operation.source_id)
+            except FileNotFoundError:
+                normalized_segments = self._normalize_segments(
+                    segments, content, operation.source_id, source_type
+                )
+                if not normalized_segments:
+                    error = "A non-empty source transcript must produce at least one segment"
+                    operation.status = "failed"
+                    operation.error = f"ValueError: {error}"
+                    operation.updated_at = (
+                        datetime.datetime.now().astimezone().isoformat()
+                    )
+                    self.artifacts.save_ingestion_operation(operation)
+                    raise ValueError(error)
+                participant_names = participants or list(
+                    dict.fromkeys(
+                        segment.speaker
+                        for segment in normalized_segments
+                        if segment.speaker
+                    )
+                )
+                occurred = (
+                    occurred_at.isoformat()
+                    if isinstance(occurred_at, datetime.datetime)
+                    else occurred_at
+                )
+                source = SourceDocument(
+                    source_id=operation.source_id,
+                    source_type=source_type,
+                    session_id=session_id,
+                    recorded_at=now.isoformat(),
+                    occurred_at=occurred,
+                    participants=participant_names,
+                    segments=normalized_segments,
+                    raw_log_entry_id=entry_id,
+                    metadata={
+                        **(metadata or {}),
+                        "ingestion_operation_id": operation_id,
+                    },
+                )
+                self.artifacts.save_source(source)
+            try:
+                episode = self.artifacts.get_episode(operation.episode_id)
+            except FileNotFoundError:
+                episode = EpisodeManifest(
+                    episode_id=operation.episode_id,
+                    source_id=source.source_id,
+                    source_type=source.source_type,
+                    occurred_at=source.occurred_at,
+                    participants=list(source.participants),
+                    segment_ids=[segment.segment_id for segment in source.segments],
+                )
+                self.artifacts.save_episode(episode)
+
+            if operation.status != "complete":
+                operation.status = "captured"
+                operation.error = None
                 operation.updated_at = datetime.datetime.now().astimezone().isoformat()
                 self.artifacts.save_ingestion_operation(operation)
-                raise ValueError(error)
-            participant_names = participants or list(dict.fromkeys(
-                segment.speaker
-                for segment in normalized_segments
-                if segment.speaker
-            ))
-            occurred = (
-                occurred_at.isoformat()
-                if isinstance(occurred_at, datetime.datetime)
-                else occurred_at
-            )
-            source = SourceDocument(
-                source_id=operation.source_id,
-                source_type=source_type,
-                session_id=session_id,
-                recorded_at=now.isoformat(),
-                occurred_at=occurred,
-                participants=participant_names,
-                segments=normalized_segments,
-                raw_log_entry_id=entry_id,
-                metadata={**(metadata or {}), "ingestion_operation_id": operation_id},
-            )
-            self.artifacts.save_source(source)
-        try:
-            episode = self.artifacts.get_episode(operation.episode_id)
-        except FileNotFoundError:
-            episode = EpisodeManifest(
-                episode_id=operation.episode_id,
-                source_id=source.source_id,
-                source_type=source.source_type,
-                occurred_at=source.occurred_at,
-                participants=list(source.participants),
-                segment_ids=[segment.segment_id for segment in source.segments],
-            )
-            self.artifacts.save_episode(episode)
+            result = [entry]
 
-        if operation.status != "complete":
-            operation.status = "captured"
-            operation.error = None
-            operation.updated_at = datetime.datetime.now().astimezone().isoformat()
-            self.artifacts.save_ingestion_operation(operation)
-        return [entry]
+        self.artifacts.db.publish()
+        return result
 
     def _sync_ingestion_operation(
         self,
@@ -221,11 +235,14 @@ class Encoder:
         operation: IngestionOperation | None = None,
     ) -> None:
         if operation is None:
-            operation = next((
-                candidate
-                for candidate in self.artifacts.list_ingestion_operations()
-                if candidate.episode_id == episode.episode_id
-            ), None)
+            operation = next(
+                (
+                    candidate
+                    for candidate in self.artifacts.list_ingestion_operations()
+                    if candidate.episode_id == episode.episode_id
+                ),
+                None,
+            )
         if operation is None:
             return
         operation.status = (
@@ -289,25 +306,33 @@ class Encoder:
         split_turns = source_type in {"multi_party_conversation", "meeting_transcript"}
         expanded: list[SourceSegment] = []
         for source_index, segment in enumerate(base):
-            parts = self._sentence_parts(segment.content) if split_turns else [segment.content]
+            parts = (
+                self._sentence_parts(segment.content)
+                if split_turns
+                else [segment.content]
+            )
             for part_index, part in enumerate(parts):
                 metadata = dict(segment.metadata)
                 if len(parts) > 1:
-                    metadata.update({
-                        "parent_segment_index": source_index,
-                        "sentence_index": part_index,
-                    })
-                expanded.append(SourceSegment(
-                    segment_id="",
-                    index=0,
-                    content=part,
-                    speaker=segment.speaker,
-                    role=segment.role,
-                    timestamp=segment.timestamp,
-                    start_seconds=segment.start_seconds,
-                    end_seconds=segment.end_seconds,
-                    metadata=metadata,
-                ))
+                    metadata.update(
+                        {
+                            "parent_segment_index": source_index,
+                            "sentence_index": part_index,
+                        }
+                    )
+                expanded.append(
+                    SourceSegment(
+                        segment_id="",
+                        index=0,
+                        content=part,
+                        speaker=segment.speaker,
+                        role=segment.role,
+                        timestamp=segment.timestamp,
+                        start_seconds=segment.start_seconds,
+                        end_seconds=segment.end_seconds,
+                        metadata=metadata,
+                    )
+                )
         normalized = []
         for index, segment in enumerate(expanded):
             segment.index = index
@@ -351,7 +376,9 @@ class Encoder:
                 completed.append(episode.episode_id)
         return completed
 
-    async def _extract_claims(self, source: SourceDocument, episode: EpisodeManifest) -> None:
+    async def _extract_claims(
+        self, source: SourceDocument, episode: EpisodeManifest
+    ) -> None:
         try:
             context_sources = [
                 self.artifacts.get_source(source_id)
@@ -362,18 +389,29 @@ class Encoder:
             context_tokens = 0
             for prior in reversed(context_sources):
                 cost = count_tokens(self._render_segments(prior.segments))
-                if prior.status == "active" and context_tokens + cost <= self.config.llm.context_window_tokens // 4:
+                if (
+                    prior.status == "active"
+                    and context_tokens + cost
+                    <= self.config.llm.context_window_tokens // 4
+                ):
                     selected_context.insert(0, prior)
                     context_tokens += cost
             context_sources = selected_context
-            context_segments = [seg for prior in context_sources for seg in prior.segments]
+            context_segments = [
+                seg for prior in context_sources for seg in prior.segments
+            ]
             claim_ids: list[str] = list(episode.claim_ids)
             dispositions = {
                 item.segment_id: item for item in episode.segment_dispositions
             }
             extraction_errors: list[str] = []
+
             def request_for(batch):
-                start = next(i for i, seg in enumerate(source.segments) if seg.segment_id == batch[0].segment_id)
+                start = next(
+                    i
+                    for i, seg in enumerate(source.segments)
+                    if seg.segment_id == batch[0].segment_id
+                )
                 # Complete adjacent segments resolve replies across extraction boundaries.
                 neighbors = []
                 context_limit = self.config.llm.context_window_tokens // 4
@@ -390,22 +428,33 @@ class Encoder:
                         break
                     supplied_context = trial
                 schema = extraction_output_model(
-                    [seg.segment_id for seg in batch], [seg.segment_id for seg in supplied_context],
+                    [seg.segment_id for seg in batch],
+                    [seg.segment_id for seg in supplied_context],
                 )
                 system, user = prompts.claim_extraction_prompt(
-                    source.source_type, source.source_id, list(source.participants),
-                    self._render_claim_segments(batch), context=self._render_segments(supplied_context),
+                    source.source_type,
+                    source.source_id,
+                    list(source.participants),
+                    self._render_claim_segments(batch),
+                    context=self._render_segments(supplied_context),
                 )
                 return system, user, schema, neighbors, bool(supplied_context)
 
             def fits(batch):
                 system, user, schema, _, think = request_for(batch)
-                output_tokens = (max(8192, self.config.llm.reasoning_output_tokens)
-                                 if think and self.config.llm.reasoning_enabled else 8192)
+                output_tokens = (
+                    max(8192, self.config.llm.reasoning_output_tokens)
+                    if think and self.config.llm.reasoning_enabled
+                    else 8192
+                )
                 try:
                     require_request_budget(
-                        [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                        context_window=self.config.llm.context_window_tokens, output_tokens=output_tokens,
+                        [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                        context_window=self.config.llm.context_window_tokens,
+                        output_tokens=output_tokens,
                         schema=schema.model_json_schema(),
                     )
                     return True
@@ -437,7 +486,11 @@ class Encoder:
                     system, user, claim_model, neighbors, think = request_for(batch)
                     if state.response is None:
                         response = await self.llm.call_structured(
-                            system, user, claim_model, num_predict=8192, think=think,
+                            system,
+                            user,
+                            claim_model,
+                            num_predict=8192,
+                            think=think,
                             debug_label=f"claim-extraction-{source.source_id}-batch-{batch_index}",
                         )
                     else:
@@ -445,8 +498,13 @@ class Encoder:
                     response = claim_model.model_validate(response).model_dump()
                     records = extraction_records(response)
                     staged_claims = self._build_extracted_claims(
-                        source, records, state.batch_id,
-                        context_sources=[*context_sources, replace(source, segments=neighbors)]
+                        source,
+                        records,
+                        state.batch_id,
+                        context_sources=[
+                            *context_sources,
+                            replace(source, segments=neighbors),
+                        ],
                     )
                     # Persist validated output before publishing claims so a write
                     # interruption replays the same decision without a new model call.
@@ -461,18 +519,21 @@ class Encoder:
                             self.artifacts.save_claim(claim)
                         claim_ids.append(claim.claim_id)
                     source_only = {
-                        item["segment_id"]: item["reason"] for item in records["source_only"]
+                        item["segment_id"]: item["reason"]
+                        for item in records["source_only"]
                     }
                     for segment_id in batch_ids:
                         supporting_ids = [
-                            claim.claim_id for claim in staged_claims
+                            claim.claim_id
+                            for claim in staged_claims
                             if segment_id in claim.provenance[0].segment_ids
                         ]
                         dispositions[segment_id] = ExtractionSegmentDisposition(
                             segment_id=segment_id,
                             disposition="claimed" if supporting_ids else "source_only",
                             reason=(
-                                "Cited by extracted statements." if supporting_ids
+                                "Cited by extracted statements."
+                                if supporting_ids
                                 else source_only[segment_id]
                             ),
                             claim_ids=supporting_ids,
@@ -495,7 +556,8 @@ class Encoder:
                 if state.status == "complete":
                     state.response = None
             terminal_batches = {
-                state.batch_id for state in episode.extraction_batches
+                state.batch_id
+                for state in episode.extraction_batches
                 if state.status == "complete"
             }
             incomplete = len(terminal_batches) != len(episode.extraction_batches)
@@ -506,11 +568,13 @@ class Encoder:
             if incomplete:
                 persisted_errors = [
                     f"batch {state.batch_index}: {state.last_error}"
-                    for state in episode.extraction_batches if state.last_error
+                    for state in episode.extraction_batches
+                    if state.last_error
                 ]
-                episode.extraction_error = "; ".join(
-                    extraction_errors or persisted_errors
-                ) or "Extraction has retryable incomplete batches"
+                episode.extraction_error = (
+                    "; ".join(extraction_errors or persisted_errors)
+                    or "Extraction has retryable incomplete batches"
+                )
             else:
                 episode.extraction_error = None
         except Exception as exc:
@@ -537,7 +601,10 @@ class Encoder:
 
     @staticmethod
     def _segment_batches(
-        segments: list[SourceSegment], batch_size: int = 48, *, fits=None,
+        segments: list[SourceSegment],
+        batch_size: int = 48,
+        *,
+        fits=None,
     ) -> list[list[SourceSegment]]:
         batches = []
         current = []
@@ -548,7 +615,9 @@ class Encoder:
                 current = []
             current.append(segment)
             if fits and not fits(current):
-                raise ContextBudgetError("A complete source segment exceeds the extraction budget")
+                raise ContextBudgetError(
+                    "A complete source segment exceeds the extraction budget"
+                )
         if current:
             batches.append(current)
         return batches
@@ -558,43 +627,55 @@ class Encoder:
         source: SourceDocument,
         response: dict[str, Any],
         batch_id: str,
-        *, context_sources: list[SourceDocument] | None = None,
+        *,
+        context_sources: list[SourceDocument] | None = None,
     ) -> list[MemoryClaim]:
         """Build a validated batch before any claim in it is persisted."""
         claims: list[MemoryClaim] = []
         for claim_index, raw in enumerate(response["claims"], start=1):
             claim_text = str(raw["text"]).strip()
             segment_ids = list(dict.fromkeys(raw["segment_ids"]))
-            source_speakers = list(dict.fromkeys(
-                segment.speaker for segment in source.segments
-                if segment.segment_id in segment_ids and segment.speaker
-            ))
+            source_speakers = list(
+                dict.fromkeys(
+                    segment.speaker
+                    for segment in source.segments
+                    if segment.segment_id in segment_ids and segment.speaker
+                )
+            )
             about = list(raw["about"])
-            raw_modality = str(raw.get("evidence_modality") or "unknown").strip().lower()
+            raw_modality = (
+                str(raw.get("evidence_modality") or "unknown").strip().lower()
+            )
             facets = dict(raw.get("facets", {}) or {})
             # The model declares an inference by supplying its evidence basis.
             is_inferred = facets.get("inference_basis") is not None
             cited_segments = [
-                segment for segment in source.segments
+                segment
+                for segment in source.segments
                 if segment.segment_id in segment_ids
             ]
-            anchor_segment_id = str(
-                raw.get("temporal_anchor_segment_id") or ""
-            ).strip()
+            anchor_segment_id = str(raw.get("temporal_anchor_segment_id") or "").strip()
             cited_context_ids = set(raw.get("context_segment_ids", []))
             anchor_candidates = [
                 *cited_segments,
-                *(segment for prior in context_sources or [] for segment in prior.segments
-                  if segment.segment_id in cited_context_ids),
+                *(
+                    segment
+                    for prior in context_sources or []
+                    for segment in prior.segments
+                    if segment.segment_id in cited_context_ids
+                ),
             ]
             anchor_segment = next(
                 (
-                    segment for segment in anchor_candidates
+                    segment
+                    for segment in anchor_candidates
                     if segment.segment_id == anchor_segment_id
                 ),
                 None,
             )
-            timestamped_evidence = [segment for segment in anchor_candidates if segment.timestamp]
+            timestamped_evidence = [
+                segment for segment in anchor_candidates if segment.timestamp
+            ]
             unambiguous_timestamp = None
             if not anchor_segment_id:
                 cited_timestamps = {
@@ -612,36 +693,51 @@ class Encoder:
                 temporal_anchor = source.occurred_at
             context_provenance = []
             for prior in context_sources or []:
-                cited = [seg.segment_id for seg in prior.segments if seg.segment_id in cited_context_ids]
+                cited = [
+                    seg.segment_id
+                    for seg in prior.segments
+                    if seg.segment_id in cited_context_ids
+                ]
                 if cited:
-                    context_provenance.append(ClaimProvenance(
-                        source_id=prior.source_id, segment_ids=cited,
-                        raw_log_entry_id=prior.raw_log_entry_id, evidence_type="explicit",
-                    ))
-            claims.append(MemoryClaim(
-                claim_id=(
-                    "claim-"
-                    + hashlib.sha256(
-                        f"{source.source_id}:{batch_id}:{claim_index}".encode("utf-8")
-                    ).hexdigest()[:16]
-                ),
-                text=claim_text,
-                about=about,
-                provenance=[ClaimProvenance(
-                    source_id=source.source_id,
-                    segment_ids=segment_ids,
-                    raw_log_entry_id=source.raw_log_entry_id,
-                    speaker=source_speakers[0] if len(source_speakers) == 1 else None,
-                    evidence_type="inferred" if is_inferred else "explicit",
-                ), *context_provenance],
-                recorded_at=source.recorded_at,
-                confidence=0.8,
-                facets=normalize_temporal_facets(
-                    facets, temporal_anchor
-                ),
-                claim_type=str(raw.get("claim_type") or "unknown"),
-                predicate=str(raw["predicate"]) if raw.get("predicate") else None,
-                evidence_modality=raw_modality,
-                temporal_status=str(raw.get("temporal_status") or "unknown"),
-            ))
+                    context_provenance.append(
+                        ClaimProvenance(
+                            source_id=prior.source_id,
+                            segment_ids=cited,
+                            raw_log_entry_id=prior.raw_log_entry_id,
+                            evidence_type="explicit",
+                        )
+                    )
+            claims.append(
+                MemoryClaim(
+                    claim_id=(
+                        "claim-"
+                        + hashlib.sha256(
+                            f"{source.source_id}:{batch_id}:{claim_index}".encode(
+                                "utf-8"
+                            )
+                        ).hexdigest()[:16]
+                    ),
+                    text=claim_text,
+                    about=about,
+                    provenance=[
+                        ClaimProvenance(
+                            source_id=source.source_id,
+                            segment_ids=segment_ids,
+                            raw_log_entry_id=source.raw_log_entry_id,
+                            speaker=source_speakers[0]
+                            if len(source_speakers) == 1
+                            else None,
+                            evidence_type="inferred" if is_inferred else "explicit",
+                        ),
+                        *context_provenance,
+                    ],
+                    recorded_at=source.recorded_at,
+                    confidence=0.8,
+                    facets=normalize_temporal_facets(facets, temporal_anchor),
+                    claim_type=str(raw.get("claim_type") or "unknown"),
+                    predicate=str(raw["predicate"]) if raw.get("predicate") else None,
+                    evidence_modality=raw_modality,
+                    temporal_status=str(raw.get("temporal_status") or "unknown"),
+                )
+            )
         return claims

@@ -1,10 +1,8 @@
 """Scope, retention, and audit policy for a Dream run."""
 
 from __future__ import annotations
-
 from dataclasses import replace
 from datetime import datetime
-
 from mycelium.artifacts import (
     ArtifactStore,
     DreamClaimDecision,
@@ -30,8 +28,10 @@ class DreamPolicy:
             return []
         claim_ids = {claim.claim_id for claim in queued_claims}
         claim_ids.update(
-            placement.claim_id
-            for placement in self.artifacts.list_placements(status="deferred")
+            (
+                placement.claim_id
+                for placement in self.artifacts.list_placements(status="deferred")
+            )
         )
         claims = {
             claim.claim_id: claim
@@ -44,30 +44,18 @@ class DreamPolicy:
         )
 
     def scope_revision_claims(
-        self,
-        queued_claims: list[MemoryClaim],
-        revision_entities: list[EntityRecord],
+        self, queued_claims: list[MemoryClaim], revision_entities: list[EntityRecord]
     ) -> list[MemoryClaim]:
         """Expand a Dream with explicit prior scope neighborhoods, never lexical similarity."""
         if not queued_claims:
             return []
         claim_ids = {claim.claim_id for claim in queued_claims}
-
-        # The immediately preceding consolidation cohort is the persisted semantic
-        # context in which an early description may have been assigned before a
-        # later name or identity became available.
         cohorts = self.artifacts.list_scope_cohorts()
         if cohorts:
             claim_ids.update(cohorts[-1].claim_ids)
-
-        # You and deferred are explicit scope states. They are the two places from
-        # which a newly established, more specific entity most often needs to take
-        # ownership; neither selection consults claim text or surface aliases.
         for placement in self.artifacts.list_placements():
             if placement.status == "deferred" or placement.owner_entity_id == "you":
                 claim_ids.add(placement.claim_id)
-
-        # Stable entity endpoints extend the neighborhood across prior cohorts.
         current_entity_ids = {entity.entity_id for entity in revision_entities} | {
             reference.entity_id
             for claim in queued_claims
@@ -78,11 +66,14 @@ class DreamPolicy:
         }
         if current_entity_ids:
             claim_ids.update(
-                reference.claim_id
-                for reference in self.artifacts.list_entity_references(status="active")
-                if reference.entity_id in current_entity_ids
+                (
+                    reference.claim_id
+                    for reference in self.artifacts.list_entity_references(
+                        status="active"
+                    )
+                    if reference.entity_id in current_entity_ids
+                )
             )
-
         claims = {
             claim.claim_id: claim
             for claim in self.artifacts.list_claims(status="active")
@@ -104,26 +95,15 @@ class DreamPolicy:
         }
         decisions = {
             decision.decision_id: decision
-            for decision in [
-                *initial.entity_decisions,
-                *revision.entity_decisions,
-            ]
+            for decision in [*initial.entity_decisions, *revision.entity_decisions]
         }
         encounters = {
             encounter.encounter_id: encounter
             for encounter in [*initial.encounters, *revision.encounters]
         }
-        assessments = {
-            assessment.assessment_id: assessment
-            for assessment in [
-                *initial.maturity_assessments,
-                *revision.maturity_assessments,
-            ]
-        }
         revision.new_entities = list(entities.values())
         revision.entity_decisions = list(decisions.values())
         revision.encounters = list(encounters.values())
-        revision.maturity_assessments = list(assessments.values())
         initial_routes = {route.claim_id: route for route in initial.routes}
         revision_routes = {route.claim_id: route for route in revision.routes}
         merged_routes = []
@@ -135,9 +115,19 @@ class DreamPolicy:
                 merged_routes.append(current)
                 continue
             selected = current or prior
-            merged_routes.append(replace(selected, identity_blocker_ids=tuple(sorted({
-                *prior.identity_blocker_ids, *selected.identity_blocker_ids,
-            }))))
+            merged_routes.append(
+                replace(
+                    selected,
+                    identity_blocker_ids=tuple(
+                        sorted(
+                            {
+                                *prior.identity_blocker_ids,
+                                *selected.identity_blocker_ids,
+                            }
+                        )
+                    ),
+                )
+            )
         revision.routes = merged_routes
         return revision
 
@@ -151,7 +141,6 @@ class DreamPolicy:
         now = datetime.now().astimezone().isoformat()
         records: dict[str, NonWikiRetentionRecord] = {}
         source_by_id = {source.source_id: source for source in sources}
-
         for source in sources:
             episode = episodes_by_source.get(source.source_id)
             if episode is None:
@@ -163,7 +152,7 @@ class DreamPolicy:
                 segment_id = disposition.segment_id
                 segment = segments.get(segment_id)
                 role = (
-                    str((segment.role or segment.speaker) if segment else "")
+                    str(segment.role or segment.speaker if segment else "")
                     .strip()
                     .lower()
                 )
@@ -186,7 +175,6 @@ class DreamPolicy:
                     policy_origin=origin,
                     created_at=now,
                 )
-
         for claim in self.artifacts.list_claims(status="active"):
             if claim.claim_id not in claim_ids:
                 continue
@@ -209,7 +197,7 @@ class DreamPolicy:
                 claim_segment_ids and claim_segment_ids <= source_only_segment_ids
             )
             admitted = self.claim_is_admitted(claim, source_by_id)
-            if admitted and not excluded_by_extraction:
+            if admitted and (not excluded_by_extraction):
                 continue
             for provenance in claim.provenance:
                 if provenance.source_id not in source_by_id:
@@ -284,9 +272,8 @@ class DreamPolicy:
             excluded_by_extraction = bool(
                 claim_segment_ids and claim_segment_ids <= source_only_segment_ids
             )
-            admitted = (
-                self.claim_is_admitted(claim, source_by_id)
-                and not excluded_by_extraction
+            admitted = self.claim_is_admitted(claim, source_by_id) and (
+                not excluded_by_extraction
             )
             existing_placement = self.artifacts.placement_for_claim(claim.claim_id)
             revising_existing = claim.claim_id not in incoming_claim_ids
@@ -302,27 +289,23 @@ class DreamPolicy:
                 evidence_id=f"{claim.claim_id}::claim",
                 source_id=matching_source.source_id,
                 raw_log_entry_id=raw_log_id,
-                disposition=(
-                    previous_disposition
-                    if revising_existing
-                    else "pending"
-                    if admitted
-                    else "excluded_source_policy"
-                ),
-                reason=(
-                    previous_reason or "Awaiting scope revision."
-                    if revising_existing
-                    else "Excluded by the typed extraction-retention policy."
-                    if excluded_by_extraction
-                    else "Awaiting page assignment."
-                    if admitted
-                    else "Excluded by the typed source-structure retention policy."
-                ),
+                disposition=previous_disposition
+                if revising_existing
+                else "pending"
+                if admitted
+                else "excluded_source_policy",
+                reason=previous_reason or "Awaiting scope revision."
+                if revising_existing
+                else "Excluded by the typed extraction-retention policy."
+                if excluded_by_extraction
+                else "Awaiting page assignment."
+                if admitted
+                else "Excluded by the typed source-structure retention policy.",
                 page_slugs=previous_slugs if revising_existing else [],
             )
             if admitted:
                 evidence.append(ClaimEvidence(claim, matching_source))
-        return evidence, decisions
+        return (evidence, decisions)
 
     @staticmethod
     def claim_is_admitted(
@@ -373,34 +356,32 @@ class DreamPolicy:
         decisions: dict[str, DreamClaimDecision],
     ) -> DreamRunAudit:
         completed_at = datetime.now().astimezone().isoformat()
-        if report.pending_source_ids and not report.completed_source_ids:
+        if report.pending_source_ids and (not report.completed_source_ids):
             status = "failed"
         elif report.pending_source_ids or report.failures:
             status = "partial"
         else:
             status = "completed"
         return DreamRunAudit(
-                run_id=run_id,
-                started_at=started_at,
-                completed_at=completed_at,
-                status=status,
-                source_ids=sorted(
-                    {
-                        *[entry.entry_id for entry in raw_entries],
-                        *[
-                            decision.raw_log_entry_id
-                            for decision in decisions.values()
-                            if decision.raw_log_entry_id
-                        ],
-                    }
-                ),
-                completed_source_ids=list(report.completed_source_ids),
-                pending_source_ids=list(report.pending_source_ids),
-                pages_created=report.pages_created,
-                pages_updated=report.pages_updated,
-                claim_decisions=sorted(
-                    decisions.values(), key=lambda item: item.claim_id
-                ),
-                failures=list(report.failures),
-                reconsolidation_proposal_ids=list(report.reconsolidation_proposal_ids),
-            )
+            run_id=run_id,
+            started_at=started_at,
+            completed_at=completed_at,
+            status=status,
+            source_ids=sorted(
+                {
+                    *[entry.entry_id for entry in raw_entries],
+                    *[
+                        decision.raw_log_entry_id
+                        for decision in decisions.values()
+                        if decision.raw_log_entry_id
+                    ],
+                }
+            ),
+            completed_source_ids=list(report.completed_source_ids),
+            pending_source_ids=list(report.pending_source_ids),
+            pages_created=report.pages_created,
+            pages_updated=report.pages_updated,
+            claim_decisions=sorted(decisions.values(), key=lambda item: item.claim_id),
+            failures=list(report.failures),
+            reconsolidation_proposal_ids=list(report.reconsolidation_proposal_ids),
+        )

@@ -55,31 +55,59 @@ class ClaimLifecycleService:
         self.resolver = resolver
 
     async def correct_claim(
-        self, claim_id: str, text: str, *, reason: str = "User correction",
-        claim_type: str | None = None, predicate: str | None = None,
+        self,
+        claim_id: str,
+        text: str,
+        *,
+        reason: str = "User correction",
+        claim_type: str | None = None,
+        predicate: str | None = None,
         temporal_status: str | None = None,
     ) -> ClaimLifecycleResult:
-        return await self._transaction("correct", dict(
-            claim_id=claim_id, text=text, reason=reason, claim_type=claim_type,
-            predicate=predicate, temporal_status=temporal_status,
-        ))
+        return await self._transaction(
+            "correct",
+            dict(
+                claim_id=claim_id,
+                text=text,
+                reason=reason,
+                claim_type=claim_type,
+                predicate=predicate,
+                temporal_status=temporal_status,
+            ),
+        )
 
-    async def retract_source(self, source_id: str, *, reason: str) -> ClaimLifecycleResult:
-        return await self._transaction("retract", dict(source_id=source_id, reason=reason))
+    async def retract_source(
+        self, source_id: str, *, reason: str
+    ) -> ClaimLifecycleResult:
+        return await self._transaction(
+            "retract", dict(source_id=source_id, reason=reason)
+        )
 
     async def _transaction(self, kind: str, inputs: dict) -> ClaimLifecycleResult:
         async with mutation_lock(self.artifacts.root):
-            transaction = LifecycleTransaction(self.artifacts.root, self.materializer.wiki.wiki_dir)
+            transaction = LifecycleTransaction(
+                self.artifacts.root, self.materializer.wiki.wiki_dir
+            )
             transaction.recover()
             operation_id = transaction.operation_id(kind, inputs)
             prior = transaction.completed(operation_id)
             if prior is not None:
                 return ClaimLifecycleResult(**prior)
             async with transaction.stage() as (paths, before):
-                artifacts = ArtifactStore(paths["artifacts"])
-                materializer = PageMaterializer(WikiStore(paths["wiki"]), artifacts, self.materializer.config)
-                service = ClaimLifecycleService(artifacts, materializer, FactResolver(self.resolver.llm, artifacts))
-                action = service._correct_claim if kind == "correct" else service._retract_source
+                artifacts = ArtifactStore(self.artifacts.root, db=paths["db"])
+                materializer = PageMaterializer(
+                    WikiStore(self.materializer.wiki.wiki_dir, db=paths["db"]),
+                    artifacts,
+                    self.materializer.config,
+                )
+                service = ClaimLifecycleService(
+                    artifacts, materializer, FactResolver(self.resolver.llm, artifacts)
+                )
+                action = (
+                    service._correct_claim
+                    if kind == "correct"
+                    else service._retract_source
+                )
                 result = await action(**inputs)
                 transaction.publish(operation_id, paths, before, asdict(result))
                 return result
@@ -105,18 +133,37 @@ class ClaimLifecycleService:
             raise ValueError("A correction requires a reason")
 
         now = datetime.now().astimezone().isoformat()
-        original_time = next((
-            self.artifacts.get_source(p.source_id).occurred_at
-            for p in target.provenance
-            if self.artifacts.get_source(p.source_id).occurred_at
-        ), None)
-        metadata = CorrectionMetadata.model_validate(await self.resolver.llm.call_structured(
-            render_prompt("memory/correction.system.jinja"),
-            json.dumps({"original_statement": target.text, "original_time": original_time,
-                        "correction_time": now, "replacement": corrected_text}),
-            CorrectionMetadata, num_predict=2048, debug_label="memory-correction",
-        ))
-        anchor = original_time if metadata.time_anchor == "original" else now if metadata.time_anchor == "correction" else None
+        original_time = next(
+            (
+                self.artifacts.get_source(p.source_id).occurred_at
+                for p in target.provenance
+                if self.artifacts.get_source(p.source_id).occurred_at
+            ),
+            None,
+        )
+        metadata = CorrectionMetadata.model_validate(
+            await self.resolver.llm.call_structured(
+                render_prompt("memory/correction.system.jinja"),
+                json.dumps(
+                    {
+                        "original_statement": target.text,
+                        "original_time": original_time,
+                        "correction_time": now,
+                        "replacement": corrected_text,
+                    }
+                ),
+                CorrectionMetadata,
+                num_predict=2048,
+                debug_label="memory-correction",
+            )
+        )
+        anchor = (
+            original_time
+            if metadata.time_anchor == "original"
+            else now
+            if metadata.time_anchor == "correction"
+            else None
+        )
         short_id = uuid.uuid4().hex[:12]
         source_id = f"source-correction-{short_id}"
         segment_id = f"{source_id}#seg-0001"
@@ -128,13 +175,15 @@ class ClaimLifecycleService:
             recorded_at=now,
             occurred_at=now,
             participants=["user"],
-            segments=[SourceSegment(
-                segment_id=segment_id,
-                index=0,
-                content=corrected_text,
-                speaker="user",
-                role="user",
-            )],
+            segments=[
+                SourceSegment(
+                    segment_id=segment_id,
+                    index=0,
+                    content=corrected_text,
+                    speaker="user",
+                    role="user",
+                )
+            ],
             metadata={
                 "corrected_claim_id": claim_id,
                 "correction_reason": correction_reason,
@@ -144,12 +193,14 @@ class ClaimLifecycleService:
             claim_id=replacement_id,
             text=corrected_text,
             about=[item.model_dump() for item in metadata.about],
-            provenance=[ClaimProvenance(
-                source_id=source_id,
-                segment_ids=[segment_id],
-                speaker="user",
-                evidence_type="explicit",
-            )],
+            provenance=[
+                ClaimProvenance(
+                    source_id=source_id,
+                    segment_ids=[segment_id],
+                    speaker="user",
+                    evidence_type="explicit",
+                )
+            ],
             recorded_at=now,
             confidence=1.0,
             facets=normalize_temporal_facets(metadata.facets.model_dump(), anchor),
@@ -165,28 +216,34 @@ class ClaimLifecycleService:
         add_claim_link(target, "superseded_by", replacement.claim_id)
 
         self.artifacts.save_source(source)
-        self.artifacts.save_episode(EpisodeManifest(
-            episode_id=f"episode-correction-{short_id}",
-            source_id=source_id,
-            source_type=source.source_type,
-            occurred_at=source.occurred_at,
-            participants=list(source.participants),
-            segment_ids=[segment_id],
-            claim_ids=[replacement_id],
-            segment_dispositions=[ExtractionSegmentDisposition(
-                segment_id=segment_id,
-                disposition="claimed",
-                claim_ids=[replacement_id],
-            )],
-            extraction_batches=[ExtractionBatchState(
-                batch_id=f"batch-correction-{short_id}",
-                batch_index=1,
+        self.artifacts.save_episode(
+            EpisodeManifest(
+                episode_id=f"episode-correction-{short_id}",
+                source_id=source_id,
+                source_type=source.source_type,
+                occurred_at=source.occurred_at,
+                participants=list(source.participants),
                 segment_ids=[segment_id],
-                status="complete",
-                attempt_count=1,
-            )],
-            extraction_status="complete",
-        ))
+                claim_ids=[replacement_id],
+                segment_dispositions=[
+                    ExtractionSegmentDisposition(
+                        segment_id=segment_id,
+                        disposition="claimed",
+                        claim_ids=[replacement_id],
+                    )
+                ],
+                extraction_batches=[
+                    ExtractionBatchState(
+                        batch_id=f"batch-correction-{short_id}",
+                        batch_index=1,
+                        segment_ids=[segment_id],
+                        status="complete",
+                        attempt_count=1,
+                    )
+                ],
+                extraction_status="complete",
+            )
+        )
         target.status = "superseded"
         self.artifacts.save_claim(target)
         self.artifacts.save_claim(replacement)
@@ -196,7 +253,8 @@ class ClaimLifecycleService:
         if placement and placement.owner_entity_id:
             affected_entity_ids.add(placement.owner_entity_id)
         routing = await ClaimRouter(self.resolver.llm, self.artifacts).route(
-            [ClaimEvidence(replacement, source)], dream_run_id=f"correction-{short_id}",
+            [ClaimEvidence(replacement, source)],
+            dream_run_id=f"correction-{short_id}",
         )
         if routing.failures:
             raise ClaimLifecycleConflictError(routing.failures[0].reason)
@@ -270,7 +328,9 @@ class ClaimLifecycleService:
             self.artifacts.save_claim(claim)
             retracted_claim_ids.append(claim.claim_id)
 
-        reconsider = self._invalidate_reviews(set(retracted_claim_ids), affected_entity_ids)
+        reconsider = self._invalidate_reviews(
+            set(retracted_claim_ids), affected_entity_ids
+        )
         pages = await self._rebuild(
             {value for value in affected_entity_ids if value},
             incoming_claim_ids=reconsider,
@@ -283,23 +343,37 @@ class ClaimLifecycleService:
             pages_deleted=sorted(pages.deleted_slugs),
         )
 
-    def _invalidate_reviews(self, inactive_ids: set[str], affected: set[str]) -> set[str]:
+    def _invalidate_reviews(
+        self, inactive_ids: set[str], affected: set[str]
+    ) -> set[str]:
         # A pending transition must refer to current canonical claims. Reconsider
         # its surviving incoming evidence after a user changes either side.
         reconsider: set[str] = set()
         for proposal in self.artifacts.list_reconsolidation_proposals(status="pending"):
-            if not inactive_ids.intersection([*proposal.incoming_claim_ids, *proposal.target_claim_ids]):
+            if not inactive_ids.intersection(
+                [*proposal.incoming_claim_ids, *proposal.target_claim_ids]
+            ):
                 continue
             proposal.status = "stale"
-            proposal.application_error = "Referenced evidence changed through user correction or retraction."
+            proposal.application_error = (
+                "Referenced evidence changed through user correction or retraction."
+            )
             self.artifacts.save_reconsolidation_proposal(proposal)
             affected.update(proposal.affected_entity_ids)
-            reconsider.update(cid for cid in proposal.incoming_claim_ids
-                              if self.artifacts.get_claim(cid).status == "active")
+            reconsider.update(
+                cid
+                for cid in proposal.incoming_claim_ids
+                if self.artifacts.get_claim(cid).status == "active"
+            )
         return reconsider
 
-    async def _rebuild(self, entity_ids: set[str], *, operation_id: str,
-                       incoming_claim_ids: set[str] | None = None):
+    async def _rebuild(
+        self,
+        entity_ids: set[str],
+        *,
+        operation_id: str,
+        incoming_claim_ids: set[str] | None = None,
+    ):
         resolution = await self.resolver.resolve(
             [],
             affected_entity_ids=entity_ids,

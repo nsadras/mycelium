@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from mycelium.snapshots import snapshot_store
+
 import copy
 import json
 import re
@@ -82,40 +84,46 @@ def _snapshot(memory: Mycelium, checkpoint_id: str) -> dict[str, Any]:
     facts = memory.artifacts.list_consolidated_facts()
     pages = memory.wiki.list_all()
     labels = _source_label_map(memory)
-    return _jsonable({
-        "checkpoint_id": checkpoint_id,
-        "sources": memory.artifacts.list_sources(),
-        "episodes": memory.artifacts.list_episodes(),
-        "claims": [
-            {
-                **asdict(claim),
-                "fixture_evidence": sorted(_claim_source_labels(claim, labels)),
-            }
-            for claim in claims
-        ],
-        "entities": entities,
-        "placements": placements,
-        "consolidated_facts": facts,
-        "scope_decisions": memory.artifacts.list_scope_decisions(),
-        "encounters": memory.artifacts.list_encounters(),
-        "reconsolidation_proposals": memory.artifacts.list_reconsolidation_proposals(),
-        "dream_runs": memory.artifacts.list_dream_runs(),
-        "pages": pages,
-        "counts": {
-            "sources": len(memory.artifacts.list_sources()),
-            "claims": len(claims),
-            "active_claims": sum(claim.status == "active" for claim in claims),
-            "pending": sum(claim.dream_disposition == "pending" for claim in claims),
-            "deferred": sum(claim.dream_disposition == "deferred" for claim in claims),
-            "routing_failed": sum(
-                claim.dream_disposition == "routing_failed" for claim in claims
-            ),
-            "placed": sum(item.status == "placed" for item in placements),
-            "consolidated_facts": len(facts),
-            "entities": len(entities),
-            "pages": len(pages),
-        },
-    })
+    return _jsonable(
+        {
+            "checkpoint_id": checkpoint_id,
+            "sources": memory.artifacts.list_sources(),
+            "episodes": memory.artifacts.list_episodes(),
+            "claims": [
+                {
+                    **asdict(claim),
+                    "fixture_evidence": sorted(_claim_source_labels(claim, labels)),
+                }
+                for claim in claims
+            ],
+            "entities": entities,
+            "placements": placements,
+            "consolidated_facts": facts,
+            "scope_decisions": memory.artifacts.list_scope_decisions(),
+            "encounters": memory.artifacts.list_encounters(),
+            "reconsolidation_proposals": memory.artifacts.list_reconsolidation_proposals(),
+            "dream_runs": memory.artifacts.list_dream_runs(),
+            "pages": pages,
+            "counts": {
+                "sources": len(memory.artifacts.list_sources()),
+                "claims": len(claims),
+                "active_claims": sum(claim.status == "active" for claim in claims),
+                "pending": sum(
+                    claim.dream_disposition == "pending" for claim in claims
+                ),
+                "deferred": sum(
+                    claim.dream_disposition == "deferred" for claim in claims
+                ),
+                "routing_failed": sum(
+                    claim.dream_disposition == "routing_failed" for claim in claims
+                ),
+                "placed": sum(item.status == "placed" for item in placements),
+                "consolidated_facts": len(facts),
+                "entities": len(entities),
+                "pages": len(pages),
+            },
+        }
+    )
 
 
 def _configure_user(memory: Mycelium, name: str) -> None:
@@ -157,16 +165,20 @@ async def _ingest_episode(
             "fixture_source_id": str(episode["source_id"]),
         }
     )
-    await memory.ingest_source(SourceInput(
-        transcript="\n".join(transcript_lines),
-        session_id=str(episode["id"]),
-        source_type=str(episode["source_type"]),
-        occurred_at=str(episode["occurred_at"]),
-        participants=tuple(str(value) for value in episode.get("participants") or []),
-        metadata=metadata,
-        segments=tuple(segments),
-        idempotency_key=f"daily-driver:{episode['id']}",
-    ))
+    await memory.ingest_source(
+        SourceInput(
+            transcript="\n".join(transcript_lines),
+            session_id=str(episode["id"]),
+            source_type=str(episode["source_type"]),
+            occurred_at=str(episode["occurred_at"]),
+            participants=tuple(
+                str(value) for value in episode.get("participants") or []
+            ),
+            metadata=metadata,
+            segments=tuple(segments),
+            idempotency_key=f"daily-driver:{episode['id']}",
+        )
+    )
 
 
 def _replay_extracted_episode(
@@ -570,9 +582,11 @@ async def _run_checkpoint_probes(
     )
     rows: list[dict[str, Any]] = []
     for probe in probes:
-        retrieval = await memory.retrieve_context(RetrievalRequest(
-            query=str(probe["question"]),
-        ))
+        retrieval = await memory.retrieve_context(
+            RetrievalRequest(
+                query=str(probe["question"]),
+            )
+        )
         loaded_pages = list(retrieval.page_references)
         retrieved_gold_facts, retrieved_claim_ids = retrieved_generated_ids(
             retrieval.evidence, snapshot_match
@@ -845,6 +859,7 @@ async def run_daily_driver(
                             memory.store_path / "wiki" / f"{page.slug}.md",
                             wiki_dir / f"{page.slug}.md",
                         )
+                    snapshot_store(memory.store_path, checkpoint_dir / "store")
                     snapshots[value] = snapshot
                     checkpoint_probes = await _run_checkpoint_probes(
                         fixture,

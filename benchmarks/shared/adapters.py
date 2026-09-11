@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from mycelium.snapshots import snapshot_store
+
 import asyncio
 import copy
-import shutil
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -66,16 +67,22 @@ class MemorySystem(Protocol):
 
 class OllamaQaClient:
     def __init__(
-        self, model: str, url: str, temperature: float | None = None, timeout: int | None = None,
+        self,
+        model: str,
+        url: str,
+        temperature: float | None = None,
+        timeout: int | None = None,
         llm_config: LLMConfig | None = None,
     ) -> None:
         self.model = model
         settings = llm_config or LLMConfig()
         self.llm = OllamaClient(
-            url=url, model=model,
+            url=url,
+            model=model,
             temperature=settings.temperature if temperature is None else temperature,
             timeout=settings.timeout_seconds if timeout is None else timeout,
-            top_p=settings.top_p, top_k=settings.top_k,
+            top_p=settings.top_p,
+            top_k=settings.top_k,
             context_window_tokens=settings.context_window_tokens,
             reasoning_enabled=settings.reasoning_enabled,
             reasoning_output_tokens=settings.reasoning_output_tokens,
@@ -129,7 +136,9 @@ class OllamaQaClient:
         )
         user = render_prompt(
             "assistant/memory_request.user.jinja",
-            memory_evidence=render_memory_workspace(tools.workspace.snapshot, include_request=False),
+            memory_evidence=render_memory_workspace(
+                tools.workspace.snapshot, include_request=False
+            ),
             user_request=question,
         )
         messages = [
@@ -324,10 +333,12 @@ class MyceliumMemorySystem:
         self._evidence_stage_segments_cache: dict[str, Any] | None = None
 
     async def reset(self, case_id: str) -> None:
+        if self.mem is not None:
+            self.mem.close()
         self.case_id = sanitize_path_part(case_id)
         store_path = self.run_dir / "stores" / self.case_id
-        if self.frozen_store is not None:
-            shutil.copytree(self.frozen_store, store_path, dirs_exist_ok=True)
+        if self.frozen_store is not None and not store_path.exists():
+            snapshot_store(self.frozen_store, store_path)
         store_path.mkdir(parents=True, exist_ok=True)
         self.mem = Mycelium(
             store_path=store_path,
@@ -381,13 +392,26 @@ class MyceliumMemorySystem:
                     session_id=session_id,
                     source_type="multi_party_conversation",
                     occurred_at=metadata.get("timestamp"),
-                    participants=tuple(dict.fromkeys(m.speaker for m in messages if m.speaker)),
-                    segments=tuple(SourceSegment(
-                        segment_id="", index=index, content=message.content,
-                        speaker=message.speaker, role=message.role,
-                        timestamp=message.timestamp,
-                        metadata={**message.metadata, "source_label": message.message_id},
-                    ) for index, message in enumerate(messages)) if all(m.speaker for m in messages) else None,
+                    participants=tuple(
+                        dict.fromkeys(m.speaker for m in messages if m.speaker)
+                    ),
+                    segments=tuple(
+                        SourceSegment(
+                            segment_id="",
+                            index=index,
+                            content=message.content,
+                            speaker=message.speaker,
+                            role=message.role,
+                            timestamp=message.timestamp,
+                            metadata={
+                                **message.metadata,
+                                "source_label": message.message_id,
+                            },
+                        )
+                        for index, message in enumerate(messages)
+                    )
+                    if all(m.speaker for m in messages)
+                    else None,
                     metadata={
                         key: value
                         for key, value in metadata.items()
@@ -421,7 +445,15 @@ class MyceliumMemorySystem:
             raise ValueError(
                 "Memory tool evidence budget must be smaller than the benchmark context budget"
             )
-        initial_budget = min(self.context_budget_tokens, self.qa_client.llm.context_window_tokens - self.qa_client.llm.output_budget(4096, think=True) - 3072) - tool_evidence_budget
+        initial_budget = (
+            min(
+                self.context_budget_tokens,
+                self.qa_client.llm.context_window_tokens
+                - self.qa_client.llm.output_budget(4096, think=True)
+                - 3072,
+            )
+            - tool_evidence_budget
+        )
         try:
             retrieval = await mem.retrieve_context(
                 RetrievalRequest(
@@ -450,13 +482,9 @@ class MyceliumMemorySystem:
             request=question,
             initial_evidence=initial_evidence,
         )
-        answer = await self.qa_client.answer_with_memory_tools(
-            question, memory_tools
-        )
+        answer = await self.qa_client.answer_with_memory_tools(question, memory_tools)
         answer.memory_construction_time = memory_construction_time
-        full_evidence_context = render_memory_workspace(
-            memory_tools.workspace.snapshot
-        )
+        full_evidence_context = render_memory_workspace(memory_tools.workspace.snapshot)
         answer.metadata.update(
             {
                 "loaded_pages": [
@@ -641,12 +669,18 @@ class MyceliumMemorySystem:
         # each frozen canonical statement once while preserving its saved section.
         for claim in claims:
             placement = mem.artifacts.placement_for_claim(claim.claim_id)
-            if claim.status != "active" or placement is None or placement.status != "placed":
+            if (
+                claim.status != "active"
+                or placement is None
+                or placement.status != "placed"
+            ):
                 continue
             if mem.artifacts.facts_for_claim(claim.claim_id):
                 continue
             owner = mem.artifacts.get_entity(placement.owner_entity_id)
-            fact, _ = mem.consolidator.fact_resolver._direct_projection(owner, claim, placement)
+            fact, _ = mem.consolidator.fact_resolver._direct_projection(
+                owner, claim, placement
+            )
             fact.section_key = placement.section_key
             mem.artifacts.save_consolidated_fact(fact)
         owner_ids = {
@@ -735,8 +769,11 @@ def build_memory_system(
         raise ValueError("--frozen-store and --replay-store are mutually exclusive")
     if frozen_store is not None and not frozen_store.is_dir():
         raise ValueError(f"Frozen store does not exist: {frozen_store}")
-    qa_client = OllamaQaClient(model=qa_model, url=ollama_url,
-                              llm_config=Config.from_toml(config_path or Path("mycelium.toml")).llm)
+    qa_client = OllamaQaClient(
+        model=qa_model,
+        url=ollama_url,
+        llm_config=Config.from_toml(config_path or Path("mycelium.toml")).llm,
+    )
     qa_client.llm.trace_path = run_dir / "diagnostics" / "qa-calls.jsonl"
     if system_name == "mycelium":
         return MyceliumMemorySystem(

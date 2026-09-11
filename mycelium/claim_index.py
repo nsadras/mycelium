@@ -45,7 +45,9 @@ class ClaimEmbedder(Protocol):
 class OllamaEmbedder:
     """EmbeddingGemma client with the task prefixes its model card specifies."""
 
-    def __init__(self, url: str, model: str, *, timeout: int, trace_path: Path | None = None) -> None:
+    def __init__(
+        self, url: str, model: str, *, timeout: int, trace_path: Path | None = None
+    ) -> None:
         self.model = model
         self.trace_path = trace_path
         self.client = AsyncClient(host=url.rstrip("/"), timeout=timeout)
@@ -72,24 +74,36 @@ class OllamaEmbedder:
         started = time.perf_counter()
         response = None
         try:
-            response = await self.client.embed(model=self.model, input=input, truncate=truncate)
+            response = await self.client.embed(
+                model=self.model, input=input, truncate=truncate
+            )
             return response
         finally:
             if self.trace_path is not None:
                 record = {
-                    "timestamp": time.time(), "stage": stage, "model": self.model,
+                    "timestamp": time.time(),
+                    "stage": stage,
+                    "model": self.model,
                     "latency_ms": int((time.perf_counter() - started) * 1000),
                     "success": response is not None,
                     "items": len(input) if isinstance(input, list) else 1,
-                    "metadata": {key: getattr(response, key, None) for key in
-                                 ("total_duration", "load_duration", "prompt_eval_count")},
+                    "metadata": {
+                        key: getattr(response, key, None)
+                        for key in (
+                            "total_duration",
+                            "load_duration",
+                            "prompt_eval_count",
+                        )
+                    },
                 }
                 try:
                     self.trace_path.parent.mkdir(parents=True, exist_ok=True)
                     with self.trace_path.open("a", encoding="utf-8") as stream:
                         stream.write(json.dumps(record) + "\n")
                 except OSError:
-                    logging.getLogger(__name__).warning("Could not persist embedding timing", exc_info=True)
+                    logging.getLogger(__name__).warning(
+                        "Could not persist embedding timing", exc_info=True
+                    )
 
 
 class LanceClaimIndex:
@@ -118,25 +132,42 @@ class LanceClaimIndex:
             return []
         result_limit = self.candidate_limit if limit is None else max(1, limit)
         async with self._lock:
-            revision = (self.embedder.model, tuple(
-                (path, stat.st_mtime_ns, stat.st_size, stat.st_ino)
-                for directory in (
-                self.artifacts.claims_dir, self.artifacts.entities_dir,
-                self.artifacts.placements_dir, self.artifacts.reconsolidation_proposals_dir,
-                self.artifacts.sources_dir,
-                ) for path in sorted(directory.glob("*.json")) for stat in [path.stat()]
-            ))
+            kinds = ("claims", "entities", "placements")
+            revision = (
+                self.embedder.model,
+                tuple(self.artifacts.db.revision(kind) for kind in kinds),
+            )
             if revision != self._revision:
-                records = self._claim_records()
-                await self._synchronize(records)
-                self._has_records = bool(records)
+                if self._revision is None or revision[0] != self._revision[0]:
+                    records = self._claim_records()
+                    await self._synchronize(records)
+                    self._has_records = bool(records)
+                else:
+                    changed = {
+                        kind: self.artifacts.db.changed_ids(kind, previous)
+                        for kind, previous in zip(kinds, self._revision[1])
+                    }
+                    affected = changed["claims"] | changed["placements"]
+                    for entity_id in changed["entities"]:
+                        affected.update(
+                            self.artifacts.db.ids(
+                                "placements", "owner_entity_id", entity_id
+                            )
+                        )
+                    if affected:
+                        records = self._claim_records(affected)
+                        await self._synchronize(records, affected)
+                        with await self._connect() as db:
+                            self._has_records = (
+                                TABLE_NAME in (await db.list_tables()).tables
+                                and await (await db.open_table(TABLE_NAME)).count_rows()
+                                > 0
+                            )
                 self._revision = revision
             if not self._has_records:
                 return []
             query_vector = await self.embedder.embed_query(query)
-            rows = await self._hybrid_search(
-                query, query_vector, limit=result_limit
-            )
+            rows = await self._hybrid_search(query, query_vector, limit=result_limit)
         return [
             ClaimSearchHit(
                 claim_id=str(row["claim_id"]),
@@ -151,9 +182,16 @@ class LanceClaimIndex:
             for row in rows
         ]
 
-    def _claim_records(self) -> list[dict[str, Any]]:
+    def _claim_records(self, claim_ids=None) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        for claim in self.artifacts.list_claims():
+        claims = self.artifacts.list_claims() if claim_ids is None else []
+        if claim_ids is not None:
+            for identifier in sorted(claim_ids):
+                try:
+                    claims.append(self.artifacts.get_claim(identifier))
+                except FileNotFoundError:
+                    pass
+        for claim in claims:
             if claim.status == "retracted":
                 continue
             tier = self.artifacts.memory_tier(claim.claim_id)
@@ -186,8 +224,8 @@ class LanceClaimIndex:
             records.append(record)
         return records
 
-    async def _synchronize(self, records: list[dict[str, Any]]) -> None:
-        existing = await self._existing_rows()
+    async def _synchronize(self, records: list[dict[str, Any]], affected=None) -> None:
+        existing = await self._existing_rows(affected)
         expected = {
             row["claim_id"]: (row["content_hash"], row["embedding_model"])
             for row in records
@@ -200,50 +238,95 @@ class LanceClaimIndex:
             return
 
         prior_by_id = {str(row["claim_id"]): row for row in existing}
-        changed = [row for row in records if actual.get(row["claim_id"]) != expected[row["claim_id"]]]
-        embedding_changes = [row for row in changed
-                             if (prior := prior_by_id.get(row["claim_id"])) is None
-                             or prior["document"] != row["document"]
-                             or prior["embedding_model"] != row["embedding_model"]]
+        changed = [
+            row
+            for row in records
+            if actual.get(row["claim_id"]) != expected[row["claim_id"]]
+        ]
+        embedding_changes = [
+            row
+            for row in changed
+            if (prior := prior_by_id.get(row["claim_id"])) is None
+            or prior["document"] != row["document"]
+            or prior["embedding_model"] != row["embedding_model"]
+        ]
         vector_by_id = {}
         for start in range(0, len(embedding_changes), 24):
-            batch = embedding_changes[start:start + 24]
-            vectors = await self.embedder.embed_documents([row["document"] for row in batch])
+            batch = embedding_changes[start : start + 24]
+            vectors = await self.embedder.embed_documents(
+                [row["document"] for row in batch]
+            )
             if len(vectors) != len(batch):
-                raise ValueError("Embedding service returned the wrong number of vectors")
-            vector_by_id.update({row["claim_id"]: vector for row, vector in zip(batch, vectors)})
+                raise ValueError(
+                    "Embedding service returned the wrong number of vectors"
+                )
+            vector_by_id.update(
+                {row["claim_id"]: vector for row, vector in zip(batch, vectors)}
+            )
         reuse_ids = {row["claim_id"] for row in changed} - set(vector_by_id)
         with await self._connect() as db:
             if TABLE_NAME not in (await db.list_tables()).tables:
                 if not changed:
                     return
-                table = await db.create_table(TABLE_NAME, data=[
-                    {**row, "vector": vector_by_id[row["claim_id"]]} for row in changed
-                ])
+                table = await db.create_table(
+                    TABLE_NAME,
+                    data=[
+                        {**row, "vector": vector_by_id[row["claim_id"]]}
+                        for row in changed
+                    ],
+                )
                 await table.create_index("document", config=FTS())
                 return
             table = await db.open_table(TABLE_NAME)
             if reuse_ids:
-                reused = await table.query().where(_id_filter(reuse_ids)).select(["claim_id", "vector"]).to_list()
-                vector_by_id.update({row["claim_id"]: list(row["vector"]) for row in reused})
+                for batch in _id_batches(reuse_ids):
+                    reused = (
+                        await table.query()
+                        .where(_id_filter(batch))
+                        .select(["claim_id", "vector"])
+                        .to_list()
+                    )
+                    vector_by_id.update(
+                        {row["claim_id"]: list(row["vector"]) for row in reused}
+                    )
             if changed:
-                await table.merge_insert("claim_id").when_matched_update_all().when_not_matched_insert_all().execute([
-                    {**row, "vector": vector_by_id[row["claim_id"]]} for row in changed
-                ])
+                await (
+                    table.merge_insert("claim_id")
+                    .when_matched_update_all()
+                    .when_not_matched_insert_all()
+                    .execute(
+                        [
+                            {**row, "vector": vector_by_id[row["claim_id"]]}
+                            for row in changed
+                        ]
+                    )
+                )
             deleted = set(actual) - set(expected)
             if deleted:
-                await table.delete(_id_filter(deleted))
+                for batch in _id_batches(deleted):
+                    await table.delete(_id_filter(batch))
 
     async def _connect(self):
         self.path.mkdir(parents=True, exist_ok=True)
         return await lancedb.connect_async(self.path)
 
-    async def _existing_rows(self) -> list[dict[str, Any]]:
+    async def _existing_rows(self, affected=None) -> list[dict[str, Any]]:
         with await self._connect() as db:
             if TABLE_NAME not in (await db.list_tables()).tables:
                 return []
             table = await db.open_table(TABLE_NAME)
-            return await table.query().select(["claim_id", "content_hash", "embedding_model", "document"]).to_list()
+            columns = ["claim_id", "content_hash", "embedding_model", "document"]
+            if affected is None:
+                return await table.query().select(columns).to_list()
+            rows = []
+            for batch in _id_batches(affected):
+                rows.extend(
+                    await table.query()
+                    .where(_id_filter(batch))
+                    .select(columns)
+                    .to_list()
+                )
+            return rows
 
     async def _hybrid_search(
         self, query: str, query_vector: list[float], *, limit: int
@@ -266,8 +349,7 @@ def _search_document(claim: MemoryClaim, owner_title: str | None) -> str:
         parts.append(f"Subject: {owner_title}")
     elif claim.about:
         parts.append(
-            "Subjects: "
-            + json.dumps(claim.about, ensure_ascii=False, sort_keys=True)
+            "Subjects: " + json.dumps(claim.about, ensure_ascii=False, sort_keys=True)
         )
     if claim.predicate:
         parts.append(f"Relation: {claim.predicate}")
@@ -291,4 +373,14 @@ def _float_or_none(value: Any) -> float | None:
 
 
 def _id_filter(ids: set[str]) -> str:
-    return "claim_id IN (" + ", ".join("'" + value.replace("'", "''") + "'" for value in sorted(ids)) + ")"
+    return (
+        "claim_id IN ("
+        + ", ".join("'" + value.replace("'", "''") + "'" for value in sorted(ids))
+        + ")"
+    )
+
+
+def _id_batches(ids: set[str]):
+    ordered = sorted(ids)
+    for start in range(0, len(ordered), 500):
+        yield set(ordered[start : start + 500])

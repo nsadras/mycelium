@@ -1,3 +1,4 @@
+from tests.session_support import configure_sessions, read_sessions, seed_sessions
 import asyncio
 from types import SimpleNamespace
 
@@ -43,44 +44,73 @@ def test_timestamp_free_session_messages_are_rejected():
 async def test_chat_page_metadata_follows_evidence_that_fits(tmp_path, monkeypatch):
     from mycelium.operations import EvidenceRecord, WikiPageReference
 
-    monkeypatch.setattr(runtime, "SESSIONS_FILE", tmp_path / "sessions.json")
-    runtime.save_meta({"chat-budget": {"query": "Schedule", "transcript": []}})
+    configure_sessions(monkeypatch, runtime, tmp_path / "sessions.json")
+    seed_sessions(runtime, {"chat-budget": {"query": "Schedule", "transcript": []}})
     small = EvidenceRecord(
-        record_id="claim-small", record_type="claim", statement="The meeting is at noon.",
-        subject_entity_id="subject-small", subject_name="Schedule", claim_ids=("claim-small",),
+        record_id="claim-small",
+        record_type="claim",
+        statement="The meeting is at noon.",
+        subject_entity_id="subject-small",
+        subject_name="Schedule",
+        claim_ids=("claim-small",),
     )
     large = EvidenceRecord(
-        record_id="claim-large", record_type="claim", statement="Long detail " * 2000,
-        subject_entity_id="subject-large", subject_name="Details", claim_ids=("claim-large",),
+        record_id="claim-large",
+        record_type="claim",
+        statement="Long detail " * 2000,
+        subject_entity_id="subject-large",
+        subject_name="Details",
+        claim_ids=("claim-large",),
     )
     config = Config.defaults()
     config.context_budget_tokens = 1000
     config.retrieval.tool_evidence_budget_tokens = 300
     mem = SimpleNamespace(
-        config=config, retriever=SimpleNamespace(),
-        retrieve_context=AsyncMock(return_value=RetrievalResult(
-            page_references=(
-                WikiPageReference("subject-large", "details", "Details", 1),
-                WikiPageReference("subject-small", "schedule", "Schedule", 2),
-            ),
-            evidence=MemoryEvidence(records=(large, small)), rendered_context="",
-        )),
-        llm=SimpleNamespace(call_messages=AsyncMock(return_value=SimpleNamespace(
-            content="At noon.", tool_events=[],
-        ))),
+        config=config,
+        retriever=SimpleNamespace(),
+        retrieve_context=AsyncMock(
+            return_value=RetrievalResult(
+                page_references=(
+                    WikiPageReference("subject-large", "details", "Details", 1),
+                    WikiPageReference("subject-small", "schedule", "Schedule", 2),
+                ),
+                evidence=MemoryEvidence(records=(large, small)),
+                rendered_context="",
+            )
+        ),
+        llm=SimpleNamespace(
+            call_messages=AsyncMock(
+                return_value=SimpleNamespace(
+                    content="At noon.",
+                    tool_events=[],
+                )
+            )
+        ),
     )
-    mem.ingest_source = AsyncMock(return_value=IngestionResult(
-        status="captured", source_ids=("source-test",),
-    ))
+    mem.ingest_source = AsyncMock(
+        return_value=IngestionResult(
+            status="captured",
+            source_ids=("source-test",),
+        )
+    )
     monkeypatch.setattr(runtime, "get_mem", lambda: mem)
     monkeypatch.setattr(sessions, "get_mem", lambda: mem)
 
-    result = await sessions.chat("chat-budget", sessions.ChatRequest(message="When is it?"))
+    result = await sessions.chat(
+        "chat-budget", sessions.ChatRequest(message="When is it?")
+    )
 
     assert result["capture_status"] == "captured"
-    assert result["loaded_pages"] == [{"slug": "schedule", "title": "Schedule", "version": 2}]
-    assert [r["record_id"] for r in result["memory_workspace"]["evidence"]["records"]] == ["claim-small"]
-    assert runtime.load_meta()["chat-budget"]["transcript"][-1]["loaded_pages"] == result["loaded_pages"]
+    assert result["loaded_pages"] == [
+        {"slug": "schedule", "title": "Schedule", "version": 2}
+    ]
+    assert [
+        r["record_id"] for r in result["memory_workspace"]["evidence"]["records"]
+    ] == ["claim-small"]
+    assert (
+        read_sessions(runtime)["chat-budget"]["transcript"][-1]["loaded_pages"]
+        == result["loaded_pages"]
+    )
 
 
 def test_append_turn_persists_the_final_memory_workspace():
@@ -113,7 +143,16 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
     llm = AsyncMock()
     llm.call_structured.return_value = {
         "claims": [
-            {'temporal_status': 'unknown', 'text': 'Ollama version 1.2 supports asynchronous web search.', 'claim_type': 'observation', 'predicate': None, 'evidence_modality': 'tool', 'about': [{'entity': 'Ollama', 'role': 'subject'}], 'segment_ids': ['source-placeholder'], 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}
+            {
+                "temporal_status": "unknown",
+                "text": "Ollama version 1.2 supports asynchronous web search.",
+                "claim_type": "observation",
+                "predicate": None,
+                "evidence_modality": "tool",
+                "about": [{"entity": "Ollama", "role": "subject"}],
+                "segment_ids": ["source-placeholder"],
+                "facets": {"when": None, "deadline": None, "inference_basis": None},
+            }
         ],
     }
     encoder = Encoder(llm, log_store, Config.defaults(), artifacts)
@@ -123,6 +162,7 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
         response["claims"] = [dict(response["claims"][0])]
         response["claims"][0]["segment_ids"] = [user.split("[", 1)[1].split("]", 1)[0]]
         from tests.extraction_support import extraction_response
+
         return extraction_response(response["claims"])
 
     llm.call_structured.side_effect = source_aware_response
@@ -200,37 +240,63 @@ async def test_append_tool_event_logs_does_not_reingest_memory_reads(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_automatic_capture_preserves_timestamps_and_retries(tmp_path, monkeypatch):
-    monkeypatch.setattr(runtime, "SESSIONS_FILE", tmp_path / "sessions.json")
-    encoder = Encoder(AsyncMock(), LogStore(tmp_path / "logs"), Config.defaults(), ArtifactStore(tmp_path / "artifacts"))
+async def test_automatic_capture_preserves_timestamps_and_retries(
+    tmp_path, monkeypatch
+):
+    configure_sessions(monkeypatch, runtime, tmp_path / "sessions.json")
+    encoder = Encoder(
+        AsyncMock(),
+        LogStore(tmp_path / "logs"),
+        Config.defaults(),
+        ArtifactStore(tmp_path / "artifacts"),
+    )
     mem = SimpleNamespace(ingest_source=encoder.ingest_source)
     monkeypatch.setattr(runtime, "get_mem", lambda: mem)
     meta = {"chat-1": {"query": "Plan", "transcript": []}}
-    append_turn(meta, "chat-1", "I will finish tomorrow.", "Understood.",
-                "2026-08-26T23:59:00+00:00", "2026-08-27T08:00:01+00:00")
-    runtime.save_meta(meta)
-    original_save = runtime.save_meta
-    monkeypatch.setattr(runtime, "save_meta", lambda _: (_ for _ in ()).throw(OSError("interrupted cursor write")))
+    append_turn(
+        meta,
+        "chat-1",
+        "I will finish tomorrow.",
+        "Understood.",
+        "2026-08-26T23:59:00+00:00",
+        "2026-08-27T08:00:01+00:00",
+    )
+    seed_sessions(runtime, meta)
+    original_save = runtime.get_sessions().save
+    monkeypatch.setattr(
+        runtime.get_sessions(),
+        "save",
+        lambda *_: (_ for _ in ()).throw(OSError("interrupted cursor write")),
+    )
     with pytest.raises(OSError):
         await runtime.capture_saved_turns("chat-1")
-    monkeypatch.setattr(runtime, "save_meta", original_save)
+    monkeypatch.setattr(runtime.get_sessions(), "save", original_save)
     await runtime.capture_saved_turns("chat-1")
     await runtime.capture_saved_turns("chat-1")
     source = encoder.artifacts.list_sources()[0]
     assert len(encoder.artifacts.list_sources()) == 1
     assert [s.timestamp for s in source.segments] == [
-        "2026-08-26T23:59:00+00:00", "2026-08-27T08:00:01+00:00",
+        "2026-08-26T23:59:00+00:00",
+        "2026-08-27T08:00:01+00:00",
     ]
-    assert runtime.load_meta()["chat-1"]["captured_turns"] == 1
+    assert read_sessions(runtime)["chat-1"]["captured_turns"] == 1
     assert encoder.artifacts.list_claims() == []
     encoder.llm.call_structured.assert_not_awaited()
     # A later turn retains source pointers for context, rather than duplicating old text.
-    meta = runtime.load_meta()
-    append_turn(meta, "chat-1", "Actually, next week.", "Noted.",
-                "2026-08-27T09:00:00+00:00", "2026-08-27T09:00:01+00:00")
-    runtime.save_meta(meta)
+    meta = read_sessions(runtime)
+    append_turn(
+        meta,
+        "chat-1",
+        "Actually, next week.",
+        "Noted.",
+        "2026-08-27T09:00:00+00:00",
+        "2026-08-27T09:00:01+00:00",
+    )
+    seed_sessions(runtime, meta)
     await runtime.capture_saved_turns("chat-1")
-    newest = next(s for s in encoder.artifacts.list_sources() if s.source_id != source.source_id)
+    newest = next(
+        s for s in encoder.artifacts.list_sources() if s.source_id != source.source_id
+    )
     assert newest.metadata["context_source_ids"] == [source.source_id]
     assert len(newest.segments) == 2
 
@@ -240,8 +306,9 @@ async def test_concurrent_chats_in_different_sessions_preserve_both(
     tmp_path, monkeypatch
 ):
     sessions_file = tmp_path / "sessions_meta.json"
-    monkeypatch.setattr(runtime, "SESSIONS_FILE", sessions_file)
-    runtime.save_meta(
+    configure_sessions(monkeypatch, runtime, sessions_file)
+    seed_sessions(
+        runtime,
         {
             session_id: {
                 "query": session_id,
@@ -257,7 +324,7 @@ async def test_concurrent_chats_in_different_sessions_preserve_both(
                 },
             }
             for session_id in ("chat-1", "chat-2")
-        }
+        },
     )
     both_started = asyncio.Event()
     started_count = 0
@@ -281,15 +348,21 @@ async def test_concurrent_chats_in_different_sessions_preserve_both(
         llm=SimpleNamespace(call_messages=call_messages),
         config=SimpleNamespace(
             context_budget_tokens=32768,
-            llm=SimpleNamespace(context_window_tokens=32768, reasoning_enabled=True,
-                                reasoning_output_tokens=16384),
+            llm=SimpleNamespace(
+                context_window_tokens=32768,
+                reasoning_enabled=True,
+                reasoning_output_tokens=16384,
+            ),
             retrieval=Config.defaults().retrieval,
         ),
         retriever=SimpleNamespace(),
     )
-    mem.ingest_source = AsyncMock(return_value=IngestionResult(
-        status="captured", source_ids=("source-test",),
-    ))
+    mem.ingest_source = AsyncMock(
+        return_value=IngestionResult(
+            status="captured",
+            source_ids=("source-test",),
+        )
+    )
     monkeypatch.setattr(runtime, "get_mem", lambda: mem)
     monkeypatch.setattr(sessions, "get_mem", lambda: mem)
 
@@ -298,7 +371,7 @@ async def test_concurrent_chats_in_different_sessions_preserve_both(
         sessions.chat("chat-2", sessions.ChatRequest(message="Second")),
     )
 
-    saved = runtime.load_meta()
+    saved = read_sessions(runtime)
     assert [message["content"] for message in saved["chat-1"]["transcript"]] == [
         "First",
         "Reply to First",
@@ -310,9 +383,16 @@ async def test_concurrent_chats_in_different_sessions_preserve_both(
 
 
 @pytest.mark.asyncio
-async def test_capture_saved_turns_handles_consecutive_user_messages(tmp_path, monkeypatch):
-    monkeypatch.setattr(runtime, "SESSIONS_FILE", tmp_path / "sessions.json")
-    encoder = Encoder(AsyncMock(), LogStore(tmp_path / "logs"), Config.defaults(), ArtifactStore(tmp_path / "artifacts"))
+async def test_capture_saved_turns_handles_consecutive_user_messages(
+    tmp_path, monkeypatch
+):
+    configure_sessions(monkeypatch, runtime, tmp_path / "sessions.json")
+    encoder = Encoder(
+        AsyncMock(),
+        LogStore(tmp_path / "logs"),
+        Config.defaults(),
+        ArtifactStore(tmp_path / "artifacts"),
+    )
     mem = SimpleNamespace(ingest_source=encoder.ingest_source)
     monkeypatch.setattr(runtime, "get_mem", lambda: mem)
 
@@ -320,14 +400,26 @@ async def test_capture_saved_turns_handles_consecutive_user_messages(tmp_path, m
         "chat-consecutive": {
             "query": "Consecutive",
             "transcript": [
-                {"role": "user", "content": "Message 1", "timestamp": "2026-08-26T23:59:00+00:00"},
-                {"role": "user", "content": "Message 2", "timestamp": "2026-08-26T23:59:01+00:00"},
-                {"role": "assistant", "content": "Got both.", "timestamp": "2026-08-27T08:00:01+00:00"},
+                {
+                    "role": "user",
+                    "content": "Message 1",
+                    "timestamp": "2026-08-26T23:59:00+00:00",
+                },
+                {
+                    "role": "user",
+                    "content": "Message 2",
+                    "timestamp": "2026-08-26T23:59:01+00:00",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Got both.",
+                    "timestamp": "2026-08-27T08:00:01+00:00",
+                },
             ],
             "captured_turns": 0,
         }
     }
-    runtime.save_meta(meta)
+    seed_sessions(runtime, meta)
 
     await runtime.capture_saved_turns("chat-consecutive")
 
@@ -338,19 +430,20 @@ async def test_capture_saved_turns_handles_consecutive_user_messages(tmp_path, m
     assert "\\n" not in raw_log.content
     assert "\n" in raw_log.content
     assert len(sources[0].segments) == 3
-    assert runtime.load_meta()["chat-consecutive"]["captured_turns"] == 1
+    assert read_sessions(runtime)["chat-consecutive"]["captured_turns"] == 1
 
 
 def test_clear_memory_store_removes_lancedb_indexes(tmp_path, monkeypatch):
     from mycelium.core import Mycelium
+
     myc = Mycelium(store_path=tmp_path / "store")
     indexes_dir = myc.store_path / "indexes" / "lancedb"
     indexes_dir.mkdir(parents=True, exist_ok=True)
     (indexes_dir / "test.txt").write_text("vector data")
 
     monkeypatch.setattr(runtime, "get_mem", lambda: myc)
-    monkeypatch.setattr(runtime, "SESSIONS_FILE", tmp_path / "sessions_meta.json")
-    runtime.save_meta({"s1": {"query": "Q", "transcript": []}})
+    configure_sessions(monkeypatch, runtime, tmp_path / "sessions_meta.json")
+    seed_sessions(runtime, {"s1": {"query": "Q", "transcript": []}})
 
     runtime.clear_memory_store()
     assert not indexes_dir.exists()

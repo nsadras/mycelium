@@ -2,7 +2,12 @@ from dataclasses import replace
 
 import pytest
 
-from mycelium.artifacts import ArtifactStore, ClaimPlacement, ClaimProvenance, MemoryClaim
+from mycelium.artifacts import (
+    ArtifactStore,
+    ClaimPlacement,
+    ClaimProvenance,
+    MemoryClaim,
+)
 from mycelium.claim_index import LanceClaimIndex
 
 
@@ -15,8 +20,7 @@ class FakeEmbedder:
     async def embed_documents(self, documents: list[str]) -> list[list[float]]:
         self.document_batches.append(documents)
         return [
-            [1.0, 0.0] if "cello" in document else [0.0, 1.0]
-            for document in documents
+            [1.0, 0.0] if "cello" in document else [0.0, 1.0] for document in documents
         ]
 
     async def embed_query(self, _query: str) -> list[float]:
@@ -35,7 +39,9 @@ def _claim(claim_id: str, text: str, *, disposition: str = "routed") -> MemoryCl
 
 
 @pytest.mark.asyncio
-async def test_claim_index_hybrid_search_is_rebuildable_and_excludes_source_only(tmp_path):
+async def test_claim_index_hybrid_search_is_rebuildable_and_excludes_source_only(
+    tmp_path,
+):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     entity = artifacts.create_entity("person", "Mira")
     cello = _claim("cello", "Mira plays the cello.")
@@ -46,16 +52,18 @@ async def test_claim_index_hybrid_search_is_rebuildable_and_excludes_source_only
     for claim in (cello, garden, excluded):
         artifacts.save_claim(claim)
     for claim in (cello, garden):
-        artifacts.save_placement(ClaimPlacement(
-            claim.claim_id,
-            entity.entity_id,
-            "timeline",
-            [],
-            "placed",
-            "test",
-            "2026-01-01T00:00:00+00:00",
-            "2026-01-01T00:00:00+00:00",
-        ))
+        artifacts.save_placement(
+            ClaimPlacement(
+                claim.claim_id,
+                entity.entity_id,
+                "timeline",
+                [],
+                "placed",
+                "test",
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+            )
+        )
     embedder = FakeEmbedder()
     index = LanceClaimIndex(tmp_path / "claims.lance", artifacts, embedder)
 
@@ -75,7 +83,9 @@ async def test_claim_index_hybrid_search_is_rebuildable_and_excludes_source_only
 
 
 @pytest.mark.asyncio
-async def test_incremental_index_reuses_vectors_for_metadata_and_removes_deleted_claims(tmp_path):
+async def test_incremental_index_reuses_vectors_for_metadata_and_removes_deleted_claims(
+    tmp_path,
+):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     claim = _claim("cello", "Mira plays the cello.", disposition="deferred")
     artifacts.save_claim(claim)
@@ -106,7 +116,6 @@ async def test_incremental_index_bounds_embedding_batches(tmp_path):
 
 @pytest.mark.asyncio
 async def test_incremental_fts_finds_new_text_and_external_edits(tmp_path):
-    import json
     artifacts = ArtifactStore(tmp_path / "artifacts")
     artifacts.save_claim(_claim("one", "Mira plays cello.", disposition="deferred"))
     embedder = FakeEmbedder()
@@ -118,9 +127,8 @@ async def test_incremental_fts_finds_new_text_and_external_edits(tmp_path):
         table = await db.open_table("claims")
         rows = await table.query().nearest_to_text("ceramics").to_list()
         assert [row["claim_id"] for row in rows] == ["two"]
-    path = artifacts.claims_dir / "two.json"
-    data = json.loads(path.read_text())
-    data["text"] = "Mira enjoys weaving."
-    path.write_text(json.dumps(data))
+    data = artifacts.get_claim("two")
+    data.text = "Mira enjoys weaving."
+    artifacts.save_claim(data)
     hits = await index.search("weaving")
     assert any(hit.claim_text == "Mira enjoys weaving." for hit in hits)

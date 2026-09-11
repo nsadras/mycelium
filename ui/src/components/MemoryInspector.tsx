@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+import api from '../lib/api';
 import {
   AlertTriangle,
   ClipboardCheck,
@@ -41,6 +43,19 @@ const tabs: { id: InspectorTab; label: string; icon: typeof Database }[] = [
 ];
 
 export default function MemoryInspector({ refreshKey = 0, target = null }: { refreshKey?: number; target?: InspectorTarget | null }) {
+  const [publication, setPublication] = useState<{sequence: number; path: string; error: string | null}[]>([]);
+  const [publicationError, setPublicationError] = useState('');
+  const refreshPublication = () => api.get('/memory/build/status').then(response => {
+    setPublication(response.data.publication ?? []);
+    setPublicationError('');
+  }).catch(error => setPublicationError(String(error)));
+  useEffect(() => { void refreshPublication(); }, [refreshKey]);
+  const retryPublication = async () => {
+    try {
+      await api.post('/memory/build/publication/retry');
+      await refreshPublication();
+    } catch (error) { setPublicationError(String(error)); }
+  };
   const {
     activeTab,
     overview,
@@ -49,7 +64,6 @@ export default function MemoryInspector({ refreshKey = 0, target = null }: { ref
     identityDecisions,
     organizationProposals,
     proposals,
-    maturityAssessments,
     filteredSources,
     filteredChatEpisodes,
     filteredEpisodes,
@@ -127,6 +141,12 @@ export default function MemoryInspector({ refreshKey = 0, target = null }: { ref
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white text-slate-900">
+      {(publication.length > 0 || publicationError) && <div role="status" className="p-3 text-sm text-amber-900">
+        <p>{publication.length} Markdown updates awaiting publication.</p>
+        {publication.map(item => <p key={item.sequence}>{item.path}: {item.error ?? 'Pending'}</p>)}
+        {publicationError && <p>{publicationError}</p>}
+        <button onClick={() => void retryPublication()} className="underline">Retry publication</button>
+      </div>}
       <header className="shrink-0 border-b border-slate-200 px-4 py-4 md:px-6">
         <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
           <div>
@@ -164,7 +184,7 @@ export default function MemoryInspector({ refreshKey = 0, target = null }: { ref
 
       {activeTab === 'overview' && overview && <OverviewPanel overview={overview} />}
 
-      {activeTab === 'review' && <ReviewInbox identities={identityDecisions.filter((item) => item.review_state === 'review_required')} organizations={organizationProposals.filter((item) => item.status === 'pending')} reconciliations={proposals.filter((item) => item.status === 'pending')} provisionalEntities={entities.filter((item) => item.status === 'active' && item.materialization_state === 'provisional')} maturityAssessments={maturityAssessments.filter((item) => item.effective_admission === 'review_required')} selectIdentity={selectIdentity} selectOrganization={selectOrganization} selectReconciliation={selectReconciliation} selectEntity={selectEntity} selectDreamRun={selectDreamRun} />}
+      {activeTab === 'review' && <ReviewInbox identities={identityDecisions.filter((item) => item.review_state === 'review_required')} organizations={organizationProposals.filter((item) => item.status === 'pending')} reconciliations={proposals.filter((item) => item.status === 'pending')} provisionalEntities={entities.filter((item) => item.status === 'active' && item.materialization_state === 'provisional')} selectIdentity={selectIdentity} selectOrganization={selectOrganization} selectReconciliation={selectReconciliation} selectEntity={selectEntity} selectDreamRun={selectDreamRun} />}
 
       {activeTab !== 'overview' && activeTab !== 'review' && (
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -344,7 +364,6 @@ export default function MemoryInspector({ refreshKey = 0, target = null }: { ref
                   <div className="rounded-lg bg-slate-50 p-3"><div className="text-xs text-slate-500">Pages updated</div><strong>{selectedDreamRun.pages_updated}</strong></div>
                 </div>
                 <section><h3 className="mb-2 text-sm font-bold">Source outcome</h3><JsonBlock value={{ completed: selectedDreamRun.completed_source_ids, pending: selectedDreamRun.pending_source_ids }} /></section>
-                <section><h3 className="mb-2 text-sm font-bold">Identity maturity proposals and verification ({selectedDreamRun.identity_maturity_assessments.length})</h3><JsonBlock value={selectedDreamRun.identity_maturity_assessments} /></section>
                 <section>
                   <h3 className="mb-3 text-sm font-bold">Claim decisions ({selectedDreamRun.claim_decisions.length})</h3>
                   <div className="space-y-2">

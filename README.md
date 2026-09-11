@@ -4,16 +4,16 @@
 
 # Mycelium
 
-Mycelium is a plaintext memory system for local AI agents. It keeps the original conversation as a durable record, turns useful information into an organized Markdown wiki, and brings the relevant parts back when they are needed later.
+Mycelium is an inspectable memory system for local AI agents. It keeps the original conversation as a durable record, turns useful information into an organized Markdown wiki, and brings the relevant parts back when they are needed later.
 
-It is designed for users who want a local assistant that can build context over time without hiding its memory in an opaque database. You can chat with it through the included web app, inspect the complete evidence-to-claim pipeline, review proposed memory updates, or add the Python library to another agent.
+It is designed for users who want a local assistant that can build context over time with inspectable evidence and an organized wiki. You can chat with it through the included web app, inspect the complete evidence-to-claim pipeline, review proposed memory updates, or add the Python library to another agent.
 
 ## Why use it?
 
 Most chat assistants either forget everything between sessions or require the entire conversation history to be sent again. Mycelium takes a different approach:
 
 - **Memory persists across conversations.** Projects, preferences, decisions, research, and prior discussions can carry into a new session.
-- **Everything stays inspectable.** Raw experiences and generated wiki views are Markdown; source documents, episode manifests, claims, and audits are JSON.
+- **Everything stays inspectable.** Raw logs and wiki views are Markdown; canonical sources, claims, decisions, and chat state are stored in SQLite and available through the inspector or JSON export.
 - **Local models do the work.** Chat, retrieval, and memory consolidation run through Ollama on your machine.
 - **You stay in control.** The UI shows the memories used for a response and requires review before contradictions or replacements change canonical claims.
 
@@ -27,6 +27,39 @@ Most chat assistants either forget everything between sessions or require the en
 - Deterministic, read-only wiki projections with exact source provenance
 - Meeting ingestion pipeline - upload meeting audio to have it transcribed, diarized, and consolidated into the memory system
 - A Python API for adding Mycelium memory to other agents and frameworks
+
+## Storage and fresh stores
+
+Canonical memory and chat state live in `memory.sqlite3`. Markdown under `wiki/`
+and `logs/` is a generated, inspectable view; edit memory through the application,
+not by modifying these files. LanceDB under `indexes/` is rebuildable.
+
+This version requires a **fresh store**. Existing JSON stores and benchmark runs
+are not migrated or modified. For the web app, select a new directory before
+running your normal launch command:
+
+```bash
+MYCELIUM_STORE=./mycelium_store_sqlite ./start.sh
+```
+
+One process owns each writable store. A second server, worker, or library process
+using that directory fails clearly; separate benchmark stores can run independently.
+Library owners should use `Mycelium` as a context manager or call `close()`.
+
+The memory inspector shows pending Markdown publication and offers **Retry
+publication**. Canonical edits commit atomically; retrying publication requires no
+model call. Invalid build plans are recorded as failed without partial canonical
+updates, and a later build can recompute them.
+
+Export canonical records into a fresh directory for offline inspection:
+
+```bash
+.venv/bin/python -m mycelium.snapshots mycelium_store_sqlite memory-export
+```
+
+The export is JSONL by record collection, not another writable backend. Existing
+Engram meeting storage remains separate; old meetings are not automatically imported
+into a fresh memory store.
 
 ## Quick start
 

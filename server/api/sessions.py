@@ -19,11 +19,17 @@ from server.runtime import (
     get_mem,
     get_session_lock,
     iso_now,
-    load_meta,
-    save_meta,
+    get_sessions,
 )
 
 router = APIRouter()
+
+
+def _session_meta(session_id):
+    try:
+        return {session_id: get_sessions().get(session_id)}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Session not found")
 
 
 def chat_history_messages(record: dict, current_message: str) -> list[dict[str, str]]:
@@ -100,7 +106,9 @@ def build_chat_prompt(
         messages = assemble(selected_history, selected_evidence, current_message)
 
     if count_message_tokens(messages) > budget_tokens:
-        raise ContextBudgetError("The current request exceeds the assistant context budget; shorten or split it")
+        raise ContextBudgetError(
+            "The current request exceeds the assistant context budget; shorten or split it"
+        )
 
     selected_evidence = fit_memory_evidence(
         evidence,
@@ -153,28 +161,27 @@ class SessionInfo(BaseModel):
 
 @router.get("/", response_model=List[dict])
 async def list_sessions():
-    async with get_meta_lock():
-        meta = load_meta()
-        for session_id, record in meta.items():
-            ensure_session_record(record, session_id)
-    return [{"id": k, "query": v["query"]} for k, v in meta.items()]
+    return [
+        {"id": key, "query": record["query"]}
+        for key, record in get_sessions().summaries().items()
+    ]
 
 
 @router.post("/", response_model=dict)
 async def create_session(req: SessionCreate):
     session_id = str(uuid.uuid4())[:8]
     async with get_meta_lock():
-        meta = load_meta()
+        meta = {}
         meta[session_id] = {"query": req.query, "transcript": []}
         ensure_session_record(meta[session_id], session_id)
-        save_meta(meta)
+        get_sessions().save(session_id, meta[session_id])
     return {"id": session_id, "query": req.query}
 
 
 @router.get("/{session_id}", response_model=SessionInfo)
 async def get_session(session_id: str):
     async with get_meta_lock():
-        meta = load_meta()
+        meta = _session_meta(session_id)
         if session_id not in meta:
             raise HTTPException(status_code=404, detail="Session not found")
         ensure_session_record(meta[session_id], session_id)
@@ -188,12 +195,11 @@ async def update_session(session_id: str, req: SessionUpdate):
         raise HTTPException(status_code=400, detail="Session name cannot be empty")
     async with get_session_lock(session_id):
         async with get_meta_lock():
-            meta = load_meta()
+            meta = _session_meta(session_id)
             if session_id not in meta:
                 raise HTTPException(status_code=404, detail="Session not found")
-            record = ensure_session_record(meta[session_id], session_id)
-            record["query"] = name
-            save_meta(meta)
+            ensure_session_record(meta[session_id], session_id)
+            get_sessions().rename(session_id, name)
     return {"id": session_id, "query": name}
 
 
@@ -202,7 +208,7 @@ async def chat(session_id: str, req: ChatRequest):
     user_timestamp = iso_now()
     async with get_session_lock(session_id):
         async with get_meta_lock():
-            meta = load_meta()
+            meta = _session_meta(session_id)
             if session_id not in meta:
                 raise HTTPException(status_code=404, detail="Session not found")
             record = ensure_session_record(meta[session_id], session_id)
@@ -210,9 +216,13 @@ async def chat(session_id: str, req: ChatRequest):
         mem = get_mem()
         prompt_budget = min(
             mem.config.context_budget_tokens,
-            mem.config.llm.context_window_tokens - (
-                max(4096, mem.config.llm.reasoning_output_tokens) if mem.config.llm.reasoning_enabled else 4096
-            ) - 3072,
+            mem.config.llm.context_window_tokens
+            - (
+                max(4096, mem.config.llm.reasoning_output_tokens)
+                if mem.config.llm.reasoning_enabled
+                else 4096
+            )
+            - 3072,
         )
         tool_evidence_budget = mem.config.retrieval.tool_evidence_budget_tokens
         if tool_evidence_budget >= prompt_budget:
@@ -223,17 +233,24 @@ async def chat(session_id: str, req: ChatRequest):
         initial_prompt_budget = prompt_budget - tool_evidence_budget
         try:
             preflight_messages, _, _ = build_chat_prompt(
-                record, req.message, MemoryEvidence(), budget_tokens=initial_prompt_budget,
+                record,
+                req.message,
+                MemoryEvidence(),
+                budget_tokens=initial_prompt_budget,
                 workspace_search_limit=mem.config.retrieval.tool_search_limit,
                 workspace_evidence_budget_tokens=tool_evidence_budget,
             )
         except ContextBudgetError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         retrieval_query = render_prompt(
-            "assistant/retrieval_query.user.jinja", chat_topic=record["query"],
-            recent_thread="\n".join(f"{item['role']}: {item['content']}"
-                                    for item in preflight_messages[1:-1]),
-            no_prior_turns="(no prior turns)", user_message=req.message,
+            "assistant/retrieval_query.user.jinja",
+            chat_topic=record["query"],
+            recent_thread="\n".join(
+                f"{item['role']}: {item['content']}"
+                for item in preflight_messages[1:-1]
+            ),
+            no_prior_turns="(no prior turns)",
+            user_message=req.message,
         )
         retrieval = await mem.retrieve_context(
             RetrievalRequest(
@@ -285,7 +302,7 @@ async def chat(session_id: str, req: ChatRequest):
         ]
 
         async with get_meta_lock():
-            meta = load_meta()
+            meta = _session_meta(session_id)
             if session_id not in meta:
                 raise HTTPException(status_code=404, detail="Session not found")
             append_turn(
@@ -300,7 +317,7 @@ async def chat(session_id: str, req: ChatRequest):
                 retrieval.trace,
                 memory_workspace,
             )
-            save_meta(meta)
+            get_sessions().save(session_id, meta[session_id])
 
         capture_error = None
         try:

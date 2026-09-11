@@ -1,12 +1,14 @@
+from tests.session_support import configure_sessions, read_sessions, seed_sessions
 from datetime import datetime
 from mycelium.models import WikiPage, LogEntry, Edge, UpdateLogEntry
 import pytest
 
 from mycelium.store import WikiStore, LogStore
 
+
 def test_wiki_store_save_and_get(tmp_path):
     store = WikiStore(tmp_path / "wiki")
-    
+
     page = WikiPage(
         slug="test-page",
         title="Test Page",
@@ -26,9 +28,9 @@ def test_wiki_store_save_and_get(tmp_path):
                 trigger="manual",
                 reason="Initial creation",
             )
-        ]
+        ],
     )
-    
+
     store.save(page)
 
     assert "importance:" not in (store.wiki_dir / "test-page.md").read_text()
@@ -45,48 +47,94 @@ def test_wiki_store_save_and_get(tmp_path):
     assert loaded.update_log[0].session_id == "ses-123"
 
 
-def test_wiki_store_rejects_pre_taxonomy_page_schema(tmp_path):
-    store = WikiStore(tmp_path / "wiki")
-    (store.wiki_dir / "legacy.md").write_text(
-        "---\nid: legacy\ntitle: Legacy\n---\nOld content\n",
-        encoding="utf-8",
-    )
+def test_legacy_store_requires_fresh_directory(tmp_path):
+    (tmp_path / "wiki").mkdir()
+    original = tmp_path / "wiki" / "legacy.md"
+    original.write_text("Legacy page")
+    with pytest.raises(ValueError, match="Legacy memory store"):
+        WikiStore(tmp_path / "wiki")
+    assert original.read_text() == "Legacy page"
 
-    with pytest.raises(ValueError, match="pre-taxonomy schema"):
-        store.get("legacy")
 
 def test_wiki_store_list_all(tmp_path):
     store = WikiStore(tmp_path / "wiki")
-    
-    store.save(WikiPage(slug="page1", title="1", content="", created=datetime.now(), last_updated=datetime.now(), version=1, page_type="topic", entity_id="topic-page1"))
-    store.save(WikiPage(slug="page2", title="2", content="", created=datetime.now(), last_updated=datetime.now(), version=1, page_type="topic", entity_id="topic-page2"))
+
+    store.save(
+        WikiPage(
+            slug="page1",
+            title="1",
+            content="",
+            created=datetime.now(),
+            last_updated=datetime.now(),
+            version=1,
+            page_type="topic",
+            entity_id="topic-page1",
+        )
+    )
+    store.save(
+        WikiPage(
+            slug="page2",
+            title="2",
+            content="",
+            created=datetime.now(),
+            last_updated=datetime.now(),
+            version=1,
+            page_type="topic",
+            entity_id="topic-page2",
+        )
+    )
     store.save_index("# Index")
-    
+
     pages = store.list_all()
     assert len(pages) == 2
     slugs = [p.slug for p in pages]
     assert "page1" in slugs
     assert "page2" in slugs
 
+
 def test_wiki_store_archive(tmp_path):
     store = WikiStore(tmp_path / "wiki")
-    store.save(WikiPage(slug="archive-me", title="A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, page_type="topic", entity_id="topic-archive-me"))
+    store.save(
+        WikiPage(
+            slug="archive-me",
+            title="A",
+            content="",
+            created=datetime.now(),
+            last_updated=datetime.now(),
+            version=1,
+            page_type="topic",
+            entity_id="topic-archive-me",
+        )
+    )
     assert store.exists("archive-me")
     store.archive("archive-me")
     assert not store.exists("archive-me")
     assert (tmp_path / "wiki" / "_archive" / "archive-me.md").exists()
 
+
 def test_wiki_store_delete(tmp_path):
     store = WikiStore(tmp_path / "wiki")
-    store.save(WikiPage(slug="delete-page", title="L", content="", created=datetime.now(), last_updated=datetime.now(), version=1, page_type="topic", entity_id="topic-delete-page"))
+    store.save(
+        WikiPage(
+            slug="delete-page",
+            title="L",
+            content="",
+            created=datetime.now(),
+            last_updated=datetime.now(),
+            version=1,
+            page_type="topic",
+            entity_id="topic-delete-page",
+        )
+    )
 
     store.delete("delete-page")
 
     assert not store.exists("delete-page")
 
+
 def test_log_store_append_and_get(tmp_path):
     store = LogStore(tmp_path / "logs")
-    
+
     entry = LogEntry(
         entry_id="2026-05-10#Entry 1",
         session_id="ses-123",
@@ -95,7 +143,7 @@ def test_log_store_append_and_get(tmp_path):
         durability="durable",
         consolidated=False,
     )
-    
+
     store.append(entry)
 
     assert "**importance:**" not in (tmp_path / "logs" / "2026-05-10.md").read_text()
@@ -106,9 +154,10 @@ def test_log_store_append_and_get(tmp_path):
     assert unconsolidated[0].durability == "durable"
     assert not unconsolidated[0].consolidated
 
+
 def test_log_store_mark_consolidated(tmp_path):
     store = LogStore(tmp_path / "logs")
-    
+
     entry = LogEntry(
         entry_id="2026-05-10#Entry 1",
         session_id="ses-123",
@@ -116,12 +165,12 @@ def test_log_store_mark_consolidated(tmp_path):
         content="User said hello.",
         consolidated=False,
     )
-    
+
     store.append(entry)
 
     assert "**status:**" not in (tmp_path / "logs" / "2026-05-10.md").read_text()
     store.mark_consolidated(["2026-05-10#Entry 1"])
-    
+
     unconsolidated = store.get_unconsolidated()
     assert len(unconsolidated) == 0
 
@@ -186,25 +235,27 @@ def test_log_store_markdown_headings_inside_body_are_not_entries(tmp_path):
     store.mark_consolidated(["2026-05-10#tool-abc123"])
     assert store.get_unconsolidated() == []
 
+
 def test_mycelium_init_seeds_you_entity(tmp_path):
     from mycelium.core import Mycelium
-    
+
     myc = Mycelium(store_path=tmp_path)
-    
+
     assert myc.wiki.exists("you")
-    
+
     page = myc.wiki.get("you")
     assert page.title == "You"
     assert page.page_type == "you"
     assert "profile" in page.tags
     assert page.entity_id == "you"
-    
+
     index_content = myc.wiki.get_index()
     assert "[[you]]" in index_content
 
+
 def test_log_store_mark_unconsolidated(tmp_path):
     store = LogStore(tmp_path / "logs")
-    
+
     entry = LogEntry(
         entry_id="2026-05-10#Entry 1",
         session_id="ses-123",
@@ -212,15 +263,15 @@ def test_log_store_mark_unconsolidated(tmp_path):
         content="User said hello.",
         consolidated=False,
     )
-    
+
     store.append(entry)
     # Initially unconsolidated
     assert len(store.get_unconsolidated()) == 1
-    
+
     # Mark consolidated
     store.mark_consolidated(["2026-05-10#Entry 1"])
     assert len(store.get_unconsolidated()) == 0
-    
+
     # Mark unconsolidated
     store.mark_unconsolidated("2026-05-10")
     unconsolidated = store.get_unconsolidated()
@@ -228,24 +279,36 @@ def test_log_store_mark_unconsolidated(tmp_path):
     assert unconsolidated[0].entry_id == "2026-05-10#Entry 1"
     assert not unconsolidated[0].consolidated
 
-def test_rebuild_wiki_preserves_canonical_memories_and_manual_decisions(tmp_path, monkeypatch):
+
+def test_rebuild_wiki_preserves_canonical_memories_and_manual_decisions(
+    tmp_path, monkeypatch
+):
     from mycelium.core import Mycelium
     from server.runtime import rebuild_wiki_store
-    from pathlib import Path
     from tests.memory_helpers import claim, place, fact
     from dataclasses import replace
+
     myc = Mycelium(store_path=tmp_path)
     monkeypatch.setattr("server.runtime.get_mem", lambda: myc)
     item = claim("kept", "The user prefers written notes.", "2026-09-01")
     place(myc.artifacts, item)
-    myc.artifacts.save_consolidated_fact(replace(fact(item), manual_text=True, synthesis_origin="manual"))
-    before = {str(p): p.read_bytes() for d in [myc.artifacts.claims_dir, myc.artifacts.consolidated_facts_dir] for p in d.glob("*.json")}
+    myc.artifacts.save_consolidated_fact(
+        replace(fact(item), manual_text=True, synthesis_origin="manual")
+    )
+    before = {
+        kind: [myc.db.get(kind, key) for key in myc.db.ids(kind)]
+        for kind in ("claims", "consolidated-facts")
+    }
     rebuild_wiki_store()
     assert "written notes" in myc.wiki.get("you").content
-    assert all(p.read_bytes() == data for name, data in before.items() for p in [Path(name)])
+    assert before == {
+        kind: [myc.db.get(kind, key) for key in myc.db.ids(kind)] for kind in before
+    }
 
 
-def test_clear_memory_store_removes_artifacts_and_preserves_conversations(tmp_path, monkeypatch):
+def test_clear_memory_store_removes_artifacts_and_preserves_conversations(
+    tmp_path, monkeypatch
+):
     from mycelium.artifacts import (
         ClaimProvenance,
         EpisodeManifest,
@@ -259,51 +322,70 @@ def test_clear_memory_store_removes_artifacts_and_preserves_conversations(tmp_pa
     myc = Mycelium(store_path=tmp_path / "store")
     sessions_file = tmp_path / "sessions_meta.json"
     monkeypatch.setattr(runtime, "get_mem", lambda: myc)
-    monkeypatch.setattr(runtime, "SESSIONS_FILE", sessions_file)
+    configure_sessions(monkeypatch, runtime, sessions_file)
     transcript = [
         {
-            "role": "user", "content": "Remember tea.",
+            "role": "user",
+            "content": "Remember tea.",
             "timestamp": "2026-07-22T10:00:00+00:00",
         },
         {
-            "role": "assistant", "content": "I will.",
+            "role": "assistant",
+            "content": "I will.",
             "timestamp": "2026-07-22T10:00:01+00:00",
         },
     ]
-    runtime.save_meta({
-        "session-1": {
-            "query": "Tea",
-            "transcript": transcript,
-            "episode_seq": 2,
-            "encoded_episodes": ["session-1-ep-1"],
-            "active_episode": {
-                "id": "session-1-ep-2",
-                "started_at": "2026-07-22T10:00:01+00:00",
-                "last_activity_at": "2026-07-22T10:00:01+00:00",
-                "buffer": [],
-                "turn_count": 0,
-            },
-        }
-    })
-    myc.artifacts.save_source(SourceDocument(
-        source_id="source-1", source_type="agent_conversation",
-        session_id="session-1", recorded_at="2026-07-22", occurred_at=None,
-        participants=["user"],
-        segments=[SourceSegment("source-1#seg-0001", 0, "Remember tea.")],
-    ))
-    myc.artifacts.save_episode(EpisodeManifest(
-        episode_id="episode-1", source_id="source-1",
-        source_type="agent_conversation", occurred_at=None,
-        participants=["user"], segment_ids=["source-1#seg-0001"],
-    ))
-    myc.artifacts.save_claim(MemoryClaim(
-        claim_id="claim-1",
-        text="The user wants tea remembered.",
-        about=[{"entity": "user"}],
-        provenance=[ClaimProvenance("source-1", ["source-1#seg-0001"])],
-        recorded_at="2026-07-22", claim_type="preference", evidence_modality="speech",
-        temporal_status="current",
-    ))
+    seed_sessions(
+        runtime,
+        {
+            "session-1": {
+                "query": "Tea",
+                "transcript": transcript,
+                "episode_seq": 2,
+                "encoded_episodes": ["session-1-ep-1"],
+                "active_episode": {
+                    "id": "session-1-ep-2",
+                    "started_at": "2026-07-22T10:00:01+00:00",
+                    "last_activity_at": "2026-07-22T10:00:01+00:00",
+                    "buffer": [],
+                    "turn_count": 0,
+                },
+            }
+        },
+    )
+    myc.artifacts.save_source(
+        SourceDocument(
+            source_id="source-1",
+            source_type="agent_conversation",
+            session_id="session-1",
+            recorded_at="2026-07-22",
+            occurred_at=None,
+            participants=["user"],
+            segments=[SourceSegment("source-1#seg-0001", 0, "Remember tea.")],
+        )
+    )
+    myc.artifacts.save_episode(
+        EpisodeManifest(
+            episode_id="episode-1",
+            source_id="source-1",
+            source_type="agent_conversation",
+            occurred_at=None,
+            participants=["user"],
+            segment_ids=["source-1#seg-0001"],
+        )
+    )
+    myc.artifacts.save_claim(
+        MemoryClaim(
+            claim_id="claim-1",
+            text="The user wants tea remembered.",
+            about=[{"entity": "user"}],
+            provenance=[ClaimProvenance("source-1", ["source-1#seg-0001"])],
+            recorded_at="2026-07-22",
+            claim_type="preference",
+            evidence_modality="speech",
+            temporal_status="current",
+        )
+    )
 
     counts = runtime.clear_memory_store()
 
@@ -313,6 +395,6 @@ def test_clear_memory_store_removes_artifacts_and_preserves_conversations(tmp_pa
     assert myc.artifacts.list_sources() == []
     assert myc.artifacts.list_episodes() == []
     assert myc.artifacts.list_claims() == []
-    session = runtime.load_meta()["session-1"]
+    session = read_sessions(runtime)["session-1"]
     assert session["transcript"] == transcript
     assert session["captured_turns"] == 0

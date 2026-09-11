@@ -20,7 +20,7 @@ Mycelium is made of three primary layers:
 - A FastAPI backend that owns persistent chat sessions and explicit memory operations
 - A React web UI for chat, memory inspection, reconciliation review, and meeting ingestion
 
-Ollama provides the local language-model runtime. The core agent memory is composed of Markdown and JSON files rather than an opaque database; the optional Engram pipeline uses SQLite for meeting-processing state.
+Ollama provides the local language-model runtime. Core memory and chat state use a canonical SQLite database with inspectable JSON records and Markdown projections; Engram keeps its separate meeting-processing database.
 
 ## Project structure
 
@@ -76,7 +76,7 @@ classes persist canonical artifacts and generated views.
 When a user sends a message, the backend builds a retrieval query from the chat title, recent thread context,
 and current message. A local LanceDB projection performs hybrid vector and full-text search over active canonical
 and short-term claims. EmbeddingGemma supplies normalized semantic embeddings through Ollama. The index is derived
-state: it is synchronized from the JSON claim artifacts and can be deleted and rebuilt without losing memory.
+state: it is synchronized from canonical SQLite claim records and can be deleted and rebuilt without losing memory.
 
 Hybrid similarity only proposes candidates. A structured model decision explicitly includes or excludes every
 candidate claim using its claim text, normalized timing, and any consolidated representation it contributes to.
@@ -197,7 +197,7 @@ Important behavior:
   others may remain source participants without becoming memory identities.
 - Uncertain identities remain reviewable proposals and defer affected routing. Existing registry IDs/types and
   explicit human identity decisions cannot be overridden by the planner. Historical audit record readers and
-  manual organization APIs remain; the retired model cascade no longer produces maturity assessments.
+  manual organization APIs remain; retired maturity-assessment storage, contracts, and UI have been removed.
   Review proposals retain exact candidate identity IDs and source evidence across reloads; pending-review context
   includes those candidates and the explanation, not just a proposed title.
 - One subsequent placement response selects one or more useful page/section destinations for each claim, including
@@ -314,19 +314,47 @@ start another server, change the configured URL, or substitute a fallback model 
 
 ## Storage layout
 
-The default store is `./mycelium_store`:
+The default store is `./mycelium_store`; the server accepts `MYCELIUM_STORE` for a
+fresh alternative, and library/benchmark callers select their own store directory.
 
 ```text
 mycelium_store/
-├── sessions_meta.json  # Chats, transcripts, and durable capture cursors
-├── logs/               # Daily raw episodic logs
-├── wiki/               # Semantic memory pages and _index.md
-│   └── _archive/       # Archived wiki pages
-├── artifacts/          # Canonical evidence plus inspectable semantic decisions and derived facts
-└── engram/             # SQLite meeting metadata and uploaded audio
+├── memory.sqlite3      # Canonical artifacts, raw logs, chat summaries/messages, receipts and revisions
+├── .writer.lock        # OS-backed ownership; not copied into snapshots
+├── wiki/               # Generated Markdown pages and _index.md
+│   └── _archive/       # Archived generated pages
+├── logs/               # Generated daily raw-log views
+├── indexes/lancedb/    # Rebuildable claim search projection
+└── diagnostics/        # Model timing and optional request diagnostics
 ```
 
-The files are deliberately readable. Raw logs and claims are canonical; wiki pages are generated views and are read-only in the application.
+A shared process-local handle owns the SQLite connection and an OS-backed lock.
+Other writer processes fail before accessing the store. SQLite uses WAL, foreign
+keys, indexed record lookups, transactional revisions and a unique entity-slug index.
+Chat summaries are separate records from messages, so sidebar listing never loads
+transcripts. Old JSON stores are rejected; this release has no migration backend.
+
+Model-driven lifecycle edits use a consistent database read snapshot with an
+isolated write set. Publication validates consulted record/collection revisions in
+a short write transaction, preserving unrelated capture and rejecting actual conflicts.
+No write transaction is held across model calls. Synchronous curation and ingestion
+also commit atomically. Dream journals record plans and errors, but application rolls
+back completely on failure; a failed plan cannot strand partially changed entities.
+
+Intended Markdown content/deletions are committed with canonical changes in a durable,
+ordered publication queue. Atomic file replacement is retryable without model work or
+new page versions. The inspector exposes failures and retry. This provides recoverable
+eventual Markdown publication, not a cross-filesystem/database atomic transaction.
+
+Claim indexing uses database collection revisions and changed IDs, including claims
+whose owner changed. Incremental lookups/deletions use batches of at most500 IDs;
+unchanged search performs no artifact-directory scan. Index checkpoints advance only
+after successful synchronization. Retrieval decisions and prompts are unchanged.
+
+Snapshots use SQLite backup and reconstruct Markdown from the backed-up records;
+they exclude locks and rebuildable indexes. `python -m mycelium.snapshots` exports
+canonical JSONL records for inspection. Benchmarks, lifecycle services, and runtime
+code use repositories rather than artifact-file paths. Engram storage remains separate.
 
 ## Configuration
 

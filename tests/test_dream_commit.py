@@ -1,7 +1,5 @@
 from datetime import datetime
-
 import pytest
-
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimPlacement,
@@ -19,13 +17,11 @@ from mycelium.materialization import MaterializationResult, PageMaterializer
 from mycelium.models import LogEntry
 from mycelium.store import LogStore, WikiStore
 
-
 NOW = "2026-08-31T15:00:00-07:00"
 
 
 def test_interrupted_dream_commit_replays_to_one_consistent_projection(
-    tmp_path,
-    monkeypatch,
+    tmp_path, monkeypatch
 ):
     artifact_path = tmp_path / "artifacts"
     wiki_path = tmp_path / "wiki"
@@ -39,20 +35,22 @@ def test_interrupted_dream_commit_replays_to_one_consistent_projection(
         claim_id="claim-1",
         text="The user prefers written project updates.",
         about=[{"entity": "user"}],
-        provenance=[ClaimProvenance(
-            "source-1", ["source-1#seg-0001"], "2026-08-31#session-1"
-        )],
+        provenance=[
+            ClaimProvenance("source-1", ["source-1#seg-0001"], "2026-08-31#session-1")
+        ],
         recorded_at=NOW,
         claim_type="preference",
         predicate="prefers",
     )
     artifacts.save_claim(claim)
-    logs.append(LogEntry(
-        entry_id="2026-08-31#session-1",
-        session_id="session-1",
-        timestamp=datetime.fromisoformat(NOW),
-        content="Raw evidence",
-    ))
+    logs.append(
+        LogEntry(
+            entry_id="2026-08-31#session-1",
+            session_id="session-1",
+            timestamp=datetime.fromisoformat(NOW),
+            content="Raw evidence",
+        )
+    )
     placement = ClaimPlacement(
         claim_id=claim.claim_id,
         owner_entity_id=entity.entity_id,
@@ -109,15 +107,17 @@ def test_interrupted_dream_commit_replays_to_one_consistent_projection(
         pending_source_ids=[],
         pages_created=1,
         pages_updated=0,
-        claim_decisions=[DreamClaimDecision(
-            claim_id=claim.claim_id,
-            evidence_id="claim-1::claim",
-            source_id="source-1",
-            raw_log_entry_id="2026-08-31#session-1",
-            disposition="routed",
-            reason="Owned by you.",
-            page_slugs=["you"],
-        )],
+        claim_decisions=[
+            DreamClaimDecision(
+                claim_id=claim.claim_id,
+                evidence_id="claim-1::claim",
+                source_id="source-1",
+                raw_log_entry_id="2026-08-31#session-1",
+                disposition="routed",
+                reason="Owned by you.",
+                page_slugs=["you"],
+            )
+        ],
     )
     service = DreamCommitService(artifacts, logs, materializer)
     commit = service.prepare(
@@ -129,7 +129,6 @@ def test_interrupted_dream_commit_replays_to_one_consistent_projection(
         ),
         retention_records=[],
         entity_decisions=[],
-        maturity_assessments=[],
         entity_references=[],
         encounters=[],
         scope_decisions=[scope],
@@ -142,60 +141,57 @@ def test_interrupted_dream_commit_replays_to_one_consistent_projection(
     original_persist_audit = artifacts.persist_dream_audit
     interrupted = False
 
+    class SimulatedCrash(BaseException):
+        pass
+
     def fail_before_audit(record):
         nonlocal interrupted
         if not interrupted:
             interrupted = True
-            raise OSError("simulated process interruption before audit")
+            raise SimulatedCrash("simulated process interruption before audit")
         original_persist_audit(record)
 
     monkeypatch.setattr(artifacts, "persist_dream_audit", fail_before_audit)
-    with pytest.raises(OSError, match="simulated process interruption"):
+    with pytest.raises(SimulatedCrash, match="simulated process interruption"):
         service.apply(commit)
-
     assert artifacts.get_dream_commit(commit.commit_id).status == "applying"
-    assert artifacts.get_dream_commit(commit.commit_id).error
-    assert len(artifacts.list_consolidated_facts()) == 1
-    assert wiki.exists("you")
-    first_page_version = wiki.get("you").version
-    assert logs.get("2026-08-31#session-1").consolidated is True
-
+    assert artifacts.list_consolidated_facts() == []
+    assert not wiki.exists("you")
+    assert logs.get("2026-08-31#session-1").consolidated is False
     restarted_artifacts = ArtifactStore(artifact_path)
     restarted_wiki = WikiStore(wiki_path)
     restarted_logs = LogStore(log_path)
     restarted_service = DreamCommitService(
         restarted_artifacts,
         restarted_logs,
-        PageMaterializer(
-            restarted_wiki, restarted_artifacts, Config.defaults()
-        ),
+        PageMaterializer(restarted_wiki, restarted_artifacts, Config.defaults()),
     )
     original_regenerate = restarted_service.materializer.regenerate
 
     def fail_recovery(entity_ids):
-        raise OSError("temporary recovery write failure")
+        raise SimulatedCrash("temporary recovery write failure")
 
     monkeypatch.setattr(restarted_service.materializer, "regenerate", fail_recovery)
-    with pytest.raises(OSError, match="temporary recovery"):
+    with pytest.raises(SimulatedCrash, match="temporary recovery"):
         restarted_service.recover_pending()
     assert restarted_artifacts.get_dream_commit(commit.commit_id).status == "applying"
-    monkeypatch.setattr(restarted_service.materializer, "regenerate", original_regenerate)
+    monkeypatch.setattr(
+        restarted_service.materializer, "regenerate", original_regenerate
+    )
     assert restarted_service.recover_pending() == [commit.commit_id]
-
     assert restarted_artifacts.get_dream_commit(commit.commit_id).status == "complete"
     assert len(restarted_artifacts.list_consolidated_facts()) == 1
     assert len(restarted_artifacts.list_scope_decisions()) == 1
     assert len(restarted_artifacts.list_scope_cohorts()) == 1
     assert len(restarted_artifacts.list_dream_runs()) == 1
     assert restarted_artifacts.get_claim(claim.claim_id).dream_disposition == "routed"
-    assert restarted_wiki.get("you").version == first_page_version
+    version = restarted_wiki.get("you").version
+    assert restarted_service.recover_pending() == []
+    assert restarted_wiki.get("you").version == version
     assert restarted_logs.get("2026-08-31#session-1").consolidated is True
 
 
-def test_invalid_payload_blocks_writes_until_repaired(
-    tmp_path,
-    monkeypatch,
-):
+def test_invalid_payload_blocks_writes_until_repaired(tmp_path, monkeypatch):
     artifact_path = tmp_path / "artifacts"
     wiki_path = tmp_path / "wiki"
     log_path = tmp_path / "logs"
@@ -204,13 +200,11 @@ def test_invalid_payload_blocks_writes_until_repaired(
     logs = LogStore(log_path)
     materializer = PageMaterializer(wiki, artifacts, Config.defaults())
     service = DreamCommitService(artifacts, logs, materializer)
-
     commit = service.prepare(
         run_id="dream-broken",
         materialization=MaterializationResult(),
         retention_records=[],
         entity_decisions=[],
-        maturity_assessments=[],
         entity_references=[],
         encounters=[],
         scope_decisions=[],
@@ -238,8 +232,6 @@ def test_invalid_payload_blocks_writes_until_repaired(
             claim_decisions=[],
         ),
     )
-
-    # A valid earlier record must not be written before a later malformed one.
     from dataclasses import asdict, replace
     from mycelium.organization import EntityCurationService
 
@@ -249,21 +241,16 @@ def test_invalid_payload_blocks_writes_until_repaired(
     commit.payload["placements"] = [{"invalid": "data"}]
     artifacts.save_dream_commit(commit)
     curation = EntityCurationService(artifacts, wiki, materializer)
-
     for _ in range(2):
         with pytest.raises(TypeError):
-            service.recover_pending()
+            service.apply(commit)
         saved = artifacts.get_dream_commit(commit.commit_id)
-        assert saved.status == "applying"
+        assert saved.status == "failed"
         assert saved.error is not None
         assert artifacts.get_entity(source.entity_id).title == "Nora"
-        with pytest.raises(ValueError, match="Recover the pending Dream commit"):
-            curation.merge(source.entity_id, target.entity_id)
-
-    # Repair the journal explicitly, then normal recovery releases the merge guard.
     saved.payload["placements"] = []
     artifacts.save_dream_commit(saved)
-    assert service.recover_pending() == [commit.commit_id]
+    service.apply(saved)
     assert artifacts.get_dream_commit(commit.commit_id).error is None
     curation.merge(source.entity_id, target.entity_id)
     assert artifacts.get_entity(source.entity_id).status == "merged"

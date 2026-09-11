@@ -1,19 +1,24 @@
 from __future__ import annotations
 
+from mycelium.snapshots import snapshot_store
+
 import json
 import os
 import tempfile
 import re
 import time
 import hashlib
-import shutil
 import subprocess
 from dataclasses import asdict
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from benchmarks.shared.adapters import BenchmarkMessage, MemorySystem, MyceliumMemorySystem
+from benchmarks.shared.adapters import (
+    BenchmarkMessage,
+    MemorySystem,
+    MyceliumMemorySystem,
+)
 from benchmarks.shared.scoring import locomo_score, summarize_scores
 
 
@@ -33,7 +38,9 @@ async def run_locomo(
     if snapshot_sessions and not isinstance(system, MyceliumMemorySystem):
         raise ValueError("--snapshot-sessions requires a Mycelium-backed system")
     if snapshot_sessions and system.frozen_store is not None:
-        raise ValueError("--snapshot-sessions requires session ingestion, not --frozen-store")
+        raise ValueError(
+            "--snapshot-sessions requires session ingestion, not --frozen-store"
+        )
     samples = json.loads(data_path.read_text(encoding="utf-8"))
     if sample_index is not None:
         if sample_index < 1 or sample_index > len(samples):
@@ -47,32 +54,52 @@ async def run_locomo(
     config_path = getattr(system, "config_path", None)
     settings = {
         "dataset_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
-        "system": system.name, "prediction_key": prediction_key,
-        "max_samples": max_samples, "max_questions": max_questions,
-        "max_sessions": max_sessions, "questions_per_category": questions_per_category,
+        "system": system.name,
+        "prediction_key": prediction_key,
+        "max_samples": max_samples,
+        "max_questions": max_questions,
+        "max_sessions": max_sessions,
+        "questions_per_category": questions_per_category,
         "sample_index": sample_index,
         **({"snapshot_sessions": True} if snapshot_sessions else {}),
         "qa_model": getattr(getattr(system, "qa_client", None), "model", None),
-        **{key: str(getattr(system, key, None)) for key in (
-            "memory_model", "context_budget_tokens", "dream_policy", "memory_profile",
-            "replay_store", "frozen_store", "replay_assignments",
-        )},
+        **{
+            key: str(getattr(system, key, None))
+            for key in (
+                "memory_model",
+                "context_budget_tokens",
+                "dream_policy",
+                "memory_profile",
+                "replay_store",
+                "frozen_store",
+                "replay_assignments",
+            )
+        },
         "config_sha256": hashlib.sha256(Path(config_path).read_bytes()).hexdigest()
-            if config_path else None,
+        if config_path
+        else None,
     }
     manifest = read_json_if_exists(manifest_path, default=None)
     if manifest is not None and manifest["settings"] != settings:
-        raise ValueError("Run settings differ from the checkpoint; use a fresh output directory")
+        raise ValueError(
+            "Run settings differ from the checkpoint; use a fresh output directory"
+        )
     if manifest is None:
         if (output_dir / "predictions.json").exists():
-            raise ValueError("Existing predictions have no run manifest; use a fresh output directory")
+            raise ValueError(
+                "Existing predictions have no run manifest; use a fresh output directory"
+            )
         manifest = {"settings": settings, "status": "running"}
     manifest["status"] = "running"
     write_json(manifest_path, manifest)
     checkpoint_dir = output_dir / "questions"
     checkpoint_dir.mkdir(exist_ok=True)
-    checkpoints = [json.loads(path.read_text()) for path in sorted(checkpoint_dir.glob("*.json"))]
-    completed_questions = {(row["sample_id"], row["question_index"]): row for row in checkpoints}
+    checkpoints = [
+        json.loads(path.read_text()) for path in sorted(checkpoint_dir.glob("*.json"))
+    ]
+    completed_questions = {
+        (row["sample_id"], row["question_index"]): row for row in checkpoints
+    }
     predictions = read_json_if_exists(output_dir / "predictions.json", default=[])
     flat_rows = checkpoints.copy()
     completed_sample_ids = {str(sample.get("sample_id")) for sample in predictions}
@@ -121,9 +148,11 @@ async def run_locomo(
                 # already published snapshots rather than replacing their history.
                 if not snapshot.exists():
                     snapshot.parent.mkdir(parents=True, exist_ok=True)
-                    with tempfile.TemporaryDirectory(dir=snapshot.parent, prefix=".snapshot-") as staging:
+                    with tempfile.TemporaryDirectory(
+                        dir=snapshot.parent, prefix=".snapshot-"
+                    ) as staging:
                         staged_store = Path(staging) / "store"
-                        shutil.copytree(system._require_mem().store_path, staged_store)
+                        snapshot_store(system._require_mem().store_path, staged_store)
                         staged_store.rename(snapshot)
                 print(f"[locomo] sample {sample_id} snapshot: {snapshot}", flush=True)
         print(f"[locomo] sample {sample_id} finalize memory", flush=True)
@@ -193,10 +222,16 @@ async def run_locomo(
             )
 
             row = flat_rows[-1]
-            checkpoint_id = hashlib.sha256(f"{sample_id}:{question_index}".encode()).hexdigest()
+            checkpoint_id = hashlib.sha256(
+                f"{sample_id}:{question_index}".encode()
+            ).hexdigest()
             write_json(checkpoint_dir / f"{checkpoint_id}.json", row)
             completed_questions[(sample_id, question_index)] = row
-            manifest.update(sample_id=sample_id, phase="qa", completed_questions=len(completed_questions))
+            manifest.update(
+                sample_id=sample_id,
+                phase="qa",
+                completed_questions=len(completed_questions),
+            )
             write_json(manifest_path, manifest)
 
         predictions.append(output_sample)
@@ -218,14 +253,21 @@ async def run_locomo(
 
 
 async def run_locomo_wiki_baseline(
-    *, data_path: Path, output_dir: Path, system: MyceliumMemorySystem,
-    sample_index: int = 1, max_sessions: int = 2, user_speaker: str | None = None,
+    *,
+    data_path: Path,
+    output_dir: Path,
+    system: MyceliumMemorySystem,
+    sample_index: int = 1,
+    max_sessions: int = 2,
+    user_speaker: str | None = None,
 ) -> dict[str, Any]:
     """Fresh, sequential build snapshots for human wiki review; no QA or gold input."""
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ValueError("Wiki baseline requires a fresh output directory")
     if system.replay_store or system.frozen_store or system.replay_assignments:
-        raise ValueError("Wiki baseline must build from source, not derived replay artifacts")
+        raise ValueError(
+            "Wiki baseline must build from source, not derived replay artifacts"
+        )
     samples = json.loads(data_path.read_text(encoding="utf-8"))
     if not 1 <= sample_index <= len(samples) or max_sessions < 1:
         raise ValueError("Invalid sample index or session count")
@@ -240,36 +282,74 @@ async def run_locomo_wiki_baseline(
     await system.reset(str(sample["sample_id"]))
     memory = system._require_mem()
     keys = {key for sid, _, _ in selected for key in (sid, f"{sid}_date_time")}
-    write_json(output_dir / "input.json", {
-        "sample_id": sample["sample_id"],
-        "conversation": {k: v for k, v in sample["conversation"].items() if k in keys or k in {"speaker_a", "speaker_b"}},
-    })
-    write_json(output_dir / "messages.json", [
-        {"session_id": sid, "timestamp": timestamp, "messages": [asdict(m) for m in messages]}
-        for sid, timestamp, messages in selected
-    ])
+    write_json(
+        output_dir / "input.json",
+        {
+            "sample_id": sample["sample_id"],
+            "conversation": {
+                k: v
+                for k, v in sample["conversation"].items()
+                if k in keys or k in {"speaker_a", "speaker_b"}
+            },
+        },
+    )
+    write_json(
+        output_dir / "messages.json",
+        [
+            {
+                "session_id": sid,
+                "timestamp": timestamp,
+                "messages": [asdict(m) for m in messages],
+            }
+            for sid, timestamp, messages in selected
+        ],
+    )
     manifest = {
-        "sample_id": sample["sample_id"], "sample_index": sample_index,
-        "session_ids": [sid for sid, _, _ in selected], "user_speaker": user_speaker,
+        "sample_id": sample["sample_id"],
+        "sample_index": sample_index,
+        "session_ids": [sid for sid, _, _ in selected],
+        "user_speaker": user_speaker,
         "dataset_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
-        "input_sha256": hashlib.sha256((output_dir / "input.json").read_bytes()).hexdigest(),
-        "config": asdict(memory.config), "build_policy": "after_each_session",
-        "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "input_sha256": hashlib.sha256(
+            (output_dir / "input.json").read_bytes()
+        ).hexdigest(),
+        "config": asdict(memory.config),
+        "build_policy": "after_each_session",
+        "git_commit": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True
+        ).strip(),
         "checkpoints": [],
     }
-    (output_dir / "working_tree.patch").write_text(subprocess.check_output(["git", "diff", "HEAD"], text=True))
+    (output_dir / "working_tree.patch").write_text(
+        subprocess.check_output(["git", "diff", "HEAD"], text=True)
+    )
     write_json(output_dir / "manifest.json", manifest)
-    shutil.copytree(memory.store_path, output_dir / "snapshots" / "initial")
+    snapshot_store(memory.store_path, output_dir / "snapshots" / "initial")
     for sid, timestamp, messages in selected:
-        print(f"[wiki-baseline] {sample['sample_id']} user={user_speaker!r}: capture/build {sid}", flush=True)
+        print(
+            f"[wiki-baseline] {sample['sample_id']} user={user_speaker!r}: capture/build {sid}",
+            flush=True,
+        )
         started = time.perf_counter()
-        await system.memorize(messages, {"session_id": sid, "timestamp": timestamp, "sample_id": sample["sample_id"]})
+        await system.memorize(
+            messages,
+            {
+                "session_id": sid,
+                "timestamp": timestamp,
+                "sample_id": sample["sample_id"],
+            },
+        )
         snapshot = output_dir / "snapshots" / sid
-        shutil.copytree(memory.store_path, snapshot)
+        snapshot_store(memory.store_path, snapshot)
         checkpoint = {
-            "session_id": sid, "elapsed_seconds": time.perf_counter() - started,
-            "stats": system.stats(), "coverage": memory.artifacts.coverage_report(),
-            "pages": [{"slug": p.slug, "title": p.title, "entity_id": p.entity_id} for p in memory.wiki.list()],
+            "session_id": sid,
+            "elapsed_seconds": time.perf_counter() - started,
+            "stats": system.stats(),
+            "coverage": memory.artifacts.coverage_report(),
+            "pages": [
+                {"slug": p.slug, "title": p.title, "entity_id": p.entity_id}
+                for p in memory.wiki.list()
+            ],
             "pending_sources": memory.consolidation_status().pending_sources,
         }
         manifest["checkpoints"].append(checkpoint)
@@ -284,7 +364,8 @@ async def run_locomo_wiki_baseline(
 
 def iter_locomo_sessions(
     sample: dict[str, Any],
-    *, user_speaker: str | None = None,
+    *,
+    user_speaker: str | None = None,
 ) -> list[tuple[str, str | None, list[BenchmarkMessage]]]:
     conversation = sample.get("conversation", {})
     sessions = []
@@ -293,13 +374,19 @@ def iter_locomo_sessions(
             continue
         session_turns = conversation.get(key) or []
         timestamp = conversation.get(f"{key}_date_time")
-        messages = [locomo_turn_to_message(turn, timestamp, user_speaker=user_speaker) for turn in session_turns]
+        messages = [
+            locomo_turn_to_message(turn, timestamp, user_speaker=user_speaker)
+            for turn in session_turns
+        ]
         sessions.append((key, timestamp, messages))
     return sessions
 
 
 def locomo_turn_to_message(
-    turn: dict[str, Any], timestamp: str | None, *, user_speaker: str | None = None,
+    turn: dict[str, Any],
+    timestamp: str | None,
+    *,
+    user_speaker: str | None = None,
 ) -> BenchmarkMessage:
     text = str(turn.get("text", "")).strip()
     if turn.get("blip_caption"):
@@ -307,7 +394,9 @@ def locomo_turn_to_message(
     if turn.get("img_url"):
         text = f"{text}\nImage URL: {turn['img_url']}"
     return BenchmarkMessage(
-        role="user" if user_speaker is not None and turn.get("speaker") == user_speaker else "participant",
+        role="user"
+        if user_speaker is not None and turn.get("speaker") == user_speaker
+        else "participant",
         speaker=str(turn.get("speaker", "speaker")),
         content=text.strip(),
         timestamp=timestamp,
@@ -483,14 +572,21 @@ def write_json(path: Path, data: Any) -> None:
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_text(path, "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+    _atomic_text(
+        path, "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+    )
 
 
 def _atomic_text(path: Path, text: str) -> None:
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
-                                         prefix=".checkpoint-", delete=False) as stream:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=".checkpoint-",
+            delete=False,
+        ) as stream:
             temporary = stream.name
             stream.write(text)
             stream.flush()

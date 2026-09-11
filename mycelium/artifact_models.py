@@ -1,11 +1,9 @@
 """Persisted artifact records and their structural validation."""
 
 from __future__ import annotations
-
 import re
 from dataclasses import dataclass, field
 from typing import Any
-
 from mycelium.ontology import (
     CLAIM_TYPES,
     ENTITY_TYPES,
@@ -29,15 +27,20 @@ NON_WIKI_RETENTION_REASONS = {
     "extractor_rejected",
 }
 ENTITY_REFERENCE_ROLES = {
-    "subject", "object", "context", "canonical_owner", "identity_subject",
+    "subject",
+    "object",
+    "context",
+    "canonical_owner",
+    "identity_subject",
 }
 RECONSOLIDATION_RELATIONS = {"contradicts", "supersedes"}
 RECONSOLIDATION_STATUSES = {"pending", "approved", "rejected", "applied", "stale"}
 SOURCE_STATUSES = {"active", "retracted"}
 CLAIM_STATUSES = {"active", "superseded", "retracted"}
 
+
 def _normalized_label(value: str | None) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+    return re.sub("[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
 
 @dataclass
@@ -72,8 +75,8 @@ class SourceDocument:
         self.status = str(self.status).strip().lower()
         if self.status not in SOURCE_STATUSES:
             raise ValueError(f"Unsupported source status: {self.status}")
-        if self.status == "retracted" and not (
-            self.retracted_at and str(self.retraction_reason or "").strip()
+        if self.status == "retracted" and (
+            not (self.retracted_at and str(self.retraction_reason or "").strip())
         ):
             raise ValueError("Retracted sources require a timestamp and reason")
         if self.status == "active" and (self.retracted_at or self.retraction_reason):
@@ -115,25 +118,20 @@ class MemoryClaim:
         self.status = str(self.status).strip().lower()
         if self.status not in CLAIM_STATUSES:
             raise ValueError(f"Unsupported claim status: {self.status}")
-
         normalized_type = _normalized_label(self.claim_type)
         if normalized_type not in CLAIM_TYPES:
             normalized_type = "unknown"
         self.claim_type = normalized_type
-
         modality = _normalized_label(self.evidence_modality)
         if modality not in EVIDENCE_MODALITIES:
             modality = "unknown"
         self.evidence_modality = modality
-
         temporal = _normalized_label(self.temporal_status)
         if temporal not in TEMPORAL_STATUSES:
             temporal = "unknown"
         self.temporal_status = temporal
-
         if self.predicate is not None:
             self.predicate = " ".join(str(self.predicate).split()).strip() or None
-
         disposition = str(self.dream_disposition or "pending").strip().lower()
         self.dream_disposition = (
             disposition if disposition in DREAM_DISPOSITIONS else "pending"
@@ -177,7 +175,7 @@ class EntityRecord:
             raise ValueError("The singleton you entity must have type 'you'")
         if self.entity_type == "you" and self.entity_id != "you":
             raise ValueError("Only the singleton entity ID 'you' may use type 'you'")
-        if self.status == "merged" and not self.merged_into_entity_id:
+        if self.status == "merged" and (not self.merged_into_entity_id):
             raise ValueError("Merged entities require merged_into_entity_id")
         if self.status != "merged" and self.merged_into_entity_id:
             raise ValueError("Only merged entities may redirect")
@@ -185,7 +183,9 @@ class EntityRecord:
         self.slug = _slugify(self.slug)
         if not self.title or not self.slug:
             raise ValueError("Entity title and slug are required")
-        self.aliases = sorted({" ".join(value.split()).strip() for value in self.aliases if value.strip()})
+        self.aliases = sorted(
+            {" ".join(value.split()).strip() for value in self.aliases if value.strip()}
+        )
 
 
 @dataclass
@@ -207,8 +207,10 @@ class NonWikiRetentionRecord:
         if self.reason not in NON_WIKI_RETENTION_REASONS:
             raise ValueError(f"Unsupported non-wiki retention reason: {self.reason}")
         if self.policy_origin not in {"source_structure", "extraction"}:
-            raise ValueError(f"Unsupported retention policy origin: {self.policy_origin}")
-        if self.target_type == "claim" and not self.claim_id:
+            raise ValueError(
+                f"Unsupported retention policy origin: {self.policy_origin}"
+            )
+        if self.target_type == "claim" and (not self.claim_id):
             raise ValueError("Claim retention records require claim_id")
         if self.target_type == "segment" and self.claim_id:
             raise ValueError("Segment retention records cannot name a claim")
@@ -241,7 +243,7 @@ class ClaimEntityReference:
             raise ValueError(f"Unsupported entity-reference origin: {self.origin}")
         if self.status not in {"active", "superseded"}:
             raise ValueError(f"Unsupported entity-reference status: {self.status}")
-        if self.status == "superseded" and not self.superseded_by_reference_id:
+        if self.status == "superseded" and (not self.superseded_by_reference_id):
             raise ValueError("Superseded references require a successor")
         self.surface = " ".join(str(self.surface or "").split()).strip() or None
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
@@ -277,79 +279,34 @@ class EntityResolutionDecision:
 
     def __post_init__(self) -> None:
         if self.decision_type not in {"entity_creation", "participant_resolution"}:
-            raise ValueError(f"Unsupported entity-resolution decision: {self.decision_type}")
+            raise ValueError(
+                f"Unsupported entity-resolution decision: {self.decision_type}"
+            )
         if self.review_state not in {"accepted", "review_required", "rejected"}:
             raise ValueError(f"Unsupported identity review state: {self.review_state}")
-        if self.proposed_scope is not None and (
-            self.proposed_scope not in SUBJECT_PERSISTED_SCOPES
+        if (
+            self.proposed_scope is not None
+            and self.proposed_scope not in SUBJECT_PERSISTED_SCOPES
         ):
-            raise ValueError(f"Unsupported proposed identity scope: {self.proposed_scope}")
-        if self.proposed_page_state is not None and (
-            self.proposed_page_state not in SUBJECT_PAGE_STATES
+            raise ValueError(
+                f"Unsupported proposed identity scope: {self.proposed_scope}"
+            )
+        if (
+            self.proposed_page_state is not None
+            and self.proposed_page_state not in SUBJECT_PAGE_STATES
         ):
             raise ValueError(
                 f"Unsupported proposed identity page state: {self.proposed_page_state}"
             )
         self.source_ids = sorted(set(self.source_ids))
         self.supporting_claim_ids = sorted(set(self.supporting_claim_ids))
-        self.identity_evidence_claim_ids = sorted(set(
-            self.identity_evidence_claim_ids
-        ))
+        self.identity_evidence_claim_ids = sorted(set(self.identity_evidence_claim_ids))
         if set(self.identity_evidence_claim_ids) - set(self.supporting_claim_ids):
-            raise ValueError(
-                "Identity-defining claims must also be supporting claims"
-            )
+            raise ValueError("Identity-defining claims must also be supporting claims")
         self.supporting_segment_ids = sorted(set(self.supporting_segment_ids))
         self.proposed_aliases = sorted(set(self.proposed_aliases))
         self.candidate_entity_ids = sorted(set(self.candidate_entity_ids))
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
-
-
-@dataclass
-class IdentityMaturityAssessment:
-    assessment_id: str
-    dream_run_id: str
-    identity_key: str
-    source_node_ids: list[str]
-    proposed_title: str
-    proposed_entity_type: str
-    supporting_source_ids: list[str]
-    supporting_claim_ids: list[str]
-    supporting_segment_ids: list[str]
-    proposal_admission: str
-    proposal_basis: dict
-    proposal_reason: str
-    proposal_confidence: float
-    verifier_verdict: str
-    verifier_reason: str
-    effective_admission: str
-    created_at: str
-    entity_id: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.proposal_admission not in {"materialized", "provisional"}:
-            raise ValueError(
-                f"Unsupported maturity proposal: {self.proposal_admission}"
-            )
-        if self.verifier_verdict not in {
-            "supported", "unsupported", "not_required",
-        }:
-            raise ValueError(
-                f"Unsupported maturity verdict: {self.verifier_verdict}"
-            )
-        if self.effective_admission not in {
-            "materialized", "provisional", "no_page", "review_required",
-        }:
-            raise ValueError(
-                f"Unsupported effective maturity: {self.effective_admission}"
-            )
-        self.source_node_ids = sorted(set(self.source_node_ids))
-        self.supporting_source_ids = sorted(set(self.supporting_source_ids))
-        self.supporting_claim_ids = sorted(set(self.supporting_claim_ids))
-        self.supporting_segment_ids = sorted(set(self.supporting_segment_ids))
-        self.proposal_confidence = max(
-            0.0, min(1.0, float(self.proposal_confidence))
-        )
 
 
 @dataclass
@@ -364,24 +321,14 @@ class IdentityWorkUnit:
     request_digest: str | None = None
     attempt_count: int = 0
     subject_nodes: list[dict[str, Any]] = field(default_factory=list)
-    identity_node_decisions: dict[str, dict[str, Any]] = field(
-        default_factory=dict
-    )
-    local_identity_decisions: dict[str, dict[str, Any]] = field(
-        default_factory=dict
-    )
-    pending_identity_decisions: dict[str, dict[str, Any]] = field(
-        default_factory=dict
-    )
+    identity_node_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    local_identity_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    pending_identity_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
     identity_groups: list[dict[str, Any]] = field(default_factory=list)
-    existing_identity_verdicts: dict[str, dict[str, Any]] = field(
-        default_factory=dict
-    )
+    existing_identity_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
     type_proposals: dict[str, dict[str, Any]] = field(default_factory=dict)
     type_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
     new_identity_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
-    maturity_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
-    maturity_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
     entity_plan: dict[str, Any] = field(default_factory=dict)
     allocated_entity_ids: dict[str, str] = field(default_factory=dict)
     last_error: str | None = None
@@ -396,6 +343,7 @@ class IdentityWorkUnit:
             raise ValueError("Identity work units require claims and sources")
         if self.status not in {"pending", "failed", "complete"}:
             raise ValueError(f"Unsupported identity work status: {self.status}")
+
 
 @dataclass
 class ScopeCohort:
@@ -434,16 +382,31 @@ class ClaimPlacement:
         if self.prominence not in {"briefing", "detail"}:
             raise ValueError("Placement prominence must be briefing or detail")
         if self.page_sections:
-            if self.status != "placed" or self.owner_entity_id not in self.page_sections:
-                raise ValueError("Page destinations require a placed statement and its primary owner")
-            if any(not entity_id or not section for entity_id, section in self.page_sections.items()):
-                raise ValueError("Page destinations require exact entity and section IDs")
-            # Synthesis can regroup the primary presentation into a different section.
-            # Keep its page metadata aligned without changing secondary placements.
-            self.page_sections = {**self.page_sections, self.owner_entity_id: self.section_key}
+            if (
+                self.status != "placed"
+                or self.owner_entity_id not in self.page_sections
+            ):
+                raise ValueError(
+                    "Page destinations require a placed statement and its primary owner"
+                )
+            if any(
+                (
+                    not entity_id or not section
+                    for entity_id, section in self.page_sections.items()
+                )
+            ):
+                raise ValueError(
+                    "Page destinations require exact entity and section IDs"
+                )
+            self.page_sections = {
+                **self.page_sections,
+                self.owner_entity_id: self.section_key,
+            }
         if self.status not in {"placed", "deferred"}:
             raise ValueError(f"Unsupported placement status: {self.status}")
-        if self.status == "placed" and (not self.owner_entity_id or not self.section_key):
+        if self.status == "placed" and (
+            not self.owner_entity_id or not self.section_key
+        ):
             raise ValueError("Placed claims require an owner and section")
         if self.status == "deferred" and (self.owner_entity_id or self.section_key):
             raise ValueError("Deferred claims cannot name an owner or section")
@@ -451,10 +414,13 @@ class ClaimPlacement:
             raise ValueError(
                 f"Unsupported placement relationship: {self.relationship_kind}"
             )
-        self.linked_entity_ids = sorted({
-            value for value in self.linked_entity_ids
-            if value and value != self.owner_entity_id
-        })
+        self.linked_entity_ids = sorted(
+            {
+                value
+                for value in self.linked_entity_ids
+                if value and value != self.owner_entity_id
+            }
+        )
         self.identity_blocker_ids = sorted(set(self.identity_blocker_ids))
 
 
@@ -482,7 +448,7 @@ class ClaimScopeDecision:
             raise ValueError(f"Unsupported scope-decision origin: {self.origin}")
         if self.status not in {"active", "superseded", "proposed", "rejected"}:
             raise ValueError(f"Unsupported scope-decision status: {self.status}")
-        if self.status == "superseded" and not self.superseded_by_decision_id:
+        if self.status == "superseded" and (not self.superseded_by_decision_id):
             raise ValueError("Superseded scope decisions require a successor")
         self.linked_entity_ids = sorted(set(self.linked_entity_ids))
         self.supporting_claim_ids = sorted(set(self.supporting_claim_ids))
@@ -537,10 +503,13 @@ class ConsolidatedFact:
         self.member_claim_ids = sorted(set(self.member_claim_ids))
         if not self.member_claim_ids:
             raise ValueError("Consolidated facts require at least one member claim")
-        self.linked_entity_ids = sorted({
-            value for value in self.linked_entity_ids
-            if value and value != self.owner_entity_id
-        })
+        self.linked_entity_ids = sorted(
+            {
+                value
+                for value in self.linked_entity_ids
+                if value and value != self.owner_entity_id
+            }
+        )
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
 
 
@@ -570,13 +539,19 @@ class OrganizationProposal:
             raise ValueError(f"Unsupported organization proposal status: {self.status}")
         if self.proposal_type == "assign_claim":
             has_existing = bool(self.proposed_owner_entity_id)
-            has_new = bool(self.proposed_new_entity_type and self.proposed_new_entity_title)
-            if not self.claim_id or not self.proposed_section_key or has_existing == has_new:
+            has_new = bool(
+                self.proposed_new_entity_type and self.proposed_new_entity_title
+            )
+            if (
+                not self.claim_id
+                or not self.proposed_section_key
+                or has_existing == has_new
+            ):
                 raise ValueError(
                     "Claim assignment proposals require one existing or new owner and a section"
                 )
-        if self.proposal_type == "merge_entities" and not (
-            self.source_entity_id and self.target_entity_id
+        if self.proposal_type == "merge_entities" and (
+            not (self.source_entity_id and self.target_entity_id)
         ):
             raise ValueError("Merge proposals require source and target entities")
         if self.source_entity_id and self.source_entity_id == self.target_entity_id:
@@ -613,9 +588,9 @@ class DreamCommit:
     error: str | None = None
 
     def __post_init__(self) -> None:
-        if self.status not in {"prepared", "applying", "complete"}:
+        if self.status not in {"prepared", "applying", "complete", "failed"}:
             raise ValueError(f"Unsupported Dream commit status: {self.status}")
-        if not self.commit_id or not self.run_id or not self.payload:
+        if not self.commit_id or not self.run_id or (not self.payload):
             raise ValueError("Dream commits require identity and a replay payload")
 
 
@@ -670,13 +645,11 @@ class ExtractionSegmentDisposition:
         if self.disposition not in {"claimed", "source_only"}:
             raise ValueError(f"Unsupported extraction disposition: {self.disposition}")
         self.claim_ids = list(dict.fromkeys(self.claim_ids))
-        if self.disposition == "claimed" and not self.claim_ids:
+        if self.disposition == "claimed" and (not self.claim_ids):
             raise ValueError("Claimed segments require at least one claim")
         if self.disposition != "claimed" and self.claim_ids:
             raise ValueError("Only claimed segments can reference claims")
-        if self.disposition == "source_only" and not str(
-            self.reason or ""
-        ).strip():
+        if self.disposition == "source_only" and (not str(self.reason or "").strip()):
             raise ValueError(f"{self.disposition} segments require a reason")
 
 
@@ -707,7 +680,9 @@ class EpisodeManifest:
     participants: list[str]
     segment_ids: list[str]
     claim_ids: list[str] = field(default_factory=list)
-    segment_dispositions: list[ExtractionSegmentDisposition] = field(default_factory=list)
+    segment_dispositions: list[ExtractionSegmentDisposition] = field(
+        default_factory=list
+    )
     extraction_batches: list[ExtractionBatchState] = field(default_factory=list)
     extraction_status: str = "pending"
     extraction_error: str | None = None
@@ -729,18 +704,26 @@ class IngestionOperation:
     error: str | None = None
 
     def __post_init__(self) -> None:
-        if self.status not in {"planned", "captured", "extracting", "complete", "failed"}:
+        if self.status not in {
+            "planned",
+            "captured",
+            "extracting",
+            "complete",
+            "failed",
+        }:
             raise ValueError(f"Unsupported ingestion operation status: {self.status}")
-        if not all((
-            self.operation_id,
-            self.idempotency_key,
-            self.input_digest,
-            self.entry_id,
-            self.source_id,
-            self.episode_id,
-        )):
+        if not all(
+            (
+                self.operation_id,
+                self.idempotency_key,
+                self.input_digest,
+                self.entry_id,
+                self.source_id,
+                self.episode_id,
+            )
+        ):
             raise ValueError("Ingestion operations require stable identities")
 
 
 def _slugify(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    return re.sub("[^a-z0-9]+", "-", value.strip().lower()).strip("-")

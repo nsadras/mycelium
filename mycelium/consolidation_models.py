@@ -1,23 +1,20 @@
 """Shared value objects for consolidation decisions."""
 
 from __future__ import annotations
-
 import re
 from dataclasses import dataclass, field
-
 from mycelium.artifacts import (
     ClaimEntityReference,
     EntityEncounter,
     EntityRecord,
     EntityResolutionDecision,
-    IdentityMaturityAssessment,
     MemoryClaim,
     SourceDocument,
 )
 
 
 def slugify(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    return re.sub("[^a-z0-9]+", "-", value.strip().lower()).strip("-")
 
 
 @dataclass(frozen=True)
@@ -52,9 +49,7 @@ class ClaimRoute:
 
     @property
     def placed(self) -> bool:
-        return self.disposition == "canonical" and bool(
-            self.owner_entity_id
-        )
+        return self.disposition == "canonical" and bool(self.owner_entity_id)
 
 
 @dataclass(frozen=True)
@@ -71,5 +66,4 @@ class RoutingResult:
     failures: list[RoutingFailure] = field(default_factory=list)
     encounters: list[EntityEncounter] = field(default_factory=list)
     entity_decisions: list[EntityResolutionDecision] = field(default_factory=list)
-    maturity_assessments: list[IdentityMaturityAssessment] = field(default_factory=list)
     entity_references: list[ClaimEntityReference] = field(default_factory=list)

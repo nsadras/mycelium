@@ -1,16 +1,13 @@
 from datetime import datetime
 from unittest.mock import AsyncMock
-
 import pytest
 from fastapi import HTTPException
-
 from mycelium.artifacts import (
     ClaimProvenance,
     ClaimPlacement,
     ConsolidatedFact,
     EpisodeManifest,
     EntityResolutionDecision,
-    IdentityMaturityAssessment,
     MemoryClaim,
     OrganizationProposal,
     ReconsolidationProposal,
@@ -35,9 +32,7 @@ def test_integrity_requires_pages_only_for_materialized_entities(tmp_path):
     provisional = mem.artifacts.create_entity(
         "project", "Possible Project", materialization_state="provisional"
     )
-
     report = artifact_integrity(mem)
-
     assert report["issues"]["entities_missing_pages"] == []
     provisional.materialization_state = "materialized"
     mem.artifacts.save_entity(provisional)
@@ -51,17 +46,33 @@ def test_integrity_allows_shared_claims_but_not_repetition_on_one_page(tmp_path)
     mem = Mycelium(store_path=tmp_path / "store", memory_profile="none")
     now = datetime.now()
     for slug in ("first", "second"):
-        mem.wiki.save(WikiPage(
-            slug=slug, title=slug, content="", created=now, last_updated=now, version=1,
-            page_type="person", entity_id=f"person-{slug}", sections=[{"key": "profile", "items": [
-                {"kind": "fact", "claim_ids": ["shared"]},
-            ]}],
-        ))
+        mem.wiki.save(
+            WikiPage(
+                slug=slug,
+                title=slug,
+                content="",
+                created=now,
+                last_updated=now,
+                version=1,
+                page_type="person",
+                entity_id=f"person-{slug}",
+                sections=[
+                    {
+                        "key": "profile",
+                        "items": [{"kind": "fact", "claim_ids": ["shared"]}],
+                    }
+                ],
+            )
+        )
     assert artifact_integrity(mem)["issues"]["pages_with_repeated_claims"] == []
     page = mem.wiki.get("first")
-    page.sections.append({"key": "timeline", "items": [{"kind": "fact", "claim_ids": ["shared"]}]})
+    page.sections.append(
+        {"key": "timeline", "items": [{"kind": "fact", "claim_ids": ["shared"]}]}
+    )
     mem.wiki.save(page)
-    assert artifact_integrity(mem)["issues"]["pages_with_repeated_claims"] == ["first:shared"]
+    assert artifact_integrity(mem)["issues"]["pages_with_repeated_claims"] == [
+        "first:shared"
+    ]
 
 
 @pytest.fixture
@@ -81,13 +92,15 @@ def artifact_memory(tmp_path, monkeypatch):
         recorded_at="2026-07-22T12:00:00",
         occurred_at=None,
         participants=["user", "assistant"],
-        segments=[SourceSegment(
-            segment_id="source-test#seg-0001",
-            index=0,
-            content="I prefer tea.",
-            speaker="user",
-            role="user",
-        )],
+        segments=[
+            SourceSegment(
+                segment_id="source-test#seg-0001",
+                index=0,
+                content="I prefer tea.",
+                speaker="user",
+                role="user",
+            )
+        ],
         raw_log_entry_id=entry.entry_id,
     )
     episode = EpisodeManifest(
@@ -104,12 +117,14 @@ def artifact_memory(tmp_path, monkeypatch):
         claim_id="claim-test",
         text="The user prefers tea.",
         about=[{"entity": "user"}],
-        provenance=[ClaimProvenance(
-            source_id=source.source_id,
-            segment_ids=["source-test#seg-0001"],
-            raw_log_entry_id=entry.entry_id,
-            speaker="user",
-        )],
+        provenance=[
+            ClaimProvenance(
+                source_id=source.source_id,
+                segment_ids=["source-test#seg-0001"],
+                raw_log_entry_id=entry.entry_id,
+                speaker="user",
+            )
+        ],
         recorded_at="2026-07-22T12:00:00",
         claim_type="preference",
         evidence_modality="speech",
@@ -119,12 +134,14 @@ def artifact_memory(tmp_path, monkeypatch):
         claim_id="claim-old",
         text="The user previously preferred coffee.",
         about=[{"entity": "user"}],
-        provenance=[ClaimProvenance(
-            source_id=source.source_id,
-            segment_ids=["source-test#seg-0001"],
-            raw_log_entry_id=entry.entry_id,
-            speaker="user",
-        )],
+        provenance=[
+            ClaimProvenance(
+                source_id=source.source_id,
+                segment_ids=["source-test#seg-0001"],
+                raw_log_entry_id=entry.entry_id,
+                speaker="user",
+            )
+        ],
         recorded_at="2026-07-21T12:00:00",
         claim_type="preference",
         evidence_modality="speech",
@@ -135,16 +152,18 @@ def artifact_memory(tmp_path, monkeypatch):
     mem.artifacts.save_claim(claim)
     mem.artifacts.save_claim(old_claim)
     for item in (claim, old_claim):
-        mem.artifacts.save_placement(ClaimPlacement(
-            claim_id=item.claim_id,
-            owner_entity_id="you",
-            section_key="preferences_working_style",
-            linked_entity_ids=[],
-            status="placed",
-            reason="fixture",
-            created_at="2026-07-22T12:00:00",
-            updated_at="2026-07-22T12:00:00",
-        ))
+        mem.artifacts.save_placement(
+            ClaimPlacement(
+                claim_id=item.claim_id,
+                owner_entity_id="you",
+                section_key="preferences_working_style",
+                linked_entity_ids=[],
+                status="placed",
+                reason="fixture",
+                created_at="2026-07-22T12:00:00",
+                updated_at="2026-07-22T12:00:00",
+            )
+        )
     stored_fact = ConsolidatedFact(
         fact_id="fact-tea-preference",
         text="The user prefers tea.",
@@ -161,88 +180,83 @@ def artifact_memory(tmp_path, monkeypatch):
     )
     mem.artifacts.save_consolidated_fact(stored_fact)
     from tests.lifecycle_support import lifecycle_response
+
     mem.consolidator.fact_resolver.llm = AsyncMock(context_window_tokens=32768)
     mem.consolidator.fact_resolver.llm.call_structured.side_effect = lifecycle_response
     mem.consolidator.fact_resolver.resolve = AsyncMock(
         return_value=FactResolutionResult(facts=[stored_fact])
     )
-    mem.wiki.save(WikiPage(
-        slug="archived-page",
-        title="Archived",
-        content="Archived content",
-        created=datetime.now(),
-        last_updated=datetime.now(),
-        version=1,
-        page_type="topic",
-        entity_id="topic-archived-page",
-    ))
+    mem.wiki.save(
+        WikiPage(
+            slug="archived-page",
+            title="Archived",
+            content="Archived content",
+            created=datetime.now(),
+            last_updated=datetime.now(),
+            version=1,
+            page_type="topic",
+            entity_id="topic-archived-page",
+        )
+    )
     mem.wiki.archive("archived-page")
-    mem.artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
-        proposal_id="recon-test",
-        incoming_claim_ids=["claim-test"],
-        target_claim_ids=["claim-old"],
-        proposed_relation="contradicts",
-        explanation="Fixture proposal",
-        confidence=0.5,
-        dream_run_id="dream-test",
-        created_at="2026-07-22T12:00:00",
-        affected_entity_ids=["you"],
-    ))
-    mem.artifacts.save_organization_proposal(OrganizationProposal(
-        proposal_id="organization-test",
-        proposal_type="assign_claim",
-        explanation="Fixture organization proposal",
-        confidence=0.7,
-        created_at="2026-07-22T12:00:00",
-        claim_id="claim-test",
-        proposed_owner_entity_id="you",
-        proposed_section_key="preferences_working_style",
-    ))
-    mem.artifacts.save_entity_resolution_decision(EntityResolutionDecision(
-        decision_id="identity-review-test",
-        decision_type="entity_creation",
-        entity_id=None,
-        proposed_entity_type="project",
-        proposed_title="Tea Journal",
-        source_ids=["source-test"],
-        supporting_claim_ids=["claim-test"],
-        supporting_segment_ids=["source-test#seg-0001"],
-        confidence=0.6,
-        reason="A continuing Project and incidental context are both plausible.",
-        review_state="review_required",
-        dream_run_id="dream-test",
-        created_at="2026-07-22T12:00:00",
-        proposed_scope="independent",
-        proposed_page_state="provisional",
-    ))
-    mem.artifacts.save_identity_maturity_assessment(IdentityMaturityAssessment(
-        assessment_id="maturity-test",
-        dream_run_id="dream-test",
-        identity_key="I001",
-        source_node_ids=["N001"],
-        proposed_title="Tea Journal",
-        proposed_entity_type="project",
-        supporting_source_ids=["source-test"],
-        supporting_claim_ids=["claim-test"],
-        supporting_segment_ids=["source-test#seg-0001"],
-        proposal_admission="provisional",
-        proposal_basis={},
-        proposal_reason="Continuity is not established.",
-        proposal_confidence=0.6,
-        verifier_verdict="not_required",
-        verifier_reason="No explicit prior-history basis was proposed.",
-        effective_admission="review_required",
-        created_at="2026-07-22T12:00:00",
-    ))
+    mem.artifacts.save_reconsolidation_proposal(
+        ReconsolidationProposal(
+            proposal_id="recon-test",
+            incoming_claim_ids=["claim-test"],
+            target_claim_ids=["claim-old"],
+            proposed_relation="contradicts",
+            explanation="Fixture proposal",
+            confidence=0.5,
+            dream_run_id="dream-test",
+            created_at="2026-07-22T12:00:00",
+            affected_entity_ids=["you"],
+        )
+    )
+    mem.artifacts.save_organization_proposal(
+        OrganizationProposal(
+            proposal_id="organization-test",
+            proposal_type="assign_claim",
+            explanation="Fixture organization proposal",
+            confidence=0.7,
+            created_at="2026-07-22T12:00:00",
+            claim_id="claim-test",
+            proposed_owner_entity_id="you",
+            proposed_section_key="preferences_working_style",
+        )
+    )
+    mem.artifacts.save_entity_resolution_decision(
+        EntityResolutionDecision(
+            decision_id="identity-review-test",
+            decision_type="entity_creation",
+            entity_id=None,
+            proposed_entity_type="project",
+            proposed_title="Tea Journal",
+            source_ids=["source-test"],
+            supporting_claim_ids=["claim-test"],
+            supporting_segment_ids=["source-test#seg-0001"],
+            confidence=0.6,
+            reason="A continuing Project and incidental context are both plausible.",
+            review_state="review_required",
+            dream_run_id="dream-test",
+            created_at="2026-07-22T12:00:00",
+            proposed_scope="independent",
+            proposed_page_state="provisional",
+        )
+    )
     monkeypatch.setattr(memory_artifacts, "get_mem", lambda: mem)
     monkeypatch.setattr(memory_curation, "get_mem", lambda: mem)
-    monkeypatch.setattr(memory_artifacts, "load_meta", lambda: {
-        "chat-1": {
+    from mycelium.sessions import SessionStore
+
+    sessions = SessionStore(mem.db)
+    sessions.save(
+        "chat-1",
+        {
             "query": "Tea",
             "transcript": [{"role": "user", "content": "Remember tea."}],
             "captured_turns": 0,
-        }
-    })
+        },
+    )
+    monkeypatch.setattr(memory_artifacts, "get_sessions", lambda: sessions)
     return mem
 
 
@@ -263,16 +277,10 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
     proposals = await memory_artifacts.list_reconsolidation_proposals()
     organization_proposals = await memory_artifacts.list_organization_proposals()
     identity_decisions = await memory_artifacts.list_entity_resolution_decisions()
-    maturity_assessments = (
-        await memory_artifacts.list_identity_maturity_assessments("dream-test")
-    )
     files = await memory_artifacts.list_stored_memory_files()
     wiki_index = await memory_artifacts.get_stored_memory_file("index", "_index.md")
-
     assert overview["coverage"]["accounted_coverage"] == 1.0
     assert identity_decisions[0]["decision_id"] == "identity-review-test"
-    assert maturity_assessments[0]["assessment_id"] == "maturity-test"
-    assert maturity_assessments[0]["verifier_verdict"] == "not_required"
     assert overview["lifecycle"] == {
         "consolidated_facts": 1,
         "entities": 1,
@@ -285,57 +293,23 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
         "average_pages_per_claim": 1.0,
         "max_pages_per_claim": 1,
     }
-    assert overview["dream_audit"] == {
-        "runs": 0,
-        "claim_dispositions": {"pending": 2},
-    }
-    assert overview["integrity"] == {
-        "healthy": True,
-        "issues": {
-            "sources_without_episode": [],
-            "episodes_missing_source": [],
-            "episodes_missing_claims": [],
-            "claims_missing_episode": [],
-            "claims_missing_provenance": [],
-            "claims_missing_source": [],
-            "claims_missing_segments": [],
-            "placements_missing_claims": [],
-            "placements_missing_entities": [],
-            "facts_missing_claims": [],
-            "facts_missing_entities": [],
-            "placements_with_inactive_entities": [],
-            "facts_with_inactive_entities": [],
-            "active_references_with_inactive_entities": [],
-            "active_scope_with_inactive_entities": [],
-            "encounters_with_inactive_entities": [],
-            "live_identity_decisions_with_inactive_entities": [],
-            "maturity_assessments_with_inactive_entities": [],
-            "cohorts_with_inactive_entities": [],
-            "entities_missing_pages": [],
-                "sources_missing_raw_log": [],
-                "proposals_missing_claims": [],
-                    "pages_unclassified": [],
-                    "pages_with_repeated_claims": [],
-            },
-    }
-    assert chat_episodes == [{
-        "session_id": "chat-1",
-        "query": "Tea",
-        "transcript_turns": 1,
-        "captured_turns": 0,
-    }]
+    assert overview["dream_audit"] == {"runs": 0, "claim_dispositions": {"pending": 2}}
+    assert chat_episodes == [
+        {
+            "session_id": "chat-1",
+            "query": "Tea",
+            "transcript_turns": 1,
+            "captured_turns": 0,
+        }
+    ]
     assert sources[0]["segment_count"] == 1
     assert sources[0]["status"] == "active"
     assert source["segments"][0]["content"] == "I prefer tea."
-    assert source["segment_accounting"] == {
-        "source-test#seg-0001": "claimed",
-    }
+    assert source["segment_accounting"] == {"source-test#seg-0001": "claimed"}
     assert episode_summaries[0]["claim_count"] == 2
     assert "claim_ids" not in episode_summaries[0]
     assert episode["claim_ids"] == ["claim-test", "claim-old"]
-    assert {item["claim_id"] for item in claim_summaries} == {
-        "claim-old", "claim-test",
-    }
+    assert {item["claim_id"] for item in claim_summaries} == {"claim-old", "claim-test"}
     assert "provenance" not in claim_summaries[0]
     assert claim["provenance"][0]["segment_ids"] == ["source-test#seg-0001"]
     assert claim["facts"][0]["fact_id"] == "fact-tea-preference"
@@ -348,9 +322,9 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
     assert fact["claims"][0]["claim_id"] == "claim-test"
     assert fact["owner"]["entity_id"] == "you"
     assert entity["facts"][0]["fact_id"] == "fact-tea-preference"
-    assert entity["maturity_assessments"] == []
     assert {item["claim_id"] for item in entity["placements"]} == {
-        "claim-old", "claim-test",
+        "claim-old",
+        "claim-test",
     }
     assert proposals[0]["proposal_id"] == "recon-test"
     assert organization_proposals[0]["proposal_id"] == "organization-test"
@@ -361,12 +335,13 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
         "organization_proposals": 1,
         "reconsolidation_proposals": 1,
         "provisional_entities": 0,
-        "maturity_review_required": 1,
     }
     assert files["wiki_index"]["filename"] == "_index.md"
     assert "content" not in files["wiki_index"]
     assert files["wiki_index"]["size"] > 0
-    assert [item["filename"] for item in files["archived_pages"]] == ["archived-page.md"]
+    assert [item["filename"] for item in files["archived_pages"]] == [
+        "archived-page.md"
+    ]
     assert wiki_index["filename"] == "_index.md"
     assert wiki_index["content"]
 
@@ -393,7 +368,6 @@ async def test_reject_proposal_endpoint_applies_immediately(artifact_memory):
         "recon-test",
         ProposalReviewRequest(reviewer_note="Both statements remain relevant."),
     )
-
     assert response["proposal"]["status"] == "rejected"
     assert response["proposal"]["reviewer_note"] == "Both statements remain relevant."
     assert artifact_memory.artifacts.get_claim("claim-test").status == "active"
@@ -406,7 +380,6 @@ async def test_review_proposal_endpoint_returns_404(artifact_memory):
         await memory_curation.approve_reconsolidation_proposal(
             "recon-missing", ProposalReviewRequest()
         )
-
     assert exc_info.value.status_code == 404
 
 
@@ -415,7 +388,6 @@ async def test_correct_claim_endpoint_creates_replacement_artifacts(artifact_mem
     artifact_memory.consolidator.fact_resolver.resolve = AsyncMock(
         return_value=FactResolutionResult(deleted_fact_ids={"fact-tea-preference"})
     )
-
     response = await memory_curation.correct_claim(
         "claim-test",
         ClaimCorrectionRequest(
@@ -423,13 +395,13 @@ async def test_correct_claim_endpoint_creates_replacement_artifacts(artifact_mem
             reason="The original claim omitted the kind of tea.",
         ),
     )
-
     replacement = artifact_memory.artifacts.get_claim(response["claim_ids"][0])
     assert replacement.text == "The user prefers herbal tea."
     assert artifact_memory.artifacts.get_claim("claim-test").status == "superseded"
-    assert artifact_memory.artifacts.get_source(
-        response["source_ids"][0]
-    ).source_type == "manual_correction"
+    assert (
+        artifact_memory.artifacts.get_source(response["source_ids"][0]).source_type
+        == "manual_correction"
+    )
 
 
 @pytest.mark.asyncio
@@ -437,12 +409,10 @@ async def test_retract_source_endpoint_marks_source_and_claims(artifact_memory):
     artifact_memory.consolidator.fact_resolver.resolve = AsyncMock(
         return_value=FactResolutionResult(deleted_fact_ids={"fact-tea-preference"})
     )
-
     response = await memory_curation.retract_source(
         "source-test",
         SourceRetractionRequest(reason="The imported chat was not authentic."),
     )
-
     assert set(response["claim_ids"]) == {"claim-test", "claim-old"}
     assert artifact_memory.artifacts.get_source("source-test").status == "retracted"
     assert artifact_memory.artifacts.get_claim("claim-test").status == "retracted"
@@ -454,26 +424,26 @@ async def test_identity_review_approves_reopens_and_reroutes(
 ):
     reroute = AsyncMock(return_value={"failures": [], "pages_created": 0})
     monkeypatch.setattr(memory_curation, "run_consolidation", reroute)
-
     response = await memory_curation.review_identity_decision(
         "identity-review-test",
         "approve",
         IdentityReviewRequest(reviewer_note="This is a continuing project."),
     )
-
     decision = response["decision"]
     assert decision["review_state"] == "accepted"
     assert decision["entity_id"] == "project-tea-journal"
-    assert artifact_memory.artifacts.get_claim(
-        "claim-test"
-    ).dream_disposition == "pending"
+    assert (
+        artifact_memory.artifacts.get_claim("claim-test").dream_disposition == "pending"
+    )
     references = artifact_memory.artifacts.list_entity_references(
         claim_id="claim-test", status="active"
     )
     assert any(
-        item.role == "identity_subject"
-        and item.entity_id == "project-tea-journal"
-        and item.origin == "manual"
-        for item in references
+        (
+            item.role == "identity_subject"
+            and item.entity_id == "project-tea-journal"
+            and (item.origin == "manual")
+            for item in references
+        )
     )
     reroute.assert_awaited_once()

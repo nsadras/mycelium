@@ -1,10 +1,8 @@
 """Replayable filesystem commit for a completed Dream decision plan."""
 
 from __future__ import annotations
-
 from dataclasses import asdict
 from datetime import datetime
-
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimEntityReference,
@@ -17,7 +15,6 @@ from mycelium.artifacts import (
     EntityEncounter,
     EntityRecord,
     EntityResolutionDecision,
-    IdentityMaturityAssessment,
     NonWikiRetentionRecord,
     ReconsolidationProposal,
     ScopeCohort,
@@ -30,10 +27,7 @@ class DreamCommitService:
     """Persist a Dream write set before applying any part of it."""
 
     def __init__(
-        self,
-        artifacts: ArtifactStore,
-        logs: LogStore,
-        materializer: PageMaterializer,
+        self, artifacts: ArtifactStore, logs: LogStore, materializer: PageMaterializer
     ) -> None:
         self.artifacts = artifacts
         self.logs = logs
@@ -46,7 +40,6 @@ class DreamCommitService:
         materialization: MaterializationResult,
         retention_records: list[NonWikiRetentionRecord],
         entity_decisions: list[EntityResolutionDecision],
-        maturity_assessments: list[IdentityMaturityAssessment],
         entity_references: list[ClaimEntityReference],
         encounters: list[EntityEncounter],
         scope_decisions: list[ClaimScopeDecision],
@@ -62,13 +55,16 @@ class DreamCommitService:
             run_id=run_id,
             status="prepared",
             payload={
-                "entities": [asdict(item) for item in materialization.entities.values()],
-                "placements": [asdict(item) for item in materialization.placements.values()],
+                "entities": [
+                    asdict(item) for item in materialization.entities.values()
+                ],
+                "placements": [
+                    asdict(item) for item in materialization.placements.values()
+                ],
                 "facts": [asdict(item) for item in materialization.facts.values()],
                 "deleted_fact_ids": sorted(materialization.deleted_fact_ids),
                 "retention_records": [asdict(item) for item in retention_records],
                 "entity_decisions": [asdict(item) for item in entity_decisions],
-                "maturity_assessments": [asdict(item) for item in maturity_assessments],
                 "entity_references": [asdict(item) for item in entity_references],
                 "encounters": [asdict(item) for item in encounters],
                 "scope_decisions": [asdict(item) for item in scope_decisions],
@@ -92,51 +88,54 @@ class DreamCommitService:
         commit.updated_at = datetime.now().astimezone().isoformat()
         self.artifacts.save_dream_commit(commit)
         payload = commit.payload
+        canonical_committed = False
         try:
-            self._validate_payload(payload)
-            for raw in payload["entities"]:
-                self.artifacts.save_entity(EntityRecord(**raw))
-            for raw in payload["placements"]:
-                self.artifacts.save_placement(ClaimPlacement(**raw))
-            for fact_id in payload["deleted_fact_ids"]:
-                self.artifacts.delete_consolidated_fact(fact_id)
-            for raw in payload["facts"]:
-                self.artifacts.save_consolidated_fact(ConsolidatedFact(**raw))
-            for raw in payload["proposals"]:
-                self.artifacts.save_reconsolidation_proposal(
-                    ReconsolidationProposal(**raw)
+            with self.artifacts.db.transaction():
+                self._validate_payload(payload)
+                for raw in payload["entities"]:
+                    self.artifacts.save_entity(EntityRecord(**raw))
+                for raw in payload["placements"]:
+                    self.artifacts.save_placement(ClaimPlacement(**raw))
+                for fact_id in payload["deleted_fact_ids"]:
+                    self.artifacts.delete_consolidated_fact(fact_id)
+                for raw in payload["facts"]:
+                    self.artifacts.save_consolidated_fact(ConsolidatedFact(**raw))
+                for raw in payload["proposals"]:
+                    self.artifacts.save_reconsolidation_proposal(
+                        ReconsolidationProposal(**raw)
+                    )
+                for raw in payload["retention_records"]:
+                    self.artifacts.save_retention_record(NonWikiRetentionRecord(**raw))
+                for raw in payload["entity_decisions"]:
+                    self.artifacts.save_entity_resolution_decision(
+                        EntityResolutionDecision(**raw)
+                    )
+                for raw in payload["entity_references"]:
+                    self.artifacts.save_entity_reference(ClaimEntityReference(**raw))
+                for raw in payload["encounters"]:
+                    self.artifacts.save_encounter(EntityEncounter(**raw))
+                for raw in payload["scope_decisions"]:
+                    self.artifacts.save_scope_decision(ClaimScopeDecision(**raw))
+                self.artifacts.save_scope_cohort(ScopeCohort(**payload["cohort"]))
+                pages = self.materializer.regenerate(
+                    set(payload["affected_entity_ids"])
                 )
-            for raw in payload["retention_records"]:
-                self.artifacts.save_retention_record(NonWikiRetentionRecord(**raw))
-            for raw in payload["entity_decisions"]:
-                self.artifacts.save_entity_resolution_decision(
-                    EntityResolutionDecision(**raw)
-                )
-            for raw in payload["maturity_assessments"]:
-                self.artifacts.save_identity_maturity_assessment(
-                    IdentityMaturityAssessment(**raw)
-                )
-            for raw in payload["entity_references"]:
-                self.artifacts.save_entity_reference(ClaimEntityReference(**raw))
-            for raw in payload["encounters"]:
-                self.artifacts.save_encounter(EntityEncounter(**raw))
-            for raw in payload["scope_decisions"]:
-                self.artifacts.save_scope_decision(ClaimScopeDecision(**raw))
-            self.artifacts.save_scope_cohort(ScopeCohort(**payload["cohort"]))
-            pages = self.materializer.regenerate(set(payload["affected_entity_ids"]))
-            self.logs.mark_consolidated(payload["completed_log_entry_ids"])
-            audit_data = dict(payload["audit"])
-            audit_data["claim_decisions"] = [
-                DreamClaimDecision(**raw)
-                for raw in audit_data.get("claim_decisions", [])
-            ]
-            self.artifacts.persist_dream_audit(DreamRunAudit(**audit_data))
-            commit.status = "complete"
-            commit.error = None
-            commit.updated_at = datetime.now().astimezone().isoformat()
-            self.artifacts.save_dream_commit(commit)
+                self.logs.mark_consolidated(payload["completed_log_entry_ids"])
+                audit_data = dict(payload["audit"])
+                audit_data["claim_decisions"] = [
+                    DreamClaimDecision(**raw)
+                    for raw in audit_data.get("claim_decisions", [])
+                ]
+                self.artifacts.persist_dream_audit(DreamRunAudit(**audit_data))
+                commit.status = "complete"
+                commit.error = None
+                commit.updated_at = datetime.now().astimezone().isoformat()
+                self.artifacts.save_dream_commit(commit)
+            canonical_committed = True
+            self.artifacts.db.publish()
             return pages
         except Exception as exc:
+            commit.status = "complete" if canonical_committed else "failed"
             commit.error = f"{type(exc).__name__}: {exc}"
             commit.updated_at = datetime.now().astimezone().isoformat()
             self.artifacts.save_dream_commit(commit)
@@ -156,7 +155,6 @@ class DreamCommitService:
             "proposals": ReconsolidationProposal,
             "retention_records": NonWikiRetentionRecord,
             "entity_decisions": EntityResolutionDecision,
-            "maturity_assessments": IdentityMaturityAssessment,
             "entity_references": ClaimEntityReference,
             "encounters": EntityEncounter,
             "scope_decisions": ClaimScopeDecision,
@@ -170,16 +168,23 @@ class DreamCommitService:
             DreamClaimDecision(**raw) for raw in audit.get("claim_decisions", [])
         ]
         DreamRunAudit(**audit)
-        for key in ("deleted_fact_ids", "affected_entity_ids", "completed_log_entry_ids"):
+        for key in (
+            "deleted_fact_ids",
+            "affected_entity_ids",
+            "completed_log_entry_ids",
+        ):
             if not isinstance(payload[key], list) or any(
-                not isinstance(value, str) for value in payload[key]
+                (not isinstance(value, str) for value in payload[key])
             ):
                 raise ValueError(f"Dream commit {key} must be a list of IDs")
 
     def recover_pending(self) -> list[str]:
+        self.artifacts.db.publish()
         recovered = []
-        for commit in [*self.artifacts.list_dream_commits(status="prepared"),
-                       *self.artifacts.list_dream_commits(status="applying")]:
+        for commit in [
+            *self.artifacts.list_dream_commits(status="prepared"),
+            *self.artifacts.list_dream_commits(status="applying"),
+        ]:
             self.apply(commit)
             recovered.append(commit.commit_id)
         return recovered

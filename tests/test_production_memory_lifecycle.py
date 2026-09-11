@@ -1,3 +1,4 @@
+from tests.session_support import configure_sessions, read_sessions, seed_sessions
 import asyncio
 
 import pytest
@@ -33,25 +34,56 @@ class DeterministicProductionModel:
 
     async def call_structured(self, _system, user, output_type, **_kwargs):
         if "segments" in output_type.model_fields:
-            segment_ids = list(output_type.model_fields["segments"].annotation.model_fields)
+            segment_ids = list(
+                output_type.model_fields["segments"].annotation.model_fields
+            )
             segment_id = segment_ids[0]
             from tests.extraction_support import extraction_response
-            return extraction_response([{'text': 'The user will send the Cedar brief tomorrow.', 'claim_type': 'commitment', 'predicate': None, 'evidence_modality': 'speech', 'temporal_status': 'future', 'temporal_anchor_segment_id': segment_id, 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': [segment_id], 'facets': {'when': 'tomorrow', 'deadline': None, 'inference_basis': None}}], segment_ids[1:])
-        if _kwargs.get('debug_label') in {'memory-correction', 'dream-identity-plan', 'dream-claim-routing', 'dream-fact-synthesis', 'dream-fact-candidate-selection'}:
+
+            return extraction_response(
+                [
+                    {
+                        "text": "The user will send the Cedar brief tomorrow.",
+                        "claim_type": "commitment",
+                        "predicate": None,
+                        "evidence_modality": "speech",
+                        "temporal_status": "future",
+                        "temporal_anchor_segment_id": segment_id,
+                        "about": [{"entity": "user", "role": "subject"}],
+                        "segment_ids": [segment_id],
+                        "facets": {
+                            "when": "tomorrow",
+                            "deadline": None,
+                            "inference_basis": None,
+                        },
+                    }
+                ],
+                segment_ids[1:],
+            )
+        if _kwargs.get("debug_label") in {
+            "memory-correction",
+            "dream-identity-plan",
+            "dream-claim-routing",
+            "dream-fact-synthesis",
+            "dream-fact-candidate-selection",
+        }:
             from tests.lifecycle_support import lifecycle_response
+
             return lifecycle_response(_system, user, output_type, **_kwargs)
         decisions_model = output_type.model_fields["decisions"].annotation
-        return {"decisions": {
-            alias: {
-                "disposition": self.context_disposition,
-                "reason": (
-                    "The candidate directly supports the request."
-                    if self.context_disposition == "include"
-                    else "The candidate does not help answer this request."
-                ),
+        return {
+            "decisions": {
+                alias: {
+                    "disposition": self.context_disposition,
+                    "reason": (
+                        "The candidate directly supports the request."
+                        if self.context_disposition == "include"
+                        else "The candidate does not help answer this request."
+                    ),
+                }
+                for alias in decisions_model.model_fields
             }
-            for alias in decisions_model.model_fields
-        }}
+        }
 
 
 class ArtifactBackedTestIndex:
@@ -80,7 +112,7 @@ class ArtifactBackedTestIndex:
 async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     sessions_file = tmp_path / "sessions_meta.json"
     store_path = tmp_path / "store"
-    monkeypatch.setattr(runtime, "SESSIONS_FILE", sessions_file)
+    configure_sessions(monkeypatch, runtime, sessions_file)
     monkeypatch.setattr(runtime, "_meta_lock", None)
     monkeypatch.setattr(runtime, "_session_locks", {})
     memory = Mycelium(store_path=store_path)
@@ -102,7 +134,7 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
 
     created = await sessions.create_session(sessions.SessionCreate(query="Cedar brief"))
     session_id = created["id"]
-    meta = runtime.load_meta()
+    meta = read_sessions(runtime)
     record = runtime.ensure_session_record(meta[session_id], session_id)
     record["transcript"] = [
         {
@@ -112,21 +144,27 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
         }
         for index in range(12)
     ]
-    record["captured_turns"] = 6  # Older turns belong to the already captured history fixture.
-    runtime.save_meta(meta)
-    timestamps = iter([
-        "2026-08-31T23:55:00+00:00",
-        "2026-08-31T23:55:02+00:00",
-    ])
+    record["captured_turns"] = (
+        6  # Older turns belong to the already captured history fixture.
+    )
+    seed_sessions(runtime, meta)
+    timestamps = iter(
+        [
+            "2026-08-31T23:55:00+00:00",
+            "2026-08-31T23:55:02+00:00",
+        ]
+    )
     monkeypatch.setattr(sessions, "iso_now", lambda: next(timestamps))
 
     # Surface a chat failure even if generation never starts, and bound a real
     # deadlock. TaskGroup also cleans up sibling tasks when an assertion fails.
     async with asyncio.timeout(10), asyncio.TaskGroup() as tasks:
-        chat_task = tasks.create_task(sessions.chat(
-            session_id,
-            sessions.ChatRequest(message="I will send the Cedar brief tomorrow."),
-        ))
+        chat_task = tasks.create_task(
+            sessions.chat(
+                session_id,
+                sessions.ChatRequest(message="I will send the Cedar brief tomorrow."),
+            )
+        )
         await fake.generation_started.wait()
         fake.finish_generation.set()
         chat_result = await chat_task
@@ -134,14 +172,16 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     assert chat_result["response"] == "I will keep that deadline in mind."
     assert chat_result["capture_status"] == "captured"
     assert memory.artifacts.list_claims() == []
-    assert (await memory.retrieve_context(RetrievalRequest("Cedar"))).evidence.records == ()
+    assert (
+        await memory.retrieve_context(RetrievalRequest("Cedar"))
+    ).evidence.records == ()
     await memory.encoder.extract_pending()
     assert count_message_tokens(fake.messages[0]) <= memory.config.context_budget_tokens
     assert len(fake.messages[0]) < len(record["transcript"]) + 2
     assert fake.messages[0][-1]["content"].endswith(
         "I will send the Cedar brief tomorrow."
     )
-    saved = runtime.load_meta()[session_id]
+    saved = read_sessions(runtime)[session_id]
     assert saved["captured_turns"] == 7
     assert "active_episode" not in saved
 
@@ -158,16 +198,18 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     assert len(memory.artifacts.list_ingestion_operations()) == 1
 
     fake.context_disposition = "include"
-    recalled = await memory.retrieve_context(RetrievalRequest(
-        query="When will the Cedar brief be sent?"
-    ))
+    recalled = await memory.retrieve_context(
+        RetrievalRequest(query="When will the Cedar brief be sent?")
+    )
     assert recalled.page_references == ()
     assert claim.text in [record.statement for record in recalled.evidence.records]
 
     fake.context_disposition = "exclude"
-    assert (await memory.retrieve_context(RetrievalRequest(
-        query="What kind of cedar tree grows near the coast?"
-    ))).evidence.records == ()
+    assert (
+        await memory.retrieve_context(
+            RetrievalRequest(query="What kind of cedar tree grows near the coast?")
+        )
+    ).evidence.records == ()
 
     correction = await memory_curation.correct_claim(
         claim.claim_id,

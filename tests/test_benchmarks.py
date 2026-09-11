@@ -104,10 +104,14 @@ def test_locomo_session_parser_orders_sessions():
 
 
 def test_locomo_user_binding_is_explicit_and_does_not_rewrite_dialogue():
-    sample = {"conversation": {"session_1": [
-        {"dia_id": "D1:1", "speaker": "A", "text": "My plan."},
-        {"dia_id": "D1:2", "speaker": "B", "text": "Your plan."},
-    ]}}
+    sample = {
+        "conversation": {
+            "session_1": [
+                {"dia_id": "D1:1", "speaker": "A", "text": "My plan."},
+                {"dia_id": "D1:2", "speaker": "B", "text": "Your plan."},
+            ]
+        }
+    }
     external = iter_locomo_sessions(sample)[0][2]
     mapped = iter_locomo_sessions(sample, user_speaker="A")[0][2]
     assert [m.role for m in external] == ["participant", "participant"]
@@ -118,28 +122,77 @@ def test_locomo_user_binding_is_explicit_and_does_not_rewrite_dialogue():
 
 
 @pytest.mark.asyncio
-async def test_wiki_baseline_captures_and_builds_each_session_without_qa(tmp_path, monkeypatch):
+async def test_wiki_baseline_captures_and_builds_each_session_without_qa(
+    tmp_path, monkeypatch
+):
     from mycelium.models import DreamReport
+
     data = tmp_path / "input.json"
-    data.write_text(json.dumps([{"sample_id": "sample", "qa": [{"answer": "not source material"}], "conversation": {
-        "speaker_a": "A", "speaker_b": "B",
-        "session_1": [{"dia_id": "D1:1", "speaker": "A", "text": "First assertion."}],
-        "session_2": [{"dia_id": "D2:1", "speaker": "B", "text": "Second assertion."}],
-    }}]))
+    data.write_text(
+        json.dumps(
+            [
+                {
+                    "sample_id": "sample",
+                    "qa": [{"answer": "not source material"}],
+                    "conversation": {
+                        "speaker_a": "A",
+                        "speaker_b": "B",
+                        "session_1": [
+                            {
+                                "dia_id": "D1:1",
+                                "speaker": "A",
+                                "text": "First assertion.",
+                            }
+                        ],
+                        "session_2": [
+                            {
+                                "dia_id": "D2:1",
+                                "speaker": "B",
+                                "text": "Second assertion.",
+                            }
+                        ],
+                    },
+                }
+            ]
+        )
+    )
     build = AsyncMock(return_value=SimpleNamespace(report=DreamReport(0, 0, 0)))
     monkeypatch.setattr(Mycelium, "consolidate", build)
     directory = tmp_path / "run"
-    system = MyceliumMemorySystem(run_dir=directory, qa_client=AsyncMock(), memory_model="test", ollama_url="http://localhost:11434")
-    manifest = await run_locomo_wiki_baseline(data_path=data, output_dir=directory, system=system, user_speaker="A")
+    system = MyceliumMemorySystem(
+        run_dir=directory,
+        qa_client=AsyncMock(),
+        memory_model="test",
+        ollama_url="http://localhost:11434",
+    )
+    manifest = await run_locomo_wiki_baseline(
+        data_path=data, output_dir=directory, system=system, user_speaker="A"
+    )
     assert build.await_count == 2
     system.qa_client.answer.assert_not_awaited()
     assert manifest["session_ids"] == ["session_1", "session_2"]
     assert "qa" not in json.loads((directory / "input.json").read_text())
-    assert len(list((directory / "snapshots/session_1/artifacts/sources").glob("*.json"))) == 1
-    assert len(list((directory / "snapshots/session_2/artifacts/sources").glob("*.json"))) == 2
+    assert (
+        len(
+            ArtifactStore(
+                (directory / "snapshots/session_1/artifacts/sources").parent
+            ).list_sources()
+        )
+        == 1
+    )
+    assert (
+        len(
+            ArtifactStore(
+                (directory / "snapshots/session_2/artifacts/sources").parent
+            ).list_sources()
+        )
+        == 2
+    )
     assert (directory / "snapshots/initial/wiki/you.md").exists()
     with pytest.raises(ValueError, match="fresh"):
-        await run_locomo_wiki_baseline(data_path=data, output_dir=directory, system=system)
+        await run_locomo_wiki_baseline(
+            data_path=data, output_dir=directory, system=system
+        )
 
 
 def test_select_questions_per_category_preserves_source_indices():
@@ -208,7 +261,9 @@ async def test_run_locomo_writes_predictions(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_run_locomo_can_finalize_a_bounded_session_prefix(tmp_path, monkeypatch, capsys):
+async def test_run_locomo_can_finalize_a_bounded_session_prefix(
+    tmp_path, monkeypatch, capsys
+):
     data_path = tmp_path / "locomo.json"
     data_path.write_text(
         json.dumps(
@@ -686,7 +741,10 @@ async def test_mycelium_benchmark_preserves_structured_source_roles(
     await system.memorize(
         [
             BenchmarkMessage(
-                role="user", speaker="Caroline", content="Caroline researched adoption agencies.", message_id="D1:1"
+                role="user",
+                speaker="Caroline",
+                content="Caroline researched adoption agencies.",
+                message_id="D1:1",
             )
         ]
     )
@@ -703,7 +761,9 @@ async def test_mycelium_benchmark_preserves_structured_source_roles(
 async def test_frozen_store_is_copied_exactly_and_skips_memorization(tmp_path):
     fixture = tmp_path / "fixture"
     fixture.mkdir()
-    (fixture / "marker.txt").write_text("exact fixture", encoding="utf-8")
+    from mycelium.database import database
+
+    database(fixture).put("test-markers", "marker", {"text": "exact fixture"})
     system = MyceliumMemorySystem(
         run_dir=tmp_path / "run",
         qa_client=object(),
@@ -718,7 +778,11 @@ async def test_frozen_store_is_copied_exactly_and_skips_memorization(tmp_path):
     await system.memorize([BenchmarkMessage(role="user", content="must be skipped")])
 
     copied = tmp_path / "run" / "stores" / "case-1" / "marker.txt"
-    assert copied.read_text(encoding="utf-8") == "exact fixture"
+    from mycelium.database import database
+
+    assert (
+        database(copied.parent).get("test-markers", "marker")["text"] == "exact fixture"
+    )
     system.mem.ingest_source.assert_not_awaited()
     assert system.stats()["encoded_batches"] == 0
 
@@ -909,63 +973,158 @@ async def test_assignment_replay_preserves_routes_and_rebuilds_pages(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_locomo_resumes_each_durable_question_and_rejects_changed_settings(tmp_path):
+async def test_locomo_resumes_each_durable_question_and_rejects_changed_settings(
+    tmp_path,
+):
     samples = json.loads(Path("tests/fixtures/locomo_tiny.json").read_text())
     samples[0]["qa"] *= 3
     data = tmp_path / "data.json"
     data.write_text(json.dumps(samples))
     output = tmp_path / "run"
+
     class Interrupted(FakeMemorySystem):
         calls = 0
+
         async def answer(self, question, metadata=None):
             self.calls += 1
             if self.calls == 2:
                 raise TimeoutError("interrupted inference")
             return await super().answer(question, metadata)
+
     with pytest.raises(TimeoutError):
-        await run_locomo(data_path=data, output_dir=output, system=Interrupted(), prediction_key="answer")
+        await run_locomo(
+            data_path=data,
+            output_dir=output,
+            system=Interrupted(),
+            prediction_key="answer",
+        )
     assert len(list((output / "questions").glob("*.json"))) == 1
     system = FakeMemorySystem()
     system.answer = AsyncMock(wraps=system.answer)
-    result = await run_locomo(data_path=data, output_dir=output, system=system, prediction_key="answer")
+    result = await run_locomo(
+        data_path=data, output_dir=output, system=system, prediction_key="answer"
+    )
     assert result["count"] == 3
     assert system.answer.await_count == 2
-    assert json.loads((output / "run_manifest.json").read_text())["status"] == "complete"
+    assert (
+        json.loads((output / "run_manifest.json").read_text())["status"] == "complete"
+    )
     with pytest.raises(ValueError, match="settings differ"):
-        await run_locomo(data_path=data, output_dir=output, system=system, prediction_key="answer", max_questions=1)
+        await run_locomo(
+            data_path=data,
+            output_dir=output,
+            system=system,
+            prediction_key="answer",
+            max_questions=1,
+        )
 
 
 @pytest.mark.asyncio
-async def test_session_snapshots_preserve_history_and_resume_qa(tmp_path, monkeypatch, capsys):
+async def test_session_snapshots_preserve_history_and_resume_qa(
+    tmp_path, monkeypatch, capsys
+):
     from mycelium.models import DreamReport
 
     data = tmp_path / "input.json"
-    data.write_text(json.dumps([{
-        "sample_id": "snapshot-case",
-        "conversation": {
-            "session_1": [{"dia_id": "D1:1", "speaker": "A", "text": "First assertion."}],
-            "session_2": [{"dia_id": "D2:1", "speaker": "B", "text": "Second assertion."}],
-        },
-        "qa": [{"question": "Which assertion?", "answer": "First", "category": 1}],
-    }]))
-    monkeypatch.setattr(Mycelium, "consolidate", AsyncMock(return_value=SimpleNamespace(report=DreamReport(0, 0, 0))))
+    data.write_text(
+        json.dumps(
+            [
+                {
+                    "sample_id": "snapshot-case",
+                    "conversation": {
+                        "session_1": [
+                            {
+                                "dia_id": "D1:1",
+                                "speaker": "A",
+                                "text": "First assertion.",
+                            }
+                        ],
+                        "session_2": [
+                            {
+                                "dia_id": "D2:1",
+                                "speaker": "B",
+                                "text": "Second assertion.",
+                            }
+                        ],
+                    },
+                    "qa": [
+                        {
+                            "question": "Which assertion?",
+                            "answer": "First",
+                            "category": 1,
+                        }
+                    ],
+                }
+            ]
+        )
+    )
+    monkeypatch.setattr(
+        Mycelium,
+        "consolidate",
+        AsyncMock(return_value=SimpleNamespace(report=DreamReport(0, 0, 0))),
+    )
     output = tmp_path / "run"
-    system = MyceliumMemorySystem(run_dir=output, qa_client=AsyncMock(model="test"), memory_model="test", ollama_url="http://localhost:11434")
+    system = MyceliumMemorySystem(
+        run_dir=output,
+        qa_client=AsyncMock(model="test"),
+        memory_model="test",
+        ollama_url="http://localhost:11434",
+    )
     system.answer = AsyncMock(side_effect=RuntimeError("QA interrupted"))
-    args = dict(data_path=data, output_dir=output, system=system,
-                prediction_key="answer", snapshot_sessions=True)
+    args = dict(
+        data_path=data,
+        output_dir=output,
+        system=system,
+        prediction_key="answer",
+        snapshot_sessions=True,
+    )
     with pytest.raises(RuntimeError, match="QA interrupted"):
         await run_locomo(**args)
     snapshots = output / "snapshots/snapshot-case"
-    assert len(list((snapshots / "session_1/artifacts/sources").glob("*.json"))) == 1
-    assert len(list((snapshots / "session_2/artifacts/sources").glob("*.json"))) == 2
-    before = {p.relative_to(snapshots): p.read_bytes() for p in snapshots.rglob("*") if p.is_file()}
-    system.answer = AsyncMock(return_value=BenchmarkAnswer(output="First", input_len=1, output_len=1, memory_construction_time=0, query_time_len=0))
+    assert (
+        len(
+            ArtifactStore(
+                (snapshots / "session_1/artifacts/sources").parent
+            ).list_sources()
+        )
+        == 1
+    )
+    assert (
+        len(
+            ArtifactStore(
+                (snapshots / "session_2/artifacts/sources").parent
+            ).list_sources()
+        )
+        == 2
+    )
+    before = {
+        p.relative_to(snapshots): p.read_bytes()
+        for p in snapshots.rglob("*")
+        if p.is_file()
+    }
+    system.answer = AsyncMock(
+        return_value=BenchmarkAnswer(
+            output="First",
+            input_len=1,
+            output_len=1,
+            memory_construction_time=0,
+            query_time_len=0,
+        )
+    )
     summary = await run_locomo(**args)
     assert summary["count"] == 1
     system.answer.assert_awaited_once()
-    assert before == {p.relative_to(snapshots): p.read_bytes() for p in snapshots.rglob("*") if p.is_file()}
-    assert json.loads((output / "run_manifest.json").read_text())["settings"]["snapshot_sessions"] is True
+    assert before == {
+        p.relative_to(snapshots): p.read_bytes()
+        for p in snapshots.rglob("*")
+        if p.is_file()
+    }
+    assert (
+        json.loads((output / "run_manifest.json").read_text())["settings"][
+            "snapshot_sessions"
+        ]
+        is True
+    )
     progress = capsys.readouterr().out
     assert "memorize session 2/2" in progress and "answer question 1/1" in progress
     assert "snapshot:" in progress
@@ -974,32 +1133,53 @@ async def test_session_snapshots_preserve_history_and_resume_qa(tmp_path, monkey
 @pytest.mark.asyncio
 async def test_snapshots_reject_systems_without_a_store(tmp_path):
     with pytest.raises(ValueError, match="Mycelium-backed"):
-        await run_locomo(data_path=Path("tests/fixtures/locomo_tiny.json"), output_dir=tmp_path,
-                         system=FakeMemorySystem(), prediction_key="answer", snapshot_sessions=True)
+        await run_locomo(
+            data_path=Path("tests/fixtures/locomo_tiny.json"),
+            output_dir=tmp_path,
+            system=FakeMemorySystem(),
+            prediction_key="answer",
+            snapshot_sessions=True,
+        )
 
 
 @pytest.mark.asyncio
 async def test_interrupted_snapshot_is_not_published(tmp_path, monkeypatch):
-    import shutil
     from mycelium.models import DreamReport
 
     output = tmp_path / "run"
-    monkeypatch.setattr(Mycelium, "consolidate", AsyncMock(return_value=SimpleNamespace(report=DreamReport(0, 0, 0))))
-    system = MyceliumMemorySystem(run_dir=output, qa_client=AsyncMock(model="test"), memory_model="test", ollama_url="http://localhost:11434")
-    copytree = shutil.copytree
+    monkeypatch.setattr(
+        Mycelium,
+        "consolidate",
+        AsyncMock(return_value=SimpleNamespace(report=DreamReport(0, 0, 0))),
+    )
+    system = MyceliumMemorySystem(
+        run_dir=output,
+        qa_client=AsyncMock(model="test"),
+        memory_model="test",
+        ollama_url="http://localhost:11434",
+    )
+    from mycelium.snapshots import snapshot_store
+
+    copytree = snapshot_store
 
     def interrupted(source, target, *args, **kwargs):
         Path(target).mkdir()
         (Path(target) / "partial").write_text("incomplete")
         raise OSError("copy interrupted")
 
-    monkeypatch.setattr("benchmarks.suites.locomo.shutil.copytree", interrupted)
-    args = dict(data_path=Path("tests/fixtures/locomo_tiny.json"), output_dir=output,
-                system=system, prediction_key="answer", snapshot_sessions=True, max_questions=0)
+    monkeypatch.setattr("benchmarks.suites.locomo.snapshot_store", interrupted)
+    args = dict(
+        data_path=Path("tests/fixtures/locomo_tiny.json"),
+        output_dir=output,
+        system=system,
+        prediction_key="answer",
+        snapshot_sessions=True,
+        max_questions=0,
+    )
     with pytest.raises(OSError, match="copy interrupted"):
         await run_locomo(**args)
     snapshot_root = output / "snapshots" / system.case_id
     assert list(snapshot_root.iterdir()) == []
-    monkeypatch.setattr("benchmarks.suites.locomo.shutil.copytree", copytree)
+    monkeypatch.setattr("benchmarks.suites.locomo.snapshot_store", copytree)
     await run_locomo(**args)
-    assert (snapshot_root / "session_1/artifacts").is_dir()
+    assert (snapshot_root / "session_1/memory.sqlite3").is_file()

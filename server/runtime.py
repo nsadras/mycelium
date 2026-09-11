@@ -4,9 +4,7 @@ import asyncio
 import json
 import os
 import shutil
-import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import mycelium
@@ -16,7 +14,6 @@ from mycelium.operations import ConsolidationRequest, SourceInput
 from mycelium.memory_tools import MEMORY_TOOL_NAMES
 from engram import EngramConfig, EngramService, EngramStore
 
-SESSIONS_FILE = Path("mycelium_store/sessions_meta.json")
 
 _mem: mycelium.Mycelium | None = None
 _engram: EngramService | None = None
@@ -36,7 +33,10 @@ def iso_now() -> str:
 def get_mem() -> mycelium.Mycelium:
     global _mem
     if _mem is None:
-        _mem = mycelium.Mycelium(store_path="./mycelium_store", config_path="mycelium.toml")
+        _mem = mycelium.Mycelium(
+            store_path=os.environ.get("MYCELIUM_STORE", "./mycelium_store"),
+            config_path="mycelium.toml",
+        )
     return _mem
 
 
@@ -50,32 +50,10 @@ def get_engram() -> EngramService:
     return _engram
 
 
-def load_meta() -> dict[str, Any]:
-    if not SESSIONS_FILE.exists():
-        return {}
-    with open(SESSIONS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+def get_sessions():
+    from mycelium.sessions import SessionStore
 
-
-def save_meta(meta: dict[str, Any]) -> None:
-    SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=SESSIONS_FILE.parent,
-        prefix=f".{SESSIONS_FILE.name}.",
-        suffix=".tmp",
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(meta, handle, indent=2)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, SESSIONS_FILE)
-    except Exception:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        raise
+    return SessionStore(get_mem().db)
 
 
 def get_meta_lock() -> asyncio.Lock:
@@ -98,7 +76,9 @@ def ensure_session_record(record: dict[str, Any], session_id: str) -> dict[str, 
     record.setdefault("transcript", [])
     record.setdefault("captured_turns", 0)
     if any(not str(m.get("timestamp") or "").strip() for m in record["transcript"]):
-        raise ValueError(f"Session {session_id} contains timestamp-free transcript messages")
+        raise ValueError(
+            f"Session {session_id} contains timestamp-free transcript messages"
+        )
     return record
 
 
@@ -135,6 +115,7 @@ def append_turn(
     if memory_workspace is not None:
         assistant_record["memory_workspace"] = memory_workspace
     record["transcript"].append(assistant_record)
+
 
 def _format_tool_observation_content(
     *,
@@ -192,32 +173,36 @@ async def append_tool_event_logs(
         )
         tool_name = str(tool_event.get("tool_name") or "unknown")
         result = str(tool_event.get("result") or "").strip()
-        ingestion = await mem.ingest_source(SourceInput(
-            transcript=content,
-            session_id=episode_id,
-            source_type="tool_observation",
-            occurred_at=occurred_at,
-            metadata={
-                "chat_session_id": session_id,
-                "episode_id": episode_id,
-                "turn_count": turn_count,
-                "tool_name": tool_name,
-                "arguments": dict(tool_event.get("arguments") or {}),
-                "failed": bool(tool_event.get("failed")),
-            },
-            segments=(SourceSegment(
-                segment_id="",
-                index=0,
-                speaker=tool_name,
-                role="tool",
-                content=result or "Tool call produced no result.",
-                timestamp=occurred_at,
-            ),),
-            idempotency_key=(
-                f"tool-observation:{session_id}:{episode_id}:"
-                f"{turn_count}:{event_index}"
-            ),
-        ))
+        ingestion = await mem.ingest_source(
+            SourceInput(
+                transcript=content,
+                session_id=episode_id,
+                source_type="tool_observation",
+                occurred_at=occurred_at,
+                metadata={
+                    "chat_session_id": session_id,
+                    "episode_id": episode_id,
+                    "turn_count": turn_count,
+                    "tool_name": tool_name,
+                    "arguments": dict(tool_event.get("arguments") or {}),
+                    "failed": bool(tool_event.get("failed")),
+                },
+                segments=(
+                    SourceSegment(
+                        segment_id="",
+                        index=0,
+                        speaker=tool_name,
+                        role="tool",
+                        content=result or "Tool call produced no result.",
+                        timestamp=occurred_at,
+                    ),
+                ),
+                idempotency_key=(
+                    f"tool-observation:{session_id}:{episode_id}:"
+                    f"{turn_count}:{event_index}"
+                ),
+            )
+        )
         created_entries.extend(ingestion.log_entries)
 
     return created_entries
@@ -241,40 +226,56 @@ async def capture_saved_turns(session_id: str) -> None:
     all source writes for the turn succeed. Stable keys make replay safe.
     """
     async with get_meta_lock():
-        meta = load_meta()
+        meta = {session_id: get_sessions().get(session_id)}
         record = ensure_session_record(meta[session_id], session_id)
         transcript = list(record["transcript"])
         captured = int(record["captured_turns"])
     completed_turns = _find_completed_turns(transcript)
     for turn_index in range(captured, len(completed_turns)):
         start_idx, asst_idx = completed_turns[turn_index]
-        messages = transcript[start_idx:asst_idx + 1]
+        messages = transcript[start_idx : asst_idx + 1]
         turn_id = f"{session_id}-turn-{turn_index + 1}"
         previous_ids = [
-            m["source_id"] for m in transcript[max(0, start_idx - 8):start_idx]
+            m["source_id"]
+            for m in transcript[max(0, start_idx - 8) : start_idx]
             if m.get("source_id")
         ]
-        ingestion = await get_mem().ingest_source(SourceInput(
-            transcript="\n".join(f"[{m['timestamp']}] {m['role'].upper()}: {m['content']}" for m in messages),
-            session_id=session_id,
-            occurred_at=messages[0]["timestamp"],
-            segments=tuple(SourceSegment(
-                segment_id="", index=i, role=m["role"], speaker=m["role"],
-                content=m["content"], timestamp=m["timestamp"],
-            ) for i, m in enumerate(messages)),
-            metadata={"turn_index": turn_index, "context_source_ids": previous_ids},
-            idempotency_key=f"chat-turn:{turn_id}",
-        ))
+        ingestion = await get_mem().ingest_source(
+            SourceInput(
+                transcript="\n".join(
+                    f"[{m['timestamp']}] {m['role'].upper()}: {m['content']}"
+                    for m in messages
+                ),
+                session_id=session_id,
+                occurred_at=messages[0]["timestamp"],
+                segments=tuple(
+                    SourceSegment(
+                        segment_id="",
+                        index=i,
+                        role=m["role"],
+                        speaker=m["role"],
+                        content=m["content"],
+                        timestamp=m["timestamp"],
+                    )
+                    for i, m in enumerate(messages)
+                ),
+                metadata={"turn_index": turn_index, "context_source_ids": previous_ids},
+                idempotency_key=f"chat-turn:{turn_id}",
+            )
+        )
         await append_tool_event_logs(
-            session_id, turn_id, messages[-1].get("tool_events", []),
-            turn_index + 1, messages[-1]["timestamp"],
+            session_id,
+            turn_id,
+            messages[-1].get("tool_events", []),
+            turn_index + 1,
+            messages[-1]["timestamp"],
         )
         async with get_meta_lock():
-            meta = load_meta()
+            meta = {session_id: get_sessions().get(session_id)}
             record = meta[session_id]
             record["captured_turns"] = turn_index + 1
             record["transcript"][asst_idx]["source_id"] = ingestion.source_ids[0]
-            save_meta(meta)
+            get_sessions().save(session_id, meta[session_id])
         transcript[asst_idx]["source_id"] = ingestion.source_ids[0]
 
 
@@ -299,77 +300,73 @@ def _dream_report_response(report) -> dict[str, Any]:
 
 async def run_consolidation() -> dict[str, Any]:
     async with _get_dream_lock():
-        for session_id in list(load_meta()):
+        for session_id in get_sessions().summaries():
             async with get_session_lock(session_id):
                 await capture_saved_turns(session_id)
-        result = await get_mem().consolidate(ConsolidationRequest(
-            include_deferred=True
-        ))
+        result = await get_mem().consolidate(
+            ConsolidationRequest(include_deferred=True)
+        )
     return _dream_report_response(result.report)
 
 
 def clear_memory_store() -> dict[str, int]:
     mem = get_mem()
     counts = {
-        "wiki_pages_deleted": 0,
-        "archived_pages_deleted": 0,
-        "logs_deleted": 0,
-        "artifact_sources_deleted": 0,
-        "artifact_episodes_deleted": 0,
-        "artifact_claims_deleted": 0,
+        "wiki_pages_deleted": len(mem.wiki.list_all()),
+        "archived_pages_deleted": len(mem.db.ids("wiki-archive")),
+        "logs_deleted": len(
+            {entry.entry_id.split("#")[0] for entry in mem.log_store.list_entries(None)}
+        ),
         "sessions_reset": 0,
     }
-
-    wiki_dir = mem.store_path / "wiki"
-    archive_dir = wiki_dir / "_archive"
-    logs_dir = mem.store_path / "logs"
-
-    for path in wiki_dir.glob("*.md"):
-        if path.name == "_index.md":
-            continue
-        path.unlink()
-        counts["wiki_pages_deleted"] += 1
-
-    for path in archive_dir.glob("*.md"):
-        path.unlink()
-        counts["archived_pages_deleted"] += 1
-
-    for path in logs_dir.glob("*.md"):
-        path.unlink()
-        counts["logs_deleted"] += 1
-
-    artifact_counts = mem.artifacts.clear()
-    counts["artifact_sources_deleted"] = artifact_counts["sources"]
-    counts["artifact_episodes_deleted"] = artifact_counts["episodes"]
-    counts["artifact_claims_deleted"] = artifact_counts["claims"]
-    counts["artifact_dream_runs_deleted"] = artifact_counts["dream_runs"]
-    counts["artifact_reconsolidation_proposals_deleted"] = artifact_counts[
-        "reconsolidation_proposals"
-    ]
-
+    with mem.db.transaction():
+        mem.db.connection.execute("DELETE FROM publication")
+        for kind, folder in (("wiki", "wiki"), ("wiki-archive", "wiki/_archive")):
+            for identifier in mem.db.ids(kind):
+                mem.db.delete(kind, identifier)
+                mem.db.project(f"{folder}/{identifier}.md", None)
+        dates = {
+            entry.entry_id.split("#")[0] for entry in mem.log_store.list_entries(None)
+        }
+        for identifier in mem.db.ids("logs"):
+            mem.db.delete("logs", identifier)
+        for date in dates:
+            mem.db.project(f"logs/{date}.md", None)
+        artifact_counts = mem.artifacts.clear()
+        for key in (
+            "sources",
+            "episodes",
+            "claims",
+            "dream_runs",
+            "reconsolidation_proposals",
+        ):
+            counts[f"artifact_{key}_deleted"] = artifact_counts[key]
+        for session_id in get_sessions().summaries():
+            record = get_sessions().get(session_id)
+            record["captured_turns"] = 0
+            for message in record["transcript"]:
+                message.pop("source_id", None)
+            get_sessions().save(session_id, record)
+            counts["sessions_reset"] += 1
+        mem.wiki.save_index("# Wiki Index\n\n_last updated: never_\n\n## Pages\n")
+        mem._ensure_user_profile()
+    mem.retriever.claim_index._revision = None
+    mem.retriever.claim_index._has_records = False
     indexes_dir = mem.store_path / "indexes"
     if indexes_dir.exists():
-        shutil.rmtree(indexes_dir, ignore_errors=True)
-    if hasattr(mem, "retriever") and hasattr(mem.retriever, "claim_index"):
-        mem.retriever.claim_index._revision = None
-        mem.retriever.claim_index._has_records = False
-
-    mem.wiki.save_index("# Wiki Index\n\n_last updated: never_\n\n## Pages\n")
-    meta = load_meta()
-    for session_id, record in meta.items():
-        ensure_session_record(record, session_id)
-        record["captured_turns"] = 0
-        for message in record["transcript"]:
-            message.pop("source_id", None)
-        counts["sessions_reset"] += 1
-    save_meta(meta)
-    mem._ensure_user_profile()
+        shutil.rmtree(indexes_dir)
+    mem.db.publish()
     return counts
 
 
 def rebuild_wiki_store() -> dict[str, int]:
     """Recreate reading surfaces while preserving evidence and human corrections."""
     mem = get_mem()
-    result = mem.consolidator.materializer.regenerate_all()
-    return {"pages_updated": len(result.updated_slugs),
-            "pages_created": len(result.created_slugs), "pages_deleted": len(result.deleted_slugs)}
+    with mem.db.transaction():
+        result = mem.consolidator.materializer.regenerate_all()
+    mem.db.publish()
+    return {
+        "pages_updated": len(result.updated_slugs),
+        "pages_created": len(result.created_slugs),
+        "pages_deleted": len(result.deleted_slugs),
+    }

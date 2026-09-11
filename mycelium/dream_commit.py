@@ -93,6 +93,7 @@ class DreamCommitService:
         self.artifacts.save_dream_commit(commit)
         payload = commit.payload
         try:
+            self._validate_payload(payload)
             for raw in payload["entities"]:
                 self.artifacts.save_entity(EntityRecord(**raw))
             for raw in payload["placements"]:
@@ -140,6 +141,40 @@ class DreamCommitService:
             commit.updated_at = datetime.now().astimezone().isoformat()
             self.artifacts.save_dream_commit(commit)
             raise
+
+    @staticmethod
+    def _validate_payload(payload: dict) -> None:
+        """Validate the entire saved write set before mutating canonical artifacts.
+
+        Invalid journals remain pending for repair; neither validation errors nor
+        interrupted writes permit newer builds to bypass an unfinished commit.
+        """
+        record_types = {
+            "entities": EntityRecord,
+            "placements": ClaimPlacement,
+            "facts": ConsolidatedFact,
+            "proposals": ReconsolidationProposal,
+            "retention_records": NonWikiRetentionRecord,
+            "entity_decisions": EntityResolutionDecision,
+            "maturity_assessments": IdentityMaturityAssessment,
+            "entity_references": ClaimEntityReference,
+            "encounters": EntityEncounter,
+            "scope_decisions": ClaimScopeDecision,
+        }
+        for key, record_type in record_types.items():
+            for raw in payload[key]:
+                record_type(**raw)
+        ScopeCohort(**payload["cohort"])
+        audit = dict(payload["audit"])
+        audit["claim_decisions"] = [
+            DreamClaimDecision(**raw) for raw in audit.get("claim_decisions", [])
+        ]
+        DreamRunAudit(**audit)
+        for key in ("deleted_fact_ids", "affected_entity_ids", "completed_log_entry_ids"):
+            if not isinstance(payload[key], list) or any(
+                not isinstance(value, str) for value in payload[key]
+            ):
+                raise ValueError(f"Dream commit {key} must be a list of IDs")
 
     def recover_pending(self) -> list[str]:
         recovered = []

@@ -176,4 +176,4 @@ page organization, preserved uncertainty/history, and retrieval of concrete deta
 Check diagnostics for failed/retried calls, stage timings, and output tokens.
 Claim membership alone does not establish semantic completeness or correct synthesis.
 Compare matched inputs/settings; partial runs and transfer scenarios are diagnostics,
-not interchangeable aggregate scores. See [iteration protocol](../BENCHMARK_ITERATION.md).
+not interchangeable aggregate scores. See [iteration protocol](../AGENT_PROMPTS/BENCHMARK_ITERATION.md).

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -222,6 +223,17 @@ async def append_tool_event_logs(
     return created_entries
 
 
+def _find_completed_turns(transcript: list[dict[str, Any]]) -> list[tuple[int, int]]:
+    """Return list of (start_idx, assistant_idx) slices for completed turns."""
+    turns = []
+    start_idx = 0
+    for idx, msg in enumerate(transcript):
+        if msg.get("role") == "assistant":
+            turns.append((start_idx, idx))
+            start_idx = idx + 1
+    return turns
+
+
 async def capture_saved_turns(session_id: str) -> None:
     """Capture uncaptured completed turns. Caller holds this session's lock.
 
@@ -233,17 +245,17 @@ async def capture_saved_turns(session_id: str) -> None:
         record = ensure_session_record(meta[session_id], session_id)
         transcript = list(record["transcript"])
         captured = int(record["captured_turns"])
-    for turn_index in range(captured, len(transcript) // 2):
-        messages = transcript[turn_index * 2:turn_index * 2 + 2]
-        if [m["role"] for m in messages] != ["user", "assistant"]:
-            raise ValueError("Captured chat turns must contain a user message and assistant reply")
+    completed_turns = _find_completed_turns(transcript)
+    for turn_index in range(captured, len(completed_turns)):
+        start_idx, asst_idx = completed_turns[turn_index]
+        messages = transcript[start_idx:asst_idx + 1]
         turn_id = f"{session_id}-turn-{turn_index + 1}"
         previous_ids = [
-            m["source_id"] for m in transcript[max(0, turn_index * 2 - 8):turn_index * 2]
+            m["source_id"] for m in transcript[max(0, start_idx - 8):start_idx]
             if m.get("source_id")
         ]
         ingestion = await get_mem().ingest_source(SourceInput(
-            transcript="\\n".join(f"[{m['timestamp']}] {m['role'].upper()}: {m['content']}" for m in messages),
+            transcript="\n".join(f"[{m['timestamp']}] {m['role'].upper()}: {m['content']}" for m in messages),
             session_id=session_id,
             occurred_at=messages[0]["timestamp"],
             segments=tuple(SourceSegment(
@@ -254,16 +266,16 @@ async def capture_saved_turns(session_id: str) -> None:
             idempotency_key=f"chat-turn:{turn_id}",
         ))
         await append_tool_event_logs(
-            session_id, turn_id, messages[1].get("tool_events", []),
-            turn_index + 1, messages[1]["timestamp"],
+            session_id, turn_id, messages[-1].get("tool_events", []),
+            turn_index + 1, messages[-1]["timestamp"],
         )
         async with get_meta_lock():
             meta = load_meta()
             record = meta[session_id]
             record["captured_turns"] = turn_index + 1
-            record["transcript"][turn_index * 2 + 1]["source_id"] = ingestion.source_ids[0]
+            record["transcript"][asst_idx]["source_id"] = ingestion.source_ids[0]
             save_meta(meta)
-        transcript[turn_index * 2 + 1]["source_id"] = ingestion.source_ids[0]
+        transcript[asst_idx]["source_id"] = ingestion.source_ids[0]
 
 
 def _get_dream_lock() -> asyncio.Lock:
@@ -334,6 +346,13 @@ def clear_memory_store() -> dict[str, int]:
     counts["artifact_reconsolidation_proposals_deleted"] = artifact_counts[
         "reconsolidation_proposals"
     ]
+
+    indexes_dir = mem.store_path / "indexes"
+    if indexes_dir.exists():
+        shutil.rmtree(indexes_dir, ignore_errors=True)
+    if hasattr(mem, "retriever") and hasattr(mem.retriever, "claim_index"):
+        mem.retriever.claim_index._revision = None
+        mem.retriever.claim_index._has_records = False
 
     mem.wiki.save_index("# Wiki Index\n\n_last updated: never_\n\n## Pages\n")
     meta = load_meta()

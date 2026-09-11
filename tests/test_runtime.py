@@ -307,3 +307,51 @@ async def test_concurrent_chats_in_different_sessions_preserve_both(
         "Second",
         "Reply to Second",
     ]
+
+
+@pytest.mark.asyncio
+async def test_capture_saved_turns_handles_consecutive_user_messages(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime, "SESSIONS_FILE", tmp_path / "sessions.json")
+    encoder = Encoder(AsyncMock(), LogStore(tmp_path / "logs"), Config.defaults(), ArtifactStore(tmp_path / "artifacts"))
+    mem = SimpleNamespace(ingest_source=encoder.ingest_source)
+    monkeypatch.setattr(runtime, "get_mem", lambda: mem)
+
+    meta = {
+        "chat-consecutive": {
+            "query": "Consecutive",
+            "transcript": [
+                {"role": "user", "content": "Message 1", "timestamp": "2026-08-26T23:59:00+00:00"},
+                {"role": "user", "content": "Message 2", "timestamp": "2026-08-26T23:59:01+00:00"},
+                {"role": "assistant", "content": "Got both.", "timestamp": "2026-08-27T08:00:01+00:00"},
+            ],
+            "captured_turns": 0,
+        }
+    }
+    runtime.save_meta(meta)
+
+    await runtime.capture_saved_turns("chat-consecutive")
+
+    sources = encoder.artifacts.list_sources()
+    assert len(sources) == 1
+    # Check that transcript uses actual newlines rather than literal \n
+    raw_log = encoder.log_store.get(sources[0].raw_log_entry_id)
+    assert "\\n" not in raw_log.content
+    assert "\n" in raw_log.content
+    assert len(sources[0].segments) == 3
+    assert runtime.load_meta()["chat-consecutive"]["captured_turns"] == 1
+
+
+def test_clear_memory_store_removes_lancedb_indexes(tmp_path, monkeypatch):
+    from mycelium.core import Mycelium
+    myc = Mycelium(store_path=tmp_path / "store")
+    indexes_dir = myc.store_path / "indexes" / "lancedb"
+    indexes_dir.mkdir(parents=True, exist_ok=True)
+    (indexes_dir / "test.txt").write_text("vector data")
+
+    monkeypatch.setattr(runtime, "get_mem", lambda: myc)
+    monkeypatch.setattr(runtime, "SESSIONS_FILE", tmp_path / "sessions_meta.json")
+    runtime.save_meta({"s1": {"query": "Q", "transcript": []}})
+
+    runtime.clear_memory_store()
+    assert not indexes_dir.exists()
+    assert myc.retriever.claim_index._revision is None

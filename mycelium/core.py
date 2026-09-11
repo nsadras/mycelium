@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Optional, Literal, cast
+import hashlib
 import uuid
 from contextlib import asynccontextmanager
 
@@ -30,7 +31,7 @@ class Mycelium:
     def __init__(
         self,
         store_path: str | Path,
-        ollama_model: str = "gemma3:12b",
+        ollama_model: str = "gemma4:12b",
         ollama_url: str = "http://localhost:11434",
         context_budget_tokens: int = 32768,
         config_path: str | Path | None = None,
@@ -215,13 +216,16 @@ class Mycelium:
                     )
                     for index, msg in enumerate(sess.transcript)
                 ]
+                transcript_hash = hashlib.sha256(
+                    transcript_str.encode("utf-8")
+                ).hexdigest()[:16]
                 await self.ingest_source(
                     SourceInput(
                         transcript=transcript_str,
                         session_id=session_id,
                         occurred_at=segments[0].timestamp,
                         segments=tuple(segments),
-                        idempotency_key=f"session-transcript:{session_id}",
+                        idempotency_key=f"session-transcript:{session_id}:{transcript_hash}",
                     )
                 )
 

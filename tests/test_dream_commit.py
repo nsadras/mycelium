@@ -170,6 +170,16 @@ def test_interrupted_dream_commit_replays_to_one_consistent_projection(
             restarted_wiki, restarted_artifacts, Config.defaults()
         ),
     )
+    original_regenerate = restarted_service.materializer.regenerate
+
+    def fail_recovery(entity_ids):
+        raise OSError("temporary recovery write failure")
+
+    monkeypatch.setattr(restarted_service.materializer, "regenerate", fail_recovery)
+    with pytest.raises(OSError, match="temporary recovery"):
+        restarted_service.recover_pending()
+    assert restarted_artifacts.get_dream_commit(commit.commit_id).status == "applying"
+    monkeypatch.setattr(restarted_service.materializer, "regenerate", original_regenerate)
     assert restarted_service.recover_pending() == [commit.commit_id]
 
     assert restarted_artifacts.get_dream_commit(commit.commit_id).status == "complete"
@@ -180,3 +190,80 @@ def test_interrupted_dream_commit_replays_to_one_consistent_projection(
     assert restarted_artifacts.get_claim(claim.claim_id).dream_disposition == "routed"
     assert restarted_wiki.get("you").version == first_page_version
     assert restarted_logs.get("2026-08-31#session-1").consolidated is True
+
+
+def test_invalid_payload_blocks_writes_until_repaired(
+    tmp_path,
+    monkeypatch,
+):
+    artifact_path = tmp_path / "artifacts"
+    wiki_path = tmp_path / "wiki"
+    log_path = tmp_path / "logs"
+    artifacts = ArtifactStore(artifact_path)
+    wiki = WikiStore(wiki_path)
+    logs = LogStore(log_path)
+    materializer = PageMaterializer(wiki, artifacts, Config.defaults())
+    service = DreamCommitService(artifacts, logs, materializer)
+
+    commit = service.prepare(
+        run_id="dream-broken",
+        materialization=MaterializationResult(),
+        retention_records=[],
+        entity_decisions=[],
+        maturity_assessments=[],
+        entity_references=[],
+        encounters=[],
+        scope_decisions=[],
+        proposals=[],
+        cohort=ScopeCohort(
+            cohort_id="cohort-broken",
+            dream_run_id="dream-broken",
+            claim_ids=[],
+            source_ids=[],
+            revision_entity_ids=[],
+            created_at=NOW,
+        ),
+        affected_entity_ids=set(),
+        completed_log_entry_ids=[],
+        audit=DreamRunAudit(
+            run_id="dream-broken",
+            started_at=NOW,
+            completed_at=NOW,
+            status="completed",
+            source_ids=[],
+            completed_source_ids=[],
+            pending_source_ids=[],
+            pages_created=0,
+            pages_updated=0,
+            claim_decisions=[],
+        ),
+    )
+
+    # A valid earlier record must not be written before a later malformed one.
+    from dataclasses import asdict, replace
+    from mycelium.organization import EntityCurationService
+
+    source = artifacts.create_entity("person", "Nora")
+    target = artifacts.create_entity("person", "Lee")
+    commit.payload["entities"] = [asdict(replace(source, title="Changed title"))]
+    commit.payload["placements"] = [{"invalid": "data"}]
+    artifacts.save_dream_commit(commit)
+    curation = EntityCurationService(artifacts, wiki, materializer)
+
+    for _ in range(2):
+        with pytest.raises(TypeError):
+            service.recover_pending()
+        saved = artifacts.get_dream_commit(commit.commit_id)
+        assert saved.status == "applying"
+        assert saved.error is not None
+        assert artifacts.get_entity(source.entity_id).title == "Nora"
+        with pytest.raises(ValueError, match="Recover the pending Dream commit"):
+            curation.merge(source.entity_id, target.entity_id)
+
+    # Repair the journal explicitly, then normal recovery releases the merge guard.
+    saved.payload["placements"] = []
+    artifacts.save_dream_commit(saved)
+    assert service.recover_pending() == [commit.commit_id]
+    assert artifacts.get_dream_commit(commit.commit_id).error is None
+    curation.merge(source.entity_id, target.entity_id)
+    assert artifacts.get_entity(source.entity_id).status == "merged"

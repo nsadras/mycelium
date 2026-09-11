@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from benchmarks.mycelium_bench.scoring import token_f1
+from benchmarks.shared.scoring import token_f1
 from mycelium.operations import MemoryEvidence
 from mycelium.ollama import OllamaClient
 from mycelium.prompting import render_prompt

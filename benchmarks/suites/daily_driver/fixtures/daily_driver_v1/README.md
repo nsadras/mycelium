@@ -82,16 +82,16 @@ navigation paths without duplicating canonical memory.
 Run the fixture validator with:
 
 ```bash
-uv run python -m benchmarks.mycelium_bench.daily_driver \
-  validate benchmarks/fixtures/daily_driver_v1
+uv run python -m benchmarks daily-driver \
+  validate benchmarks/suites/daily_driver/fixtures/daily_driver_v1
 ```
 
 Run the scenario through the configured production pipeline with:
 
 ```bash
-uv run python -m benchmarks.mycelium_bench.daily_driver \
-  run benchmarks/fixtures/daily_driver_v1 \
-  --output-dir benchmark_runs/daily-driver-v1-run \
+uv run python -m benchmarks daily-driver \
+  run benchmarks/suites/daily_driver/fixtures/daily_driver_v1 \
+  --run-id daily-driver-v1-run \
   --config-path mycelium.toml
 ```
 
@@ -107,8 +107,8 @@ it. Recompute the deterministic comparison after changing comparison logic witho
 calling the LLM again:
 
 ```bash
-uv run python -m benchmarks.mycelium_bench.daily_driver \
-  compare benchmarks/fixtures/daily_driver_v1 \
+uv run python -m benchmarks daily-driver \
+  compare benchmarks/suites/daily_driver/fixtures/daily_driver_v1 \
   --output-dir benchmark_runs/daily-driver-v1-run \
   --config-path mycelium.toml
 ```
@@ -117,9 +117,9 @@ For ownership, fact-resolution, or presentation iterations, replay the exact ext
 layer while rerunning every downstream stage:
 
 ```bash
-uv run python -m benchmarks.mycelium_bench.daily_driver run \
-  benchmarks/fixtures/daily_driver_v1 \
-  --output-dir benchmark_runs/daily-driver-v1-replay \
+uv run python -m benchmarks daily-driver run \
+  benchmarks/suites/daily_driver/fixtures/daily_driver_v1 \
+  --run-id daily-driver-v1-replay \
   --replay-extraction-store benchmark_runs/<baseline>/store \
   --config-path mycelium.toml
 ```
@@ -133,9 +133,9 @@ Before accepting a candidate, run at least three fresh end-to-end trials. The ro
 gate—never a combined score:
 
 ```bash
-uv run python -m benchmarks.mycelium_bench.daily_driver run \
-  benchmarks/fixtures/daily_driver_v1 \
-  --output-dir benchmark_runs/daily-driver-v1-candidate \
+uv run python -m benchmarks daily-driver run \
+  benchmarks/suites/daily_driver/fixtures/daily_driver_v1 \
+  --run-id daily-driver-v1-candidate \
   --trials 3 \
   --config-path mycelium.toml
 ```

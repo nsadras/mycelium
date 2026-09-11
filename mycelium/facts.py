@@ -24,7 +24,7 @@ from mycelium.ontology import default_section, entity_type_definition
 from mycelium.projection import display_claim_text
 from mycelium.structured_outputs import (
     fact_candidate_selection_output_model,
-    fact_truth_output_model,
+    fact_truth_batch_model,
     fact_synthesis_output_model,
 )
 
@@ -55,7 +55,7 @@ class FactResolver:
     """Resolve bounded additions; preserve atomicity when changing existing ownership."""
 
     _MAX_UNREPRESENTED_PER_GROUPING = 12
-    _MAX_ADDITIONS_WITH_HISTORY = 4
+    _MAX_ADDITIONS_WITH_HISTORY = 12
 
     def __init__(self, llm: OllamaClient, artifacts: ArtifactStore):
         self.llm = llm
@@ -374,72 +374,63 @@ class FactResolver:
         reserved_target_aliases: set[str] = set()
         prior_decisions: list[dict] = []
         facts_by_id = {fact.fact_id: fact for fact in existing}
+        targets_by_incoming = {}
         for incoming_alias in incoming_aliases:
-            incoming_claim = aliases[incoming_alias]
-            candidate_facts = [
-                facts_by_id[fact_id]
-                for fact_id in sorted(candidate_fact_ids_by_claim.get(
-                    incoming_claim.claim_id, set()
-                ))
-                if fact_id in facts_by_id
-            ]
-            target_aliases = sorted({
-                alias_for_claim[claim_id]
-                for fact in candidate_facts
-                for claim_id in fact.member_claim_ids
-                if claim_id in alias_for_claim
-                and alias_for_claim[claim_id] not in reserved_target_aliases
+            targets = sorted({
+                alias_for_claim[cid]
+                for fid in candidate_fact_ids_by_claim.get(aliases[incoming_alias].claim_id, set())
+                if fid in facts_by_id
+                for cid in facts_by_id[fid].member_claim_ids
+                if cid in alias_for_claim
             })
-            # Truth changes require an existing target. An empty target domain
-            # has no possible change to adjudicate; canonical synthesis can proceed.
-            if not target_aliases:
-                continue
-            decision_aliases = {
-                alias: aliases[alias]
-                for alias in [incoming_alias, *target_aliases]
-            }
-            incoming_claim_text = self._claims_text(
-                {incoming_alias: incoming_claim},
-                placements,
-                alias_for_entity,
-                entities,
-            )
-            target_claims_text = self._claims_text(
-                {alias: aliases[alias] for alias in target_aliases},
-                placements,
-                alias_for_entity,
-                entities,
-            )
-            decision_relations_text = self._relations_text(
-                owner_id,
-                {claim.claim_id: alias for alias, claim in decision_aliases.items()},
-            )
+            if targets:
+                targets_by_incoming[incoming_alias] = targets
+
+        async def decide(incoming):
+            targets = {alias: [t for t in targets_by_incoming[alias] if t not in reserved_target_aliases]
+                       for alias in incoming}
+            targets = {alias: values for alias, values in targets.items() if values}
+            if not targets:
+                return
+            older = sorted({t for values in targets.values() for t in values})
+            decision_aliases = {a: aliases[a] for a in [*targets, *older]}
+            incoming_text = json.loads(self._claims_text(
+                {a: aliases[a] for a in targets}, placements, alias_for_entity, entities))
+            for alias, values in targets.items():
+                incoming_text["claims"][alias]["candidate_targets"] = values
+            candidate_ids = {fid for alias in targets
+                             for fid in candidate_fact_ids_by_claim.get(aliases[alias].claim_id, set())}
             system, user = prompts.fact_truth_prompt(
                 owner_text,
-                target_claims_text,
-                self._existing_facts_text(candidate_facts, alias_for_claim),
-                decision_relations_text,
-                incoming_claim_text,
-                json.dumps(prior_decisions, ensure_ascii=False, sort_keys=True),
+                self._claims_text({a: aliases[a] for a in older}, placements, alias_for_entity, entities),
+                self._existing_facts_text([f for f in existing if f.fact_id in candidate_ids], alias_for_claim),
+                self._relations_text(owner_id, {c.claim_id: a for a, c in decision_aliases.items()}),
+                json.dumps(incoming_text, ensure_ascii=False),
+                json.dumps(prior_decisions, ensure_ascii=False),
             )
-            truth_schema = fact_truth_output_model(target_aliases)
-            response = await self.llm.call_structured(
-                system,
-                user,
-                truth_schema,
-                num_predict=8192,
-                debug_label="dream-fact-truth",
-                think=True,
-            )
-            decision = truth_schema.model_validate(response).model_dump()
-            adjudications[incoming_alias] = decision
-            prior_decision = {
-                "incoming_claim_alias": incoming_alias,
-                "relation": decision["relation"],
-                "target_claim_aliases": decision["changed_targets"],
-            }
-            reserved_target_aliases.update(decision["changed_targets"])
-            prior_decisions.append(prior_decision)
+            schema = fact_truth_batch_model(targets)
+            # Split complete decisions only when their evidence exceeds the budget.
+            tokens = request_tokens([{"role": "system", "content": system},
+                                     {"role": "user", "content": user}], schema=schema.model_json_schema())
+            output_budget = max(8192, self.llm.reasoning_output_tokens) if self.llm.reasoning_enabled is True else 8192
+            if tokens > structured_input_budget(self.llm.context_window_tokens, output_budget):
+                if len(targets) == 1:
+                    raise ValueError("A complete truth decision exceeds the input budget; evidence was not truncated")
+                keys = list(targets)
+                middle = len(keys) // 2
+                await decide(keys[:middle])
+                await decide(keys[middle:])
+                return
+            response = schema.model_validate(await self.llm.call_structured(
+                system, user, schema, num_predict=8192, debug_label="dream-fact-truth", think=True,
+            )).model_dump()["decisions"]
+            for alias, decision in response.items():
+                adjudications[alias] = decision
+                reserved_target_aliases.update(decision["changed_targets"])
+                prior_decisions.append({"incoming_claim_alias": alias, "relation": decision["relation"],
+                                        "target_claim_aliases": decision["changed_targets"]})
+
+        await decide(list(targets_by_incoming))
         changes = [
             {
                 "relation": decision["relation"],

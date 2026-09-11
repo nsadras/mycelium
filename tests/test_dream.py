@@ -224,14 +224,16 @@ def fact_resolution_plan(
     targets = set(target_aliases or ()) | {target for change in truth_changes or [] for target in change["target_claim_aliases"]}
     responses = []
     if targets:
+        decisions = {}
         for alias in incoming_aliases:
             change = changes_by_incoming.get(alias)
-            responses.append({
+            decisions[alias] = {
                 "comparisons": [{"target":target,"scope":"same","reason":"The fixture establishes shared scope."} for target in sorted(targets)],
                 "relation": change["relation"] if change else "no_change",
                 "changed_targets": change["target_claim_aliases"] if change else [],
                 "reason": change["explanation"] if change else "Compatible information.",
-            })
+            }
+        responses.append({"decisions": decisions})
     responses.append({"facts":[{"prominence": "briefing",
         "memory_scope":"The fixture memory.", "member_claim_aliases":aliases,
         "state":"current", "section_key":section, "text":None if len(aliases)==1 else text,

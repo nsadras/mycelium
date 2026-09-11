@@ -17,7 +17,7 @@ from mycelium import structured_outputs as contracts
 from mycelium.identity_plan import identity_plan_model
 from mycelium.page_plan import page_plan_model
 from mycelium.ontology import section_keys
-from benchmarks.probe_support import RecordedSdk, fresh_run_root, write
+from benchmarks.experiments.probe_support import RecordedSdk, fresh_run_root, write
 from mycelium import prompts
 from mycelium.ollama import OllamaClient
 

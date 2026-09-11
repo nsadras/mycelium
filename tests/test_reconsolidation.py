@@ -318,12 +318,12 @@ async def test_truth_change_publishes_both_accounts_for_optional_review(tmp_path
             "candidate_fact_ids": ["X001"],
             "reason": "The prior fact describes the preference being replaced.",
         }}},
-        {
+        {"decisions": {"C002": {
             "comparisons": [{"target": "C001", "scope": "same", "reason": "Same preference."}],
             "relation": "supersedes",
             "changed_targets": ["C001"],
             "reason": "The newer statement explicitly replaces the old preference.",
-        },
+        }}},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -360,12 +360,12 @@ async def test_repeated_evidence_joins_and_preserves_the_existing_fact(tmp_path)
             "candidate_fact_ids": ["X001"],
             "reason": "The prior fact describes the same preference.",
         }}},
-        {
+        {"decisions": {"C002": {
             "comparisons": [{"target": "C001", "scope": "same", "reason": "Same preference."}],
             "relation": "no_change",
             "changed_targets": [],
             "reason": "The new claim independently supports the existing state.",
-        },
+        }}},
         {"facts": [{"prominence": "briefing",
             "member_claim_aliases": ["C001", "C002"],
             "memory_scope": "Preferred update format.",
@@ -389,7 +389,7 @@ async def test_repeated_evidence_joins_and_preserves_the_existing_fact(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_truth_changes_are_decided_sequentially_and_cannot_compete(tmp_path):
+async def test_batched_truth_changes_have_one_review_per_target(tmp_path):
     artifacts = setup_owner(tmp_path)
     old = claim("old", "The user's bicycle is blue.", "2026-08-01T12:00:00")
     first = claim(
@@ -409,7 +409,10 @@ async def test_truth_changes_are_decided_sequentially_and_cannot_compete(tmp_pat
             "candidate_fact_ids": ["X001"],
             "reason": "The fact may be the prior bicycle state.",
         }}},
-        {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'supersedes', 'changed_targets': ['C001'], 'reason': 'The new color replaces the old color.'},
+        {"decisions": {
+            "C002": {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'supersedes', 'changed_targets': ['C001'], 'reason': 'The new color replaces the old color.'},
+            "C003": {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The same state is already targeted by C002.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'Additional evidence for the same transition.'},
+        }},
         {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C003'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
     ]
 
@@ -449,7 +452,7 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path
             "candidate_fact_ids": ["X001"],
             "reason": "The prior preference may express the same durable state.",
         }}},
-        {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'The evidence does not explicitly replace the prior preference.'},
+        {"decisions": {"C002": {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'The evidence does not explicitly replace the prior preference.'}}},
         {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}, {"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
     ]
 
@@ -481,7 +484,7 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
             "candidate_fact_ids": ["X001"],
             "reason": "The prior fact may express the same durable state.",
         }}},
-        {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'No change proposed by this test decision.'},
+        {"decisions": {"C002": {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'No change proposed by this test decision.'}}},
         {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
     ]
 
@@ -519,7 +522,7 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
         {"decisions": {alias: {"candidate_fact_ids": ["X001"], "reason": "Candidate for review."}}}
         for alias in ("C001",)
     ] + [
-        {'comparisons': [{'target': 'C001', 'scope': 'distinct', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'No new proposal.'}
+        {"decisions": {"C002": {'comparisons': [{'target': 'C001', 'scope': 'distinct', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'No new proposal.'}}}
         for alias in ("C002",)
     ] + [{"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'text': None, 'state': 'current', 'section_key': 'preferences_working_style'}]}]
 

@@ -460,7 +460,7 @@ The benchmark harness compares Mycelium with a no-memory baseline and a full-con
 Run a small LoCoMo smoke benchmark:
 
 ```bash
-uv run python -m benchmarks.mycelium_bench locomo \
+uv run python -m benchmarks locomo \
   --locomo-path ../locomo/data/locomo10.json \
   --system mycelium \
   --qa-model gemma4:12b \
@@ -469,12 +469,23 @@ uv run python -m benchmarks.mycelium_bench locomo \
   --max-questions 3
 ```
 
-Run a selected LoCoMo conversation with `SAMPLE_INDEX=2 scripts/benchmark-locomo.sh`. Change the sample index as needed, or pass `null` or `full_context` instead of `mycelium` to run those baselines.
+Run a selected LoCoMo conversation directly from the repository root:
+
+```bash
+.venv/bin/python -m benchmarks locomo \
+  --config-path mycelium.toml \
+  --qa-model gemma4:12b --memory-model gemma4:12b \
+  --sample-index 2 --snapshot-sessions
+```
+
+The module generates a timestamped run ID automatically; pass `--run-id <name>` for a custom name.
+Change the 1-based sample index as needed, or pass `--system null` or `--system full_context`
+to run those baselines. Omitting the sample index runs all samples unless limited by `--max-samples`.
 
 For a human-reviewed encoding/wiki baseline (no QA scoring), use a fresh run ID:
 
 ```bash
-.venv/bin/python -m benchmarks.mycelium_bench locomo \
+.venv/bin/python -m benchmarks locomo \
   --wiki-baseline --sample-index 1 --max-sessions 2 \
   --config-path mycelium.toml --qa-model gemma4:12b \
   --run-id locomo-wiki-before-external
@@ -496,7 +507,7 @@ can vary; page-title equality and LoCoMo QA scores are not the acceptance criter
 For a MemoryAgentBench smoke run:
 
 ```bash
-uv run python -m benchmarks.mycelium_bench mab \
+uv run python -m benchmarks mab \
   --mab-root ../MemoryAgentBench \
   --dataset-config ../MemoryAgentBench/configs/data_conf/Accurate_Retrieval/EventQA/Eventqa_64k.yaml \
   --system mycelium \
@@ -506,36 +517,24 @@ uv run python -m benchmarks.mycelium_bench mab \
   --max-queries 3
 ```
 
-Full-suite helpers are available as:
-
-```bash
-scripts/benchmark-locomo-full.sh
-scripts/benchmark-memoryagentbench-full.sh
-scripts/benchmark-all-full.sh
-```
-
-They accept environment overrides such as:
-
-```bash
-QA_MODEL=llama3.1:8b MEMORY_MODEL=gemma4:12b RUN_TAG=claim-pipeline scripts/benchmark-all-full.sh
-```
-
-Full runs default to `DREAM_POLICY=per-case`; this can be changed, for example, with `DREAM_POLICY=per-batch scripts/benchmark-locomo-full.sh mycelium`. Results are written beneath `benchmark_runs/<run-id>/` as predictions, JSONL rows, and summaries. MemoryAgentBench may require its own dependencies and Hugging Face dataset downloads.
+For full runs, omit sample limits and select each system or MAB dataset explicitly.
+See the [benchmark guide](benchmarks/README.md) for commands and the curated MAB configuration list.
+The default dream policy is `per-batch`; use `--dream-policy per-case` explicitly when needed.
 
 The Daily Driver fixture is the behavioral protocol for entity, ownership, lifecycle, and wiki-coherence work.
 Validate it before use:
 
 ```bash
-uv run python -m benchmarks.mycelium_bench.daily_driver \
-  validate benchmarks/fixtures/daily_driver_v1
+uv run python -m benchmarks daily-driver \
+  validate benchmarks/suites/daily_driver/fixtures/daily_driver_v1
 ```
 
 For a downstream semantic iteration, replay a known extraction store into a fresh output directory:
 
 ```bash
-uv run python -m benchmarks.mycelium_bench.daily_driver run \
-  benchmarks/fixtures/daily_driver_v1 \
-  --output-dir benchmark_runs/<candidate> \
+uv run python -m benchmarks daily-driver run \
+  benchmarks/suites/daily_driver/fixtures/daily_driver_v1 \
+  --run-id <candidate> \
   --replay-extraction-store benchmark_runs/<baseline>/store \
   --config-path mycelium.toml
 ```
@@ -543,7 +542,7 @@ uv run python -m benchmarks.mycelium_bench.daily_driver run \
 This replay copies only source, episode, claim, and raw-log evidence, then reruns identity, admission, ownership,
 reconsolidation, materialization, retrieval, and evaluation. Projection-only work may instead replay assignments;
 retrieval-only work may use an exact frozen store. See the
-[fixture guide](benchmarks/fixtures/daily_driver_v1/README.md) for those modes, three-trial primary acceptance, and
+[fixture guide](benchmarks/suites/daily_driver/fixtures/daily_driver_v1/README.md) for those modes, three-trial primary acceptance, and
 the paraphrased and unrelated-domain transfer fixtures.
 
 The current page-structure milestone accepts page admission, stable identity separation, entity relationships,

@@ -113,12 +113,7 @@ def extraction_output_model(
         __config__=ConfigDict(extra="forbid"),
         claims=(list[claim], Field(min_length=1, max_length=128)),
     )
-    skipped = create_model(
-        "NoNewClaims",
-        __config__=ConfigDict(extra="forbid"),
-        reason=(str, Field(min_length=1, max_length=500)),
-    )
-    decision = claimed | skipped
+    decision = claimed | None
     segments = create_model(
         "SegmentDecisions",
         __config__=ConfigDict(extra="forbid"),
@@ -159,8 +154,8 @@ def extraction_records(response: dict[str, Any]) -> dict[str, Any]:
     claims = []
     source_only = []
     for sid, value in response["segments"].items():
-        if "reason" in value:
-            source_only.append({"segment_id": sid, "reason": value["reason"]})
+        if value is None:
+            source_only.append({"segment_id": sid, "reason": "Model marked this segment as adding no new claim."})
         else:
             for claim in value["claims"]:
                 claims.append(
@@ -368,3 +363,27 @@ def fact_synthesis_output_model(
             return self
 
     return ExactFactSynthesis
+
+
+def fact_truth_batch_model(
+    targets_by_incoming: Mapping[str, Collection[str]],
+) -> type[BaseModel]:
+    """Share context while requiring each decision and noncompeting review targets."""
+    decisions = create_model(
+        "TruthDecisions", __config__=ConfigDict(extra="forbid"),
+        **{alias: (fact_truth_output_model(targets), ...)
+           for alias, targets in targets_by_incoming.items()},
+    )
+    base = create_model(
+        "TruthBatch", __config__=ConfigDict(extra="forbid"), decisions=(decisions, ...),
+    )
+
+    class ExactTruthBatch(base):
+        @model_validator(mode="after")
+        def validate_changes(self):
+            targets = [target for _, decision in self.decisions for target in decision.root.changed_targets]
+            if len(targets) != len(set(targets)):
+                raise ValueError("An older claim can be targeted by only one change in a batch")
+            return self
+
+    return ExactTruthBatch

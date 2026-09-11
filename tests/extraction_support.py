@@ -9,9 +9,9 @@ def extraction_response(claims, source_only_segment_ids=()):
         segments.setdefault(primary, {"claims": []})["claims"].append({**claim, "segment_ids": support})
         support_ids.update(support)
     for sid in support_ids:
-        segments.setdefault(sid, {"reason": "Evidence supporting another segment's statement."})
+        segments.setdefault(sid, None)
     for sid in source_only_segment_ids:
         if sid in segments:
             raise ValueError("Conflicting fixture decisions for one segment")
-        segments[sid] = {"reason": "The segment contains no new assertion."}
+        segments[sid] = None
     return {"segments": segments}

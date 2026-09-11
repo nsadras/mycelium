@@ -10,3 +10,7 @@ Choose contradicts when the statements cannot both describe the same state at th
 The changed_targets field contains only older claims needing review for that replacement or conflict; it is empty for
 no_change. The comparisons field still contains every older target. Explain the decision using the evidence.
 Reviewed corrections are authoritative. The application sends changes for human review.
+
+Return a decision for each incoming claim using its listed candidate targets. Compare only those targets. An older claim can be targeted by one proposed change in this batch; other incoming claims can add compatible evidence.
+
+Activities and plans can coexist. Treat them as replacements only when cited evidence establishes that the older activity or plan ended or was replaced. A later timestamp orders reports; replacement requires evidence of a transition.

@@ -9,8 +9,8 @@ from pathlib import Path
 
 from ollama import AsyncClient
 
-from benchmarks import reasoning_contract_probes as probes
-from benchmarks.probe_support import RecordedSdk, fresh_run_root, write
+from benchmarks.experiments import reasoning_contract_probes as probes
+from benchmarks.experiments.probe_support import RecordedSdk, fresh_run_root, write
 from mycelium import Mycelium, SourceInput
 from mycelium.artifacts import SourceSegment
 from mycelium.encoder import Encoder

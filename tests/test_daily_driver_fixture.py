@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.mycelium_bench.daily_driver import load_fixture, validate_fixture
-from benchmarks.mycelium_bench.daily_driver_eval import _entity_map, proposition_completeness
-from benchmarks.mycelium_bench.daily_driver_run import _replay_extracted_episode
+from benchmarks.suites.daily_driver.fixture import load_fixture, validate_fixture
+from benchmarks.suites.daily_driver.eval import _entity_map, proposition_completeness
+from benchmarks.suites.daily_driver.run import _replay_extracted_episode
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimProvenance,
@@ -19,13 +19,13 @@ from mycelium.core import Mycelium
 from mycelium.models import LogEntry
 from mycelium.store import LogStore
 from mycelium.operations import EvidenceRecord, MemoryEvidence
-from benchmarks.mycelium_bench.daily_driver_eval import retrieved_generated_ids
+from benchmarks.suites.daily_driver.eval import retrieved_generated_ids
 
 
-FIXTURE_DIR = Path("benchmarks/fixtures/daily_driver_v1")
+FIXTURE_DIR = Path("benchmarks/suites/daily_driver/fixtures/daily_driver_v1")
 TRANSFER_FIXTURES = (
-    Path("benchmarks/fixtures/daily_driver_paraphrased_v1"),
-    Path("benchmarks/fixtures/daily_driver_unrelated_v1"),
+    Path("benchmarks/suites/daily_driver/fixtures/daily_driver_paraphrased_v1"),
+    Path("benchmarks/suites/daily_driver/fixtures/daily_driver_unrelated_v1"),
 )
 
 

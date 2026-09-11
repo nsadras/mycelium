@@ -77,9 +77,9 @@ async def test_batched_selection_covers_each_pair_once_within_budget(
         product([f"C{i:03d}" for i in range(1, 6)], [f"X{i:03d}" for i in range(1, 26)])
     )
     if words == 0:
-        assert resolver.llm.call_structured.await_count == 6  # formerly 15
+        assert resolver.llm.call_structured.await_count == 3  # All five incoming claims share each prior-fact chunk.
     else:
-        assert resolver.llm.call_structured.await_count > 6
+        assert resolver.llm.call_structured.await_count > 3
 
 
 @pytest.mark.asyncio
@@ -117,3 +117,21 @@ async def test_new_memories_do_not_require_empty_target_truth_calls(tmp_path):
         c.claim_id for c in incoming
     }
     assert resolver.llm.call_structured.await_count == 1
+
+
+def test_truth_batch_requires_each_decision_and_rejects_competing_changes():
+    from pydantic import ValidationError
+    from mycelium.structured_outputs import fact_truth_batch_model
+    schema = fact_truth_batch_model({'N1': ['P1'], 'N2': ['P1', 'P2']})
+    first = {'comparisons': [{'target': 'P1', 'scope': 'same', 'reason': 'Same object.'}],
+             'relation': 'supersedes', 'changed_targets': ['P1'], 'reason': 'Explicit replacement.'}
+    second = {'comparisons': [{'target': 'P1', 'scope': 'same', 'reason': 'Additional evidence.'},
+                              {'target': 'P2', 'scope': 'distinct', 'reason': 'Another object.'}],
+              'relation': 'no_change', 'changed_targets': [], 'reason': 'The change is already proposed by N1.'}
+    assert schema.model_validate({'decisions': {'N1': first, 'N2': second}})
+    with pytest.raises(ValidationError):
+        schema.model_validate({'decisions': {'N1': first}})
+    with pytest.raises(ValidationError, match='only one change'):
+        schema.model_validate({'decisions': {'N1': first, 'N2': {**second, 'relation': 'supersedes', 'changed_targets': ['P1']}}})
+    with pytest.raises(ValidationError, match='same scope'):
+        schema.model_validate({'decisions': {'N1': first, 'N2': {**second, 'relation': 'supersedes', 'changed_targets': ['P2']}}})

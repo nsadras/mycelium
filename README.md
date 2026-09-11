@@ -225,7 +225,7 @@ with the assistant message and is available from the chat's collapsed **Evidence
 
 Architecture, storage contracts, retrieval details, migrations, development checks, and benchmark workflows are
 documented in [DESIGN.md](DESIGN.md). The Daily Driver fixture has its own
-[benchmark guide](benchmarks/fixtures/daily_driver_v1/README.md).
+[benchmark guide](benchmarks/README.md).
 
 ## Replay the chat-to-memory smoke test
 

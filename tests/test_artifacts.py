@@ -41,8 +41,8 @@ def test_combined_extraction_enforces_exact_accounting_and_citations():
     missing = copy.deepcopy(valid)
     del missing["segments"]["b"]
     invalid.append(missing)
-    invalid.append({"segments": {"a": {"claims": []}, "b": {"reason": "Greeting."}}})
-    invalid.append({"segments": {**valid["segments"], "unknown": {"reason": "Greeting."}}})
+    invalid.append({"segments": {"a": {"claims": []}, "b": None}})
+    invalid.append({"segments": {**valid["segments"], "unknown": None}})
     wrong_context = copy.deepcopy(valid)
     wrong_context["segments"]["a"]["claims"][0]["context_segment_ids"] = ["unknown"]
     invalid.append(wrong_context)
@@ -471,7 +471,7 @@ async def test_encoder_rejects_undeclared_segment_decisions(tmp_path):
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
         value = extraction_response([], [segment_id])
-        value["segments"]["unknown"] = {"reason": "No new claim."}
+        value["segments"]["unknown"] = None
         return value
 
     llm.call_structured.side_effect = response
@@ -1035,7 +1035,7 @@ async def test_ingestion_key_rejects_different_input(tmp_path):
         llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts
     )
     llm.call_structured.side_effect = [
-        {"segments": {"unused": {"reason": "No durable claim."}}},
+        {"segments": {"unused": None}},
     ]
     await capture_and_extract(encoder,
         "First transcript", "session-1", idempotency_key="stable-key"
@@ -1104,19 +1104,19 @@ def test_extraction_schema_requires_a_decision_per_segment_and_cites_container()
         "facets": {"when": None, "deadline": None, "inference_basis": None},
     }
     response = schema.model_validate({"segments": {
-        "S1": {"reason": "Proposal supporting the subsequent acceptance."}, "S2": {"claims": [claim]},
+        "S1": None, "S2": {"claims": [claim]},
     }}).model_dump()
     records = extraction_records(response)
     assert records["claims"][0]["segment_ids"] == ["S2", "S1"]
-    assert records["source_only"] == [{"segment_id": "S1", "reason": "Proposal supporting the subsequent acceptance."}]
+    assert records["source_only"] == [{"segment_id": "S1", "reason": "Model marked this segment as adding no new claim."}]
 
 
-def test_segment_decisions_require_explicit_claims_or_reason_labels():
+def test_segment_decisions_require_explicit_claims_or_null():
     schema = extraction_output_model(["S1"])
     with pytest.raises(ValidationError):
         schema.model_validate({"segments": {"S1": "Ava teaches pottery."}})
     with pytest.raises(ValidationError):
         schema.model_validate({"segments": {"S1": {"claims": [], "reason": "Greeting."}}})
     assert extraction_records(schema.model_validate({"segments": {
-        "S1": {"reason": "Greeting."},
+        "S1": None,
     }}).model_dump())["claims"] == []

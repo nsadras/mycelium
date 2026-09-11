@@ -1,4 +1,4 @@
-from benchmarks.mycelium_bench.scoring import token_f1
+from benchmarks.shared.scoring import token_f1
 
 
 def test_token_f1_normalizes_iso_and_written_dates():

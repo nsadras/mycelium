@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from benchmarks.mycelium_bench.adapters import BenchmarkMessage, MemorySystem
+from benchmarks.shared.adapters import BenchmarkMessage, MemorySystem
 
 
 class MyceliumMABAgent:

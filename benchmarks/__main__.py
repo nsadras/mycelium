@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
 from pathlib import Path
 
-from benchmarks.mycelium_bench.adapters import build_memory_system, run_async
-from benchmarks.mycelium_bench.locomo import run_locomo, run_locomo_wiki_baseline
-from benchmarks.mycelium_bench.mab import run_memoryagentbench
+from benchmarks.shared.cli import default_run_id
+
+from benchmarks.shared.adapters import build_memory_system, run_async
+from benchmarks.suites.locomo import run_locomo, run_locomo_wiki_baseline
+from benchmarks.suites.mab import run_memoryagentbench
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(prog="python -m benchmarks.mycelium_bench")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="python -m benchmarks")
     subparsers = parser.add_subparsers(dest="benchmark", required=True)
 
     locomo = subparsers.add_parser("locomo", help="Run LoCoMo QA benchmark.")
@@ -33,6 +34,7 @@ def main() -> None:
     )
     locomo.add_argument("--sample-index", type=int, default=None, help="Run one 1-based LoCoMo sample index.")
     locomo.add_argument("--wiki-baseline", action="store_true", help="Build fresh per-session wiki snapshots without QA scoring.")
+    locomo.add_argument("--snapshot-sessions", action="store_true", help="Save the Mycelium store after each session while retaining ordinary progress output and QA.")
     locomo.add_argument("--user-speaker", default=None, help="For wiki baseline only: exact speaker name to bind to the configured user.")
 
     mab = subparsers.add_parser("mab", help="Run MemoryAgentBench through its data/metric utilities.")
@@ -42,7 +44,20 @@ def main() -> None:
     mab.add_argument("--max-contexts", type=int, default=None)
     mab.add_argument("--max-queries", type=int, default=None)
 
-    args = parser.parse_args()
+    from benchmarks.suites.daily_driver.cli import add_args
+
+    add_args(subparsers.add_parser("daily-driver", help="Validate and evaluate cumulative memory scenarios."))
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.benchmark == "daily-driver":
+        from benchmarks.suites.daily_driver.cli import dispatch
+
+        dispatch(args, parser)
+        return
     run_id = args.run_id or default_run_id(args.benchmark, args.system)
     output_dir = args.output_root / run_id
     system = build_memory_system(
@@ -85,6 +100,7 @@ def main() -> None:
                 max_sessions=args.max_sessions,
                 questions_per_category=args.questions_per_category,
                 sample_index=args.sample_index,
+                snapshot_sessions=args.snapshot_sessions,
             )
         )
     elif args.benchmark == "mab":
@@ -116,7 +132,11 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         ],
         default="mycelium",
     )
-    parser.add_argument("--run-id", default=None)
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Output directory name under --output-root (default: <benchmark>-<system>-YYYYMMDD-HHMMSS).",
+    )
     parser.add_argument("--output-root", type=Path, default=Path("benchmark_runs"))
     parser.add_argument("--qa-model", default="gemma4:latest")
     parser.add_argument("--memory-model", default=None)
@@ -149,9 +169,6 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def default_run_id(benchmark: str, system: str) -> str:
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{benchmark}-{system}-{stamp}"
 
 
 if __name__ == "__main__":

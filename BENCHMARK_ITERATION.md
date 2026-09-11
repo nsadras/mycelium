@@ -7,22 +7,41 @@ useful memory across LoCoMo, meetings, and user–agent conversations—not for 
 
 ## Run
 
-Hold models and configuration fixed, and use a unique hypothesis-based tag:
+Run the Python module from the repository root. Hold models and configuration fixed,
+and use a unique hypothesis-based run ID:
 
 ```bash
-RUN_TAG=<hypothesis> SAMPLE_INDEX=2 scripts/benchmark-locomo.sh
+.venv/bin/python -m benchmarks locomo \
+  --config-path mycelium.toml \
+  --qa-model gemma4:12b --memory-model gemma4:12b \
+  --sample-index 2 \
+  --run-id locomo-sample2-hypothesis-v1
 ```
 
 Inspect `summary.json`, `predictions.jsonl`, and `stores/*/{artifacts,wiki}` under the resulting
-`benchmark_runs/locomo-mycelium-convo-<index>-<tag>/` directory.
+`benchmark_runs/locomo-sample2-hypothesis-v1/` directory. Omit `--run-id` to generate
+`locomo-mycelium-YYYYMMDD-HHMMSS` automatically. Sample indexes are 1-based;
+omitting `--sample-index` runs all samples unless limited by `--max-samples`.
 
-For retrieval and answer-context experiments, set `FROZEN_STORE` to an exact completed case store and
-`DREAM_POLICY=none`. This skips ingestion and consolidation so only retrieval and answering can vary.
-Use `INCLUDE_RETRIEVAL_CONTEXT=1` only for synthetic or otherwise approved data; it intentionally writes
+Add `--snapshot-sessions` to preserve each session's store under `snapshots/<sample-id>/session_N/`.
+Ordinary progress output and QA scoring remain enabled. Snapshots include artifacts,
+wiki pages, logs, and diagnostics, reflecting the selected dream policy (the default
+builds after each session). Existing snapshots are preserved on resume; interrupted
+copies are not published. Use a fresh run ID when enabling snapshots on an older run.
+
+For retrieval and answer-context experiments, pass `--frozen-store <completed-case-store>` and
+`--dream-policy none`. This skips ingestion and consolidation so only retrieval and answering can vary.
+Use `--include-retrieval-context` only for synthetic or otherwise approved data; it intentionally writes
 the rendered memory context into benchmark metadata for qualitative inspection.
 
-For fast hypothesis screening, set `QUESTIONS_PER_CATEGORY` to run the same balanced panel while preserving
+For fast hypothesis screening, pass `--questions-per-category N` to run the same balanced panel while preserving
 source question indices. Graduate promising changes to all questions before retaining them.
+
+Use `--max-sessions N` to limit ingestion and `--max-questions 0` to inspect memory
+without QA. `--replay-store <case-store>` reuses extraction artifacts;
+`--replay-assignments` also preserves assignments. Run the module with
+`locomo --help` for all options. Invoke it separately with `--system null` or
+`--system full_context` to compare baselines.
 
 ## Iteration Loop
 

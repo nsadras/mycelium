@@ -11,16 +11,16 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
-from benchmarks.mycelium_bench.daily_driver import load_fixture, validate_fixture
-from benchmarks.mycelium_bench.daily_driver_eval import (
+from benchmarks.suites.daily_driver.fixture import load_fixture, validate_fixture
+from benchmarks.suites.daily_driver.eval import (
     evaluate_run,
     judge_probe_answer,
     load_snapshots,
     match_snapshot,
     retrieved_generated_ids,
 )
-from benchmarks.mycelium_bench.adapters import OllamaQaClient
-from benchmarks.mycelium_bench.scoring import token_f1
+from benchmarks.shared.adapters import OllamaQaClient
+from benchmarks.shared.scoring import token_f1
 from mycelium.artifacts import ArtifactStore, MemoryClaim, SourceSegment
 from mycelium.core import Mycelium
 from mycelium.operations import ConsolidationRequest, RetrievalRequest, SourceInput

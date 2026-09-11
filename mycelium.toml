@@ -6,7 +6,7 @@ top_p = 0.95
 top_k = 64
 timeout_seconds = 900
 context_window_tokens = 65536
-reasoning_enabled = true
+reasoning_enabled = false
 reasoning_output_tokens = 32768
 # Keep reasoning and final JSON in one generation; Pydantic still validates it.
 reasoning_format = "prompt"

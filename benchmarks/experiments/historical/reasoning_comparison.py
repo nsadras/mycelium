@@ -17,8 +17,8 @@ from ollama import AsyncClient
 from mycelium import Mycelium, SourceInput, prompts
 from mycelium.budget import count_tokens, require_request_budget
 from mycelium.structured_outputs import extraction_output_model
-from benchmarks.mycelium_bench.locomo import iter_locomo_sessions
-from benchmarks.probe_support import write
+from benchmarks.suites.locomo import iter_locomo_sessions
+from benchmarks.experiments.probe_support import write
 
 ROOT = Path("benchmark_runs/reasoning-comparison-20260909")
 OUTPUT_TOKENS = 16384

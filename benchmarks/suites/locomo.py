@@ -13,8 +13,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from benchmarks.mycelium_bench.adapters import BenchmarkMessage, MemorySystem, MyceliumMemorySystem
-from benchmarks.mycelium_bench.scoring import locomo_score, summarize_scores
+from benchmarks.shared.adapters import BenchmarkMessage, MemorySystem, MyceliumMemorySystem
+from benchmarks.shared.scoring import locomo_score, summarize_scores
 
 
 async def run_locomo(
@@ -28,7 +28,12 @@ async def run_locomo(
     max_sessions: int | None = None,
     questions_per_category: int | None = None,
     sample_index: int | None = None,
+    snapshot_sessions: bool = False,
 ) -> dict[str, Any]:
+    if snapshot_sessions and not isinstance(system, MyceliumMemorySystem):
+        raise ValueError("--snapshot-sessions requires a Mycelium-backed system")
+    if snapshot_sessions and system.frozen_store is not None:
+        raise ValueError("--snapshot-sessions requires session ingestion, not --frozen-store")
     samples = json.loads(data_path.read_text(encoding="utf-8"))
     if sample_index is not None:
         if sample_index < 1 or sample_index > len(samples):
@@ -46,6 +51,7 @@ async def run_locomo(
         "max_samples": max_samples, "max_questions": max_questions,
         "max_sessions": max_sessions, "questions_per_category": questions_per_category,
         "sample_index": sample_index,
+        **({"snapshot_sessions": True} if snapshot_sessions else {}),
         "qa_model": getattr(getattr(system, "qa_client", None), "model", None),
         **{key: str(getattr(system, key, None)) for key in (
             "memory_model", "context_budget_tokens", "dream_policy", "memory_profile",
@@ -109,6 +115,17 @@ async def run_locomo(
                 f"{session_id} finished in {time.perf_counter() - session_started:.1f}s",
                 flush=True,
             )
+            if snapshot_sessions:
+                snapshot = output_dir / "snapshots" / system.case_id / session_id
+                # Resume revisits ingestion against an advanced store. Preserve
+                # already published snapshots rather than replacing their history.
+                if not snapshot.exists():
+                    snapshot.parent.mkdir(parents=True, exist_ok=True)
+                    with tempfile.TemporaryDirectory(dir=snapshot.parent, prefix=".snapshot-") as staging:
+                        staged_store = Path(staging) / "store"
+                        shutil.copytree(system._require_mem().store_path, staged_store)
+                        staged_store.rename(snapshot)
+                print(f"[locomo] sample {sample_id} snapshot: {snapshot}", flush=True)
         print(f"[locomo] sample {sample_id} finalize memory", flush=True)
         await system.finalize_case()
 

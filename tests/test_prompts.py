@@ -11,7 +11,7 @@ from mycelium import prompts
 def test_extraction_includes_the_policy_for_its_source(source_type):
     system, _ = prompts.claim_extraction_prompt(source_type, "source-test", [], "")
     policy = render_prompt(prompts._EXTRACTION_POLICY_TEMPLATES[source_type])
-    assert system.endswith("Policy for this source: " + policy)
+    assert "Policy for this source: " + policy in system
 
 
 def test_every_prompt_is_an_external_strict_jinja_template() -> None:

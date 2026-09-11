@@ -175,6 +175,11 @@ def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
             lines.append(f"Subject: {subject}")
         if record.state:
             lines.append(f"State: {_text(record.state)}")
+        for qualification in record.uncertainty:
+            lines.append(f"Uncertainty: {_text(qualification)}")
+        for revision in record.revisions:
+            lines.append(f"Revision: {_text(revision['relation'])} `{_text(revision['claim_id'])}` "
+                         f"({_text(revision['status'])}): {_text(revision['text'])}")
         lines.append("Supporting claims:")
         lines.extend(f"- `{_text(value)}`" for value in record.claim_ids)
         if record.canonical_claims:
@@ -231,6 +236,7 @@ def _render_sources(sources: tuple[EvidenceSource, ...]) -> list[str]:
             [
                 f"## Source `{_text(source.source_id)}`",
                 f"Conversation time: {_text(source.conversation_time)}",
+                f"Source status: {_text(source.status)}" + (f" — {_text(source.retraction_reason)}" if source.retraction_reason else ""),
                 "Supports claims:",
             ]
         )
@@ -273,6 +279,10 @@ class RetrievedContextBuilder:
     def __init__(self, wiki: WikiStore, artifacts: ArtifactStore) -> None:
         self.wiki = wiki
         self.artifacts = artifacts
+
+    @cached_property
+    def retracted_source_ids(self):
+        return {s.source_id for s in self.artifacts.list_sources() if s.status == "retracted"}
 
     @cached_property
     def facts_by_claim(self):
@@ -351,7 +361,9 @@ class RetrievedContextBuilder:
         except FileNotFoundError:
             return hit.claim_text
 
-        lines = [f"Claim: {claim.text}", *self._timing_lines([claim])]
+        lines = [f"Claim ({claim.status}): {claim.text}", *self._timing_lines([claim])]
+        for revision in self._revisions([claim]):
+            lines.append(f"Revision: {revision}")
         facts = self.facts_by_claim.get(hit.claim_id, [])
         for review in self.reviews_by_claim.get(hit.claim_id, []):
             lines.append(f"Unresolved review: {review}")
@@ -373,15 +385,25 @@ class RetrievedContextBuilder:
                 claim = self.artifacts.get_claim(claim_id)
             except FileNotFoundError:
                 continue
-            if claim.status == "active":
+            if claim.status in {"active", "superseded"}:
                 claims[claim_id] = claim
-        return self._structured_source_evidence(
+        sources = self._structured_source_evidence(
             [
                 claims[claim_id]
                 for claim_id in dict.fromkeys(claim_ids)
                 if claim_id in claims
             ],
             budget_tokens=budget_tokens,
+        )
+        records = self._memory_evidence([
+            ClaimSearchHit(c.claim_id, c.text, c.status, None, None, None, None, None)
+            for c in claims.values()
+        ]).records
+        # Carry interpretation status with transcript excerpts, so inspecting an
+        # older source cannot silently revive a superseded interpretation.
+        return fit_memory_evidence(
+            replace(sources, records=records),
+            lambda trial: count_tokens(render_memory_evidence(trial)) <= budget_tokens,
         )
 
     def _memory_evidence(self, hits: list[ClaimSearchHit]) -> MemoryEvidence:
@@ -401,7 +423,8 @@ class RetrievedContextBuilder:
             claim = claims.get(hit.claim_id)
             if claim is None:
                 continue
-            facts = facts_by_claim.get(hit.claim_id, [])
+            facts = [f for f in facts_by_claim.get(hit.claim_id, [])
+                     if all(cid in claims and claims[cid].status == "active" for cid in f.member_claim_ids)]
             if facts:
                 for fact in sorted(facts, key=lambda item: item.fact_id):
                     if fact.fact_id in seen_record_ids:
@@ -508,7 +531,38 @@ class RetrievedContextBuilder:
                                   if matched_claim_ids is None or c.claim_id in matched_claim_ids),
             reviews=tuple({r.proposal_id: r for cid in claim_ids
                            for r in self.reviews_by_claim.get(cid, [])}.values()),
+            uncertainty=tuple(dict.fromkeys(
+                note for cid in claim_ids
+                for placement in [self.artifacts.placement_for_claim(cid)]
+                if placement is not None
+                for note in [placement.uncertainty, *(
+                    f"Identity unresolved; optional review {decision_id}"
+                    for decision_id in placement.identity_blocker_ids
+                )] if note
+            )) + tuple(dict.fromkeys(
+                f"Supporting source {p.source_id} is retracted; interpretation may be incomplete."
+                for claim in claims for p in claim.provenance
+                if p.source_id in self.retracted_source_ids
+            )),
+            revisions=tuple(self._revisions(claims)),
         )
+
+    def _revisions(self, claims):
+        seen = set()
+        for claim in claims:
+            for link in claim.links:
+                if link["relation"] not in {"supersedes", "superseded_by", "contradicts"}:
+                    continue
+                key = (link["relation"], link["target"])
+                if key in seen:
+                    continue
+                try:
+                    other = self.artifacts.get_claim(link["target"])
+                except FileNotFoundError:
+                    continue
+                seen.add(key)
+                yield {"relation": link["relation"], "claim_id": other.claim_id,
+                       "status": other.status, "text": other.text}
 
     def _entity_title(self, entity_id: str | None) -> str | None:
         if not entity_id:
@@ -574,6 +628,8 @@ class RetrievedContextBuilder:
                     conversation_time=source.occurred_at or source.recorded_at,
                     citations=self._source_citations(cited_by_claim, trial_ids),
                     segments=trial_segments,
+                    status=source.status,
+                    retraction_reason=source.retraction_reason,
                 )
                 trial = MemoryEvidence(sources=tuple([*sources, trial_source]))
                 if count_tokens(render_memory_evidence(trial)) > budget_tokens:
@@ -586,6 +642,8 @@ class RetrievedContextBuilder:
                         source_id=source.source_id,
                         conversation_time=source.occurred_at or source.recorded_at,
                         citations=self._source_citations(cited_by_claim, accepted_ids),
+                        status=source.status,
+                        retraction_reason=source.retraction_reason,
                         segments=tuple(
                             self._evidence_segment(value, cited_ids)
                             for value in source.segments

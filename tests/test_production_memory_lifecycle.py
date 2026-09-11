@@ -1,5 +1,4 @@
 import asyncio
-from typing import get_args
 
 import pytest
 
@@ -32,29 +31,15 @@ class DeterministicProductionModel:
         await self.finish_generation.wait()
         return ChatResponse("I will keep that deadline in mind.")
 
-    @staticmethod
-    def _declared_segment_ids(output_type, collection_field, segment_field):
-        item_type = get_args(
-            output_type.model_fields[collection_field].annotation
-        )[0]
-        annotation = item_type.model_fields[segment_field].annotation
-        if segment_field == "segment_ids":
-            annotation = get_args(annotation)[0]
-        return get_args(annotation)
-
     async def call_structured(self, _system, user, output_type, **_kwargs):
-        if "claims" in output_type.model_fields:
-            segment_ids = self._declared_segment_ids(output_type, "claims", "segment_ids")
+        if "segments" in output_type.model_fields:
+            segment_ids = list(output_type.model_fields["segments"].annotation.model_fields)
             segment_id = segment_ids[0]
-            return {"source_only": [
-                {
-                    "segment_id": segment_id,
-                    "reason": "The assistant response is supporting conversation context.",
-                }
-                for segment_id in segment_ids[1:]
-            ],
-                "claims": [{'text': 'The user will send the Cedar brief tomorrow.', 'claim_type': 'commitment', 'predicate': None, 'evidence_modality': 'speech', 'temporal_status': 'future', 'temporal_anchor_segment_id': segment_id, 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': [segment_id], 'facets': {'when': 'tomorrow', 'deadline': None, 'inference_basis': None}}],
-            }
+            from tests.extraction_support import extraction_response
+            return extraction_response([{'text': 'The user will send the Cedar brief tomorrow.', 'claim_type': 'commitment', 'predicate': None, 'evidence_modality': 'speech', 'temporal_status': 'future', 'temporal_anchor_segment_id': segment_id, 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': [segment_id], 'facets': {'when': 'tomorrow', 'deadline': None, 'inference_basis': None}}], segment_ids[1:])
+        if _kwargs.get('debug_label') in {'memory-correction', 'dream-identity-plan', 'dream-claim-routing', 'dream-fact-synthesis', 'dream-fact-candidate-selection'}:
+            from tests.lifecycle_support import lifecycle_response
+            return lifecycle_response(_system, user, output_type, **_kwargs)
         decisions_model = output_type.model_fields["decisions"].annotation
         return {"decisions": {
             alias: {

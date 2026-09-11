@@ -122,8 +122,8 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
         response = dict(llm.call_structured.return_value)
         response["claims"] = [dict(response["claims"][0])]
         response["claims"][0]["segment_ids"] = [user.split("[", 1)[1].split("]", 1)[0]]
-        response["source_only"] = []
-        return response
+        from tests.extraction_support import extraction_response
+        return extraction_response(response["claims"])
 
     llm.call_structured.side_effect = source_aware_response
     monkeypatch.setattr(

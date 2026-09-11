@@ -25,7 +25,7 @@ interface ClaimDetailProps {
   correctClaim: (text: string, reason: string, fields: { claim_type?: string; predicate?: string | null; temporal_status?: string }) => Promise<void>;
 }
 
-export function ClaimDetail({ claim, claimTypes, selectSource, selectFact, selectIdentity, selectReconciliation, correcting, correctClaim }: ClaimDetailProps) {
+export function ClaimDetail({ claim, selectSource, selectFact, selectIdentity, selectReconciliation, correcting, correctClaim }: ClaimDetailProps) {
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-5 md:p-8">
       <div>
@@ -69,21 +69,24 @@ export function ClaimDetail({ claim, claimTypes, selectSource, selectFact, selec
       {(claim.reconsolidation_proposals ?? []).length > 0 && <section><h3 className="mb-2 text-sm font-bold">Reconciliation history</h3><div className="space-y-2">{claim.reconsolidation_proposals!.map((proposal) => <button key={proposal.proposal_id} onClick={() => selectReconciliation(proposal.proposal_id)} className="flex w-full items-center justify-between rounded-lg border border-slate-200 p-3 text-left"><span><strong className="text-sm">{proposal.proposed_relation.replaceAll('_', ' ')}</strong><br /><span className="text-xs text-slate-500">{proposal.status} · {proposal.explanation}</span></span><ChevronRight size={15} /></button>)}</div></section>}
       <section><h3 className="mb-2 text-sm font-bold">About</h3><JsonBlock value={claim.about} /></section>
       <section><h3 className="mb-2 text-sm font-bold">Provenance</h3><div className="space-y-2">{claim.provenance.map((item, index) => <button key={`${item.source_id}:${index}`} onClick={() => selectSource(item.source_id)} className="flex w-full items-center justify-between rounded-lg border border-slate-200 p-3 text-left text-sm hover:bg-slate-50"><span><strong>{item.source_id}</strong><br /><span className="text-xs text-slate-500">{item.segment_ids.join(', ')} · {item.speaker ?? 'unknown speaker'} · {item.evidence_type}</span></span><ChevronRight size={15} /></button>)}</div></section>
-      {claim.status === 'active' && <ClaimCorrectionForm key={claim.claim_id} claim={claim} claimTypes={claimTypes} correcting={correcting} correctClaim={correctClaim} />}
+      {claim.status === 'active' && <ClaimCorrectionForm key={claim.claim_id} claim={claim} correcting={correcting} correctClaim={correctClaim} />}
       <section className="grid gap-4 md:grid-cols-2"><div><h3 className="mb-2 text-sm font-bold">Facets</h3><JsonBlock value={claim.facets} /></div><div><h3 className="mb-2 text-sm font-bold">Links</h3><JsonBlock value={claim.links} /></div></section>
     </div>
   );
 }
 
-const temporalStatuses = ['past', 'current', 'future', 'recurring', 'atemporal', 'unknown'];
-
-function ClaimCorrectionForm({ claim, claimTypes, correcting, correctClaim }: Pick<ClaimDetailProps, 'claim' | 'claimTypes' | 'correcting' | 'correctClaim'>) {
+function ClaimCorrectionForm({ claim, correcting, correctClaim }: Pick<ClaimDetailProps, 'claim' | 'correcting' | 'correctClaim'>) {
   const [text, setText] = useState(claim.text);
   const [reason, setReason] = useState('');
-  const [claimType, setClaimType] = useState(claim.claim_type);
-  const [predicate, setPredicate] = useState(claim.predicate ?? '');
-  const [temporalStatus, setTemporalStatus] = useState(claim.temporal_status);
-  return <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4"><h3 className="text-sm font-bold text-amber-950">Correct canonical claim</h3><p className="mt-1 text-xs leading-relaxed text-amber-800">This creates new explicit source evidence, supersedes this claim, preserves its current wiki ownership, and rebuilds its facts and page.</p><label className="mt-4 block text-xs font-semibold text-slate-700" htmlFor="claim-correction-text">Replacement claim</label><textarea id="claim-correction-text" value={text} onChange={(event) => setText(event.target.value)} className="mt-1 min-h-24 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm outline-none focus:ring-2 focus:ring-amber-500" /><div className="mt-3 grid gap-3 md:grid-cols-3"><label className="text-xs font-semibold text-slate-700">Claim type<select value={claimType} onChange={(event) => setClaimType(event.target.value)} className="mt-1 w-full rounded-lg border-slate-200 bg-white text-sm">{claimTypes.map((value) => <option key={value} value={value}>{value}</option>)}</select></label><label className="text-xs font-semibold text-slate-700">Predicate<input value={predicate} onChange={(event) => setPredicate(event.target.value)} placeholder="Optional structured predicate" className="mt-1 w-full rounded-lg border-slate-200 bg-white text-sm" /></label><label className="text-xs font-semibold text-slate-700">Temporal status<select value={temporalStatus} onChange={(event) => setTemporalStatus(event.target.value)} className="mt-1 w-full rounded-lg border-slate-200 bg-white text-sm">{temporalStatuses.map((value) => <option key={value} value={value}>{value}</option>)}</select></label></div><label className="mt-3 block text-xs font-semibold text-slate-700" htmlFor="claim-correction-reason">Reason</label><textarea id="claim-correction-reason" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why is the current claim incorrect?" className="mt-1 min-h-20 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm outline-none focus:ring-2 focus:ring-amber-500" /><button disabled={correcting || !text.trim() || !reason.trim()} onClick={() => void correctClaim(text, reason, { claim_type: claimType, predicate: predicate.trim() || null, temporal_status: temporalStatus })} className="mt-3 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{correcting ? 'Correcting and rebuilding…' : 'Create corrected claim'}</button></section>;
+  return <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4">
+    <h3 className="text-sm font-bold text-amber-950">Correct memory</h3>
+    <p className="mt-1 text-xs leading-relaxed text-amber-800">Your correction becomes new evidence. It replaces this interpretation and updates the affected memories and pages.</p>
+    <label className="mt-4 block text-xs font-semibold text-slate-700" htmlFor="claim-correction-text">Corrected statement</label>
+    <textarea id="claim-correction-text" value={text} onChange={(event) => setText(event.target.value)} className="mt-1 min-h-24 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm" />
+    <label className="mt-3 block text-xs font-semibold text-slate-700" htmlFor="claim-correction-reason">Reason (optional)</label>
+    <textarea id="claim-correction-reason" value={reason} onChange={(event) => setReason(event.target.value)} className="mt-1 min-h-20 w-full rounded-lg border border-slate-200 bg-white p-3 text-sm" />
+    <button disabled={correcting || !text.trim()} onClick={() => void correctClaim(text, reason.trim() || 'User correction', {})} className="mt-3 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{correcting ? 'Correcting and rebuilding…' : 'Save correction'}</button>
+  </section>;
 }
 
 interface SourceDetailProps {

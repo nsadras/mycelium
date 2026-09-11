@@ -2,7 +2,8 @@
 
 from dataclasses import asdict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from mycelium.lifecycle_transaction import LifecycleTransaction, mutation_lock
 
 from mycelium.claim_lifecycle import (
     ClaimLifecycleConflictError,
@@ -20,7 +21,6 @@ from server.api.memory_contracts import (
     EntityMergeRequest,
     EntitySplitRequest,
     EntityUpdateRequest,
-    FactEditRequest,
     FactGroupRequest,
     FactMoveRequest,
     FactSplitRequest,
@@ -31,7 +31,14 @@ from server.api.memory_contracts import (
 )
 from server.runtime import get_mem, run_consolidation
 
-router = APIRouter()
+async def memory_mutation():
+    mem = get_mem()
+    async with mutation_lock(mem.artifacts.root):
+        LifecycleTransaction(mem.artifacts.root, mem.wiki.wiki_dir).recover()
+        yield
+
+
+router = APIRouter(dependencies=[Depends(memory_mutation)])
 
 
 def _review_service():
@@ -202,18 +209,6 @@ async def update_placement(claim_id: str, req: PlacementUpdateRequest):
         raise HTTPException(
             status_code=404, detail="Claim or entity not found"
         ) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@router.patch("/facts/{fact_id}")
-async def edit_fact(fact_id: str, req: FactEditRequest):
-    try:
-        return _fact_curation_response(
-            _fact_curation_service().edit(fact_id, req.text, reason=req.reason)
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Fact not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

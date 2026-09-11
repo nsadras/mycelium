@@ -15,7 +15,7 @@ from mycelium.operations import (
 from mycelium.pipeline import MemoryPipeline
 
 
-def build_pipeline():
+def build_pipeline(tmp_path):
     encoder = SimpleNamespace(
         ingest_source=AsyncMock(return_value=IngestionResult(status="captured")),
         extract_pending=AsyncMock(return_value=["episode-retried"]),
@@ -26,7 +26,8 @@ def build_pipeline():
         )
     )
     consolidator = SimpleNamespace(run=AsyncMock(return_value=DreamReport(0, 0, 0)))
-    encoder.artifacts = SimpleNamespace(list_sources=Mock(return_value=[]))
+    encoder.artifacts = SimpleNamespace(root=tmp_path / "artifacts", list_sources=Mock(return_value=[]))
+    consolidator.materializer = SimpleNamespace(wiki=SimpleNamespace(wiki_dir=tmp_path / "wiki"))
     return MemoryPipeline(encoder, retriever, consolidator), {
         "encoder": encoder,
         "retriever": retriever,
@@ -35,8 +36,8 @@ def build_pipeline():
 
 
 @pytest.mark.asyncio
-async def test_pipeline_exposes_typed_ingestion_and_retrieval_operations():
-    pipeline, services = build_pipeline()
+async def test_pipeline_exposes_typed_ingestion_and_retrieval_operations(tmp_path):
+    pipeline, services = build_pipeline(tmp_path)
     source = SourceInput("USER: Keep this.", "session-one")
     retrieval_request = RetrievalRequest("What should be kept?")
 
@@ -50,8 +51,8 @@ async def test_pipeline_exposes_typed_ingestion_and_retrieval_operations():
 
 
 @pytest.mark.asyncio
-async def test_pipeline_consolidation_reports_retried_extraction_ids():
-    pipeline, services = build_pipeline()
+async def test_pipeline_consolidation_reports_retried_extraction_ids(tmp_path):
+    pipeline, services = build_pipeline(tmp_path)
     request = ConsolidationRequest(dry_run=False, include_deferred=True)
 
     result = await pipeline.consolidate(request)

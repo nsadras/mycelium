@@ -95,21 +95,29 @@ class ClaimRouter:
             *(d for d in seed_identity_decisions if d.review_state == "review_required"),
         ]
         try:
+            system, user = identity_plan_prompt(
+                self.formatter.entity_planning_catalog(planned.values(), seed_identity_decisions),
+                self.formatter.format_evidence(aliases, participants),
+                self.formatter.identity_review_catalog(aliases),
+                self.formatter.format_pending_identity_proposals(pending),
+                declared_user_bindings(participants),
+            )
+            request_digest = hashlib.sha256(json.dumps({
+                "system": system, "user": user, "schema": schema.model_json_schema(),
+                "model": str(getattr(self.llm, "model", "")),
+            }, sort_keys=True).encode()).hexdigest()
+            if work_unit.request_digest != request_digest:
+                work_unit.entity_plan = {}
+                work_unit.allocated_entity_ids = {}
+            work_unit.request_digest = request_digest
             if work_unit.entity_plan:
                 plan = schema.model_validate(work_unit.entity_plan).model_dump()
             else:
-                system, user = identity_plan_prompt(
-                    self.formatter.entity_planning_catalog(planned.values(), seed_identity_decisions),
-                    self.formatter.format_evidence(aliases, participants),
-                    self.formatter.identity_review_catalog(aliases),
-                    self.formatter.format_pending_identity_proposals(pending),
-                    declared_user_bindings(participants),
-                )
                 plan = schema.model_validate(await self.llm.call_structured(
                     system, user, schema, num_predict=8192, debug_label="dream-identity-plan",
                 )).model_dump()
             # Explicit human identity references are authoritative exact-ID constraints.
-            for node in planned_subjects(plan, planned):
+            for node in planned_subjects(plan, planned, participants):
                 reviewed = {
                     ref.entity_id for alias in node["supporting_evidence"] if alias in aliases
                     for ref in self.artifacts.list_entity_references(
@@ -127,7 +135,7 @@ class ClaimRouter:
 
         resolved = []
         blockers: dict[str, list[str]] = {}
-        for node in planned_subjects(plan, planned):
+        for node in planned_subjects(plan, planned, participants):
             support = [aliases[a] for a in node["supporting_evidence"] if a in aliases]
             participant_support = [participants[p] for p in node["participant_evidence"]]
             entity = None
@@ -141,7 +149,7 @@ class ClaimRouter:
                     entity.title = node["title"]
                 entity.updated_at = now
                 entity.__post_init__()
-            elif node["resolution"] == "new":
+            elif node["resolution"] in {"new", "review_required"}:
                 allocated_id = work_unit.allocated_entity_ids.get(node["node_id"])
                 if allocated_id in planned:
                     entity = replace(planned[allocated_id])
@@ -172,11 +180,11 @@ class ClaimRouter:
                       if seg.speaker == name and seg.role == role],
                 }),
                 confidence=min((item.claim.confidence for item in support), default=0.8), reason=node["reason"],
-                review_state="accepted" if entity else "review_required",
+                review_state="review_required" if node["resolution"] == "review_required" else "accepted",
                 dream_run_id=dream_run_id, created_at=now,
             )
             result.entity_decisions.append(decision)
-            if entity is None:
+            if node["resolution"] == "review_required":
                 for alias in node["supporting_evidence"]:
                     if alias in aliases:
                         blockers.setdefault(alias, []).append(decision.decision_id)
@@ -191,10 +199,9 @@ class ClaimRouter:
             })
 
         routable = {e.entity_id: e.entity_type for e in planned.values() if e.status == "active"}
-        routings = {a: {"pages": {}, "owner_entity": "",
-                       "reason": "A supporting identity requires review."} for a in blockers}
+        routings = {}
         batches = list(self._alias_batches(
-            {a: item for a, item in aliases.items() if a not in blockers},
+            aliases,
             entity_count=len(routable),
         ))
         while batches:
@@ -237,6 +244,8 @@ class ClaimRouter:
                 "subject_entity": "",
                 "object_entities": [], "contextual_entities": [], "relationship_kind": "none",
                 "page_sections": destinations,
+                "uncertainty": routing["uncertainty"],
+                "prominence": routing["prominence"],
                 "supporting_claims": [], "identity_blocker_ids": blockers.get(alias, []),
                 "confidence": aliases[alias].claim.confidence,
                 "reason": routing["reason"] if kind == "deferred" else "\n".join(
@@ -357,13 +366,6 @@ class ClaimRouter:
                 float(decision["confidence"]),
                 identity_blocker_ids=identity_blockers,
             )
-        if identity_blockers:
-            return ClaimRoute(
-                item.claim.claim_id, None, None, (), item.raw_log_entry_id,
-                "An attached identity decision is still unresolved.",
-                "deferred", supporting_ids, float(decision["confidence"]),
-                identity_blocker_ids=identity_blockers,
-            )
         owner_ref = str(decision["owner_entity"])
         owner = candidates.get(owner_ref) or entities.get(owner_ref)
         if (
@@ -425,6 +427,9 @@ class ClaimRouter:
             })),
             None if relationship_kind == "none" else relationship_kind,
             page_sections=dict(decision["page_sections"]),
+            identity_blocker_ids=identity_blockers,
+            uncertainty=decision.get("uncertainty"),
+            prominence=decision.get("prominence", "briefing"),
         )
 
     def _unresolved_identity_blockers(
@@ -449,15 +454,6 @@ class ClaimRouter:
             if decision.review_state == "review_required":
                 unresolved.append(decision_id)
                 continue
-            entity = entities.get(str(decision.entity_id or ""))
-            if (
-                decision.proposed_page_state == "provisional"
-                and (
-                    entity is None
-                    or entity.materialization_state != "materialized"
-                )
-            ):
-                unresolved.append(decision_id)
         return tuple(sorted(set(unresolved)))
 
     @staticmethod
@@ -538,4 +534,6 @@ def placement_from_route(route: ClaimRoute, *, now: str | None = None) -> ClaimP
         relationship_kind=route.relationship_kind,
         identity_blocker_ids=list(route.identity_blocker_ids),
         page_sections=dict(route.page_sections),
+        uncertainty=route.uncertainty,
+        prominence=route.prominence,
     )

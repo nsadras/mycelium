@@ -49,7 +49,7 @@ async def test_truth_review(tmp_path, monkeypatch, name, prior, incoming, dispos
     assert (decision["relation"] == "no_change") == (disposition == "no_change")
     if relation:
         assert decision["relation"] == relation
-        assert decision["targets"] == ["C001"]
+        assert decision["changed_targets"] == ["C001"]
 
 
 @pytest.mark.integration

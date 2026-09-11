@@ -15,6 +15,7 @@ from mycelium.ollama import OllamaClient
 from mycelium.operations import MemoryEvidence, RetrievalRequest, RetrievalResult
 from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
 from mycelium.store import WikiStore
+from mycelium.lifecycle_transaction import LifecycleTransaction
 
 
 class MemoryRetriever:
@@ -47,6 +48,7 @@ class MemoryRetriever:
         return SearchQueryOutput.model_validate(response).query
 
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
+        LifecycleTransaction(self.artifacts.root, self.context_builder.wiki.wiki_dir).recover()
         budget_tokens = (
             request.budget_tokens
             if request.budget_tokens is not None
@@ -116,6 +118,7 @@ class MemoryRetriever:
         exclude_claim_ids: set[str] | None = None,
     ) -> RetrievalResult:
         """Return additional ranked evidence without a separate model gate."""
+        LifecycleTransaction(self.artifacts.root, self.context_builder.wiki.wiki_dir).recover()
         builder = RetrievedContextBuilder(self.context_builder.wiki, self.artifacts)
         excluded = exclude_claim_ids or set()
         hits = await self.claim_index.search(await self._search_query(query), limit=limit + len(excluded))

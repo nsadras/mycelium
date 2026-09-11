@@ -12,12 +12,12 @@ import type { InspectorTarget } from './components/memory-inspector/types';
 import { idleStatus, type AssistantActivity, type AssistantStatus } from './lib/assistantStatus';
 
 const memoryOperationStatus: Record<
-  'build' | 'clear-memory' | 'clear-wiki',
+  'build' | 'clear-memory' | 'rebuild-wiki',
   AssistantStatus
 > = {
   build: { activity: 'building', label: 'Building Memory', detail: 'Extracting statements and updating wiki' },
   'clear-memory': { activity: 'building', label: 'Clearing', detail: 'Resetting memory store' },
-  'clear-wiki': { activity: 'building', label: 'Clearing Wiki', detail: 'Resetting wiki index' },
+  'rebuild-wiki': { activity: 'building', label: 'Rebuilding Wiki', detail: 'Regenerating views from stored memories' },
 };
 
 function isMemoryActivity(activity: AssistantActivity) {
@@ -85,18 +85,13 @@ function App() {
   };
 
   const handleMemoryOperation = async (
-    operation: 'build' | 'clear-memory' | 'clear-wiki'
+    operation: 'build' | 'clear-memory' | 'rebuild-wiki'
   ) => {
     let shouldResetStatus = true;
     try {
       if (operation === 'clear-memory') {
         const confirmed = window.confirm(
           'Delete all wiki pages and episodic logs? This is intended for development and cannot be undone.'
-        );
-        if (!confirmed) return;
-      } else if (operation === 'clear-wiki') {
-        const confirmed = window.confirm(
-          'Delete all wiki pages? This will reset the wiki, but keep all daily event logs and chat sessions intact.'
         );
         if (!confirmed) return;
       }
@@ -106,8 +101,8 @@ function App() {
 
       if (operation === 'clear-memory') {
         res = await api.post('/memory/dev/clear');
-      } else if (operation === 'clear-wiki') {
-        res = await api.post('/memory/dev/clear-wiki');
+      } else if (operation === 'rebuild-wiki') {
+        res = await api.post('/memory/rebuild-wiki');
       } else {
         res = await api.post('/memory/build');
       }

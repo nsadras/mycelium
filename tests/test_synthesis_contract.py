@@ -8,7 +8,7 @@ from mycelium.structured_outputs import fact_synthesis_output_model
 
 def synthesis_plan():
     return {"facts": [
-                {'memory_scope': text, 'member_claim_aliases': [key], 'section_key': 'profile', 'state': 'current', 'text': None}
+                {"prominence": "briefing", 'memory_scope': text, 'member_claim_aliases': [key], 'section_key': 'profile', 'state': 'current', 'text': None}
                 for key, text in [("C001", "Ava prefers tea."), ("C002", "Ava grows herbs.")]
             ]}
 
@@ -71,3 +71,15 @@ def test_synthesis_schema_has_feasible_array_bounds(count):
             for child in value:
                 check(child)
     check(schema.model_json_schema())
+
+
+def test_native_synthesis_schema_enforces_text_for_combined_claims():
+    schema = fact_synthesis_output_model({"C001": "One.", "C002": "Two."}, ["profile"])
+    definitions = schema.model_json_schema()["$defs"]
+    single = definitions["SingleClaimFact"]["properties"]
+    combined = definitions["CombinedFact"]["properties"]
+    assert single["member_claim_aliases"]["maxItems"] == 1
+    assert single["text"]["type"] == "null"
+    assert combined["member_claim_aliases"]["minItems"] == 2
+    assert combined["text"]["type"] == "string"
+    assert combined["text"]["minLength"] == 1

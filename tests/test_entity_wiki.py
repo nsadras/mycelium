@@ -309,7 +309,7 @@ def test_moving_project_role_updates_old_and_new_project_views(tmp_path):
     assert person_fact["links"][0]["entity_id"] == new_project.entity_id
 
 
-def test_pending_conflict_is_withheld_from_authoritative_section(tmp_path):
+def test_pending_conflict_stays_visible_in_its_section(tmp_path):
     artifacts, wiki, materializer, _, project = setup_store(tmp_path)
     old = claim("claim-old", "Mycelium uses SQLite.")
     new = claim("claim-new", "Mycelium does not use SQLite.")
@@ -330,7 +330,7 @@ def test_pending_conflict_is_withheld_from_authoritative_section(tmp_path):
     materializer.regenerate({project.entity_id})
     page = wiki.get(project.slug)
 
-    assert [section["key"] for section in page.sections] == ["needs_review"]
+    assert [section["key"] for section in page.sections] == ["current_status"]
     assert {item["text"] for item in page.sections[0]["items"]} == {old.text, new.text}
     assert all(not item["authoritative"] for item in page.sections[0]["items"])
     assert all(
@@ -567,7 +567,7 @@ def test_manual_placement_moves_claim_between_short_term_and_canonical_memory(tm
     assert artifacts.facts_for_claim(item.claim_id) == []
 
 
-def test_manual_fact_group_edit_and_split_preserve_claims(tmp_path):
+def test_manual_fact_group_and_split_preserve_claims(tmp_path):
     artifacts, wiki, materializer, _, project = setup_store(tmp_path)
     first = claim("claim-first", "Mycelium stores claims as plaintext.")
     second = claim("claim-second", "Mycelium keeps exact source references.")
@@ -581,11 +581,6 @@ def test_manual_fact_group_edit_and_split_preserve_claims(tmp_path):
         "Mycelium stores plaintext claims with exact source references.",
         reason="User combined complementary facts",
     ).facts[0]
-    service.edit(
-        grouped.fact_id,
-        "Mycelium keeps plaintext claims and exact evidence references.",
-        reason="User refined the wording",
-    )
     split = service.split(
         grouped.fact_id,
         [
@@ -601,18 +596,6 @@ def test_manual_fact_group_edit_and_split_preserve_claims(tmp_path):
     }
     assert first.text in wiki.get(project.slug).content
     assert second.text in wiki.get(project.slug).content
-
-
-def test_clear_projection_preserves_and_requeues_active_claims(tmp_path):
-    artifacts = ArtifactStore(tmp_path / "artifacts")
-    item = claim("claim-1", "Mycelium is transparent.")
-    artifacts.save_claim(item)
-
-    counts = artifacts.clear_projection()
-
-    assert counts["claims_requeued"] == 1
-    assert artifacts.get_claim("claim-1").text == item.text
-    assert artifacts.get_claim("claim-1").dream_disposition == "pending"
 
 
 @pytest.mark.parametrize(

@@ -90,6 +90,20 @@ class FactResolver:
         entities = {entity.entity_id: entity for entity in self.artifacts.list_entities()}
         entities.update({entity.entity_id: entity for entity in seed_entities or []})
         for owner_id in sorted(affected_entity_ids):
+            # Pending truth interpretations remain published as independent,
+            # qualified statements. Review changes truth, not access to evidence.
+            for claim_id in sorted(held_claim_ids):
+                placement = placement_by_claim.get(claim_id)
+                if not self._owned_by(placement, owner_id):
+                    continue
+                claim = self.artifacts.get_claim(claim_id)
+                if claim.status != "active":
+                    continue
+                prior = next((f for f in existing_facts
+                              if f.owner_entity_id == owner_id
+                              and f.member_claim_ids == [claim_id]), None)
+                direct, _ = self._direct_projection(entities[owner_id], claim, placement)
+                result.facts.append(prior or direct)
             owner_claims = sorted(
                 (
                     claim
@@ -100,6 +114,7 @@ class FactResolver:
             )
             owner_existing = [
                 fact for fact in existing_facts if fact.owner_entity_id == owner_id
+                and not set(fact.member_claim_ids) & held_claim_ids
             ]
             if not owner_claims:
                 result.deleted_fact_ids.update(fact.fact_id for fact in owner_existing)
@@ -269,6 +284,7 @@ class FactResolver:
                 synthesis_origin="claim",
                 confidence=claim.confidence,
                 reason="Direct projection of one owner-scoped canonical claim.",
+                prominence=placement.prominence,
                 created_at=now,
                 updated_at=now,
             ),
@@ -420,16 +436,16 @@ class FactResolver:
             prior_decision = {
                 "incoming_claim_alias": incoming_alias,
                 "relation": decision["relation"],
-                "target_claim_aliases": decision["targets"],
+                "target_claim_aliases": decision["changed_targets"],
             }
-            reserved_target_aliases.update(decision["targets"])
+            reserved_target_aliases.update(decision["changed_targets"])
             prior_decisions.append(prior_decision)
         changes = [
             {
                 "relation": decision["relation"],
                 "incoming_claim_aliases": [alias],
-                "target_claim_aliases": decision["targets"],
-                "prior_state": "\n".join(display_claim_text(aliases[t]) for t in decision["targets"]),
+                "target_claim_aliases": decision["changed_targets"],
+                "prior_state": "\n".join(display_claim_text(aliases[t]) for t in decision["changed_targets"]),
                 "incoming_state": display_claim_text(aliases[alias]),
                 "explanation": decision["reason"] + "\nComparisons: " + json.dumps(decision["comparisons"], ensure_ascii=False),
                 "confidence": aliases[alias].confidence,
@@ -567,6 +583,7 @@ class FactResolver:
                 created_at=prior.created_at if prior else now,
                 updated_at=now,
                 manual_text=manual,
+                prominence=group["prominence"],
             ))
             for member in members:
                 placement = placements[member.claim_id]
@@ -578,9 +595,10 @@ class FactResolver:
         for claim_id in pending_incoming:
             placement = placements.get(claim_id)
             if placement is not None:
-                output.placements.append(replace(
-                    placement, section_key="needs_review", updated_at=now
-                ))
+                claim = next((c for c in aliases.values() if c.claim_id == claim_id), None)
+                if claim is not None and not any(claim_id in f.member_claim_ids for f in output.facts):
+                    fact, _ = self._direct_projection(owner, claim, placement)
+                    output.facts.append(fact)
         return output
 
     async def _select_prior_facts(

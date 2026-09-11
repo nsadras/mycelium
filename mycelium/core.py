@@ -51,6 +51,8 @@ class Mycelium:
         self._wiki = WikiStore(self.store_path / "wiki")
         self._log_store = LogStore(self.store_path / "logs")
         self.artifacts = ArtifactStore(self.store_path / "artifacts")
+        from mycelium.lifecycle_transaction import LifecycleTransaction
+        LifecycleTransaction(self.artifacts.root, self._wiki.wiki_dir).recover()
         self._ensure_seed_profile(memory_profile)
         self.llm = OllamaClient(
             url=self.config.llm.url,

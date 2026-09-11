@@ -160,6 +160,9 @@ def artifact_memory(tmp_path, monkeypatch):
         updated_at="2026-07-22T12:00:00",
     )
     mem.artifacts.save_consolidated_fact(stored_fact)
+    from tests.lifecycle_support import lifecycle_response
+    mem.consolidator.fact_resolver.llm = AsyncMock(context_window_tokens=32768)
+    mem.consolidator.fact_resolver.llm.call_structured.side_effect = lifecycle_response
     mem.consolidator.fact_resolver.resolve = AsyncMock(
         return_value=FactResolutionResult(facts=[stored_fact])
     )

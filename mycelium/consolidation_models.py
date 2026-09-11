@@ -47,6 +47,8 @@ class ClaimRoute:
     relationship_kind: str | None = None
     identity_blocker_ids: tuple[str, ...] = ()
     page_sections: dict[str, str] = field(default_factory=dict)
+    uncertainty: str | None = None
+    prominence: str = "briefing"
 
     @property
     def placed(self) -> bool:

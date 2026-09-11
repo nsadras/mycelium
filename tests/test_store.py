@@ -228,49 +228,21 @@ def test_log_store_mark_unconsolidated(tmp_path):
     assert unconsolidated[0].entry_id == "2026-05-10#Entry 1"
     assert not unconsolidated[0].consolidated
 
-def test_clear_wiki_store(tmp_path, monkeypatch):
+def test_rebuild_wiki_preserves_canonical_memories_and_manual_decisions(tmp_path, monkeypatch):
     from mycelium.core import Mycelium
-    from server.runtime import clear_wiki_store
-    
+    from server.runtime import rebuild_wiki_store
+    from pathlib import Path
+    from tests.memory_helpers import claim, place, fact
+    from dataclasses import replace
     myc = Mycelium(store_path=tmp_path)
     monkeypatch.setattr("server.runtime.get_mem", lambda: myc)
-    
-    # Create consolidated log entry
-    from mycelium.models import LogEntry
-    entry = LogEntry(
-        entry_id="2026-05-10#Entry 1",
-        session_id="ses-123",
-        timestamp=datetime(2026, 5, 10, 10, 0, 0),
-        content="User said hello.",
-        consolidated=True,
-    )
-    myc.log_store.append(entry)
-    assert len(myc.log_store.get_unconsolidated()) == 0
-    
-    from mycelium.models import WikiPage
-    myc.wiki.save(WikiPage(slug="page-a", title="Page A", content="", created=datetime.now(), last_updated=datetime.now(), version=1, page_type="topic", entity_id="topic-page-a"))
-    myc.wiki.save(WikiPage(slug="page-b", title="Page B", content="", created=datetime.now(), last_updated=datetime.now(), version=1, page_type="topic", entity_id="topic-page-b"))
-    myc.wiki.save_index("# Wiki Index\n\n## Pages\n- [[you]]\n- [[page-a]]\n- [[page-b]]")
-    
-    assert myc.wiki.exists("page-a")
-    assert myc.wiki.exists("page-b")
-    assert myc.wiki.exists("you")
-    
-    clear_wiki_store()
-    
-    assert not myc.wiki.exists("page-a")
-    assert not myc.wiki.exists("page-b")
-    assert myc.wiki.exists("you")
-    
-    index_content = myc.wiki.get_index()
-    assert "[[you]]" in index_content
-    assert "[[page-a]]" not in index_content
-    assert "[[page-b]]" not in index_content
-    
-    # Logs should be automatically marked as unconsolidated!
-    unconsolidated = myc.log_store.get_unconsolidated()
-    assert len(unconsolidated) == 1
-    assert not unconsolidated[0].consolidated
+    item = claim("kept", "The user prefers written notes.", "2026-09-01")
+    place(myc.artifacts, item)
+    myc.artifacts.save_consolidated_fact(replace(fact(item), manual_text=True, synthesis_origin="manual"))
+    before = {str(p): p.read_bytes() for d in [myc.artifacts.claims_dir, myc.artifacts.consolidated_facts_dir] for p in d.glob("*.json")}
+    rebuild_wiki_store()
+    assert "written notes" in myc.wiki.get("you").content
+    assert all(p.read_bytes() == data for name, data in before.items() for p in [Path(name)])
 
 
 def test_clear_memory_store_removes_artifacts_and_preserves_conversations(tmp_path, monkeypatch):

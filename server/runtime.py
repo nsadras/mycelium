@@ -348,48 +348,9 @@ def clear_memory_store() -> dict[str, int]:
     return counts
 
 
-def clear_wiki_store() -> dict[str, int]:
+def rebuild_wiki_store() -> dict[str, int]:
+    """Recreate reading surfaces while preserving evidence and human corrections."""
     mem = get_mem()
-    counts = {
-        "wiki_pages_deleted": 0,
-        "archived_pages_deleted": 0,
-        "logs_marked_unconsolidated": 0,
-        "entities_deleted": 0,
-        "placements_deleted": 0,
-        "organization_proposals_deleted": 0,
-        "scope_decisions_deleted": 0,
-        "encounters_deleted": 0,
-        "consolidated_facts_deleted": 0,
-        "claims_requeued": 0,
-    }
-
-    wiki_dir = mem.store_path / "wiki"
-    archive_dir = wiki_dir / "_archive"
-
-    for path in wiki_dir.glob("*.md"):
-        if path.name == "_index.md":
-            continue
-        path.unlink()
-        counts["wiki_pages_deleted"] += 1
-
-    for path in archive_dir.glob("*.md"):
-        path.unlink()
-        counts["archived_pages_deleted"] += 1
-
-    # Mark all event logs as unconsolidated to support seamless rebuilds
-    log_files = list(mem.log_store.logs_dir.glob("*.md"))
-    mem.log_store.mark_all_unconsolidated()
-    counts["logs_marked_unconsolidated"] = len(log_files)
-
-    mem.wiki.save_index("# Wiki Index\n\n_last updated: never_\n\n## Pages\n")
-    projection_counts = mem.artifacts.clear_projection()
-    counts["entities_deleted"] = projection_counts["entities"]
-    counts["placements_deleted"] = projection_counts["placements"]
-    counts["organization_proposals_deleted"] = projection_counts["organization_proposals"]
-    counts["scope_decisions_deleted"] = projection_counts["scope_decisions"]
-    counts["encounters_deleted"] = projection_counts["encounters"]
-    counts["consolidated_facts_deleted"] = projection_counts["consolidated_facts"]
-    counts["claims_requeued"] = projection_counts["claims_requeued"]
-    mem._ensure_user_profile()
-
-    return counts
+    result = mem.consolidator.materializer.regenerate_all()
+    return {"pages_updated": len(result.updated_slugs),
+            "pages_created": len(result.created_slugs), "pages_deleted": len(result.deleted_slugs)}

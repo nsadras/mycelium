@@ -39,10 +39,14 @@ def test_ontology_registry_is_internally_complete() -> None:
 
 def test_structured_model_contracts_derive_from_the_ontology() -> None:
     claim_schema = ExtractedClaimOutput.model_json_schema()
-    identity_type_schema = identity_plan_model(["C001"], {}, {}).model_json_schema()["$defs"]["NewIdentity"]
+    identity_definitions = identity_plan_model(["C001"], {}, {}).model_json_schema()["$defs"]
+    identity_types = set()
+    for name in ("NewIdentity", "NewPersonIdentity"):
+        field = identity_definitions[name]["properties"]["entity_type"]
+        identity_types.update(field.get("enum", [field["const"]] if "const" in field else []))
 
     assert set(claim_schema["properties"]["claim_type"]["enum"]) == set(CLAIM_TYPES)
-    assert set(identity_type_schema["properties"]["entity_type"]["enum"]) == set(ENTITY_TYPES) - {"you"}
+    assert identity_types == set(ENTITY_TYPES) - {"you"}
 
 
 def test_subject_representation_registry_is_internally_complete() -> None:

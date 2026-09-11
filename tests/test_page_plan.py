@@ -10,7 +10,7 @@ from mycelium.page_plan import page_plan_model
 @pytest.mark.parametrize("second_section", ["overview", "not_selected"])
 def test_page_choices_survive_structured_response_roundtrip(second_section):
     schema = page_plan_model(["C001"], {"you": "you", "project-1": "project"})
-    response = {"decisions": {"C001": {
+    response = {"decisions": {"C001": {"prominence": "briefing", "uncertainty": None,
         "owner_entity": "you", "reason": None,
         "pages": {
             "you": {"section_key": "priorities_plans", "reason": "Personal goal."},
@@ -28,7 +28,7 @@ def test_page_choices_survive_structured_response_roundtrip(second_section):
 
 def test_no_eligible_pages_requires_deferral():
     schema = page_plan_model(["C001"], {})
-    decision = {"pages": {}, "owner_entity": "", "reason": "No eligible identity."}
+    decision = {"prominence": "briefing", "uncertainty": None, "pages": {}, "owner_entity": "", "reason": "No eligible identity."}
     schema.model_validate({"decisions": {"C001": decision}})
     with pytest.raises(ValidationError):
         schema.model_validate({"decisions": {"C001": {**decision, "reason": None}}})
@@ -36,7 +36,7 @@ def test_no_eligible_pages_requires_deferral():
 
 def test_selection_requires_valid_owner_and_destination_reason():
     schema = page_plan_model(["C001"], {"you": "you"})
-    decision = {"pages": {"you": {"section_key": "profile", "reason": "Personal statement."}},
+    decision = {"prominence": "briefing", "uncertainty": None, "pages": {"you": {"section_key": "profile", "reason": "Personal statement."}},
                 "owner_entity": "", "reason": None}
     with pytest.raises(ValidationError, match="primary owner"):
         schema.model_validate({"decisions": {"C001": decision}})

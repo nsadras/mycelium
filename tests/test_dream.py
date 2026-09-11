@@ -39,9 +39,9 @@ def assignment(
     reason: str = "The cohort establishes this scope.",
 ) -> dict:
     if disposition == "deferred":
-        return {"owner_entity": "", "pages": {}, "reason": reason}
+        return {"prominence": "briefing", "uncertainty": None, "owner_entity": "", "pages": {}, "reason": reason}
     assert disposition == "canonical"
-    return {
+    return {"prominence": "briefing", "uncertainty": None,
         "owner_entity": owner,
         "pages": {target: {"reason": reason} for target in dict.fromkeys([owner, *(links or [])])},
         "reason": None,
@@ -95,7 +95,7 @@ def split_scope_plan(plan: dict) -> list[dict]:
         return candidate_entities.get(value, value)
 
     routing = {"decisions": {
-        alias: {
+        alias: {"prominence": "briefing", "uncertainty": None,
             **decision,
             "owner_entity": stable(decision["owner_entity"]),
             "pages": {
@@ -114,6 +114,10 @@ def split_scope_plan(plan: dict) -> list[dict]:
             subjects.append({"resolution": "existing", "entity_id": participant["entity"], "title": None,
                              "aliases": [], "supporting_evidence": [alias],
                              "participant_evidence": [alias], "reason": participant["reason"]})
+    for node in subjects:
+        node["supporting_evidence"] = list(dict.fromkeys(
+            node["supporting_evidence"] + node.pop("participant_evidence")
+        ))
     return [{"subjects": subjects}, routing]
 
 
@@ -225,10 +229,10 @@ def fact_resolution_plan(
             responses.append({
                 "comparisons": [{"target":target,"scope":"same","reason":"The fixture establishes shared scope."} for target in sorted(targets)],
                 "relation": change["relation"] if change else "no_change",
-                "targets": change["target_claim_aliases"] if change else [],
+                "changed_targets": change["target_claim_aliases"] if change else [],
                 "reason": change["explanation"] if change else "Compatible information.",
             })
-    responses.append({"facts":[{
+    responses.append({"facts":[{"prominence": "briefing",
         "memory_scope":"The fixture memory.", "member_claim_aliases":aliases,
         "state":"current", "section_key":section, "text":None if len(aliases)==1 else text,
     } for aliases,text,section in facts.values()]})
@@ -314,7 +318,7 @@ def test_routing_batches_preserve_claims_without_a_page_matrix(entity_count):
     assert all(batch for batch in batches)
 
 
-def test_revision_cannot_overwrite_identity_blocked_deferral():
+def test_revision_can_place_uncertain_claim_without_losing_review():
     initial = RoutingResult(routes=[ClaimRoute(
         claim_id="claim-kitchen",
         owner_entity_id=None,
@@ -336,12 +340,13 @@ def test_revision_cannot_overwrite_identity_blocked_deferral():
 
     merged = DreamPolicy.merge_revision_routing(initial, revision)
 
-    assert merged.routes == initial.routes
+    assert merged.routes[0].placed
+    assert merged.routes[0].identity_blocker_ids == ("identity-kitchen-review",)
 
 
 def test_claim_routing_contract_requires_exact_claims_and_registry_values():
     schema = page_plan_model(["C001", "C002"], {"you": "you", "project-cedar": "project"})
-    decision = {"owner_entity": "you",
+    decision = {"prominence": "briefing", "uncertainty": None, "owner_entity": "you",
                 "pages": {"you": {"section_key": "profile", "reason": "Personal fact."},
                           },
                 "reason": None}
@@ -362,7 +367,7 @@ def test_claim_routing_contract_requires_exact_claims_and_registry_values():
 
 
 @pytest.mark.asyncio
-async def test_later_dream_cannot_route_claim_while_provisional_blocker_remains(
+async def test_later_dream_routes_claim_with_identity_review_annotation(
     tmp_path,
 ):
     dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
@@ -416,9 +421,9 @@ async def test_later_dream_cannot_route_claim_while_provisional_blocker_remains(
     result = await dream.router.route([ClaimEvidence(claim, source)])
 
     assert result.failures == []
-    assert result.routes[0].disposition == "deferred"
-    assert result.routes[0].owner_entity_id is None
-    assert result.routes[0].identity_blocker_ids == (blocker.decision_id,)
+    assert result.routes[0].placed
+    assert result.routes[0].owner_entity_id == person.entity_id
+    assert result.routes[0].identity_blocker_ids == ()
 
     project.materialization_state = "materialized"
     artifacts.save_entity(project)
@@ -462,7 +467,7 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
         if routing_calls == 1:
             return {"decisions": {}}
         return {"decisions": {
-            alias: {
+            alias: {"prominence": "briefing", "uncertainty": None,
                 "owner_entity": "you",
                 "pages": {"you": {"section_key": "profile", "reason": "Personal fact."}},
                 "reason": None,
@@ -1116,7 +1121,10 @@ async def test_partial_extraction_routes_available_claims_without_repair(tmp_pat
 
     report = await dream.run()
 
-    assert report.completed_source_ids == [entry.entry_id]
+    assert report.completed_source_ids == []
+    assert report.pending_source_ids == [entry.entry_id]
+    assert report.failures[0]["stage"] == "extraction"
+    assert not logs.get(entry.entry_id).consolidated
     assert wiki.exists("partial-memory")
     assert llm.call_structured.await_count == 2
 
@@ -1246,7 +1254,7 @@ async def test_subject_graph_rejects_an_undeclared_participant_identity(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_ambiguous_subject_type_is_deferred_for_identity_review(tmp_path):
+async def test_ambiguous_subject_type_is_published_for_optional_review(tmp_path):
     dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
     _, source = add_source(logs, artifacts)
     claim = add_claim(
@@ -1264,12 +1272,12 @@ async def test_ambiguous_subject_type_is_deferred_for_identity_review(tmp_path):
         "reason": "Project and Series are both materially plausible.",
         "candidate_entity_ids": [],
     })
-    llm.call_structured.side_effect = responses[:1]
+    llm.call_structured.side_effect = responses
 
     result = await dream.router.route([ClaimEvidence(claim, source)])
 
-    assert result.routes[0].disposition == "deferred"
-    assert result.new_entities == []
+    assert result.routes[0].placed
+    assert len(result.new_entities) == 1
     decision = result.entity_decisions[0]
     assert decision.review_state == "review_required"
     assert result.routes[0].identity_blocker_ids == (decision.decision_id,)
@@ -1277,7 +1285,7 @@ async def test_ambiguous_subject_type_is_deferred_for_identity_review(tmp_path):
         "Project and Series are both materially plausible."
     )
     assert result.maturity_assessments == []
-    assert llm.call_structured.await_count == 1
+    assert llm.call_structured.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -1551,8 +1559,8 @@ async def test_dream_preserves_accepted_fact_while_contradiction_is_pending(tmp_
     assert artifacts.get_claim("claim-new").status == "active"
     page = wiki.get("you")
     assert "prefers tea" in page.content
-    assert "dislikes tea" not in page.content
-    assert page.content.count("pending reconciliation") == 1
+    assert "dislikes tea" in page.content
+    assert page.content.count("unresolved accounts; optional review") == 2
 
 
 @pytest.mark.asyncio

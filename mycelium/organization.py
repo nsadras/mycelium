@@ -538,19 +538,6 @@ class FactCurationService:
         self.artifacts = artifacts
         self.materializer = materializer
 
-    def edit(self, fact_id: str, text: str, *, reason: str) -> FactCurationResult:
-        fact = self.artifacts.get_consolidated_fact(fact_id)
-        fact.text = text
-        fact.synthesis_origin = "manual"
-        fact.manual_text = True
-        fact.confidence = 1.0
-        fact.reason = reason
-        fact.updated_at = _now()
-        fact.__post_init__()
-        self.artifacts.save_consolidated_fact(fact)
-        pages = self.materializer.regenerate({fact.owner_entity_id})
-        return FactCurationResult([fact], sorted(pages.changed_pages))
-
     def move(
         self,
         fact_id: str,

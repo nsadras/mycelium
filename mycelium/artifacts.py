@@ -31,7 +31,6 @@ from mycelium.artifact_sources import segment_transcript
 from mycelium.temporal import (
     normalize_temporal_facets,
     parse_source_datetime,
-    query_temporal_record,
     temporal_intervals_overlap,
     temporal_record,
 )
@@ -64,7 +63,6 @@ __all__ = [
     "SourceSegment",
     "normalize_temporal_facets",
     "parse_source_datetime",
-    "query_temporal_record",
     "segment_transcript",
     "temporal_intervals_overlap",
     "temporal_record",

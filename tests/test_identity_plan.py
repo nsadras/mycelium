@@ -17,7 +17,10 @@ def subject(**changes):
              "entity_id": "you", "aliases": [], "supporting_evidence": ["C001"],
              "participant_evidence": ["P001"], "candidate_entity_ids": [],
              "reason": "Explicit identity evidence.", **changes}
-    fields = {"reason", "aliases", "supporting_evidence", "participant_evidence"}
+    value["supporting_evidence"] = list(dict.fromkeys(
+        value["supporting_evidence"] + value.pop("participant_evidence")
+    ))
+    fields = {"reason", "aliases", "supporting_evidence"}
     if changes.get("node_id") != "you":
         fields.add("resolution")
         if value["resolution"] == "existing":
@@ -35,7 +38,7 @@ def subject(**changes):
     {"supporting_evidence": ["missing"]},
     {"resolution": "new", "entity_id": "", "entity_type": "person"},
     {"entity_id": "missing"},
-    {"participant_evidence": []},
+    {"supporting_evidence": ["C001"]},
     {"candidate_entity_ids": ["missing"]},
 ])
 def test_identity_contract_rejects_invalid_ids_and_user_binding(changes):
@@ -48,7 +51,7 @@ def test_declared_user_is_required_separately_from_other_subjects():
     schema = identity_plan_model(["C001"], {"P001": "user"}, {"you": "you"})
     plan = schema.model_validate({"subjects": [], "user": subject(node_id="you")})
     assert list(schema.model_json_schema()["properties"]) == ["user", "subjects"]
-    assert plan.user.participant_evidence == ["P001"]
+    assert plan.user.supporting_evidence == ["C001", "P001"]
     with pytest.raises(ValidationError):
         schema.model_validate({"subjects": []})
 
@@ -182,14 +185,14 @@ def test_page_catalog_limits_sections_to_supplied_active_types(tmp_path):
 
 
 def route(owner="you"):
-    return {"decisions": {"C001": {"owner_entity": owner,
+    return {"decisions": {"C001": {"prominence": "briefing", "uncertainty": None, "owner_entity": owner,
             "pages": {owner: {"section_key": "overview", "reason": "Useful statement."}},
             "reason": None}}}
 
 
 
 @pytest.mark.asyncio
-async def test_retry_reuses_plan_and_allocated_identity_after_partial_commit(tmp_path):
+async def test_retry_replans_after_registry_changes_without_duplicating_identity(tmp_path):
     memory, llm, router, evidence = setup_router(tmp_path)
     llm.context_window_tokens = 32768
     plan = {"subjects": [subject(title="Exhibit", entity_type="project", resolution="new",
@@ -201,12 +204,16 @@ async def test_retry_reuses_plan_and_allocated_identity_after_partial_commit(tmp
     for entity in first.new_entities:
         memory.artifacts.save_entity(entity)
     llm.call_structured.reset_mock()
-    llm.call_structured.side_effect = [route(first.new_entities[0].entity_id)]
+    llm.call_structured.side_effect = [
+        {"subjects": [subject(resolution="existing", entity_id=first.new_entities[0].entity_id,
+                              participant_evidence=[])]},
+        route(first.new_entities[0].entity_id),
+    ]
     second = await router.route(evidence)
     assert not second.failures
     assert second.routes[0].owner_entity_id == first.new_entities[0].entity_id
     assert {e.entity_id for e in second.new_entities} == {first.new_entities[0].entity_id}
-    assert llm.call_structured.await_count == 1
+    assert llm.call_structured.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -252,12 +259,15 @@ async def test_identity_candidates_survive_routing_and_repository_roundtrip(tmp_
         memory.artifacts.save_entity(EntityRecord(
             entity_id, "person", entity_id, entity_id, [], "active", "2026-09-07", "2026-09-07",
         ))
-    llm.call_structured.return_value = {"subjects": [subject(
+    llm.call_structured.side_effect = [{"subjects": [subject(
         title="Unknown organizer", entity_type="person", resolution="review_required",
         entity_id="", participant_evidence=[], candidate_entity_ids=["person-a", "person-b"],
-    )]}
+    )]}, {"decisions": {"C001": {"prominence": "briefing", "pages": {"person-unknown-organizer": {"section_key": "goals_plans", "reason": "The unresolved organizer made the commitment."}}, "owner_entity": "person-unknown-organizer", "reason": None, "uncertainty": "Which organizer is unknown."}}}]
     result = await router.route(evidence)
-    assert not result.failures and not result.new_entities
+    assert not result.failures
+    assert len(result.new_entities) == 1
+    for entity in result.new_entities:
+        memory.artifacts.save_entity(entity)
     assert len(result.entity_decisions) == 1
     decision = result.entity_decisions[0]
     memory.artifacts.save_entity_resolution_decision(decision)
@@ -277,7 +287,7 @@ def test_identity_catalog_retains_staged_founding_evidence(tmp_path):
     entity = EntityRecord("project-new", "project", "Exhibit", "exhibit", [], "active", "2026-09-04", "2026-09-04")
     decision = EntityResolutionDecision("d1", "entity_creation", entity.entity_id, "project", entity.title,
         ["s1"], ["c1"], ["seg1"], 0.9, "Founding subject evidence.", "accepted", "build", "2026-09-04",
-        identity_evidence_claim_ids=["c1"])
+        identity_evidence_claim_ids=["c1"], reviewer_note="Confirmed this identity from the source.")
     formatter = RoutingFormatter(memory.artifacts)
     assert evidence[0].claim.text not in formatter.entity_planning_catalog([entity])
     rendered = formatter.entity_planning_catalog([entity], [decision])
@@ -285,5 +295,43 @@ def test_identity_catalog_retains_staged_founding_evidence(tmp_path):
     assert '"claim_id": "c1"' in rendered
     assert '"source_id": "s1"' in rendered
     assert '"segment_ids": ["seg1"]' in rendered
-    assert decision.reason in rendered
+    assert decision.reason not in rendered
+    assert decision.reviewer_note in rendered
+    pending = formatter.format_pending_identity_proposals([decision])
+    assert decision.reason not in pending
+    assert decision.reviewer_note in pending
+    assert evidence[0].claim.text in pending
     assert memory.artifacts.list_entity_resolution_decisions() == []
+
+
+def test_participant_only_identity_derives_binding_from_one_citation_list():
+    from mycelium.identity_plan import planned_subjects
+
+    schema = identity_plan_model(["C001"], {"P001": "participant"}, {})
+    node = subject(resolution="new", title="Ava", entity_type="person",
+                   supporting_evidence=[], participant_evidence=["P001"])
+    plan = schema.model_validate({"subjects": [node]}).model_dump()
+    nodes = planned_subjects(plan, {}, {"P001": ("source", "Ava", "participant")})
+    assert nodes[0]["participant_evidence"] == ["P001"]
+    with pytest.raises(ValidationError):
+        schema.model_validate({"subjects": [{**node, "entity_type": "project"}]})
+    with pytest.raises(ValidationError, match="Each participant"):
+        schema.model_validate({"subjects": [node, {**node, "title": "Other"}]})
+
+
+def test_native_identity_evidence_domains_match_declared_entity_types():
+    schema = identity_plan_model(["C001"], {"P001": "participant"}, {"person": "person", "org": "organization"}).model_json_schema()
+    person = schema["$defs"]["ExistingPersonIdentity"]["properties"]
+    other = schema["$defs"]["ExistingIdentity"]["properties"]
+    assert person["entity_id"]["const"] == "person"
+    assert set(person["supporting_evidence"]["items"]["enum"]) == {"C001", "P001"}
+    assert other["entity_id"]["const"] == "org"
+    assert other["supporting_evidence"]["items"]["const"] == "C001"
+
+
+def test_declared_user_without_claims_has_no_other_subject_domain():
+    schema = identity_plan_model([], {"P001": "user"}, {"you": "you"})
+    schema.model_validate({"subjects": [], "user": {
+        "reason": "Declared speaker.", "supporting_evidence": ["P001"], "aliases": [],
+    }})
+    assert schema.model_json_schema()["properties"]["subjects"]["maxItems"] == 0

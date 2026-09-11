@@ -170,6 +170,7 @@ export interface WikiFactItem {
   relationship_kind: 'project_role' | null;
   synthesis_origin: 'claim' | 'model' | 'manual';
   memory_state: 'current' | 'history';
+  prominence: 'briefing' | 'detail';
   synthesis_confidence: number;
   synthesis_reason: string;
   manual_text: boolean;

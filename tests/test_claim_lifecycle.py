@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock
+from tests.lifecycle_support import lifecycle_response
 
 import pytest
 
@@ -31,10 +32,8 @@ def setup_service(tmp_path):
     wiki = WikiStore(tmp_path / "wiki")
     materializer = PageMaterializer(wiki, artifacts, Config.defaults())
     artifacts.create_entity("you", "You")
-    llm = AsyncMock()
-    llm.call_structured.side_effect = AssertionError(
-        "These lifecycle fixtures should resolve structurally"
-    )
+    llm = AsyncMock(context_window_tokens=32768)
+    llm.call_structured.side_effect = lifecycle_response
     return (
         artifacts,
         wiki,
@@ -236,3 +235,82 @@ def test_source_lifecycle_fields_are_structurally_validated():
             segments=[],
             status="retracted",
         )
+
+
+@pytest.mark.asyncio
+async def test_correction_failure_is_isolated_and_retry_is_idempotent(tmp_path):
+    artifacts, wiki, service = setup_service(tmp_path)
+    segment = add_source(artifacts, "original")
+    claim = add_claim(artifacts, "original", [ClaimProvenance("original", [segment])], with_fact=True)
+    service.materializer.regenerate({"you"})
+    before = wiki.get("you").content
+    service.resolver.llm.call_structured.side_effect = RuntimeError("model unavailable")
+    with pytest.raises(RuntimeError, match="model unavailable"):
+        await service.correct_claim(claim.claim_id, "The user prefers afternoon meetings.")
+    assert artifacts.get_claim(claim.claim_id).status == "active"
+    assert len(artifacts.list_claims()) == 1
+    assert wiki.get("you").content == before
+    service.resolver.llm.call_structured.side_effect = lifecycle_response
+    result = await service.correct_claim(claim.claim_id, "The user prefers afternoon meetings.")
+    service.resolver.llm.call_structured.reset_mock()
+    retry = await service.correct_claim(claim.claim_id, "The user prefers afternoon meetings.")
+    assert retry == result
+    service.resolver.llm.call_structured.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retraction_invalidates_pending_review_and_qualifies_partial_support(tmp_path):
+    from mycelium.artifacts import ReconsolidationProposal
+    artifacts, wiki, service = setup_service(tmp_path)
+    first = add_source(artifacts, "first")
+    second = add_source(artifacts, "second")
+    target = add_claim(artifacts, "target", [ClaimProvenance("first", [first])], with_fact=True)
+    survivor = add_claim(artifacts, "survivor", [ClaimProvenance("first", [first]), ClaimProvenance("second", [second])], with_fact=True)
+    artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
+        "proposal", [survivor.claim_id], [target.claim_id], "contradicts", "Different accounts",
+        1.0, "build", NOW, affected_entity_ids=["you"]))
+    await service.retract_source("first", reason="Incorrect source")
+    assert artifacts.get_reconsolidation_proposal("proposal").status == "stale"
+    assert artifacts.get_claim(survivor.claim_id).status == "active"
+    assert "supporting evidence retracted" in wiki.get("you").content
+
+
+def test_supporting_detail_and_uncertainty_remain_cited_and_retrievable(tmp_path):
+    from mycelium.claim_index import ClaimSearchHit
+    from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
+    artifacts, wiki, service = setup_service(tmp_path)
+    segment = add_source(artifacts, "source")
+    claim = add_claim(artifacts, "detail", [ClaimProvenance("source", [segment])], with_fact=True)
+    placement = artifacts.placement_for_claim(claim.claim_id)
+    placement.uncertainty = "The preference is tentative."
+    artifacts.save_placement(placement)
+    fact = artifacts.facts_for_claim(claim.claim_id)[0]
+    fact.prominence = "detail"
+    artifacts.save_consolidated_fact(fact)
+    service.materializer.regenerate({"you"})
+    content = wiki.get("you").content
+    assert "<details>" in content and "Supporting detail" in content
+    assert claim.text in content and placement.uncertainty in content
+    builder = RetrievedContextBuilder(wiki, artifacts)
+    evidence = builder._memory_evidence([ClaimSearchHit(claim.claim_id, claim.text, "wiki", "you", "You", "you", placement.section_key, 1)])
+    rendered = render_memory_evidence(evidence)
+    assert claim.text in rendered and placement.uncertainty in rendered
+
+
+def test_source_inspection_carries_superseded_status_and_replacement(tmp_path):
+    from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
+    from mycelium.budget import count_tokens
+    artifacts, wiki, _ = setup_service(tmp_path)
+    segment = add_source(artifacts, "source")
+    old = add_claim(artifacts, "old", [ClaimProvenance("source", [segment])])
+    new = add_claim(artifacts, "new", [ClaimProvenance("source", [segment])])
+    old.status = "superseded"
+    old.links = [{"relation": "superseded_by", "target": new.claim_id}]
+    new.text = "The user prefers afternoon meetings."
+    artifacts.save_claim(old)
+    artifacts.save_claim(new)
+    result = RetrievedContextBuilder(wiki, artifacts).source_evidence([old.claim_id], budget_tokens=2000)
+    rendered = render_memory_evidence(result)
+    assert "superseded" in rendered and new.text in rendered
+    assert result.sources and result.records
+    assert count_tokens(rendered) <= 2000

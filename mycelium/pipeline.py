@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from mycelium.dream import ConsolidationProcess
+from mycelium.lifecycle_transaction import LifecycleTransaction, mutation_lock
 from mycelium.encoder import Encoder
 from mycelium.operations import (
     ConsolidationRequest,
@@ -27,7 +26,7 @@ class MemoryPipeline:
         self.encoder = encoder
         self.retriever = retriever
         self.consolidator = consolidator
-        self._build_lock = asyncio.Lock()
+        self._build_lock = mutation_lock(encoder.artifacts.root)
 
     async def ingest_source(self, source: SourceInput) -> IngestionResult:
         return await self.encoder.ingest_source(source)
@@ -39,6 +38,7 @@ class MemoryPipeline:
         self, request: ConsolidationRequest = ConsolidationRequest()
     ) -> ConsolidationResult:
         async with self._build_lock:
+            LifecycleTransaction(self.encoder.artifacts.root, self.consolidator.materializer.wiki.wiki_dir).recover()
             source_ids = {
                 source.source_id for source in self.encoder.artifacts.list_sources()
             }

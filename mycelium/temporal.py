@@ -25,7 +25,7 @@ NUMBER_WORDS = {
 }
 
 def normalize_temporal_facets(
-    facets: dict[str, Any], anchor: str | None, claim_text: str | None = None
+    facets: dict[str, Any], anchor: str | None
 ) -> dict[str, Any]:
     """Resolve relative time into one explicit, provenance-preserving interval."""
     result = dict(facets or {})
@@ -45,41 +45,6 @@ def normalize_temporal_facets(
     ).strip()
     for legacy_key in ("normalized_date", "date_precision", "normalization_anchor"):
         result.pop(legacy_key, None)
-    if not expression and claim_text:
-        deadline_match = re.search(
-            r"\b(?:by|due(?: on)?)\s+("
-            r"(?:last|this|next) (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
-            r"(?:last|this|next) (?:week|month)|"
-            r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
-            r"end of (?:this|next) (?:week|month)|"
-            r"in (?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d+) "
-            r"(?:days?|weeks?)(?: from now)?|today|tomorrow)\b",
-            claim_text,
-            re.I,
-        )
-        if deadline_match:
-            expression = deadline_match.group(1)
-            role = "deadline"
-    if not expression and claim_text:
-        match = re.search(
-            r"\b(today|yesterday|tomorrow|the day before yesterday|"
-            r"the day after tomorrow|last week|this week|next week|"
-            r"last month|this month|next month|"
-            r"early next week|late next week|later this week|sometime next week|"
-            r"soon|recently|"
-            r"(?:in )?(?:a few|few|several) (?:days?|weeks?) "
-            r"(?:ago|later|from now)|"
-            r"(?:last|this|next) (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
-            r"(?:in (?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|"
-            r"eleven|twelve|\d+) (?:days?|weeks?)(?: from now)?|"
-            r"(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|"
-            r"eleven|twelve|\d+) (?:days?|weeks?) (?:ago|later|from now))|"
-            r"(?:(?:a|one|two|three|\d+) )?years? ago)\b",
-            claim_text,
-            re.I,
-        )
-        if match:
-            expression = match.group(0)
     if anchor:
         result.setdefault("observed_at", anchor)
     if not expression:
@@ -92,6 +57,15 @@ def normalize_temporal_facets(
         "certainty": "unknown",
     }
     result["temporal"] = temporal
+    # A complete calendar date in a model-declared time field is independent
+    # of the conversation date. This parses syntax; it does not infer timing
+    # from claim prose or supply a missing year.
+    absolute = parse_source_datetime(expression)
+    if absolute is not None:
+        temporal.update({"start": absolute.date().isoformat(),
+                         "end": absolute.date().isoformat(), "precision": "day",
+                         "status": "resolved", "certainty": "exact"})
+        return result
     if not anchor:
         return result
     base = parse_source_datetime(anchor)
@@ -207,14 +181,6 @@ def normalize_temporal_facets(
 def temporal_record(facets: dict[str, Any]) -> dict[str, Any] | None:
     value = facets.get("temporal")
     return value if isinstance(value, dict) and value.get("expression") else None
-
-
-def query_temporal_record(query: str, anchor: datetime) -> dict[str, Any] | None:
-    facets = normalize_temporal_facets({}, anchor.isoformat(), query)
-    temporal = temporal_record(facets)
-    if temporal and re.search(r"\b(?:deadline|deadlines|due)\b", query, re.I):
-        temporal["role"] = "deadline"
-    return temporal
 
 
 def temporal_intervals_overlap(

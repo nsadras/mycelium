@@ -158,7 +158,7 @@ async def test_truth_in_mixed_history(
     if scope:
         assert {c["target"]: c["scope"] for c in decision["comparisons"]}["C001"] == scope
     if expected == "truth_change":
-        assert decision["targets"] == ["C001"]
+        assert decision["changed_targets"] == ["C001"]
 
 
 @pytest.mark.asyncio

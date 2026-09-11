@@ -11,7 +11,7 @@ import pytest
 
 from mycelium import Mycelium, SourceInput
 from mycelium import prompts
-from mycelium.structured_outputs import extraction_output_model
+from mycelium.structured_outputs import extraction_output_model, extraction_records
 from tests.model_probe_helpers import capture, check_meaning
 
 CASES = json.loads((Path(__file__).parent / "fixtures/extraction_replays.json").read_text())
@@ -59,6 +59,7 @@ async def test_large_extraction_partition(tmp_path, monkeypatch):
     result = schema.model_validate(await memory.llm.call_structured(
         system, user, schema, num_predict=8192, debug_label="large-partition",
     )).model_dump()
+    result = extraction_records(result)
     (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
     assert result["claims"] and result["source_only"]
     await check_meaning(memory, {
@@ -103,6 +104,7 @@ async def test_long_multiparty_concrete_admission(tmp_path, monkeypatch):
     result = schema.model_validate(await memory.llm.call_structured(
         system, user, schema, num_predict=8192, debug_label="multiparty-admission",
     )).model_dump()
+    result = extraction_records(result)
     (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
     cited = {sid for c in result["claims"] for sid in c["segment_ids"]}
     assert {s.segment_id for s in source.segments if s.metadata["fixture_assertion"]} <= cited
@@ -132,6 +134,7 @@ async def test_tool_admission_preserves_business_facts_not_transport_metadata(tm
         memory.encoder._render_claim_segments(source.segments),
     )
     result = schema.model_validate(await memory.llm.call_structured(system, user, schema, num_predict=8192)).model_dump()
+    result = extraction_records(result)
     (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
     await check_meaning(memory, {
         "expected": "Harbor Workshop is a bicycle repair business at 42 Wharf Road, founded by Elena Ruiz in 2019.",
@@ -165,6 +168,7 @@ async def test_extraction_contract_in_real_system(tmp_path, monkeypatch, case, m
         response = schema.model_validate(await memory.llm.call_structured(
             system, user, schema, num_predict=8192, think=any(p.segments for p in context),
         )).model_dump()
+        response = extraction_records(response)
         (tmp_path / "response.json").write_text(json.dumps(response, indent=2))
         if not case["expected"]:
             assert response["claims"] == []

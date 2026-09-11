@@ -52,6 +52,7 @@ def sections_markdown(
 
     for section in sections:
         item_lines: list[str] = []
+        detail_lines: list[str] = []
         for item in section["items"]:
             if item["kind"] == "link":
                 item_lines.append(f"- [[{item['slug']}]] — {item['title']}")
@@ -76,10 +77,13 @@ def sections_markdown(
                 f"[[{link['slug']}]]" for link in item.get("links", [])
             )
             link_suffix = f" — {linked}" if linked else ""
-            item_lines.append(
+            destination = detail_lines if item.get("prominence") == "detail" else item_lines
+            destination.append(
                 f"- {item['text']}{link_suffix}{suffix}"
                 + evidence_suffix(item.get("sources", []))
             )
+        if detail_lines:
+            item_lines.extend(["", "<details>", "<summary>Supporting detail</summary>", "", *detail_lines, "", "</details>"])
         if not item_lines:
             continue
         if lines:
@@ -193,6 +197,7 @@ class PageMaterializer:
     def _stage_entities(
         self, result: MaterializationResult, entity_ids: set[str]
     ) -> None:
+        self._retracted_source_ids = {s.source_id for s in self.artifacts.list_sources() if s.status == "retracted"}
         entities = {entity.entity_id: entity for entity in self.artifacts.list_entities()}
         entities.update(result.entities)
         placements = {
@@ -442,12 +447,8 @@ class PageMaterializer:
         claims_by_id: dict[str, MemoryClaim],
     ) -> list[dict]:
         grouped: dict[str, list[ConsolidatedFact]] = defaultdict(list)
-        review: list[ConsolidatedFact] = []
         for fact in facts:
-            if set(fact.member_claim_ids) & set(pending_proposals_by_claim):
-                review.append(fact)
-            else:
-                grouped[fact.section_key].append(fact)
+            grouped[fact.section_key].append(fact)
 
         encounter_items: list[dict] = []
         if entity.entity_type == "person":
@@ -479,10 +480,7 @@ class PageMaterializer:
                 if links:
                     sections.append({"key": key, "title": title, "items": links})
                 continue
-            values = (
-                [*grouped.get(key, []), *review]
-                if key == "needs_review" else grouped.get(key, [])
-            )
+            values = grouped.get(key, [])
             items = self._fact_items(
                 values,
                 entities,
@@ -520,6 +518,7 @@ class PageMaterializer:
         if not values:
             return []
         items = []
+        retracted_source_ids = self._retracted_source_ids
 
         def fact_order(value: ConsolidatedFact) -> tuple:
             if not chronological:
@@ -546,6 +545,16 @@ class PageMaterializer:
                 continue
             claim = members[0]
             member_ids = list(fact.member_claim_ids)
+            review_ids = sorted({proposal_id for claim_id in member_ids
+                                 for proposal_id in pending_proposals_by_claim.get(claim_id, set())})
+            identity_reviews = sorted({decision_id for claim_id in member_ids
+                                      if claim_id in canonical_placements
+                                      for decision_id in canonical_placements[claim_id].identity_blocker_ids})
+            uncertainty = list(dict.fromkeys(
+                canonical_placements[cid].uncertainty for cid in member_ids
+                if cid in canonical_placements and canonical_placements[cid].uncertainty
+            ))
+            uncertain = pending or bool(review_ids or identity_reviews or uncertainty)
             links = sorted({
                 linked_id for linked_id in fact.linked_entity_ids
                 if linked_id in entities and entities[linked_id].status == "active"
@@ -553,8 +562,16 @@ class PageMaterializer:
             qualifiers = []
             if claim.evidence_modality == "tool":
                 qualifiers.append("external research")
-            if pending:
-                qualifiers.append("pending reconciliation")
+            if review_ids:
+                qualifiers.append("unresolved accounts; optional review")
+            if identity_reviews:
+                qualifiers.append("identity uncertain; optional review")
+            qualifiers.extend(uncertainty)
+            retracted_sources = sorted({p.source_id for member in members for p in member.provenance
+                                        if p.source_id in retracted_source_ids})
+            if retracted_sources:
+                qualifiers.append("supporting evidence retracted; interpretation uncertain")
+                uncertain = True
             temporal_evidence = [
                 dict(temporal)
                 for member in members
@@ -602,6 +619,7 @@ class PageMaterializer:
                 "claim_ids": member_ids,
                 "synthesis_origin": fact.synthesis_origin,
                 "memory_state": fact.state,
+                "prominence": fact.prominence,
                 "synthesis_confidence": fact.confidence,
                 "synthesis_reason": fact.reason,
                 "manual_text": fact.manual_text,
@@ -635,12 +653,9 @@ class PageMaterializer:
                     }
                     for linked_id in links
                 ],
-                "authoritative": not pending,
-                "reconciliation_proposal_ids": sorted({
-                    proposal_id
-                    for claim_id in member_ids
-                    for proposal_id in pending_proposals_by_claim.get(claim_id, set())
-                }),
+                "authoritative": not uncertain,
+                "reconciliation_proposal_ids": review_ids,
+                "identity_review_ids": identity_reviews,
             })
         return items
 

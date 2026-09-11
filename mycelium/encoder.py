@@ -13,7 +13,7 @@ from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
 from mycelium.config import Config
 from mycelium import prompts
-from mycelium.structured_outputs import extraction_output_model
+from mycelium.structured_outputs import extraction_output_model, extraction_records
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimProvenance,
@@ -443,8 +443,9 @@ class Encoder:
                     else:
                         response = state.response
                     response = claim_model.model_validate(response).model_dump()
+                    records = extraction_records(response)
                     staged_claims = self._build_extracted_claims(
-                        source, response, state.batch_id,
+                        source, records, state.batch_id,
                         context_sources=[*context_sources, replace(source, segments=neighbors)]
                     )
                     # Persist validated output before publishing claims so a write
@@ -460,7 +461,7 @@ class Encoder:
                             self.artifacts.save_claim(claim)
                         claim_ids.append(claim.claim_id)
                     source_only = {
-                        item["segment_id"]: item["reason"] for item in response["source_only"]
+                        item["segment_id"]: item["reason"] for item in records["source_only"]
                     }
                     for segment_id in batch_ids:
                         supporting_ids = [
@@ -577,23 +578,27 @@ class Encoder:
                 segment for segment in source.segments
                 if segment.segment_id in segment_ids
             ]
-            timestamped_segments = [
-                segment for segment in cited_segments if segment.timestamp
-            ]
             anchor_segment_id = str(
                 raw.get("temporal_anchor_segment_id") or ""
             ).strip()
+            cited_context_ids = set(raw.get("context_segment_ids", []))
+            anchor_candidates = [
+                *cited_segments,
+                *(segment for prior in context_sources or [] for segment in prior.segments
+                  if segment.segment_id in cited_context_ids),
+            ]
             anchor_segment = next(
                 (
-                    segment for segment in timestamped_segments
+                    segment for segment in anchor_candidates
                     if segment.segment_id == anchor_segment_id
                 ),
                 None,
             )
+            timestamped_evidence = [segment for segment in anchor_candidates if segment.timestamp]
             unambiguous_timestamp = None
             if not anchor_segment_id:
                 cited_timestamps = {
-                    segment.timestamp for segment in timestamped_segments
+                    segment.timestamp for segment in timestamped_evidence
                 }
                 if len(cited_timestamps) == 1:
                     unambiguous_timestamp = next(iter(cited_timestamps))
@@ -601,12 +606,11 @@ class Encoder:
                 temporal_anchor = anchor_segment.timestamp
             elif unambiguous_timestamp is not None:
                 temporal_anchor = unambiguous_timestamp
-            elif timestamped_segments:
+            elif timestamped_evidence:
                 temporal_anchor = None
             else:
                 temporal_anchor = source.occurred_at
             context_provenance = []
-            cited_context_ids = set(raw.get("context_segment_ids", []))
             for prior in context_sources or []:
                 cited = [seg.segment_id for seg in prior.segments if seg.segment_id in cited_context_ids]
                 if cited:
@@ -633,7 +637,7 @@ class Encoder:
                 recorded_at=source.recorded_at,
                 confidence=0.8,
                 facets=normalize_temporal_facets(
-                    facets, temporal_anchor, claim_text
+                    facets, temporal_anchor
                 ),
                 claim_type=str(raw.get("claim_type") or "unknown"),
                 predicate=str(raw["predicate"]) if raw.get("predicate") else None,

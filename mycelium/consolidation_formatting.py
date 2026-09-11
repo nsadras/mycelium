@@ -74,11 +74,16 @@ class RoutingFormatter:
                 claims = []
                 for claim_id in decision.identity_evidence_claim_ids:
                     claim = self.artifacts.get_claim(claim_id)
+                    if claim.status != "active" or any(self.artifacts.get_source(p.source_id).status != "active" for p in claim.provenance):
+                        continue
                     claims.append({"claim_id": claim.claim_id, "text": claim.text,
                                    "provenance": [{"source_id": p.source_id, "segment_ids": p.segment_ids}
                                                   for p in claim.provenance]})
-                grounding.append({"decision_id": decision.decision_id, "reason": decision.reason,
-                                  "claims": claims})
+                # Model explanations contain call-local aliases; retain them in the
+                # audit record, not in evidence for a later alias namespace.
+                grounding.append({"decision_id": decision.decision_id,
+                                  "claims": claims,
+                                  **({"reviewer_note": decision.reviewer_note} if decision.reviewer_note else {})})
             if grounding:
                 lines.append("  identity_grounding=" + json.dumps(grounding, ensure_ascii=False))
             facts = self.artifacts.list_consolidated_facts(
@@ -129,11 +134,12 @@ class RoutingFormatter:
                 except FileNotFoundError:
                     continue
                 claims.append(f"{claim.claim_id}: {claim.text}")
+            reviewer_note = f"reviewer_note={decision.reviewer_note}; " if decision.reviewer_note else ""
             blocks.append(
                 f"[{decision.decision_id}] type={decision.proposed_entity_type}; "
                 f"title={decision.proposed_title!r}; "
                 f"candidate_entity_ids={','.join(decision.candidate_entity_ids) or 'none'}; "
-                f"reason={decision.reason}; "
+                f"{reviewer_note}"
                 f"scope={decision.proposed_scope or 'unspecified'}; "
                 f"identity_defining_evidence={' | '.join(claims) or 'none'}"
             )

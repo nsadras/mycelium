@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 
 from mycelium.artifacts import ArtifactStore, MemoryClaim, ReconsolidationProposal
 from mycelium.facts import FactResolver
 from mycelium.materialization import PageMaterializer
+from mycelium.lifecycle_transaction import LifecycleTransaction, mutation_lock
+from mycelium.store import WikiStore
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,33 @@ class ReconsolidationReviewService:
         self.resolver = resolver
 
     async def approve(
+        self, proposal_id: str, *, reviewer_note: str | None = None
+    ) -> ReviewResult:
+        return await self._transaction("approve", proposal_id, reviewer_note)
+
+    async def reject(
+        self, proposal_id: str, *, reviewer_note: str | None = None
+    ) -> ReviewResult:
+        return await self._transaction("reject", proposal_id, reviewer_note)
+
+    async def _transaction(self, action, proposal_id, reviewer_note):
+        async with mutation_lock(self.artifacts.root):
+            transaction = LifecycleTransaction(self.artifacts.root, self.materializer.wiki.wiki_dir)
+            transaction.recover()
+            operation_id = transaction.operation_id(action, {"proposal_id": proposal_id, "reviewer_note": reviewer_note})
+            prior = transaction.completed(operation_id)
+            if prior is not None:
+                return ReviewResult(ReconsolidationProposal(**prior["proposal"]), prior["pages_updated"], prior["pages_deleted"])
+            async with transaction.stage() as (paths, before):
+                artifacts = ArtifactStore(paths["artifacts"])
+                materializer = PageMaterializer(WikiStore(paths["wiki"]), artifacts, self.materializer.config)
+                service = ReconsolidationReviewService(artifacts, materializer, FactResolver(self.resolver.llm, artifacts))
+                method = service._approve if action == "approve" else service._reject
+                result = await method(proposal_id, reviewer_note=reviewer_note)
+                transaction.publish(operation_id, paths, before, asdict(result))
+                return result
+
+    async def _approve(
         self, proposal_id: str, *, reviewer_note: str | None = None
     ) -> ReviewResult:
         proposal = self.artifacts.get_reconsolidation_proposal(proposal_id)
@@ -80,7 +109,7 @@ class ReconsolidationReviewService:
             self.artifacts.save_reconsolidation_proposal(proposal)
             raise
 
-    async def reject(
+    async def _reject(
         self, proposal_id: str, *, reviewer_note: str | None = None
     ) -> ReviewResult:
         proposal = self.artifacts.get_reconsolidation_proposal(proposal_id)

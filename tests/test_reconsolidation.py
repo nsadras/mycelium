@@ -52,10 +52,10 @@ def test_coverage_distinguishes_review_holdback_from_missing_presentation(tmp_pa
 def test_truth_schema_separates_incoming_from_prior_targets():
     schema = fact_truth_output_model(["C001"])
     valid = {"comparisons":[{"target":"C001","scope":"same","reason":"Same state."}],
-             "relation":"supersedes","targets":["C001"],"reason":"The incoming evidence replaces the prior state."}
-    assert schema.model_validate(valid).relation == "supersedes"
+             "relation":"supersedes","changed_targets":["C001"],"reason":"The incoming evidence replaces the prior state."}
+    assert schema.model_validate(valid).root.relation == "supersedes"
     with pytest.raises(ValidationError):
-        schema.model_validate({**valid,"targets":["C002"]})
+        schema.model_validate({**valid,"changed_targets":["C002"]})
 
 
 
@@ -126,7 +126,7 @@ async def test_owner_plan_groups_independent_support(tmp_path):
     placements = [place(artifacts, first), place(artifacts, second)]
     llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = [{
-        "facts": [{
+        "facts": [{"prominence": "briefing",
             "member_claim_aliases": ["C001", "C002"],
             "memory_scope": "Preferred update format.",
             "state": "current",
@@ -167,7 +167,7 @@ async def test_synthesis_uses_corrected_claim_not_original_source(tmp_path):
         assert corrected.text in user and related.text in user
         assert "I prefer tea." not in user
         assert corrected.recorded_at not in user
-        return {"facts": [{'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001', 'C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': 'The user prefers coffee and drinks it each morning.'}]}
+        return {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001', 'C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': 'The user prefers coffee and drinks it each morning.'}]}
 
     llm.call_structured.side_effect = respond
     result = await FactResolver(llm, artifacts).resolve(
@@ -197,7 +197,7 @@ async def test_synthesis_receives_only_manual_previous_presentations(tmp_path, m
         assert kwargs["debug_label"] == "dream-fact-synthesis"
         assert old.text in user and new.text in user
         assert (previous.text in user) == manual
-        return {"facts": [{'memory_scope': "The user's update preference.", 'member_claim_aliases': ['C001', 'C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': 'The user prefers concise written updates.'}]}
+        return {"facts": [{"prominence": "briefing", 'memory_scope': "The user's update preference.", 'member_claim_aliases': ['C001', 'C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': 'The user prefers concise written updates.'}]}
 
     llm.call_structured.side_effect = respond
     result = await FactResolver(llm, artifacts)._resolve_owner_step(
@@ -220,14 +220,14 @@ async def test_synthesis_keeps_distinct_claim_groups(tmp_path):
     llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = [{
         "facts": [
-            {
+            {"prominence": "briefing",
                 "member_claim_aliases": ["C001"],
                 "memory_scope": "Cooking class.",
                 "state": "history",
                 "section_key": "preferences_working_style",
                 "text": None,
             },
-            {
+            {"prominence": "briefing",
                 "member_claim_aliases": ["C002"],
                 "memory_scope": "Exercise.",
                 "state": "history",
@@ -277,7 +277,7 @@ async def test_grouped_project_roles_preserve_each_claims_exact_project_link(tmp
         placements.append(placement)
     llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = [{
-        "facts": [{
+        "facts": [{"prominence": "briefing",
             "member_claim_aliases": ["C001", "C002"],
             "memory_scope": "Permit coordination responsibilities.",
             "state": "current",
@@ -305,7 +305,7 @@ async def test_grouped_project_roles_preserve_each_claims_exact_project_link(tmp
 
 
 @pytest.mark.asyncio
-async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_path):
+async def test_truth_change_publishes_both_accounts_for_optional_review(tmp_path):
     artifacts = setup_owner(tmp_path)
     old = claim("old", "The user prefers tea.", "2026-08-01T12:00:00")
     new = claim("new", "The user now prefers coffee.", "2026-08-05T12:00:00")
@@ -321,7 +321,7 @@ async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_p
         {
             "comparisons": [{"target": "C001", "scope": "same", "reason": "Same preference."}],
             "relation": "supersedes",
-            "targets": ["C001"],
+            "changed_targets": ["C001"],
             "reason": "The newer statement explicitly replaces the old preference.",
         },
     ]
@@ -334,11 +334,12 @@ async def test_truth_change_preserves_accepted_fact_and_withholds_incoming(tmp_p
     )
 
     assert result.failures == []
-    assert [item.fact_id for item in result.facts] == [old_fact.fact_id]
+    assert old_fact in result.facts
+    assert {cid for f in result.facts for cid in f.member_claim_ids} == {"old", "new"}
     assert len(result.proposals) == 1
     assert result.proposals[0].incoming_claim_ids == ["new"]
     assert result.proposals[0].target_claim_ids == ["old"]
-    assert next(item for item in result.placements if item.claim_id == "new").section_key == "needs_review"
+    assert any(f.member_claim_ids == ["new"] for f in result.facts)
 
 
 @pytest.mark.asyncio
@@ -362,10 +363,10 @@ async def test_repeated_evidence_joins_and_preserves_the_existing_fact(tmp_path)
         {
             "comparisons": [{"target": "C001", "scope": "same", "reason": "Same preference."}],
             "relation": "no_change",
-            "targets": [],
+            "changed_targets": [],
             "reason": "The new claim independently supports the existing state.",
         },
-        {"facts": [{
+        {"facts": [{"prominence": "briefing",
             "member_claim_aliases": ["C001", "C002"],
             "memory_scope": "Preferred update format.",
             "state": "current",
@@ -408,8 +409,8 @@ async def test_truth_changes_are_decided_sequentially_and_cannot_compete(tmp_pat
             "candidate_fact_ids": ["X001"],
             "reason": "The fact may be the prior bicycle state.",
         }}},
-        {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'supersedes', 'targets': ['C001'], 'reason': 'The new color replaces the old color.'},
-        {"facts": [{'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C003'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
+        {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'supersedes', 'changed_targets': ['C001'], 'reason': 'The new color replaces the old color.'},
+        {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C003'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -448,8 +449,8 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path
             "candidate_fact_ids": ["X001"],
             "reason": "The prior preference may express the same durable state.",
         }}},
-        {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'targets': [], 'reason': 'The evidence does not explicitly replace the prior preference.'},
-        {"facts": [{'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}, {'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
+        {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'The evidence does not explicitly replace the prior preference.'},
+        {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}, {"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -480,8 +481,8 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
             "candidate_fact_ids": ["X001"],
             "reason": "The prior fact may express the same durable state.",
         }}},
-        {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'targets': [], 'reason': 'No change proposed by this test decision.'},
-        {"facts": [{'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
+        {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'No change proposed by this test decision.'},
+        {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -518,9 +519,9 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
         {"decisions": {alias: {"candidate_fact_ids": ["X001"], "reason": "Candidate for review."}}}
         for alias in ("C001",)
     ] + [
-        {'comparisons': [{'target': 'C001', 'scope': 'distinct', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'targets': [], 'reason': 'No new proposal.'}
+        {'comparisons': [{'target': 'C001', 'scope': 'distinct', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'No new proposal.'}
         for alias in ("C002",)
-    ] + [{"facts": [{'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'text': None, 'state': 'current', 'section_key': 'preferences_working_style'}]}]
+    ] + [{"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'text': None, 'state': 'current', 'section_key': 'preferences_working_style'}]}]
 
     result = await FactResolver(llm, artifacts).resolve(
         placements, affected_entity_ids={"you"}, incoming_claim_ids={"pending", "other"},
@@ -529,7 +530,7 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
 
     assert not result.failures
     assert old_fact in result.facts
-    assert {cid for item in result.facts for cid in item.member_claim_ids} == {"old", "other"}
+    assert {cid for item in result.facts for cid in item.member_claim_ids} == {"old", "other", "pending"}
     assert not result.proposals
     synthesis = llm.call_structured.await_args_list[-1]
     assert synthesis.kwargs["debug_label"] == "dream-fact-synthesis"
@@ -558,7 +559,8 @@ async def test_pending_review_alone_does_not_trigger_more_model_work(tmp_path):
         [], affected_entity_ids={"you"}, incoming_claim_ids=set(), dream_run_id="next",
     )
     llm.call_structured.assert_not_awaited()
-    assert result.facts == [old_fact]
+    assert old_fact in result.facts
+    assert any(f.member_claim_ids == ["pending"] for f in result.facts)
     assert not result.failures
     assert not result.proposals
     assert not result.deleted_fact_ids
@@ -663,7 +665,7 @@ async def test_large_new_claim_sets_are_grouped_incrementally(tmp_path):
         if label == "dream-fact-synthesis":
             call_counts["synthesis"] += 1
             batch = claims[:12] if call_counts["synthesis"] == 1 else claims[12:]
-            return {"facts": [{'memory_scope': 'The fixture memory.', 'member_claim_aliases': [f'C{index:03d}'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None} for index, item in enumerate(batch, 1)]}
+            return {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': [f'C{index:03d}'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None} for index, item in enumerate(batch, 1)]}
         raise AssertionError(f"Unexpected model call: {label}")
 
     llm.call_structured.side_effect = respond
@@ -706,11 +708,10 @@ async def test_approve_supersession_mutates_claims_and_reruns_resolver(tmp_path)
         affected_entity_ids=["you"],
     )
     artifacts.save_reconsolidation_proposal(proposal)
-    new_fact = fact(new)
-    resolver = AsyncMock()
-    resolver.resolve.return_value = FactResolutionResult(
-        facts=[new_fact], deleted_fact_ids={old_fact.fact_id}
-    )
+    from tests.lifecycle_support import lifecycle_response
+    llm = AsyncMock(context_window_tokens=32768)
+    llm.call_structured.side_effect = lifecycle_response
+    resolver = FactResolver(llm, artifacts)
     service = ReconsolidationReviewService(
         artifacts,
         PageMaterializer(wiki, artifacts, Config.defaults()),
@@ -722,8 +723,8 @@ async def test_approve_supersession_mutates_claims_and_reruns_resolver(tmp_path)
     assert result.proposal.status == "applied"
     assert artifacts.get_claim("old").status == "superseded"
     assert artifacts.get_claim("new").links == [{"relation": "supersedes", "target": "old"}]
-    assert {item.fact_id for item in artifacts.list_consolidated_facts()} == {"fact-new"}
-    resolver.resolve.assert_awaited_once()
+    assert {cid for item in artifacts.list_consolidated_facts() for cid in item.member_claim_ids} == {"new"}
+    llm.call_structured.assert_awaited()
 
 
 def test_claim_evidence_carries_only_cited_occurrence_anchors(tmp_path):

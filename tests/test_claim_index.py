@@ -86,8 +86,10 @@ async def test_incremental_index_reuses_vectors_for_metadata_and_removes_deleted
     await index.search("cello")
     assert len(embedder.document_batches) == 1
     artifacts.save_claim(replace(claim, status="superseded"))
-    assert await index.search("cello") == []
+    assert (await index.search("cello"))[0].memory_tier == "superseded"
     restarted = LanceClaimIndex(tmp_path / "index", artifacts, embedder)
+    assert (await restarted.search("cello"))[0].memory_tier == "superseded"
+    artifacts.save_claim(replace(claim, status="retracted"))
     assert await restarted.search("cello") == []
 
 

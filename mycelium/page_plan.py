@@ -35,6 +35,8 @@ def page_plan_model(evidence_aliases, entity_types):
         pages: pages_model
         owner_entity: Literal.__getitem__((*entity_types, ""))
         reason: str | None
+        uncertainty: str | None
+        prominence: Literal["briefing", "detail"]
 
         @model_validator(mode="after")
         def validate_destinations(self):

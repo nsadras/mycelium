@@ -14,7 +14,7 @@ interface SidebarProps {
   setActiveTab: (tab: 'chat' | 'engram' | 'memory' | 'wiki' | 'logs') => void;
   onBuildMemory: () => void;
   onMemoryOperation: (
-    operation: 'build' | 'clear-memory' | 'clear-wiki'
+    operation: 'build' | 'clear-memory' | 'rebuild-wiki'
   ) => void;
   runningMemoryOperation: string | null;
   assistantStatus: AssistantStatus;
@@ -44,10 +44,10 @@ export default function Sidebar({
 
   const memoryOps = [
     {
-      id: 'clear-wiki',
-      label: 'Clear Wiki Pages',
+      id: 'rebuild-wiki',
+      label: 'Rebuild Wiki Views',
       icon: Trash2,
-      tooltip: 'Delete all wiki pages but keep all episodic logs and sessions intact.',
+      tooltip: 'Regenerate wiki views while preserving evidence and corrections.',
     },
     {
       id: 'clear-memory',

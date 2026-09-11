@@ -134,19 +134,10 @@ class DreamPolicy:
                 assert current is not None
                 merged_routes.append(current)
                 continue
-            if not prior.identity_blocker_ids:
-                merged_routes.append(current or prior)
-                continue
-            if current is None or current.placed:
-                merged_routes.append(prior)
-                continue
-            merged_routes.append(replace(
-                current,
-                identity_blocker_ids=tuple(sorted({
-                    *prior.identity_blocker_ids,
-                    *current.identity_blocker_ids,
-                })),
-            ))
+            selected = current or prior
+            merged_routes.append(replace(selected, identity_blocker_ids=tuple(sorted({
+                *prior.identity_blocker_ids, *selected.identity_blocker_ids,
+            }))))
         revision.routes = merged_routes
         return revision
 

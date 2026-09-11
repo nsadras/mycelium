@@ -29,7 +29,7 @@ async def test_build_snapshot_leaves_concurrent_capture_pending_and_replays_safe
         memory.artifacts.save_episode(episode)
 
     memory.encoder._extract_claims = AsyncMock(side_effect=extract)
-    organizer = SimpleNamespace(run=AsyncMock(return_value=DreamReport(0, 0, 0)))
+    organizer = SimpleNamespace(run=AsyncMock(return_value=DreamReport(0, 0, 0)), materializer=memory.consolidator.materializer)
     memory.pipeline.consolidator = organizer
     async with asyncio.timeout(10), asyncio.TaskGroup() as tasks:
         build = tasks.create_task(memory.consolidate(ConsolidationRequest()))
@@ -83,13 +83,10 @@ async def test_combined_batch_replays_validated_output_after_interrupted_claim_w
     captured = await memory.ingest_source(SourceInput("USER: Two assertions.", "chat"))
     source = memory.artifacts.get_source(captured.source_ids[0])
     segment_id = source.segments[0].segment_id
-    response = {
-        "source_only": [],
-        "claims": [
+    response = {"segments": {segment_id: {"claims": [
             {'temporal_status': 'unknown', 'text': text, 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': [segment_id], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}
             for text in ("The user prefers tea.", "The user avoids coffee.")
-        ],
-    }
+        ]}}}
     model = AsyncMock(return_value=response)
     memory.encoder.llm = SimpleNamespace(call_structured=model)
     save_claim = memory.artifacts.save_claim
@@ -107,7 +104,7 @@ async def test_combined_batch_replays_validated_output_after_interrupted_claim_w
     episode = memory.artifacts.list_episodes()[0]
     assert episode.extraction_batches[0].status == "failed"
     assert episode.extraction_batches[0].response is not None
-    assert episode.extraction_batches[0].response["claims"][0]["facets"] == {
+    assert episode.extraction_batches[0].response["segments"][segment_id]["claims"][0]["facets"] == {
         "when": None, "deadline": None, "inference_basis": None,
     }
     assert len(memory.artifacts.list_claims()) == 1
@@ -148,12 +145,9 @@ async def test_cross_turn_context_citations_keep_original_source_identity(tmp_pa
     )
 
     async def response(_system, _user, output_type, **kwargs):
-        return {
-            "source_only": [],
-            "claims": [
+        return {"segments": {new_segment: {"claims": [
                 {'temporal_status': 'unknown', 'text': 'The user will lead the workshop.', 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': [new_segment], 'context_segment_ids': [prior_segment], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}
-            ]
-        }
+            ]}}}
 
     memory.encoder.llm = SimpleNamespace(
         call_structured=AsyncMock(side_effect=response)

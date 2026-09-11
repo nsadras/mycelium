@@ -361,6 +361,7 @@ class IdentityWorkUnit:
     source_ids: list[str]
     status: str = "pending"
     stage: str = "subject_nodes"
+    request_digest: str | None = None
     attempt_count: int = 0
     subject_nodes: list[dict[str, Any]] = field(default_factory=list)
     identity_node_decisions: dict[str, dict[str, Any]] = field(
@@ -426,8 +427,12 @@ class ClaimPlacement:
     relationship_kind: str | None = None
     identity_blocker_ids: list[str] = field(default_factory=list)
     page_sections: dict[str, str] = field(default_factory=dict)
+    uncertainty: str | None = None
+    prominence: str = "briefing"
 
     def __post_init__(self) -> None:
+        if self.prominence not in {"briefing", "detail"}:
+            raise ValueError("Placement prominence must be briefing or detail")
         if self.page_sections:
             if self.status != "placed" or self.owner_entity_id not in self.page_sections:
                 raise ValueError("Page destinations require a placed statement and its primary owner")
@@ -515,8 +520,11 @@ class ConsolidatedFact:
     created_at: str
     updated_at: str
     manual_text: bool = False
+    prominence: str = "briefing"
 
     def __post_init__(self) -> None:
+        if self.prominence not in {"briefing", "detail"}:
+            raise ValueError("Fact prominence must be briefing or detail")
         if self.state not in {"current", "history"}:
             raise ValueError(f"Unsupported consolidated-fact state: {self.state}")
         if self.synthesis_origin not in {"claim", "model", "manual"}:

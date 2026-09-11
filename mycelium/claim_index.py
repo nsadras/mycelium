@@ -123,6 +123,7 @@ class LanceClaimIndex:
                 for directory in (
                 self.artifacts.claims_dir, self.artifacts.entities_dir,
                 self.artifacts.placements_dir, self.artifacts.reconsolidation_proposals_dir,
+                self.artifacts.sources_dir,
                 ) for path in sorted(directory.glob("*.json")) for stat in [path.stat()]
             ))
             if revision != self._revision:
@@ -152,10 +153,14 @@ class LanceClaimIndex:
 
     def _claim_records(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        for claim in self.artifacts.list_claims(status="active"):
+        for claim in self.artifacts.list_claims():
+            if claim.status == "retracted":
+                continue
             tier = self.artifacts.memory_tier(claim.claim_id)
             if tier == "source":
                 continue
+            if claim.status == "superseded":
+                tier = "superseded"
             placement = self.artifacts.placement_for_claim(claim.claim_id)
             entity = None
             if placement and placement.owner_entity_id:

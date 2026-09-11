@@ -494,11 +494,7 @@ class ConsolidationProcess:
             episode = episodes_by_source.get(source.source_id)
             if (
                 episode is None
-                or episode.extraction_status == "failed"
-                or (
-                    episode.extraction_status == "partial"
-                    and not episode.claim_ids
-                )
+                or episode.extraction_status != "complete"
             ):
                 failed_source_ids.add(entry.entry_id)
                 failures.append({

@@ -8,22 +8,24 @@ import pytest
 from pydantic import ValidationError
 
 from mycelium import Mycelium, prompts
-from mycelium.structured_outputs import fact_truth_output_model
+from mycelium.structured_outputs import fact_truth_output_model, extraction_records
 
 
 def test_truth_change_requires_same_scope():
     schema = fact_truth_output_model(["C001", "C002"])
     decision = {"comparisons":[{"target":"C001","scope":"same","reason":"Same object."},
                                {"target":"C002","scope":"distinct","reason":"Another object."}],
-                "relation":"contradicts","targets":["C001"],"reason":"Same object and time."}
+                "relation":"contradicts","changed_targets":["C001"],"reason":"Same object and time."}
     schema.model_validate(decision)
     with pytest.raises(ValidationError, match="same scope"):
-        schema.model_validate({**decision,"targets":["C002"]})
+        schema.model_validate({**decision,"changed_targets":["C002"]})
 
 
 def test_truth_schema_establishes_scope_before_verdict():
     schema = fact_truth_output_model(["C001"]).model_json_schema()
-    assert list(schema["properties"])[0] == "comparisons"
+    for branch in schema["anyOf"]:
+        definition = schema["$defs"][branch["$ref"].rsplit("/", 1)[1]]
+        assert list(definition["properties"])[0] == "comparisons"
 
 
 TEMPORAL_CASES = [
@@ -117,9 +119,9 @@ def test_extraction_requires_explicit_temporal_classification():
     schema = extraction_output_model(["s1"])
     claim = {'text': 'A stored assertion.', 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': ['s1'], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}
     with pytest.raises(ValidationError, match="temporal_status"):
-        schema.model_validate({"claims": [claim], "source_only": []})
+        schema.model_validate({"segments": {"s1": {"claims": [claim]}}})
     claim["temporal_status"] = "unknown"
-    schema.model_validate({"claims": [claim], "source_only": []})
+    schema.model_validate({"segments": {"s1": {"claims": [claim]}}})
 
 
 @pytest.mark.integration
@@ -144,7 +146,7 @@ async def test_extraction_temporal_and_fidelity_contract(tmp_path, monkeypatch):
     response = await memory.llm.call_structured(system, user, extraction_output_model(ids),
                                                num_predict=8192, dump_success=True)
     (tmp_path / "response.json").write_text(json.dumps(response, indent=2))
-    claims = response["claims"]
+    claims = extraction_records(response)["claims"]
     assert {sid for c in claims for sid in c["segment_ids"]} == set(ids)
     for sid, state in {"S2": "past", "S4": "past", "S5": "past", "S6": "recurring"}.items():
         assert all(c["temporal_status"] == state for c in claims if sid in c["segment_ids"])
@@ -154,3 +156,28 @@ async def test_extraction_temporal_and_fidelity_contract(tmp_path, monkeypatch):
     ]:
         await check_meaning(memory, {"expected": expected, "forbidden": forbidden},
                             [c for c in claims if sid in c["segment_ids"]], tmp_path / f"meaning-{sid}.json")
+
+
+def test_truth_schema_requires_each_target_at_a_fixed_position():
+    schema = fact_truth_output_model(["C001", "C002"]).model_json_schema()
+    comparisons = schema["$defs"]["UnchangedTruth"]["properties"]["comparisons"]
+    assert comparisons["minItems"] == comparisons["maxItems"] == 2
+    for item, target in zip(comparisons["prefixItems"], ["C001", "C002"], strict=True):
+        definition = schema["$defs"][item["$ref"].rsplit("/", 1)[1]]
+        assert definition["properties"]["target"]["const"] == target
+
+
+def test_truth_verdict_variants_enforce_changed_targets_in_native_schema():
+    model = fact_truth_output_model(["C001"])
+    schema = model.model_json_schema()
+    unchanged = schema["$defs"]["UnchangedTruth"]["properties"]
+    changed = schema["$defs"]["ChangedTruth"]["properties"]
+    assert unchanged["changed_targets"]["maxItems"] == 0
+    assert changed["changed_targets"]["minItems"] == 1
+    valid = {"comparisons": [{"target": "C001", "scope": "same", "reason": "Same state."}],
+             "reason": "Compatible evidence.", "relation": "no_change", "changed_targets": []}
+    assert model.model_validate(valid).model_dump(mode="json") == valid
+    with pytest.raises(ValidationError):
+        model.model_validate({**valid, "changed_targets": ["C001"]})
+    with pytest.raises(ValidationError):
+        model.model_validate({**valid, "relation": "supersedes"})

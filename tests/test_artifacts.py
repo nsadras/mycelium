@@ -1,4 +1,4 @@
-from datetime import datetime
+from tests.extraction_support import extraction_response
 
 import pytest
 from pydantic import ValidationError
@@ -13,14 +13,13 @@ from mycelium.artifacts import (
     SourceDocument,
     SourceSegment,
     normalize_temporal_facets,
-    query_temporal_record,
     temporal_intervals_overlap,
 )
 from mycelium.config import Config
 from mycelium.encoder import Encoder
 from mycelium.store import LogStore
 from mycelium.structured_outputs import (
-    extraction_output_model,
+    extraction_output_model, extraction_records,
 )
 
 
@@ -31,44 +30,27 @@ async def capture_and_extract(encoder, *args, **kwargs):
     return entries
 
 
-def extraction_response(claims, source_only_segment_ids=()):
-    return {
-        "claims": claims,
-        "source_only": [
-            {
-                "segment_id": segment_id,
-                "reason": "The segment contains no durable assertion.",
-            }
-            for segment_id in source_only_segment_ids
-        ],
-    }
-
 
 def test_combined_extraction_enforces_exact_accounting_and_citations():
     schema = extraction_output_model(["a", "b"], ["prior"])
     claim = {'temporal_status': 'unknown', 'text': 'Ava prefers tea.', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': ['a'], 'context_segment_ids': ['prior'], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}
     valid = extraction_response([claim], ["b"])
-    assert schema.model_validate(valid).claims[0].context_segment_ids == ["prior"]
+    assert extraction_records(schema.model_validate(valid).model_dump())["claims"][0]["context_segment_ids"] == ["prior"]
     import copy
     invalid = []
     missing = copy.deepcopy(valid)
-    missing["source_only"].pop()
+    del missing["segments"]["b"]
     invalid.append(missing)
-    duplicate = copy.deepcopy(valid)
-    duplicate["source_only"].append(dict(duplicate["source_only"][0]))
-    invalid.append(duplicate)
-    invalid.append({**valid, "claims": []})
-    uncited = copy.deepcopy(valid)
-    uncited["claims"][0]["segment_ids"] = ["b"]
-    invalid.append(uncited)
+    invalid.append({"segments": {"a": {"claims": []}, "b": {"reason": "Greeting."}}})
+    invalid.append({"segments": {**valid["segments"], "unknown": {"reason": "Greeting."}}})
     wrong_context = copy.deepcopy(valid)
-    wrong_context["claims"][0]["context_segment_ids"] = ["unknown"]
+    wrong_context["segments"]["a"]["claims"][0]["context_segment_ids"] = ["unknown"]
     invalid.append(wrong_context)
     for response in invalid:
         with pytest.raises(ValidationError):
             schema.model_validate(response)
     empty = extraction_response([], ["a", "b"])
-    assert schema.model_validate(empty).claims == []
+    assert extraction_records(schema.model_validate(empty).model_dump())["claims"] == []
 
 
 @pytest.mark.asyncio
@@ -83,7 +65,7 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
     # Make the mock use the generated segment id returned in the extraction prompt.
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
-        claim = dict(llm.call_structured.return_value["claims"][0])
+        claim = dict(extraction_records(llm.call_structured.return_value)["claims"][0])
         claim["segment_ids"] = [segment_id]
         return extraction_response([claim])
     llm.call_structured.side_effect = response
@@ -476,7 +458,7 @@ async def test_encoder_records_uncovered_segments_without_repair(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_encoder_rejects_duplicate_source_only_segments(tmp_path):
+async def test_encoder_rejects_undeclared_segment_decisions(tmp_path):
     llm = AsyncMock()
     artifacts = ArtifactStore(tmp_path / "artifacts")
     encoder = Encoder(
@@ -489,7 +471,7 @@ async def test_encoder_rejects_duplicate_source_only_segments(tmp_path):
     async def response(system, user, output_type, **kwargs):
         segment_id = user.split("[", 1)[1].split("]", 1)[0]
         value = extraction_response([], [segment_id])
-        value["source_only"].append(dict(value["source_only"][0]))
+        value["segments"]["unknown"] = {"reason": "No new claim."}
         return value
 
     llm.call_structured.side_effect = response
@@ -502,7 +484,7 @@ async def test_encoder_rejects_duplicate_source_only_segments(tmp_path):
 
     episode = artifacts.list_episodes()[0]
     assert episode.extraction_status == "partial"
-    assert "source_only" in str(episode.extraction_error)
+    assert "unknown" in str(episode.extraction_error)
     assert artifacts.list_claims() == []
 
 
@@ -636,7 +618,7 @@ async def test_encoder_routes_image_urls_through_semantic_coverage(tmp_path):
         ]
         target_ids = (
             source_ids
-            if "source_only" in output_type.model_fields
+            if "segments" in output_type.model_fields
             else source_ids[:1]
         )
         claim = {'temporal_status': 'unknown', 'text': 'Ava shared a painting.', 'about': [{'entity': 'Ava', 'role': 'subject'}], 'segment_ids': [target_ids[0]], 'facets': {'when': None, 'deadline': None, 'inference_basis': None}, 'claim_type': 'unknown', 'evidence_modality': 'unknown'}
@@ -684,9 +666,7 @@ async def test_encoder_batches_large_initial_extractions(tmp_path):
     ]
 
     async def response(system, user, output_type, **kwargs):
-        from typing import get_args
-        item_type = get_args(output_type.model_fields["source_only"].annotation)[0]
-        segment_ids = list(get_args(item_type.model_fields["segment_id"].annotation))
+        segment_ids = list(output_type.model_fields["segments"].annotation.model_fields)
         assert len(segment_ids) <= 48
         return extraction_response([], segment_ids)
 
@@ -737,14 +717,9 @@ def test_human_readable_timestamp_anchors_relative_dates():
     }
 
 
-def test_temporal_facets_recover_relative_phrase_from_claim_text():
-    facets = normalize_temporal_facets(
-        {}, "4:24 pm on 16 March, 2023", "Ava visited Paris yesterday."
-    )
-
-    assert facets["temporal"]["expression"] == "yesterday"
-    assert facets["temporal"]["start"] == "2023-03-15"
-    assert facets["temporal"]["precision"] == "day"
+def test_omitted_temporal_fields_stay_unresolved():
+    facets = normalize_temporal_facets({}, "4:24 pm on 16 March, 2023")
+    assert "temporal" not in facets
 
 
 def test_month_relative_time_preserves_month_precision():
@@ -827,18 +802,6 @@ def test_meeting_deadlines_resolve_as_due_dates(expression, expected):
     assert facets["temporal"]["end"] == expected
 
 
-def test_deadline_can_be_recovered_from_claim_text():
-    facets = normalize_temporal_facets(
-        {},
-        "4:24 pm on 16 March, 2023",
-        "Ava committed to sending the report by Friday.",
-    )
-
-    assert facets["temporal"]["expression"] == "Friday"
-    assert facets["temporal"]["role"] == "deadline"
-    assert facets["temporal"]["start"] == "2023-03-17"
-
-
 def test_year_relative_time_preserves_year_precision():
     facets = normalize_temporal_facets(
         {"when": "three years ago"}, "4:24 pm on 16 March, 2023"
@@ -849,12 +812,10 @@ def test_year_relative_time_preserves_year_precision():
     assert facets["temporal"]["precision"] == "year"
 
 
-@pytest.mark.parametrize("from_text", [False, True])
-def test_unquantified_years_do_not_invent_a_calendar_year(from_text):
+def test_unquantified_years_do_not_invent_a_calendar_year():
     facets = normalize_temporal_facets(
-        {} if from_text else {"when": "years ago"},
+        {"when": "years ago"},
         "4:24 pm on 16 March, 2023",
-        "Ava visited the coast years ago." if from_text else "",
     )
     assert facets["temporal"]["expression"] == "years ago"
     assert facets["temporal"]["status"] == "unresolved"
@@ -912,18 +873,6 @@ def test_unbounded_vague_time_remains_unresolved(expression, direction):
     assert facets["temporal"]["certainty"] == "vague"
     assert facets["temporal"]["direction"] == direction
     assert "start" not in facets["temporal"]
-
-
-def test_temporal_query_resolves_deadline_range_at_query_time():
-    temporal = query_temporal_record(
-        "What deadlines are due next week?",
-        datetime.fromisoformat("2026-08-11T10:00:00-07:00"),
-    )
-
-    assert temporal is not None
-    assert temporal["role"] == "deadline"
-    assert temporal["start"] == "2026-08-17"
-    assert temporal["end"] == "2026-08-23"
 
 
 def test_temporal_interval_overlap_is_inclusive():
@@ -984,6 +933,7 @@ def test_artifact_store_clear_removes_all_derived_artifacts(tmp_path):
         "identity_maturity_assessments": 0,
         "identity_work_units": 0,
         "ingestion_operations": 0,
+        "lifecycle_operations": 0,
         "scope_cohorts": 0,
         "encounters": 0,
         "consolidated_facts": 0,
@@ -1085,10 +1035,7 @@ async def test_ingestion_key_rejects_different_input(tmp_path):
         llm, LogStore(tmp_path / "logs"), Config.defaults(), artifacts
     )
     llm.call_structured.side_effect = [
-        {"claims": [], "source_only": [{
-            "segment_id": "unused",
-            "reason": "No durable claim.",
-        }]},
+        {"segments": {"unused": {"reason": "No durable claim."}}},
     ]
     await capture_and_extract(encoder,
         "First transcript", "session-1", idempotency_key="stable-key"
@@ -1110,3 +1057,66 @@ def test_cached_json_returns_independent_values_and_observes_in_place_edits(tmp_
     assert ArtifactStore._read(path) == {"values": [1]}
     path.write_text(json.dumps({"values": [3, 4]}))
     assert ArtifactStore._read(path) == {"values": [3, 4]}
+
+
+def test_context_time_anchor_must_be_cited_and_controls_normalization(tmp_path):
+    schema = extraction_output_model(["S1"], ["P1", "P2"])
+    raw = {
+        "text": "Ava accepted the workshop scheduled tomorrow.",
+        "claim_type": "commitment", "evidence_modality": "speech",
+        "temporal_status": "future", "about": [{"entity": "Ava", "role": "subject"}],
+        "segment_ids": ["S1"], "context_segment_ids": ["P1"],
+        "temporal_anchor_segment_id": "P1",
+        "facets": {"when": "tomorrow", "deadline": None, "inference_basis": None},
+    }
+    response = extraction_records(schema.model_validate(extraction_response([raw])).model_dump())
+    with pytest.raises(ValidationError, match="cited evidence"):
+        schema.model_validate(extraction_response([{**raw, "temporal_anchor_segment_id": "P2"}]))
+    current_time = "2026-02-02T08:00:00+00:00"
+    prior_time = "2026-02-01T12:00:00+00:00"
+    source = SourceDocument("current", "agent_conversation", "s", current_time, current_time,
+                            ["Ava"], [SourceSegment("S1", 0, "Yes.", timestamp=current_time)])
+    prior = SourceDocument("prior", "agent_conversation", "p", prior_time, prior_time,
+                           ["Ava"], [SourceSegment("P1", 0, "Workshop tomorrow?", timestamp=prior_time)])
+    encoder = Encoder(AsyncMock(), LogStore(tmp_path / "logs"), Config.defaults(), ArtifactStore(tmp_path / "artifacts"))
+    claim = encoder._build_extracted_claims(source, response, "batch", context_sources=[prior])[0]
+    assert claim.facets["temporal"]["anchor"] == prior_time
+    assert claim.facets["temporal"]["start"] == "2026-02-02"
+    assert claim.provenance[1].source_id == "prior"
+    assert claim.provenance[1].segment_ids == ["P1"]
+    raw["temporal_anchor_segment_id"] = None
+    response = extraction_records(schema.model_validate(extraction_response([raw])).model_dump())
+    ambiguous = encoder._build_extracted_claims(source, response, "other-batch", context_sources=[prior])[0]
+    assert ambiguous.facets["temporal"]["status"] == "unresolved"
+    assert ambiguous.facets["temporal"].get("start") is None
+
+
+def test_extraction_schema_requires_a_decision_per_segment_and_cites_container():
+    schema = extraction_output_model(["S1", "S2"])
+    native = schema.model_json_schema()
+    decisions = native["$defs"]["SegmentDecisions"]
+    assert decisions["required"] == ["S1", "S2"]
+    assert decisions["additionalProperties"] is False
+    claim = {
+        "text": "Ava accepted the proposal.", "claim_type": "commitment",
+        "evidence_modality": "speech", "temporal_status": "future",
+        "about": [{"entity": "Ava", "role": "subject"}], "segment_ids": ["S1"],
+        "facets": {"when": None, "deadline": None, "inference_basis": None},
+    }
+    response = schema.model_validate({"segments": {
+        "S1": {"reason": "Proposal supporting the subsequent acceptance."}, "S2": {"claims": [claim]},
+    }}).model_dump()
+    records = extraction_records(response)
+    assert records["claims"][0]["segment_ids"] == ["S2", "S1"]
+    assert records["source_only"] == [{"segment_id": "S1", "reason": "Proposal supporting the subsequent acceptance."}]
+
+
+def test_segment_decisions_require_explicit_claims_or_reason_labels():
+    schema = extraction_output_model(["S1"])
+    with pytest.raises(ValidationError):
+        schema.model_validate({"segments": {"S1": "Ava teaches pottery."}})
+    with pytest.raises(ValidationError):
+        schema.model_validate({"segments": {"S1": {"claims": [], "reason": "Greeting."}}})
+    assert extraction_records(schema.model_validate({"segments": {
+        "S1": {"reason": "Greeting."},
+    }}).model_dump())["claims"] == []

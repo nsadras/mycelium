@@ -2,9 +2,16 @@
 
 from collections import Counter
 from collections.abc import Collection, Mapping
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    create_model,
+    model_validator,
+)
 
 from mycelium.ontology import (
     ClaimType,
@@ -28,6 +35,16 @@ class ExtractedDetails(BaseModel):
     inference_basis: str | None = Field(
         description="Evidence for an inferred assertion; null for a directly stated assertion"
     )
+
+
+class CorrectionMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    about: list[ExtractedEntityOutput] = Field(min_length=1)
+    claim_type: ClaimType
+    predicate: Literal["project_role"] | None
+    temporal_status: Literal["past", "current", "future", "recurring", "atemporal", "unknown"]
+    facets: ExtractedDetails
+    time_anchor: Literal["original", "correction"] | None
 
 
 class ExtractedClaimOutput(BaseModel):
@@ -58,12 +75,6 @@ def extraction_output_model(
     if not ids:
         raise ValueError("Extraction requires source segments")
     id_type = Literal.__getitem__(ids)
-    source_only = create_model(
-        "SourceOnlySegment",
-        __config__=ConfigDict(extra="forbid"),
-        segment_id=(id_type, ...),
-        reason=(str, Field(min_length=1, max_length=500)),
-    )
     fields = {}
     if context_segment_ids:
         context_type = Literal.__getitem__(tuple(sorted(set(context_segment_ids))))
@@ -76,8 +87,12 @@ def extraction_output_model(
     claim = create_model(
         "ExtractedStatement",
         __base__=ExtractedClaimOutput,
-        segment_ids=(list[id_type], Field(min_length=1, max_length=32)),
-        temporal_anchor_segment_id=(id_type | None, None),
+        segment_ids=(list[id_type], Field(max_length=32)),
+        temporal_anchor_segment_id=(
+            Literal.__getitem__(tuple(sorted(set(ids) | set(context_segment_ids))))
+            | None,
+            None,
+        ),
         **fields,
     )
     evidence_order = ["segment_ids", *fields, "temporal_status", "facets"]
@@ -93,39 +108,70 @@ def extraction_output_model(
             for name in ordered_fields
         },
     )
+    claimed = create_model(
+        "ExtractedClaims",
+        __config__=ConfigDict(extra="forbid"),
+        claims=(list[claim], Field(min_length=1, max_length=128)),
+    )
+    skipped = create_model(
+        "NoNewClaims",
+        __config__=ConfigDict(extra="forbid"),
+        reason=(str, Field(min_length=1, max_length=500)),
+    )
+    decision = claimed | skipped
+    segments = create_model(
+        "SegmentDecisions",
+        __config__=ConfigDict(extra="forbid"),
+        **{sid: (decision, ...) for sid in ids},
+    )
     base = create_model(
         "ExtractionResponse",
         __config__=ConfigDict(extra="forbid"),
-        claims=(list[claim], Field(max_length=128)),
-        source_only=(list[source_only], Field(max_length=len(ids))),
+        segments=(segments, ...),
     )
 
     class ExactExtractionResponse(base):
         @model_validator(mode="after")
-        def validate_accounting(self):
-            for claim in self.claims:
-                if (
-                    claim.temporal_anchor_segment_id is not None
-                    and claim.temporal_anchor_segment_id not in claim.segment_ids
-                ):
-                    raise ValueError(
-                        "A time anchor must be one of the claim's cited new segments"
-                    )
-            remainder = [d.segment_id for d in self.source_only]
-            cited = {s for c in self.claims for s in c.segment_ids}
-            if len(remainder) != len(set(remainder)):
-                raise ValueError("Duplicate source-only segment")
-            if cited & set(remainder):
-                raise ValueError(
-                    f"Cited segments cannot also be source-only: {sorted(cited & set(remainder))}"
-                )
-            if cited | set(remainder) != set(ids):
-                raise ValueError(
-                    f"Claims and source-only reasons must account for every new segment; missing={sorted(set(ids) - cited - set(remainder))}"
-                )
+        def validate_anchors(self):
+            for sid, value in self.segments:
+                if not isinstance(value, claimed):
+                    continue
+                for item in value.claims:
+                    if (
+                        item.temporal_anchor_segment_id is not None
+                        and item.temporal_anchor_segment_id
+                        not in [
+                            sid,
+                            *item.segment_ids,
+                            *getattr(item, "context_segment_ids", []),
+                        ]
+                    ):
+                        raise ValueError(
+                            "A time anchor must be one of the claim's cited evidence segments"
+                        )
             return self
 
     return ExactExtractionResponse
+
+
+def extraction_records(response: dict[str, Any]) -> dict[str, Any]:
+    """Flatten validated per-segment decisions, preserving their explicit evidence."""
+    claims = []
+    source_only = []
+    for sid, value in response["segments"].items():
+        if "reason" in value:
+            source_only.append({"segment_id": sid, "reason": value["reason"]})
+        else:
+            for claim in value["claims"]:
+                claims.append(
+                    {
+                        **claim,
+                        "segment_ids": list(
+                            dict.fromkeys([sid, *claim["segment_ids"]])
+                        ),
+                    }
+                )
+    return {"claims": claims, "source_only": source_only}
 
 
 class GroundedAnswerOutput(BaseModel):
@@ -171,39 +217,46 @@ def fact_truth_output_model(target_claim_aliases: Collection[str]) -> type[BaseM
     if not targets:
         raise ValueError("Truth review requires older targets")
     target_type = Literal.__getitem__(targets)
-    comparison = create_model(
-        "Comparison",
-        __config__=ConfigDict(extra="forbid"),
-        target=(target_type, ...),
-        scope=(Literal["same", "distinct", "unresolved"], ...),
-        reason=(str, Field(min_length=1, max_length=500)),
+    comparisons = tuple(
+        create_model(
+            f"Comparison{index}",
+            __config__=ConfigDict(extra="forbid"),
+            target=(Literal.__getitem__((target,)), ...),
+            scope=(Literal["same", "distinct", "unresolved"], ...),
+            reason=(str, Field(min_length=1, max_length=500)),
+        )
+        for index, target in enumerate(targets)
     )
-    base = create_model(
-        "TruthDecision",
-        __config__=ConfigDict(extra="forbid"),
-        comparisons=(
-            list[comparison],
-            Field(min_length=len(targets), max_length=len(targets)),
-        ),
-        relation=(Literal["no_change", "contradicts", "supersedes"], ...),
-        targets=(list[target_type], Field(max_length=len(targets))),
+    common = dict(
+        comparisons=(tuple[comparisons], ...),
         reason=(str, Field(min_length=1, max_length=800)),
     )
+    unchanged = create_model(
+        "UnchangedTruth",
+        __config__=ConfigDict(extra="forbid"),
+        **common,
+        relation=(Literal["no_change"], ...),
+        changed_targets=(list[target_type], Field(max_length=0)),
+    )
+    changed = create_model(
+        "ChangedTruth",
+        __config__=ConfigDict(extra="forbid"),
+        **common,
+        relation=(Literal["contradicts", "supersedes"], ...),
+        changed_targets=(
+            list[target_type],
+            Field(min_length=1, max_length=len(targets)),
+        ),
+    )
 
-    class ExactTruthDecision(base):
+    class ExactTruthDecision(RootModel[unchanged | changed]):
         @model_validator(mode="after")
         def validate_targets(self):
-            compared = [c.target for c in self.comparisons]
-            if len(set(compared)) != len(compared) or set(compared) != set(targets):
-                raise ValueError("Compare every older target exactly once")
-            if len(set(self.targets)) != len(self.targets):
+            decision = self.root
+            if len(set(decision.changed_targets)) != len(decision.changed_targets):
                 raise ValueError("Changed targets must be unique")
-            if (self.relation == "no_change") != (not self.targets):
-                raise ValueError(
-                    "A change requires targets; no_change requires an empty targets list"
-                )
-            scopes = {c.target: c.scope for c in self.comparisons}
-            if any(scopes[t] != "same" for t in self.targets):
+            scopes = {c.target: c.scope for c in decision.comparisons}
+            if any(scopes[t] != "same" for t in decision.changed_targets):
                 raise ValueError("Changed targets require established same scope")
             return self
 
@@ -252,18 +305,32 @@ def fact_synthesis_output_model(
         raise ValueError("Synthesis requires claims and allowed sections")
     alias_type = Literal.__getitem__(tuple(claim_texts))
     section_type = Literal.__getitem__(tuple(dict.fromkeys(allowed_sections)))
-    fact = create_model(
-        "SynthesizedFact",
-        __config__=ConfigDict(extra="forbid"),
+    common = dict(
         memory_scope=(str, Field(min_length=1)),
-        member_claim_aliases=(
-            list[alias_type],
-            Field(min_length=1, max_length=len(claim_texts)),
-        ),
+        prominence=(Literal["briefing", "detail"], ...),
         state=(Literal["current", "history"], ...),
         section_key=(section_type, ...),
-        text=(str | None, Field(max_length=1000)),
     )
+    singleton = create_model(
+        "SingleClaimFact",
+        __config__=ConfigDict(extra="forbid"),
+        member_claim_aliases=(list[alias_type], Field(min_length=1, max_length=1)),
+        text=(type(None), ...),
+        **common,
+    )
+    fact = singleton
+    if len(claim_texts) > 1:
+        combined = create_model(
+            "CombinedFact",
+            __config__=ConfigDict(extra="forbid"),
+            member_claim_aliases=(
+                list[alias_type],
+                Field(min_length=2, max_length=len(claim_texts)),
+            ),
+            text=(str, Field(min_length=1, max_length=1000)),
+            **common,
+        )
+        fact = Union[singleton, combined]
     base = create_model(
         "FactSynthesis",
         __config__=ConfigDict(extra="forbid"),

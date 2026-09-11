@@ -709,6 +709,7 @@ class ArtifactStore:
             "identity_maturity_assessments": 0,
             "identity_work_units": 0,
             "ingestion_operations": 0,
+            "lifecycle_operations": 0,
             "scope_cohorts": 0,
             "encounters": 0,
             "consolidated_facts": 0,
@@ -730,6 +731,7 @@ class ArtifactStore:
             ("identity_maturity_assessments", self.identity_maturity_assessments_dir),
             ("identity_work_units", self.identity_work_units_dir),
             ("ingestion_operations", self.ingestion_operations_dir),
+            ("lifecycle_operations", self.root / "lifecycle-operations"),
             ("scope_cohorts", self.scope_cohorts_dir),
             ("encounters", self.encounters_dir),
             ("consolidated_facts", self.consolidated_facts_dir),
@@ -737,59 +739,6 @@ class ArtifactStore:
             for path in directory.glob("*.json"):
                 path.unlink()
                 counts[label] += 1
-        return counts
-
-    def clear_projection(self) -> dict[str, int]:
-        """Delete entity-owned derived artifacts while preserving sources and claims."""
-        counts = {
-            "entities": 0,
-            "placements": 0,
-            "organization_proposals": 0,
-            "scope_decisions": 0,
-            "retention_records": 0,
-            "entity_references": 0,
-            "entity_resolution_decisions": 0,
-            "identity_maturity_assessments": 0,
-            "identity_work_units": 0,
-            "scope_cohorts": 0,
-            "encounters": 0,
-            "consolidated_facts": 0,
-            "claims_requeued": 0,
-            "dream_commits": 0,
-        }
-        for label, directory in (
-            ("dream_commits", self.dream_commits_dir),
-            ("entities", self.entities_dir),
-            ("placements", self.placements_dir),
-            ("organization_proposals", self.organization_proposals_dir),
-            ("scope_decisions", self.scope_decisions_dir),
-            ("retention_records", self.retention_records_dir),
-            ("entity_references", self.entity_references_dir),
-            ("entity_resolution_decisions", self.entity_resolution_decisions_dir),
-            ("identity_maturity_assessments", self.identity_maturity_assessments_dir),
-            ("identity_work_units", self.identity_work_units_dir),
-            ("scope_cohorts", self.scope_cohorts_dir),
-            ("encounters", self.encounters_dir),
-            ("consolidated_facts", self.consolidated_facts_dir),
-        ):
-            for path in directory.glob("*.json"):
-                path.unlink()
-                counts[label] += 1
-        for path in self.claims_dir.glob("*.json"):
-            data = self._read(path)
-            changed = False
-            if data.get("status", "active") == "active" and data.get(
-                "dream_disposition"
-            ) != "excluded_source_policy":
-                data["dream_disposition"] = "pending"
-                data["dream_disposition_reason"] = "Canonical projection was cleared."
-                data["dream_run_id"] = None
-                data["dream_disposition_at"] = None
-                counts["claims_requeued"] += 1
-                changed = True
-            if not changed:
-                continue
-            _atomic_json(path, data)
         return counts
 
     def list_claims(self, *, status: str | None = None) -> list[MemoryClaim]:

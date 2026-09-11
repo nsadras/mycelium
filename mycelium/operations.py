@@ -83,6 +83,8 @@ class EvidenceRecord:
     citations: tuple[EvidenceCitation, ...] = ()
     canonical_claims: tuple[EvidenceClaim, ...] = ()
     reviews: tuple[EvidenceReview, ...] = ()
+    uncertainty: tuple[str, ...] = ()
+    revisions: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,8 @@ class EvidenceSource:
     conversation_time: str
     citations: tuple[EvidenceSourceCitation, ...]
     segments: tuple[EvidenceSegment, ...]
+    status: str = "active"
+    retraction_reason: str | None = None
 
 
 @dataclass(frozen=True)

@@ -44,14 +44,9 @@ class PlacementUpdateRequest(BaseModel):
     reason: str = "Manual wiki organization"
 
 
-class FactEditRequest(BaseModel):
-    text: str = Field(min_length=1)
-    reason: str = "Manual fact correction"
-
-
 class ClaimCorrectionRequest(BaseModel):
     text: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
+    reason: str = "User correction"
     claim_type: str | None = None
     predicate: str | None = None
     temporal_status: str | None = None

@@ -1,11 +1,17 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 import tomllib
+import math
+
+
+def _positive_integer(name, value):
+    if type(value) is not int or value <= 0:
+        raise ValueError(f'{name} must be a positive integer')
 
 @dataclass
 class LLMConfig:
     url: str = 'http://localhost:11434'
-    model: str = 'gemma4:latest'
+    model: str = 'gemma4:12b'
     temperature: float = 1.0
     top_p: float = 0.95
     top_k: int = 64
@@ -16,6 +22,16 @@ class LLMConfig:
     reasoning_format: str = "prompt"
 
     def __post_init__(self):
+        if not self.model.strip() or not self.url.strip():
+            raise ValueError("Model and URL must be nonempty")
+        for name in ('context_window_tokens', 'timeout_seconds', 'reasoning_output_tokens', 'top_k'):
+            _positive_integer(name, getattr(self, name))
+        for name in ('temperature', 'top_p'):
+            value = getattr(self, name)
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise ValueError(f'{name} must be finite')
+        if self.temperature < 0 or not 0 < self.top_p <= 1:
+            raise ValueError('temperature must be nonnegative and top_p in (0, 1]')
         if type(self.reasoning_enabled) is not bool:
             raise ValueError("reasoning_enabled must be a boolean")
         if self.reasoning_output_tokens <= 0:
@@ -32,61 +48,34 @@ class RetrievalConfig:
     tool_search_limit: int = 3
     tool_evidence_budget_tokens: int = 6000
 
+    def __post_init__(self):
+        if not isinstance(self.embedding_model, str) or not self.embedding_model.strip():
+            raise ValueError('embedding_model must be nonempty')
+        for name in ('candidate_limit', 'initial_result_limit', 'tool_result_limit',
+                     'tool_search_limit', 'tool_evidence_budget_tokens'):
+            _positive_integer(name, getattr(self, name))
+        if self.initial_result_limit > 5 or self.tool_result_limit > 6:
+            raise ValueError('Initial and tool result limits must be at most 5 and 6')
+
 @dataclass
 class Config:
     context_budget_tokens: int = 32768
     llm: LLMConfig = field(default_factory=LLMConfig)
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
 
+    def __post_init__(self):
+        _positive_integer('context_budget_tokens', self.context_budget_tokens)
+
     @classmethod
     def from_toml(cls, path: Path) -> 'Config':
         """Loads config from mycelium.toml, returns Config with defaults for missing keys."""
-        if not path.exists():
-            return cls.defaults()
-        
         with open(path, "rb") as f:
             data = tomllib.load(f)
             
-        context_budget_tokens = data.get('session', {}).get('context_budget_tokens', 32768)
-        
-        llm_data = data.get('llm', {})
-        llm = LLMConfig(
-            url=llm_data.get('url', 'http://localhost:11434'),
-            model=llm_data.get('model', 'gemma4:latest'),
-            temperature=float(llm_data.get('temperature', 1.0)),
-            top_p=float(llm_data.get('top_p', 0.95)),
-            top_k=int(llm_data.get('top_k', 64)),
-            timeout_seconds=int(llm_data.get('timeout_seconds', 900)),
-            context_window_tokens=int(llm_data.get('context_window_tokens', 65536)),
-            reasoning_enabled=llm_data.get('reasoning_enabled', True),
-            reasoning_output_tokens=int(llm_data.get('reasoning_output_tokens', 32768)),
-            reasoning_format=str(llm_data.get('reasoning_format', 'prompt')),
-        )
-        
-        retrieval_data = data.get('retrieval', {})
-        retrieval = RetrievalConfig(
-            embedding_model=str(
-                retrieval_data.get('embedding_model', 'embeddinggemma:latest')
-            ),
-            candidate_limit=max(1, int(retrieval_data.get('candidate_limit', 20))),
-            initial_result_limit=max(
-                1, int(retrieval_data.get('initial_result_limit', 5))
-            ),
-            tool_result_limit=max(
-                1, int(retrieval_data.get('tool_result_limit', 6))
-            ),
-            tool_search_limit=max(
-                1, int(retrieval_data.get('tool_search_limit', 3))
-            ),
-            tool_evidence_budget_tokens=max(
-                1, int(retrieval_data.get('tool_evidence_budget_tokens', 6000))
-            ),
-        )
-        
         return cls(
-            context_budget_tokens=context_budget_tokens,
-            llm=llm,
-            retrieval=retrieval,
+            **data.get('session', {}),
+            llm=LLMConfig(**data.get('llm', {})),
+            retrieval=RetrievalConfig(**data.get('retrieval', {})),
         )
 
     @classmethod

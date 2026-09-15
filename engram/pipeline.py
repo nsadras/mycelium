@@ -6,7 +6,7 @@ import wave
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, BinaryIO
 
 from engram.config import EngramConfig
 from engram.diarize import WhisperXDiarizer
@@ -110,6 +110,7 @@ class EngramService:
             segments = self.store.list_segments(meeting_id)
             meeting = self.store.update_meeting(meeting_id, status="processing")
 
+            diarization_warning = None
             try:
                 diarized = await asyncio.to_thread(
                     self.diarizer_factory().diarize,
@@ -120,14 +121,13 @@ class EngramService:
                     segment.meeting_id = meeting_id
                 self.store.replace_segments(meeting_id, diarized)
                 segments = self.store.list_segments(meeting_id)
-            except Exception:
-                # Diarization is valuable but should not block summary or memory ingestion.
-                pass
+            except Exception as exc:
+                diarization_warning = f"Diarization failed: {type(exc).__name__}: {exc}"
 
             meeting = self.store.update_meeting(
                 meeting_id,
                 status="reviewing",
-                error=None,
+                error=diarization_warning,
             )
             return meeting
         except Exception as exc:
@@ -139,6 +139,32 @@ class EngramService:
             raise ValueError("Speaker labels cannot change after source admission.")
         meeting = self.store.save_speaker_names(meeting_id, speaker_names)
         return meeting
+
+    async def retry_diarization(self, meeting_id: str) -> Meeting:
+        """Retry speaker detection using the reviewed transcript, without ASR."""
+        async with self._processing_lock:
+            meeting = self.store.get_meeting(meeting_id)
+            if meeting.status != "reviewing" or meeting.memory_log_entry_id:
+                raise ValueError("Speaker detection can only retry before source admission during review")
+            segments = self.store.list_segments(meeting_id)
+            self.store.update_meeting(meeting_id, status="processing")
+            try:
+                diarized = await asyncio.to_thread(
+                    self.diarizer_factory().diarize, meeting.audio_path, segments,
+                )
+                # Diarization assigns speakers; it must preserve the transcript.
+                if [(s.segment_index, s.text, s.start_seconds, s.end_seconds) for s in diarized] != [
+                    (s.segment_index, s.text, s.start_seconds, s.end_seconds) for s in self.store.list_segments(meeting_id)
+                ]:
+                    raise ValueError("Speaker detection changed the transcript")
+                for segment in diarized:
+                    segment.meeting_id = meeting_id
+                self.store.replace_segments(meeting_id, diarized)
+            except Exception as exc:
+                return self.store.update_meeting(
+                    meeting_id, status="reviewing", error=f"Diarization failed: {type(exc).__name__}: {exc}",
+                )
+            return self.store.update_meeting(meeting_id, status="reviewing", error=None)
 
     async def update_transcript(
         self,
@@ -194,14 +220,29 @@ class EngramService:
         self,
         *,
         title: str,
-        audio_bytes: bytes,
+        audio_stream: BinaryIO,
         original_filename: str | None = None,
     ) -> Meeting:
         self.config.ensure_dirs()
         meeting = self.store.create_meeting(title)
         suffix = _audio_suffix(original_filename)
         audio_path = self.config.audio_dir / f"{meeting.id}{suffix}"
-        audio_path.write_bytes(audio_bytes)
+        def copy_upload():
+            total = 0
+            with audio_path.open("xb") as target:
+                while chunk := audio_stream.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > self.config.max_upload_bytes:
+                        raise ValueError("Audio upload exceeds the configured size limit")
+                    target.write(chunk)
+            if not total:
+                raise ValueError("Audio upload is empty")
+        try:
+            await asyncio.to_thread(copy_upload)
+        except BaseException:
+            audio_path.unlink(missing_ok=True)
+            self.store.delete_meeting(meeting.id)
+            raise
         now = datetime.now()
         duration = await asyncio.to_thread(_audio_duration, audio_path)
         meeting = self.store.update_meeting(

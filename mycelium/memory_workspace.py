@@ -127,7 +127,20 @@ def merge_memory_evidence(
     """Merge evidence by declared IDs while preserving complete evidence units."""
     records = {record.record_id: record for record in current.records}
     for record in incoming.records:
-        records.setdefault(record.record_id, record)
+        prior = records.get(record.record_id)
+        if prior is None or record.revision > prior.revision:
+            records[record.record_id] = record
+        elif record.revision == prior.revision:
+            records[record.record_id] = replace(
+                prior,
+                claim_ids=tuple(dict.fromkeys((*prior.claim_ids, *record.claim_ids))),
+                canonical_claims=tuple({c.claim_id: c for c in (*prior.canonical_claims, *record.canonical_claims)}.values()),
+                citations=tuple(dict.fromkeys((*prior.citations, *record.citations))),
+                temporal=tuple(dict.fromkeys((*prior.temporal, *record.temporal))),
+                reviews=tuple({r.proposal_id: r for r in (*prior.reviews, *record.reviews)}.values()),
+                uncertainty=tuple(dict.fromkeys((*prior.uncertainty, *record.uncertainty))),
+                revisions=tuple({(r['relation'], r['claim_id']): r for r in (*prior.revisions, *record.revisions)}.values()),
+            )
 
     sources = {source.source_id: source for source in current.sources}
     for source in incoming.sources:

@@ -63,9 +63,11 @@ export default function WikiExplorer({ onInspectReview }: { onInspectReview?: (p
   }, []);
   useEffect(() => {
     if (!selectedSlug) return;
+    let cancelled = false;
     api.get<WikiPage>(`/memory/wiki/${encodeURIComponent(selectedSlug)}`)
-      .then((response) => setPageData(response.data))
+      .then((response) => { if (!cancelled) setPageData(response.data); })
       .catch((error) => console.error('Failed to fetch page', error));
+    return () => { cancelled = true; };
   }, [selectedSlug]);
 
   const [showDetails, setShowDetails] = useState(false);

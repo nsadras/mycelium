@@ -25,6 +25,7 @@ class EngramConfig:
     ollama_url: str = "http://localhost:11434"
     summary_temperature: float = 1.0
     summary_context_window_tokens: int = 32768
+    max_upload_bytes: int = 1024 * 1024 * 1024
 
     @property
     def db_path(self) -> Path:
@@ -64,6 +65,7 @@ class EngramConfig:
 
         store_path = Path(engram_data.get("store_path", "./mycelium_store/engram"))
         return cls(
+            max_upload_bytes=int(engram_data.get("max_upload_bytes", 1024 * 1024 * 1024)),
             store_path=store_path,
             audio_dir=Path(engram_data.get("audio_dir", store_path / "audio")),
             whisper_model=whisper_data.get("model", "large-v3"),

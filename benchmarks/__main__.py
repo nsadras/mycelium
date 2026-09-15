@@ -58,6 +58,12 @@ def main(argv: list[str] | None = None) -> None:
 
         dispatch(args, parser)
         return
+    from mycelium.config import Config
+    config = Config.from_toml(args.config_path) if args.config_path else Config.defaults()
+    args.qa_model = args.qa_model or config.llm.model
+    args.memory_model = args.memory_model or config.llm.model
+    args.ollama_url = args.ollama_url or config.llm.url
+    args.context_budget_tokens = args.context_budget_tokens if args.context_budget_tokens is not None else config.context_budget_tokens
     run_id = args.run_id or default_run_id(args.benchmark, args.system)
     output_dir = args.output_root / run_id
     system = build_memory_system(
@@ -101,6 +107,7 @@ def main(argv: list[str] | None = None) -> None:
                 questions_per_category=args.questions_per_category,
                 sample_index=args.sample_index,
                 snapshot_sessions=args.snapshot_sessions,
+                allow_incomplete_encoding=args.allow_incomplete_encoding,
             )
         )
     elif args.benchmark == "mab":
@@ -138,11 +145,12 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         help="Output directory name under --output-root (default: <benchmark>-<system>-YYYYMMDD-HHMMSS).",
     )
     parser.add_argument("--output-root", type=Path, default=Path("benchmark_runs"))
-    parser.add_argument("--qa-model", default="gemma4:latest")
+    parser.add_argument("--allow-incomplete-encoding", action="store_true", help="Allow diagnostic QA after incomplete encoding")
+    parser.add_argument("--qa-model", default=None)
     parser.add_argument("--memory-model", default=None)
-    parser.add_argument("--ollama-url", default="http://localhost:11434")
+    parser.add_argument("--ollama-url", default=None)
     parser.add_argument("--config-path", type=Path, default=None)
-    parser.add_argument("--context-budget-tokens", type=int, default=32768)
+    parser.add_argument("--context-budget-tokens", type=int, default=None)
     parser.add_argument("--dream-policy", choices=["none", "per-batch", "per-case"], default="per-batch")
     parser.add_argument("--prediction-key", default=None)
     parser.add_argument(

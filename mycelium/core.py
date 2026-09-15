@@ -31,21 +31,24 @@ class Mycelium:
     def __init__(
         self,
         store_path: str | Path,
-        ollama_model: str = "gemma4:12b",
-        ollama_url: str = "http://localhost:11434",
-        context_budget_tokens: int = 32768,
+        ollama_model: str | None = None,
+        ollama_url: str | None = None,
+        context_budget_tokens: int | None = None,
         config_path: str | Path | None = None,
         memory_profile: Literal["user", "none"] = "user",
     ):
         self.store_path = Path(store_path)
 
-        if config_path and Path(config_path).exists():
-            self.config = Config.from_toml(Path(config_path))
-        else:
-            self.config = Config.defaults()
+        self.config = Config.from_toml(Path(config_path)) if config_path is not None else Config.defaults()
+        if ollama_model is not None:
             self.config.llm.model = ollama_model
+        if ollama_url is not None:
             self.config.llm.url = ollama_url
+        if context_budget_tokens is not None:
             self.config.context_budget_tokens = context_budget_tokens
+        self.config.llm.__post_init__()
+        if self.config.context_budget_tokens <= 0:
+            raise ValueError("Context budget must be positive")
 
         from mycelium.database import database
 

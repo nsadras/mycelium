@@ -103,6 +103,9 @@ class MemoryDatabase:
         ).fetchone()
         return row[0] if row else 0
 
+    def evidence_revision(self):
+        return self.connection.execute("SELECT coalesce(sum(revision),0) FROM generations WHERE kind IN ('claims','sources','entities','placements','consolidated-facts','reconsolidation-proposals')").fetchone()[0]
+
     def get(self, kind, identifier):
         row = self.connection.execute(
             "SELECT payload FROM records WHERE kind=? AND id=?", (kind, identifier)
@@ -304,32 +307,42 @@ class UnitOfWork:
         self.collections[kind] = value
         return value
 
+    def evidence_revision(self):
+        return self.reader.execute("SELECT coalesce(sum(revision),0) FROM generations WHERE kind IN ('claims','sources','entities','placements','consolidated-facts','reconsolidation-proposals')").fetchone()[0]
+
     def ids(self, kind, field=None, value=None):
         self.revision(kind)
-        result = {
-            row[0]
-            for row in self.reader.execute(
-                "SELECT id FROM records WHERE kind=?", (kind,)
+        if field is not None and value is not None:
+            rows = self.reader.execute(
+                "SELECT id FROM lookups WHERE kind=? AND field=? AND value=?",
+                (kind, field, str(value)),
             )
-        }
+        else:
+            rows = self.reader.execute("SELECT id FROM records WHERE kind=?", (kind,))
+        result = {row[0] for row in rows}
         for (written_kind, identifier), record in self.writes.items():
             if written_kind == kind:
-                if record is None:
+                selected = record.get(field) if record is not None and field is not None else None
+                matches = field is None or value is None or (
+                    value in selected if isinstance(selected, list) else selected == value
+                )
+                if record is None or not matches:
                     result.discard(identifier)
                 else:
                     result.add(identifier)
-        if field is not None and value is not None:
-
-            def matches(identifier):
-                selected = self.get(kind, identifier).get(field)
-                return (
-                    value in selected
-                    if isinstance(selected, list)
-                    else selected == value
-                )
-
-            result = {identifier for identifier in result if matches(identifier)}
         return sorted(result)
+
+    def validate_reads(self):
+        """Validate consulted state without acquiring a write transaction."""
+        for kind, expected in self.collections.items():
+            if self.db.revision(kind) != expected:
+                raise ValueError(f"Memory changed during operation: {kind}")
+        for key, expected in self.reads.items():
+            row = self.db.connection.execute(
+                "SELECT revision FROM records WHERE kind=? AND id=?", key
+            ).fetchone()
+            if (row[0] if row else None) != expected:
+                raise ValueError(f"Memory changed during operation: {key}")
 
     def put(self, kind, identifier, value):
         try:

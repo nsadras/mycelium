@@ -293,3 +293,29 @@ model judge checks meaning without requiring exact output wording. The judge is 
 ## License
 
 Mycelium is available under the MIT License. See [LICENSE](LICENSE).
+
+## Private Wi-Fi and Tailscale access
+
+The app has no sign-in. Use the host firewall and Tailscale access rules to limit
+access to trusted devices. Keep the backend on loopback and expose the UI only
+on your private network. API and audio requests use the same origin as the UI;
+Vite proxies `/api` to the backend.
+
+Set these variables before running your normal `./start.sh` command:
+
+```bash
+export MYCELIUM_UI_HOST=0.0.0.0
+export MYCELIUM_ALLOWED_HOSTS=localhost,127.0.0.1,my-host,my-host.example.ts.net,192.168.1.20
+```
+
+Replace the example names and address with your actual LAN and Tailscale hosts.
+Host entries omit schemes and ports. The backend defaults to `127.0.0.1:8000`;
+`MYCELIUM_API_HOST` explicitly overrides that binding. Do not forward the UI or
+API port from the public internet. Browser requests from other origins are
+rejected. Host validation and same-origin checks are not authentication.
+
+A UI built with `cd ui && npm run build` is also served by the backend when
+`ui/dist` exists at backend startup. For HTTPS reverse proxies, preserve the Host
+header and configure trusted forwarded headers so the backend sees the original
+scheme. After you start the services, verify chat, audio playback, and memory
+inspection from each intended LAN/Tailscale device.

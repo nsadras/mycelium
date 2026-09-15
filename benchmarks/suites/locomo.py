@@ -20,8 +20,10 @@ from benchmarks.shared.adapters import (
     MyceliumMemorySystem,
 )
 from benchmarks.shared.scoring import locomo_score, summarize_scores
+from benchmarks.shared.run_tracking import recorded_run, prior_elapsed, environment_manifest, begin_invocation
 
 
+@recorded_run
 async def run_locomo(
     *,
     data_path: Path,
@@ -34,6 +36,7 @@ async def run_locomo(
     questions_per_category: int | None = None,
     sample_index: int | None = None,
     snapshot_sessions: bool = False,
+    allow_incomplete_encoding: bool = False,
 ) -> dict[str, Any]:
     if snapshot_sessions and not isinstance(system, MyceliumMemorySystem):
         raise ValueError("--snapshot-sessions requires a Mycelium-backed system")
@@ -53,6 +56,8 @@ async def run_locomo(
     manifest_path = output_dir / "run_manifest.json"
     config_path = getattr(system, "config_path", None)
     settings = {
+        "protocol_version": 2,
+        "allow_incomplete_encoding": allow_incomplete_encoding,
         "dataset_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
         "system": system.name,
         "prediction_key": prediction_key,
@@ -89,8 +94,10 @@ async def run_locomo(
             raise ValueError(
                 "Existing predictions have no run manifest; use a fresh output directory"
             )
-        manifest = {"settings": settings, "status": "running"}
-    manifest["status"] = "running"
+        manifest = {"settings": settings, "status": "running", "execution_status": "running", "encoding_status": "pending", "qa_status": "pending", "environment": environment_manifest(), "cases": {}}
+    begin_invocation(output_dir)
+    manifest.update(status="running", execution_status="running")
+    manifest.pop("execution_error", None)
     write_json(manifest_path, manifest)
     checkpoint_dir = output_dir / "questions"
     checkpoint_dir.mkdir(exist_ok=True)
@@ -103,7 +110,7 @@ async def run_locomo(
     predictions = read_json_if_exists(output_dir / "predictions.json", default=[])
     flat_rows = checkpoints.copy()
     completed_sample_ids = {str(sample.get("sample_id")) for sample in predictions}
-    started = time.perf_counter()
+    started = time.perf_counter() - prior_elapsed(output_dir)
 
     for sample_index, sample in enumerate(samples):
         sample_id = str(sample.get("sample_id") or f"sample-{sample_index}")
@@ -157,6 +164,15 @@ async def run_locomo(
                 print(f"[locomo] sample {sample_id} snapshot: {snapshot}", flush=True)
         print(f"[locomo] sample {sample_id} finalize memory", flush=True)
         await system.finalize_case()
+        case_stats = system.stats()
+        encoding_status = case_stats.get("encoding_status", "complete")
+        manifest["cases"][sample_id] = case_stats
+        manifest["encoding_status"] = "incomplete" if any(case.get("encoding_status") == "incomplete" for case in manifest["cases"].values()) else "complete"
+        if encoding_status == "incomplete" and not allow_incomplete_encoding:
+            manifest.update(status="failed", execution_status="blocked", qa_status="not_run")
+            write_json(manifest_path, manifest)
+            raise RuntimeError("Encoding is incomplete; inspect the run manifest or explicitly enable diagnostic QA")
+        write_json(manifest_path, manifest)
 
         all_qas = deepcopy(sample.get("qa", []))
         indexed_qas = list(enumerate(all_qas))
@@ -196,6 +212,7 @@ async def run_locomo(
                 question,
                 answer_metadata,
             )
+            answer.metadata["encoding_status"] = encoding_status
             _record_evidence_survival(answer, qa.get("evidence"))
             _record_retrieval_evidence(answer, qa.get("evidence"))
             score = locomo_score(
@@ -247,7 +264,7 @@ async def run_locomo(
     write_json(output_dir / "predictions.json", predictions)
     write_jsonl(output_dir / "predictions.jsonl", flat_rows)
     write_json(output_dir / "summary.json", summary)
-    manifest.update(status="complete", completed_questions=len(completed_questions))
+    manifest.update(status="complete", execution_status="complete", qa_status="complete", completed_questions=len(completed_questions))
     write_json(manifest_path, manifest)
     return summary
 

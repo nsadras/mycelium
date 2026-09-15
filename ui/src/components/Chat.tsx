@@ -94,6 +94,12 @@ function RetrievalTrace({ trace }: { trace: NonNullable<Message['retrieval_trace
           {trace.selection_error && (
             <div className="rounded bg-rose-50 p-2 text-rose-700">{trace.selection_error}</div>
           )}
+          {!!trace.supported_aspects?.length && (
+            <div className="p-2 text-slate-600">Supported: {trace.supported_aspects.join('; ')}</div>
+          )}
+          {!!trace.remaining_gaps?.length && (
+            <div className="p-2 text-amber-700">Missing evidence: {trace.remaining_gaps.join('; ')}</div>
+          )}
           {trace.candidates.map(candidate => (
             <div key={candidate.claim_id} className="rounded border border-slate-100 px-2 py-1.5">
               <div className="flex items-center gap-2">
@@ -328,6 +334,10 @@ export default function Chat({
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const activeSession = useRef(selectedId);
+  const viewGeneration = useRef(0);
+  const drafts = useRef(new Map<string, string>());
+  useEffect(() => { activeSession.current = selectedId; }, [selectedId]);
 
   const [activePromptIndex, setActivePromptIndex] = useState<number | null>(null);
   const [navOpenMobile, setNavOpenMobile] = useState(false);
@@ -387,13 +397,15 @@ export default function Chat({
 
   useEffect(() => {
     let cancelled = false;
+    const generation = ++viewGeneration.current;
     const loadHistory = selectedId
       ? api.get(`/sessions/${selectedId}`).then((res) => res.data.transcript as Message[])
       : Promise.resolve([] as Message[]);
     loadHistory
       .then((transcript) => {
-        if (cancelled) return;
+        if (cancelled || generation !== viewGeneration.current) return;
         setMessages(transcript);
+        setInput(selectedId ? drafts.current.get(selectedId) ?? '' : '');
         setAssistantStatus({ activity: 'idle', label: 'Idle', detail: selectedId ? 'Ready' : 'Select a session' });
         setNavOpenMobile(false);
       })
@@ -411,6 +423,10 @@ export default function Chat({
     e.preventDefault();
     if (!input.trim() || !selectedId || isLoading) return;
 
+    const requestSession = selectedId;
+    const generation = ++viewGeneration.current;
+    const submittedText = input;
+    drafts.current.delete(requestSession);
     const optimisticTimestamp = new Date().toISOString();
     const userMsg: Message = { role: 'user', content: input, timestamp: optimisticTimestamp };
     setMessages([...messages, userMsg]);
@@ -421,6 +437,7 @@ export default function Chat({
 
     try {
       const res = await api.post(`/sessions/${selectedId}/chat`, { message: input });
+      if (activeSession.current !== requestSession || generation !== viewGeneration.current) return;
       if (res.data.capture_error) {
         alert('Your reply was saved, but memory capture is pending. Build Memory will retry. ' + res.data.capture_error);
       }
@@ -446,22 +463,21 @@ export default function Chat({
         },
       ]);
     } catch (err) {
+      drafts.current.set(requestSession, submittedText);
+      if (activeSession.current !== requestSession || generation !== viewGeneration.current) return;
+      setInput(submittedText);
+      setMessages(prev => prev.filter(message => message.timestamp !== optimisticTimestamp));
       console.error("Chat error", err);
       shouldResetStatus = false;
       setAssistantStatus({ activity: 'error', label: 'Chat failed', detail: 'Check backend logs' });
       window.setTimeout(() => {
-        setAssistantStatus({ activity: 'idle', label: 'Idle', detail: 'Ready' });
+        if (generation === viewGeneration.current) setAssistantStatus({ activity: 'idle', label: 'Idle', detail: 'Ready' });
       }, 2500);
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: "Error: Failed to get response from agent.",
-        timestamp: new Date().toISOString(),
-      }]);
     } finally {
       setIsLoading(false);
-      if (shouldResetStatus) {
+      if (shouldResetStatus && activeSession.current === requestSession) {
         window.setTimeout(() => {
-          setAssistantStatus({ activity: 'idle', label: 'Idle', detail: 'Ready' });
+          if (activeSession.current === requestSession && generation === viewGeneration.current) setAssistantStatus({ activity: 'idle', label: 'Idle', detail: 'Ready' });
         }, 900);
       }
     }
@@ -643,6 +659,7 @@ export default function Chat({
               onChange={(e) => {
                 const nextValue = e.target.value;
                 setInput(nextValue);
+                if (selectedId) drafts.current.set(selectedId, nextValue);
                 if (!isLoading) {
                   setAssistantStatus(prev => {
                     const isNextEmpty = !nextValue.trim();

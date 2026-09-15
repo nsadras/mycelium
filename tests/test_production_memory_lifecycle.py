@@ -70,19 +70,13 @@ class DeterministicProductionModel:
             from tests.lifecycle_support import lifecycle_response
 
             return lifecycle_response(_system, user, output_type, **_kwargs)
-        decisions_model = output_type.model_fields["decisions"].annotation
+        from typing import get_args
+
+        aliases = get_args(get_args(output_type.model_fields["selected_ids"].annotation)[0])
         return {
-            "decisions": {
-                alias: {
-                    "disposition": self.context_disposition,
-                    "reason": (
-                        "The candidate directly supports the request."
-                        if self.context_disposition == "include"
-                        else "The candidate does not help answer this request."
-                    ),
-                }
-                for alias in decisions_model.model_fields
-            }
+            "selected_ids": list(aliases)[:5] if self.context_disposition == "include" else [],
+            "supported_aspects": [],
+            "remaining_gaps": [],
         }
 
 

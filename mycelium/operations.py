@@ -85,6 +85,7 @@ class EvidenceRecord:
     reviews: tuple[EvidenceReview, ...] = ()
     uncertainty: tuple[str, ...] = ()
     revisions: tuple[dict[str, str], ...] = ()
+    revision: int = 0
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,15 @@ class RetrievalResult:
     evidence: MemoryEvidence
     rendered_context: str
     trace: dict[str, Any] = field(default_factory=dict)
+
+
+class RetrievalError(RuntimeError):
+    """A retryable retrieval failure, distinct from a successful empty search."""
+
+    def __init__(self, stage: str, detail: str):
+        self.stage = stage
+        self.detail = detail
+        super().__init__(f"Memory retrieval failed at {stage}: {detail}")
 
 
 @dataclass(frozen=True)

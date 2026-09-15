@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-export const apiOrigin = import.meta.env.VITE_API_ORIGIN ?? `${window.location.protocol}//${window.location.hostname}:8000`;
+export const apiOrigin = window.location.origin;
 
 const api = axios.create({
   baseURL: `${apiOrigin}/api`,
@@ -35,13 +35,14 @@ export interface RetrievalTrace {
     score?: number | null;
     decision?: {
       disposition: 'include' | 'exclude';
-      confidence: number;
-      reason: string;
+      reason?: string;
     } | null;
   }>;
   selected_claim_ids: string[];
   rendered_claim_ids: string[];
   selection_error?: string | null;
+  supported_aspects?: string[];
+  remaining_gaps?: string[];
 }
 
 export interface ToolEvent {
@@ -53,6 +54,7 @@ export interface ToolEvent {
 }
 
 export interface MemoryEvidenceRecord {
+  revision: number;
   record_id: string;
   record_type: 'claim' | 'fact';
   statement: string;

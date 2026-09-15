@@ -496,7 +496,7 @@ class MyceliumMemorySystem:
                 ],
                 "retrieval_trace": retrieval_trace,
                 "_evidence_stage_segments": self._evidence_stage_segments(
-                    full_evidence_context
+                    memory_tools.workspace.snapshot.evidence
                 ),
             }
         )
@@ -504,7 +504,7 @@ class MyceliumMemorySystem:
             answer.metadata["retrieval_context"] = full_evidence_context
         return answer
 
-    def _evidence_stage_segments(self, context: str) -> dict[str, Any]:
+    def _evidence_stage_segments(self, context: MemoryEvidence) -> dict[str, Any]:
         if self._evidence_stage_segments_cache is None:
             mem = self._require_mem()
             label_by_segment = {
@@ -531,7 +531,7 @@ class MyceliumMemorySystem:
                 placement = mem.artifacts.placement_for_claim(claim.claim_id)
                 if placement and placement.owner_entity_id:
                     entity = mem.artifacts.get_entity(placement.owner_entity_id)
-                    if mem.wiki.exists(entity.slug):
+                    if mem.wiki.exists(entity.slug) and mem.artifacts.facts_for_claim(claim.claim_id):
                         wiki_segments.update(segments)
             self._evidence_stage_segments_cache = {
                 "segments_by_label": segments_by_label,
@@ -551,7 +551,8 @@ class MyceliumMemorySystem:
             ].items()
         }
         stage_segments["context"] = sorted(
-            segment_id for segment_id in source_segments if segment_id in context
+            {segment_id for record in context.records for citation in record.citations for segment_id in citation.segment_ids if segment_id in source_segments}
+            | {segment.segment_id for source in context.sources for segment in source.segments if segment.segment_id in source_segments}
         )
         return {
             "segments_by_label": {
@@ -597,6 +598,8 @@ class MyceliumMemorySystem:
             "errors": self._errors,
             "dream_failures": self._dream_failures,
             "artifact_coverage": coverage,
+            "effective_config": asdict(self.mem.config) if self.mem else None,
+            "encoding_status": "incomplete" if log_count or coverage.get("pending_extraction_segments", 0) or (self.mem and self.mem.db.publication_status()) else "complete",
         }
 
     def _record_dream_report(self, report: Any, *, session_id: str) -> None:
@@ -772,7 +775,7 @@ def build_memory_system(
     qa_client = OllamaQaClient(
         model=qa_model,
         url=ollama_url,
-        llm_config=Config.from_toml(config_path or Path("mycelium.toml")).llm,
+        llm_config=(Config.from_toml(config_path) if config_path else Config.defaults()).llm,
     )
     qa_client.llm.trace_path = run_dir / "diagnostics" / "qa-calls.jsonl"
     if system_name == "mycelium":

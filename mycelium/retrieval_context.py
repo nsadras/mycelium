@@ -280,17 +280,8 @@ class RetrievedContextBuilder:
         self.wiki = wiki
         self.artifacts = artifacts
 
-    @cached_property
-    def retracted_source_ids(self):
-        return {s.source_id for s in self.artifacts.list_sources() if s.status == "retracted"}
-
-    @cached_property
-    def facts_by_claim(self):
-        result = defaultdict(list)
-        for fact in self.artifacts.list_consolidated_facts():
-            for claim_id in fact.member_claim_ids:
-                result[claim_id].append(fact)
-        return result
+    def _facts_for_claim(self, claim_id):
+        return self.artifacts.facts_for_claim(claim_id)
 
     @cached_property
     def reviews_by_claim(self):
@@ -305,7 +296,7 @@ class RetrievedContextBuilder:
     def distinct_hits(self, hits, limit):
         selected, seen = [], set()
         for hit in hits:
-            ids = {f.fact_id for f in self.facts_by_claim.get(hit.claim_id, [])} or {hit.claim_id}
+            ids = {f.fact_id for f in self._facts_for_claim(hit.claim_id)} or {hit.claim_id}
             if ids <= seen:
                 selected.append(hit)
                 continue
@@ -364,7 +355,7 @@ class RetrievedContextBuilder:
         lines = [f"Claim ({claim.status}): {claim.text}", *self._timing_lines([claim])]
         for revision in self._revisions([claim]):
             lines.append(f"Revision: {revision}")
-        facts = self.facts_by_claim.get(hit.claim_id, [])
+        facts = self._facts_for_claim(hit.claim_id)
         for review in self.reviews_by_claim.get(hit.claim_id, []):
             lines.append(f"Unresolved review: {review}")
         if facts:
@@ -408,7 +399,7 @@ class RetrievedContextBuilder:
 
     def _memory_evidence(self, hits: list[ClaimSearchHit]) -> MemoryEvidence:
         matched_ids = {hit.claim_id for hit in hits}
-        facts_by_claim = self.facts_by_claim
+        facts_by_claim = {hit.claim_id: self._facts_for_claim(hit.claim_id) for hit in hits}
         wanted = matched_ids | {cid for hit in hits for f in facts_by_claim.get(hit.claim_id, []) for cid in f.member_claim_ids}
         claims = {}
         for cid in wanted:
@@ -421,7 +412,7 @@ class RetrievedContextBuilder:
         seen_record_ids: set[str] = set()
         for hit in hits:
             claim = claims.get(hit.claim_id)
-            if claim is None:
+            if claim is None or claim.status not in {"active", "superseded"}:
                 continue
             facts = [f for f in facts_by_claim.get(hit.claim_id, [])
                      if all(cid in claims and claims[cid].status == "active" for cid in f.member_claim_ids)]
@@ -459,7 +450,7 @@ class RetrievedContextBuilder:
                     subject_entity_id=hit.owner_entity_id,
                     subject_name=hit.owner_title,
                     claim_ids=(claim.claim_id,),
-                    state=hit.memory_tier,
+                    state="superseded" if claim.status == "superseded" else self.artifacts.memory_tier(claim.claim_id),
                     claims=[claim],
                 )
             )
@@ -518,6 +509,7 @@ class RetrievedContextBuilder:
                     )
                 )
         return EvidenceRecord(
+            revision=self.artifacts.db.evidence_revision(),
             record_id=record_id,
             record_type=record_type,
             statement=statement,
@@ -542,7 +534,7 @@ class RetrievedContextBuilder:
             )) + tuple(dict.fromkeys(
                 f"Supporting source {p.source_id} is retracted; interpretation may be incomplete."
                 for claim in claims for p in claim.provenance
-                if p.source_id in self.retracted_source_ids
+                if self.artifacts.get_source(p.source_id).status == "retracted"
             )),
             revisions=tuple(self._revisions(claims)),
         )

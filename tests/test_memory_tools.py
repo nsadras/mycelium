@@ -42,6 +42,7 @@ def _result(context: str, claim_ids: list[str]):
 
 def _toolset(*, evidence_budget_tokens: int = 1000, search_limit: int = 2):
     retriever = SimpleNamespace(
+        refresh_evidence=lambda evidence, **kwargs: evidence,
         search_evidence=AsyncMock(
             side_effect=[
                 _result("evidence for claim two", ["claim-2"]),

@@ -33,16 +33,7 @@ def test_context_selection_schema_requires_every_exact_candidate():
 async def test_context_selector_can_abstain_from_every_candidate():
     llm = AsyncMock()
     llm.context_window_tokens = 32768
-    llm.call_structured.return_value = {"decisions": {
-        "M001": {
-            "disposition": "exclude",
-            "reason": "The record is unrelated.",
-        },
-        "M002": {
-            "disposition": "exclude",
-            "reason": "The record is also unrelated.",
-        },
-    }}
+    llm.call_structured.return_value = {"selected_ids": [], "supported_aspects": [], "remaining_gaps": ["No support"]}
     candidates = [
         AssistantContextCandidate("page:first", "wiki_page", "First", "One"),
         AssistantContextCandidate("page:second", "wiki_page", "Second", "Two"),
@@ -73,9 +64,9 @@ async def test_admission_batches_complete_records_without_truncating_tail():
     seen = []
     async def select(system, user, schema, **kwargs):
         seen.append(user)
-        aliases = schema.model_fields["decisions"].annotation.model_fields
-        return {"decisions": {alias: {"disposition": "include",
-                                      "reason": "Supported candidate."} for alias in aliases}}
+        from typing import get_args
+        aliases = get_args(get_args(schema.model_fields["selected_ids"].annotation)[0])
+        return {"selected_ids": list(aliases), "supported_aspects": [], "remaining_gaps": []}
     llm.call_structured.side_effect = select
     candidates = [AssistantContextCandidate(str(i), "claim", "Record", "material " * 1500 + f"TAIL-{i}")
                   for i in range(10)]

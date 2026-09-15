@@ -140,14 +140,7 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
     ]
     llm = AsyncMock()
     llm.context_window_tokens = 32768
-    llm.call_structured.return_value = {
-        "decisions": {
-            "M001": {
-                "disposition": "include",
-                "reason": "It answers the question.",
-            }
-        }
-    }
+    llm.call_structured.return_value = {"selected_ids": ["M001"], "supported_aspects": ["practice time"], "remaining_gaps": []}
     retriever = MemoryRetriever(
         llm, wiki, artifacts, default_budget_tokens=2000, claim_index=index
     )

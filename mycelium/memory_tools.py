@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from mycelium.budget import count_tokens
 from mycelium.memory_workspace import MemoryWorkspaceAccumulator
 from mycelium.ollama import ToolExecutionResult
-from mycelium.operations import MemoryEvidence, MemoryWorkspace
+from mycelium.operations import MemoryEvidence, MemoryWorkspace, RetrievalError
 from mycelium.retrieval import MemoryRetriever
 from mycelium.retrieval_context import (
     render_memory_search_result,
     render_memory_source_result,
     render_memory_tool_error,
     render_memory_workspace,
+    fit_memory_evidence,
 )
 
 
@@ -115,6 +116,7 @@ class MemoryToolset:
             remaining_searches=self.search_limit,
             remaining_evidence_tokens=self.remaining_evidence_tokens,
         )
+        self.workspace_budget_tokens = count_tokens(render_memory_workspace(self.workspace.snapshot)) + self.remaining_evidence_tokens
 
     async def run(
         self, tool_name: str, arguments: dict[str, Any]
@@ -148,6 +150,9 @@ class MemoryToolset:
                     requested_claim_ids=list(source_result.claim_ids),
                 )
                 result_evidence = source_result.evidence
+            self.workspace.evidence = self.retriever.refresh_evidence(
+                self.workspace.evidence, budget_tokens=self.workspace_budget_tokens,
+            )
             workspace = self.workspace.record_success(
                 tool_name,
                 arguments,
@@ -155,8 +160,13 @@ class MemoryToolset:
                 remaining_searches=self.search_limit - self.search_count,
                 remaining_evidence_tokens=self.remaining_evidence_tokens,
             )
+            self.workspace.evidence = fit_memory_evidence(
+                self.workspace.evidence,
+                lambda trial: count_tokens(render_memory_workspace(replace(workspace, evidence=trial))) <= self.workspace_budget_tokens,
+            )
+            workspace = self.workspace.snapshot
             return self._execution_result(rendered, workspace)
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, RetrievalError) as exc:
             rendered = render_memory_tool_error(str(exc))
             workspace = self.workspace.record_failure(
                 tool_name,

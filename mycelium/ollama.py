@@ -721,7 +721,7 @@ class OllamaClient:
         metadata: dict[str, Any],
         error: Exception,
     ) -> str | None:
-        debug_dir = os.getenv(LLM_DEBUG_DIR_ENV)
+        debug_dir = os.getenv(LLM_DEBUG_DIR_ENV) or (str(self.trace_path.parent / "failures") if self.trace_path else None)
         if not debug_dir:
             return None
 

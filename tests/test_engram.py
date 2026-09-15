@@ -1,3 +1,4 @@
+import io
 from types import SimpleNamespace
 from datetime import datetime
 import sys
@@ -147,7 +148,7 @@ async def test_engram_service_creates_ready_meeting_from_uploaded_audio(tmp_path
 
     meeting = await service.create_uploaded_meeting(
         title="Phone recording",
-        audio_bytes=audio.read_bytes(),
+        audio_stream=io.BytesIO(audio.read_bytes()),
         original_filename="phone.wav",
     )
     response = meeting_response(meeting, [])
@@ -440,3 +441,49 @@ def test_diarizer_assigns_speakers_to_original_asr_without_transcribing(monkeypa
     assert result[0].start_seconds == original.start_seconds
     assert result[0].end_seconds == original.end_seconds
     assert result[0].speaker == "Speaker 1"
+
+
+@pytest.mark.asyncio
+async def test_diarization_retry_preserves_transcript_and_exposes_failures(tmp_path):
+    store = EngramStore(tmp_path / 'engram.sqlite')
+    meeting = store.create_meeting('Review')
+    store.update_meeting(meeting.id, status='reviewing', audio_path=str(tmp_path/'audio.wav'))
+    store.add_segment(meeting.id, segment_index=0, start_seconds=0, end_seconds=1,
+                      text='Reviewed words.', status='final')
+
+    class Diarizer:
+        fails = True
+        def diarize(self, path, segments):
+            if self.fails:
+                raise RuntimeError('device unavailable')
+            for segment in segments:
+                segment.speaker = 'SPEAKER_00'
+            return segments
+
+    diarizer = Diarizer()
+    service = EngramService(EngramConfig(store_path=tmp_path), store, lambda: None,
+                            transcriber_factory=lambda: pytest.fail('ASR must not rerun'),
+                            diarizer_factory=lambda: diarizer)
+    failed = await service.retry_diarization(meeting.id)
+    assert failed.status == 'reviewing'
+    assert 'device unavailable' in failed.error
+    assert store.list_segments(meeting.id)[0].text == 'Reviewed words.'
+    diarizer.fails = False
+    recovered = await service.retry_diarization(meeting.id)
+    assert recovered.error is None
+    assert store.list_segments(meeting.id)[0].speaker == 'SPEAKER_00'
+    store.update_meeting(meeting.id, memory_log_entry_id='captured')
+    with pytest.raises(ValueError, match='before source admission'):
+        await service.retry_diarization(meeting.id)
+
+
+@pytest.mark.asyncio
+async def test_upload_limit_removes_partial_audio_and_meeting(tmp_path):
+    store = EngramStore(tmp_path / 'engram.sqlite')
+    config = EngramConfig(store_path=tmp_path, audio_dir=tmp_path/'audio', max_upload_bytes=4)
+    service = EngramService(config, store, lambda: None)
+    with pytest.raises(ValueError, match='limit'):
+        await service.create_uploaded_meeting(title='Too large', audio_stream=io.BytesIO(b'12345'),
+                                             original_filename='clip.wav')
+    assert store.list_meetings() == []
+    assert list(config.audio_dir.glob('*')) == []

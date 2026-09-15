@@ -431,6 +431,7 @@ def test_evidence_stage_segments_tracks_exact_ids_instead_of_turn_labels():
     artifacts = SimpleNamespace(
         list_sources=lambda: [source],
         list_claims=lambda status: [claim],
+        facts_for_claim=lambda claim_id: [object()],
         placement_for_claim=lambda claim_id: SimpleNamespace(
             owner_entity_id="person-evan"
         ),
@@ -443,9 +444,11 @@ def test_evidence_stage_segments_tracks_exact_ids_instead_of_turn_labels():
     )
     system._evidence_stage_segments_cache = None
 
-    stages = system._evidence_stage_segments(
-        "The label D1:1 alone is not evidence. `source-a#seg-0002` is."
-    )
+    from mycelium.operations import MemoryEvidence, EvidenceRecord, EvidenceCitation
+    stages = system._evidence_stage_segments(MemoryEvidence(records=(EvidenceRecord(
+        "record", "claim", "The label D1:1 alone is not evidence.", None, None, ("claim-two",),
+        citations=(EvidenceCitation("claim-two", "source-a", (second.segment_id,)),),
+    ),)))
 
     assert stages["segments_by_label"] == {
         "D1:1": ["source-a#seg-0001", "source-a#seg-0002"]
@@ -1077,6 +1080,7 @@ async def test_session_snapshots_preserve_history_and_resume_qa(
         system=system,
         prediction_key="answer",
         snapshot_sessions=True,
+        allow_incomplete_encoding=True,
     )
     with pytest.raises(RuntimeError, match="QA interrupted"):
         await run_locomo(**args)
@@ -1139,6 +1143,7 @@ async def test_snapshots_reject_systems_without_a_store(tmp_path):
             system=FakeMemorySystem(),
             prediction_key="answer",
             snapshot_sessions=True,
+        allow_incomplete_encoding=True,
         )
 
 
@@ -1174,6 +1179,7 @@ async def test_interrupted_snapshot_is_not_published(tmp_path, monkeypatch):
         system=system,
         prediction_key="answer",
         snapshot_sessions=True,
+        allow_incomplete_encoding=True,
         max_questions=0,
     )
     with pytest.raises(OSError, match="copy interrupted"):

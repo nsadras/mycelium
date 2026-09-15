@@ -82,20 +82,34 @@ async def list_meetings():
     ]
 
 
+@router.post("/meetings/{meeting_id}/retry-diarization", response_model=EngramMeetingResponse)
+async def retry_diarization(meeting_id: str):
+    service = get_engram()
+    try:
+        meeting = await service.retry_diarization(meeting_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Meeting not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return meeting_response(meeting, service.store.list_segments(meeting_id))
+
+
 @router.post("/meetings/upload", response_model=EngramMeetingResponse)
 async def upload_meeting_audio(
     title: str | None = Form(default=None),
     file: UploadFile = File(...),
 ):
     service = get_engram()
-    audio_bytes = await file.read()
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="Audio upload is empty")
-    meeting = await service.create_uploaded_meeting(
-        title=title or file.filename or "Uploaded recording",
-        audio_bytes=audio_bytes,
-        original_filename=file.filename,
-    )
+    if file.size is not None and file.size > service.config.max_upload_bytes:
+        raise HTTPException(status_code=413, detail="Audio upload exceeds the configured size limit")
+    try:
+        meeting = await service.create_uploaded_meeting(
+            title=title or file.filename or "Uploaded recording",
+            audio_stream=file.file,
+            original_filename=file.filename,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return meeting_response(meeting, [])
 
 

@@ -181,6 +181,27 @@ class AssistantContextCandidateDecisionOutput(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+def complementary_selection_model(candidate_aliases: Collection[str], limit: int = 5) -> type[BaseModel]:
+    aliases = tuple(candidate_aliases)
+    if not aliases:
+        raise ValueError("Selection requires candidates")
+    base = create_model(
+        "ComplementarySelectionFields", __config__=ConfigDict(extra="forbid"),
+        selected_ids=(list[Literal.__getitem__(aliases)], Field(max_length=limit)),
+        supported_aspects=(list[str], Field(max_length=limit)),
+        remaining_gaps=(list[str], Field(max_length=limit)),
+    )
+
+    class ComplementarySelection(base):
+        @model_validator(mode="after")
+        def unique_selection(self):
+            if len(self.selected_ids) != len(set(self.selected_ids)):
+                raise ValueError("Select each record at most once")
+            return self
+
+    return ComplementarySelection
+
+
 def assistant_context_selection_output_model(
     candidate_aliases: Collection[str],
 ) -> type[BaseModel]:

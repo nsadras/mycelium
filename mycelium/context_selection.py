@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from mycelium import prompts
 from mycelium.budget import require_request_budget, ContextBudgetError
 from mycelium.ollama import OllamaClient
-from mycelium.structured_outputs import assistant_context_selection_output_model
+from mycelium.structured_outputs import complementary_selection_model
 
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,8 @@ class AssistantContextSelection:
     selected_ids: tuple[str, ...]
     decisions: dict[str, dict]
     error: str | None = None
+    supported_aspects: tuple[str, ...] = ()
+    remaining_gaps: tuple[str, ...] = ()
 
 
 class AssistantContextSelector:
@@ -67,11 +69,11 @@ class AssistantContextSelector:
             )
         rendered = "\n".join(rendered_records)
         system, user = prompts.assistant_context_selection_prompt(query, rendered)
-        schema = assistant_context_selection_output_model(aliases)
+        schema = complementary_selection_model(aliases)
         try:
             require_request_budget(
                 [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                context_window=self.llm.context_window_tokens, output_tokens=2048,
+                context_window=self.llm.context_window_tokens, output_tokens=1024,
                 schema=schema.model_json_schema(),
             )
         except ContextBudgetError:
@@ -90,10 +92,10 @@ class AssistantContextSelector:
                 system,
                 user,
                 schema,
-                num_predict=2048,
+                num_predict=1024,
                 debug_label="assistant-context-selection",
             )
-            decisions = schema.model_validate(response).model_dump()["decisions"]
+            decision = schema.model_validate(response).model_dump()
         except Exception as exc:
             logger.warning(
                 "Assistant context selection failed closed: %s: %s",
@@ -103,15 +105,11 @@ class AssistantContextSelector:
             return AssistantContextSelection(
                 (), {}, f"{type(exc).__name__}: {exc}"
             )
-        selected = tuple(
-            candidate.candidate_id
-            for alias, candidate in aliases.items()
-            if decisions[alias]["disposition"] == "include"
-        )
+        selected = tuple(aliases[alias].candidate_id for alias in decision["selected_ids"])
         return AssistantContextSelection(
             selected,
-            {
-                candidate.candidate_id: dict(decisions[alias])
-                for alias, candidate in aliases.items()
-            },
+            {candidate.candidate_id: {"disposition": "include" if alias in decision["selected_ids"] else "exclude"}
+             for alias, candidate in aliases.items()},
+            supported_aspects=tuple(decision["supported_aspects"]),
+            remaining_gaps=tuple(decision["remaining_gaps"]),
         )

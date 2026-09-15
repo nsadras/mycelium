@@ -157,12 +157,12 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     }
   }, [segments.length]);
 
-  const processMeeting = async () => {
+  const processMeeting = async (action: 'process' | 'retry-diarization' = 'process') => {
     if (!meeting || isProcessing) return;
     setIsProcessing(true);
     setAssistantStatus({ activity: 'thinking', label: 'Processing meeting', detail: meeting.title });
     try {
-      const res = await api.post(`/engram/meetings/${meeting.id}/process`);
+      const res = await api.post(`/engram/meetings/${meeting.id}/${action}`);
       applyMeeting(res.data);
       setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
     } catch (err) {
@@ -497,7 +497,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                 )}
                 {(meeting.status === 'ready' || meeting.status === 'failed') && (
                   <button
-                    onClick={processMeeting}
+                    onClick={() => void processMeeting()}
                     disabled={isProcessing}
                     className="inline-flex items-center gap-2 rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
                   >
@@ -513,6 +513,15 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                   >
                     {isFinalizing ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
                     {meeting.status === 'completed' ? 'Retry Summary' : 'Finalize'}
+                  </button>
+                )}
+                {meeting.status === 'reviewing' && !meeting.memory_log_entry_id && (
+                  <button
+                    onClick={() => void processMeeting('retry-diarization')}
+                    disabled={isProcessing || isFinalizing || isSavingSpeakers || Boolean(editingTranscriptTurn) || Boolean(savingTranscriptTurn)}
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm disabled:opacity-50"
+                  >
+                    Retry speaker detection
                   </button>
                 )}
               </div>

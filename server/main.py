@@ -12,6 +12,8 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from mycelium.operations import RetrievalError
 
 from server.api import sessions, memory, engram
+from server.upload_limits import AudioUploadLimitMiddleware
+from engram.config import EngramConfig
 
 load_dotenv()
 
@@ -56,6 +58,10 @@ async def same_origin(request, call_next):
         if not matches:
             return JSONResponse({"detail": "Cross-origin requests are not allowed"}, status_code=403)
     return await call_next(request)
+
+# Bound the whole multipart body, allowing 64 KiB for title/part headers.
+app.add_middleware(AudioUploadLimitMiddleware,
+                   max_body_bytes=lambda: EngramConfig.from_toml().max_upload_bytes + 64 * 1024)
 
 # Include routers
 app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])

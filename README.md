@@ -319,3 +319,10 @@ A UI built with `cd ui && npm run build` is also served by the backend when
 header and configure trusted forwarded headers so the backend sees the original
 scheme. After you start the services, verify chat, audio playback, and memory
 inspection from each intended LAN/Tailscale device.
+
+Audio uploads are bounded twice: the whole multipart request may contain at most
+`engram.max_upload_bytes` plus 64 KiB of metadata, and the audio file itself must
+fit `engram.max_upload_bytes` (default 1 GiB). Chunked uploads are bounded while
+receiving; partial multipart files are closed on rejection. A diarization warning
+can be retried with **Retry speaker detection** during review, without rerunning
+transcription.

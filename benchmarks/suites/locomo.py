@@ -20,7 +20,9 @@ from benchmarks.shared.adapters import (
     MyceliumMemorySystem,
 )
 from benchmarks.shared.scoring import locomo_score, summarize_scores
-from benchmarks.shared.run_tracking import recorded_run, prior_elapsed, environment_manifest, begin_invocation
+from mycelium.telemetry import trace_operation
+from benchmarks.shared.provenance import model_inventory, validate_model_resume
+from benchmarks.shared.run_tracking import recorded_run, prior_elapsed, environment_manifest, begin_invocation, invocation_started
 
 
 @recorded_run
@@ -56,7 +58,7 @@ async def run_locomo(
     manifest_path = output_dir / "run_manifest.json"
     config_path = getattr(system, "config_path", None)
     settings = {
-        "protocol_version": 2,
+        "protocol_version": 3,
         "allow_incomplete_encoding": allow_incomplete_encoding,
         "dataset_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
         "system": system.name,
@@ -89,12 +91,17 @@ async def run_locomo(
         raise ValueError(
             "Run settings differ from the checkpoint; use a fresh output directory"
         )
+    inventory = await model_inventory(system)
+    if manifest is not None:
+        validate_model_resume(manifest.get('model_inventory', {}), inventory)
     if manifest is None:
         if (output_dir / "predictions.json").exists():
             raise ValueError(
                 "Existing predictions have no run manifest; use a fresh output directory"
             )
         manifest = {"settings": settings, "status": "running", "execution_status": "running", "encoding_status": "pending", "qa_status": "pending", "environment": environment_manifest(), "cases": {}}
+    manifest['model_inventory'] = inventory
+    manifest['model_provenance_complete'] = all(not value['error'] for value in inventory.values())
     begin_invocation(output_dir)
     manifest.update(status="running", execution_status="running")
     manifest.pop("execution_error", None)
@@ -110,7 +117,7 @@ async def run_locomo(
     predictions = read_json_if_exists(output_dir / "predictions.json", default=[])
     flat_rows = checkpoints.copy()
     completed_sample_ids = {str(sample.get("sample_id")) for sample in predictions}
-    started = time.perf_counter() - prior_elapsed(output_dir)
+    started = invocation_started() - prior_elapsed(output_dir)
 
     for sample_index, sample in enumerate(samples):
         sample_id = str(sample.get("sample_id") or f"sample-{sample_index}")
@@ -124,7 +131,8 @@ async def run_locomo(
             f"[locomo] sample {sample_index + 1}/{len(samples)} reset: {sample_id}",
             flush=True,
         )
-        await system.reset(sample_id)
+        with trace_operation('reset', sample_id=sample_id):
+            await system.reset(sample_id)
         sessions = iter_locomo_sessions(sample)
         if max_sessions is not None:
             if max_sessions <= 0:
@@ -136,14 +144,15 @@ async def run_locomo(
                 flush=True,
             )
             session_started = time.perf_counter()
-            await system.memorize(
-                messages,
-                {
-                    "sample_id": sample_id,
-                    "session_id": session_id,
-                    "timestamp": timestamp,
-                },
-            )
+            with trace_operation('memorize', sample_id=sample_id, session_id=session_id):
+                await system.memorize(
+                    messages,
+                    {
+                        "sample_id": sample_id,
+                        "session_id": session_id,
+                        "timestamp": timestamp,
+                    },
+                )
             print(
                 f"[locomo] sample {sample_id} memorize session {session_index + 1}/{len(sessions)}: "
                 f"{session_id} finished in {time.perf_counter() - session_started:.1f}s",
@@ -163,7 +172,8 @@ async def run_locomo(
                         staged_store.rename(snapshot)
                 print(f"[locomo] sample {sample_id} snapshot: {snapshot}", flush=True)
         print(f"[locomo] sample {sample_id} finalize memory", flush=True)
-        await system.finalize_case()
+        with trace_operation('finalize', sample_id=sample_id):
+            await system.finalize_case()
         case_stats = system.stats()
         encoding_status = case_stats.get("encoding_status", "complete")
         manifest["cases"][sample_id] = case_stats
@@ -182,6 +192,8 @@ async def run_locomo(
             )
         if max_questions is not None:
             indexed_qas = indexed_qas[:max_questions]
+        manifest["qa_status"] = "running" if indexed_qas else "not_run"
+        write_json(manifest_path, manifest)
         output_sample = {
             "sample_id": sample_id,
             "qa": [qa for _, qa in indexed_qas],
@@ -208,10 +220,12 @@ async def run_locomo(
                 qa[f"{prediction_key}_score"] = round(prior["score"], 4)
                 qa[f"{prediction_key}_metadata"] = prior["metadata"]
                 continue
-            answer = await system.answer(
-                question,
-                answer_metadata,
-            )
+            with trace_operation('answer', sample_id=sample_id, query_id=answer_metadata['query_id']) as linkage:
+                answer = await system.answer(
+                    question,
+                    answer_metadata,
+                )
+            answer.metadata['trace'] = linkage
             answer.metadata["encoding_status"] = encoding_status
             _record_evidence_survival(answer, qa.get("evidence"))
             _record_retrieval_evidence(answer, qa.get("evidence"))
@@ -264,7 +278,7 @@ async def run_locomo(
     write_json(output_dir / "predictions.json", predictions)
     write_jsonl(output_dir / "predictions.jsonl", flat_rows)
     write_json(output_dir / "summary.json", summary)
-    manifest.update(status="complete", execution_status="complete", qa_status="complete", completed_questions=len(completed_questions))
+    manifest.update(status="complete", execution_status="complete", qa_status="complete" if completed_questions else "not_run", completed_questions=len(completed_questions))
     write_json(manifest_path, manifest)
     return summary
 

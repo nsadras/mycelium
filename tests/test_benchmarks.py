@@ -41,6 +41,11 @@ from mycelium.operations import MemoryEvidence, MemoryWorkspace
 from mycelium.store import LogStore
 
 
+@pytest.fixture(autouse=True)
+def isolated_model_inventory(monkeypatch):
+    monkeypatch.setattr('benchmarks.suites.locomo.model_inventory', AsyncMock(return_value={}))
+
+
 class FakeMemorySystem:
     name = "fake"
 
@@ -437,10 +442,15 @@ def test_evidence_stage_segments_tracks_exact_ids_instead_of_turn_labels():
         ),
         get_entity=lambda entity_id: SimpleNamespace(slug="evan"),
     )
+    from mycelium.materialization import sections_markdown
+    sections = [{"title": "Profile", "items": [{"kind": "fact", "text": "First sentence.",
+        "sources": [{"source_id": "source-a", "segment_ids": [first.segment_id]}]}]}]
     system = object.__new__(MyceliumMemorySystem)
     system.mem = SimpleNamespace(
         artifacts=artifacts,
-        wiki=SimpleNamespace(exists=lambda slug: True),
+        wiki=SimpleNamespace(list_all=lambda: [SimpleNamespace(
+            slug="evan", sections=sections, content=sections_markdown(sections),
+        )]),
     )
     system._evidence_stage_segments_cache = None
 
@@ -456,6 +466,12 @@ def test_evidence_stage_segments_tracks_exact_ids_instead_of_turn_labels():
     assert stages["stages"]["claim"] == ["source-a#seg-0001"]
     assert stages["stages"]["wiki"] == ["source-a#seg-0001"]
     assert stages["stages"]["context"] == ["source-a#seg-0002"]
+    system.mem.wiki.list_all = lambda: [SimpleNamespace(slug="evan", sections=sections, content="stale")]
+    system._evidence_stage_segments_cache = None
+    stale = system._evidence_stage_segments(MemoryEvidence())
+    assert stale['stages']['wiki'] == []
+    assert stale['mismatched_wiki_pages'] == ['evan']
+
 
 
 def test_retrieval_evidence_uses_exact_context_survival_when_available():

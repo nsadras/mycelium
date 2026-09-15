@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import os
 import platform
@@ -11,6 +12,8 @@ import tempfile
 import uuid
 from contextvars import ContextVar
 from pathlib import Path
+
+from mycelium.telemetry import trace_operation, trace_metadata
 
 _active: ContextVar[dict | None] = ContextVar('benchmark_invocation', default=None)
 
@@ -27,10 +30,11 @@ def begin_invocation(root: Path) -> None:
     state = _active.get()
     if state is None:
         raise RuntimeError('Invocation is not being tracked')
-    state.update(root=root, invocation_id=uuid.uuid4().hex)
+    state.update(root=root, invocation_id=trace_metadata()['invocation_id'])
     _append(root, {
         'invocation_id': state['invocation_id'], 'status': 'running',
         'started_at': state['started_at'],
+        'environment': environment_manifest(),
     })
 
 
@@ -59,7 +63,8 @@ def recorded_run(function):
         token = _active.set(state)
         status, error = 'complete', None
         try:
-            return await function(*args, **kwargs)
+            with trace_operation('benchmark_invocation', invocation_id=uuid.uuid4().hex):
+                return await function(*args, **kwargs)
         except BaseException as exc:
             status, error = 'failed', f'{type(exc).__name__}: {exc}'
             raise
@@ -88,12 +93,31 @@ def prior_elapsed(root: Path) -> float:
                for line in path.read_text().splitlines())
 
 
+def invocation_started() -> float:
+    state = _active.get()
+    if state is None:
+        raise RuntimeError('Invocation is not being tracked')
+    return state['clock']
+
+
 def environment_manifest():
+    root = Path(subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip())
+    files = subprocess.check_output(
+        ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], cwd=root,
+    ).decode().split('\0')
+    source_hashes = {}
+    for name in sorted(set(files)):
+        path = root / name
+        if not name or not path.is_file():
+            continue
+        if Path(name).parts[0] in {'mycelium', 'benchmarks', 'engram', 'server', 'ui'} or name in {'pyproject.toml', 'uv.lock'}:
+            source_hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
     return {
         'git_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
         'working_tree_patch': subprocess.check_output(['git', 'diff', 'HEAD'], text=True),
+        'source_sha256': source_hashes,
         'python': platform.python_version(), 'platform': platform.platform(),
         'scorer_version': 'legacy-token-v1',
-        'evidence_metric': 'typed-citation-coverage-v2',
+        'evidence_metric': 'rendered-projection-citation-coverage-v3',
         'elapsed_accounting': 'completed-invocations-only; interrupted durations unknown',
     }

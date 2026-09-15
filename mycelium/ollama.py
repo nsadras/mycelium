@@ -1,3 +1,4 @@
+from mycelium.telemetry import trace_metadata
 import json
 import inspect
 import logging
@@ -726,6 +727,7 @@ class OllamaClient:
             return None
 
         payload = {
+            "trace": trace_metadata(),
             "call_id": call_id,
             "attempt": attempt,
             "max_retries": max_retries,
@@ -776,6 +778,7 @@ class OllamaClient:
             return None
 
         payload = {
+            "trace": trace_metadata(),
             "call_id": call_id,
             "attempt": attempt,
             "max_retries": max_retries,
@@ -858,6 +861,7 @@ class OllamaClient:
         stage: str | None = None,
     ) -> None:
         entry = {
+            "trace": trace_metadata(),
             "timestamp": time.time(),
             "stage": stage or "chat",
             "model": self.model,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from mycelium.telemetry import trace_metadata
+
 import asyncio
 import hashlib
 import json
@@ -81,6 +83,7 @@ class OllamaEmbedder:
         finally:
             if self.trace_path is not None:
                 record = {
+                    "trace": trace_metadata(),
                     "timestamp": time.time(),
                     "stage": stage,
                     "model": self.model,

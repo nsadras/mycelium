@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import os
-import sys
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomllib
+import tomllib
 
 
 @dataclass
@@ -26,6 +23,19 @@ class EngramConfig:
     summary_temperature: float = 1.0
     summary_context_window_tokens: int = 32768
     max_upload_bytes: int = 1024 * 1024 * 1024
+
+    def __post_init__(self):
+        for name in ('whisper_model', 'whisper_device', 'whisper_compute_type',
+                     'pyannote_model', 'ollama_model', 'ollama_url'):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f'{name} must be a nonempty string')
+        for name in ('whisper_batch_size', 'summary_context_window_tokens', 'max_upload_bytes'):
+            value = getattr(self, name)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f'{name} must be a positive integer')
+        if type(self.summary_temperature) not in (int, float) or not math.isfinite(self.summary_temperature) or self.summary_temperature < 0:
+            raise ValueError('summary_temperature must be finite and nonnegative')
 
     @property
     def db_path(self) -> Path:
@@ -52,10 +62,8 @@ class EngramConfig:
     @classmethod
     def from_toml(cls, path: str | Path = "mycelium.toml") -> "EngramConfig":
         config_path = Path(path)
-        data: dict = {}
-        if config_path.exists():
-            with open(config_path, "rb") as f:
-                data = tomllib.load(f)
+        with open(config_path, "rb") as f:
+            data = tomllib.load(f)
 
         engram_data = data.get("engram", {})
         whisper_data = engram_data.get("whisper", {})
@@ -65,24 +73,22 @@ class EngramConfig:
 
         store_path = Path(engram_data.get("store_path", "./mycelium_store/engram"))
         return cls(
-            max_upload_bytes=int(engram_data.get("max_upload_bytes", 1024 * 1024 * 1024)),
+            max_upload_bytes=engram_data.get("max_upload_bytes", cls.max_upload_bytes),
             store_path=store_path,
             audio_dir=Path(engram_data.get("audio_dir", store_path / "audio")),
             whisper_model=whisper_data.get("model", "large-v3"),
             whisper_device=whisper_data.get("device", "auto"),
             whisper_compute_type=whisper_data.get("compute_type", "auto"),
-            whisper_batch_size=int(whisper_data.get("batch_size", 8)),
+            whisper_batch_size=whisper_data.get("batch_size", cls.whisper_batch_size),
             pyannote_model=diarization_data.get("model", "pyannote/speaker-diarization-community-1"),
             hf_token=os.getenv("HF_TOKEN") or diarization_data.get("hf_token"),
             ollama_model=summary_data.get("model", llm_data.get("model", "gemma4:12b")),
             ollama_url=summary_data.get("url", llm_data.get("url", "http://localhost:11434")),
-            summary_temperature=float(summary_data.get("temperature", 1.0)),
-            summary_context_window_tokens=int(
-                summary_data.get(
+            summary_temperature=summary_data.get("temperature", cls.summary_temperature),
+            summary_context_window_tokens=summary_data.get(
                     "context_window_tokens",
-                    llm_data.get("context_window_tokens", 32768),
-                )
-            ),
+                    llm_data.get("context_window_tokens", cls.summary_context_window_tokens),
+                ),
         )
 
     def ensure_dirs(self) -> None:

@@ -528,13 +528,24 @@ class MyceliumMemorySystem:
                     if segment_id in label_by_segment
                 }
                 claim_segments.update(segments)
-                placement = mem.artifacts.placement_for_claim(claim.claim_id)
-                if placement and placement.owner_entity_id:
-                    entity = mem.artifacts.get_entity(placement.owner_entity_id)
-                    if mem.wiki.exists(entity.slug) and mem.artifacts.facts_for_claim(claim.claim_id):
-                        wiki_segments.update(segments)
+            from mycelium.materialization import sections_markdown
+            mismatched_pages = []
+            for page in mem.wiki.list_all():
+                if page.content != sections_markdown(page.sections):
+                    mismatched_pages.append(page.slug)
+                    continue
+                for section in page.sections:
+                    for item in section.get("items", []):
+                        if item.get("kind") != "fact":
+                            continue
+                        for citation in item.get("sources", []):
+                            wiki_segments.update(
+                                segment_id for segment_id in citation.get("segment_ids", [])
+                                if segment_id in label_by_segment
+                            )
             self._evidence_stage_segments_cache = {
                 "segments_by_label": segments_by_label,
+                "mismatched_wiki_pages": mismatched_pages,
                 "stages": {
                     "source": source_segments,
                     "claim": claim_segments,
@@ -560,6 +571,7 @@ class MyceliumMemorySystem:
                 for label, segment_ids in segments_by_label.items()
             },
             "stages": stage_segments,
+            "mismatched_wiki_pages": self._evidence_stage_segments_cache["mismatched_wiki_pages"],
         }
 
     async def finalize_case(self) -> None:

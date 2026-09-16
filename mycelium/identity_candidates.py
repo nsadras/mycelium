@@ -4,6 +4,9 @@ import json
 
 
 def identity_records(artifacts, entities, staged_decisions=()):
+    # Preparation is synchronous under the store's writer lease. Reuse exact
+    # records only within this call; the next build sees every edit/retraction.
+    claims, sources, segment_ids = {}, {}, {}
     decisions = {d.decision_id: d for d in artifacts.list_entity_resolution_decisions()}
     decisions.update({d.decision_id: d for d in staged_decisions})
     by_entity = {}
@@ -22,11 +25,19 @@ def identity_records(artifacts, entities, staged_decisions=()):
         evidence = {}
         for decision in selected.values():
             for claim_id in decision.identity_evidence_claim_ids:
-                claim = artifacts.get_claim(claim_id)
+                if claim_id not in claims:
+                    claims[claim_id] = artifacts.get_claim(claim_id)
+                claim = claims[claim_id]
                 if claim.status != "active":
                     continue
-                sources = [artifacts.get_source(p.source_id) for p in claim.provenance]
-                if any(source.status != "active" for source in sources):
+                for provenance in claim.provenance:
+                    sid = provenance.source_id
+                    if sid not in sources:
+                        sources[sid] = artifacts.get_source(sid)
+                        segment_ids[sid] = {s.segment_id for s in sources[sid].segments}
+                if any(
+                    sources[p.source_id].status != "active" for p in claim.provenance
+                ):
                     continue
                 if not claim.provenance or any(
                     not p.segment_ids for p in claim.provenance
@@ -34,10 +45,11 @@ def identity_records(artifacts, entities, staged_decisions=()):
                     raise ValueError(
                         f"Identity evidence {claim_id} has no source citations"
                     )
-                for provenance, source in zip(claim.provenance, sources):
-                    if not set(provenance.segment_ids) <= {
-                        s.segment_id for s in source.segments
-                    }:
+                for provenance in claim.provenance:
+                    if (
+                        not set(provenance.segment_ids)
+                        <= segment_ids[provenance.source_id]
+                    ):
                         raise ValueError(
                             f"Identity evidence {claim_id} cites missing source segments"
                         )

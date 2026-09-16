@@ -176,6 +176,21 @@ def _entity_map(
     return mapping, rows, extras
 
 
+def gold_fact_definitions(fixture: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Include transient facts that have no place in the final gold wiki."""
+    grouped = defaultdict(list)
+    for claim in fixture["gold_claims"].get("claims") or []:
+        if claim.get("fact_id"):
+            grouped[str(claim["fact_id"])].append(claim)
+    definitions = {
+        fid: {"id": fid, "text": "\n".join(dict.fromkeys(str(c["text"]) for c in claims)),
+              "claim_ids": [c["id"] for c in claims], "state": claims[0].get("state"), "render_on": []}
+        for fid, claims in grouped.items()
+    }
+    definitions.update({str(row["id"]): dict(row) for row in fixture["gold_wiki"].get("facts") or []})
+    return definitions
+
+
 def match_snapshot(fixture: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
     """Map gold records to generated records using exact evidence before semantics."""
     generated_claims = snapshot.get("claims") or []
@@ -276,25 +291,7 @@ def match_snapshot(fixture: dict[str, Any], snapshot: dict[str, Any]) -> dict[st
                         "section_key": str(section_key),
                     }
                 )
-    gold_fact_definitions = {
-        str(row["id"]): dict(row) for row in fixture["gold_wiki"].get("facts") or []
-    }
-    for gold_claim in fixture["gold_claims"].get("claims") or []:
-        fact_id = str(gold_claim.get("fact_id") or "")
-        if not fact_id or fact_id in gold_fact_definitions:
-            continue
-        gold_fact_definitions[fact_id] = {
-            "id": fact_id,
-            "text": gold_claim.get("text", ""),
-            "claim_ids": [
-                row["id"]
-                for row in fixture["gold_claims"].get("claims") or []
-                if str(row.get("fact_id") or "") == fact_id
-            ],
-            "state": gold_claim.get("state"),
-            "render_on": [],
-        }
-    for gold_fact in gold_fact_definitions.values():
+    for gold_fact in gold_fact_definitions(fixture).values():
         expected_claims = [
             claim_row_by_id[value]
             for value in gold_fact.get("claim_ids") or []

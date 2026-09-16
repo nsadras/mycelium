@@ -21,6 +21,7 @@ from mycelium.store import LogStore
 from mycelium.operations import EvidenceRecord, MemoryEvidence
 from benchmarks.suites.daily_driver.eval import retrieved_generated_ids
 from benchmarks.suites.daily_driver.eval import probe_judgment_model
+from benchmarks.suites.daily_driver.eval import gold_fact_definitions
 
 
 FIXTURE_DIR = Path("benchmarks/suites/daily_driver/fixtures/daily_driver_v1")
@@ -28,6 +29,26 @@ TRANSFER_FIXTURES = (
     Path("benchmarks/suites/daily_driver/fixtures/daily_driver_paraphrased_v1"),
     Path("benchmarks/suites/daily_driver/fixtures/daily_driver_unrelated_v1"),
 )
+
+
+@pytest.mark.parametrize("fixture_dir", [FIXTURE_DIR, *TRANSFER_FIXTURES])
+def test_probe_catalog_includes_facts_that_are_retracted_before_the_final_wiki(fixture_dir):
+    fixture = load_fixture(fixture_dir)
+    facts = gold_fact_definitions(fixture)
+    required = {fid for probe in fixture["probes"]["probes"]
+                for fid in [*probe.get("required_facts", []), *probe.get("forbidden_facts", [])]}
+    assert required <= facts.keys()
+    assert all(facts[fid]["text"] for fid in required)
+
+
+def test_transient_gold_fact_keeps_all_declared_claim_propositions():
+    fixture = {"gold_claims": {"claims": [
+        {"id": "a", "fact_id": "temporary", "text": "The permit costs twelve dollars.", "state": "retracted"},
+        {"id": "b", "fact_id": "temporary", "text": "The permit expires in March.", "state": "retracted"},
+    ]}, "gold_wiki": {"facts": []}}
+    fact = gold_fact_definitions(fixture)["temporary"]
+    assert fact["claim_ids"] == ["a", "b"]
+    assert fact["text"] == "The permit costs twelve dollars.\nThe permit expires in March."
 
 
 def test_probe_judgment_rejects_unknown_and_cross_category_ids():

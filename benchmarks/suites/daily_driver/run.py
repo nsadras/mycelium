@@ -17,6 +17,7 @@ from typing import Any
 from benchmarks.suites.daily_driver.fixture import load_fixture, validate_fixture
 from benchmarks.suites.daily_driver.eval import (
     evaluate_run,
+    gold_fact_definitions,
     judge_probe_answer,
     load_snapshots,
     match_snapshot,
@@ -28,6 +29,7 @@ from benchmarks.shared.run_tracking import begin_invocation, recorded_run
 from benchmarks.shared.model_recording import RecordingClient
 from mycelium.artifacts import ArtifactStore, MemoryClaim, SourceSegment
 from mycelium.core import Mycelium
+from mycelium.claim_lifecycle import ClaimLifecycleService
 from mycelium.config import Config
 from mycelium.operations import ConsolidationRequest, RetrievalRequest, SourceInput
 from mycelium.reconsolidation import ReconsolidationReviewService
@@ -247,7 +249,7 @@ def _gold_claim(fixture: dict[str, Any], claim_id: str) -> dict[str, Any]:
     )
 
 
-def _approve_proposal(
+async def _approve_proposal(
     memory: Mycelium, fixture: dict[str, Any], fixture_proposal_id: str
 ) -> dict[str, Any]:
     reconciliation = next(
@@ -265,11 +267,12 @@ def _approve_proposal(
     labels = _source_label_map(memory)
     candidates = []
     for proposal in memory.artifacts.list_reconsolidation_proposals(status="pending"):
-        incoming = memory.artifacts.get_claim(proposal.incoming_claim_id)
-        target = memory.artifacts.get_claim(proposal.target_claim_id)
+        incoming = [memory.artifacts.get_claim(cid) for cid in proposal.incoming_claim_ids]
+        targets = [memory.artifacts.get_claim(cid) for cid in proposal.target_claim_ids]
         if (
-            _claim_source_labels(incoming, labels) & incoming_evidence
-            and _claim_source_labels(target, labels) & target_evidence
+            proposal.proposed_relation == reconciliation["relation"]
+            and all(_claim_source_labels(claim, labels) & incoming_evidence for claim in incoming)
+            and all(_claim_source_labels(claim, labels) & target_evidence for claim in targets)
         ):
             candidates.append(proposal)
     if len(candidates) != 1:
@@ -277,11 +280,27 @@ def _approve_proposal(
             f"Expected one pending proposal for {fixture_proposal_id}, found {len(candidates)}"
         )
     service = ReconsolidationReviewService(
-        memory.artifacts, memory.consolidator.materializer
+        memory.artifacts, memory.consolidator.materializer, memory.consolidator.fact_resolver
     )
-    result = service.approve(
+    result = await service.approve(
         candidates[0].proposal_id,
         reviewer_note=f"Approved by fixture action {fixture_proposal_id}",
+    )
+    return _jsonable(result)
+
+
+async def _retract_source(memory: Mycelium, fixture_source_id: str) -> dict[str, Any]:
+    sources = [source for source in memory.artifacts.list_sources()
+               if source.metadata.get("fixture_source_id") == fixture_source_id]
+    if len(sources) != 1:
+        raise RuntimeError(
+            f"Expected one source for {fixture_source_id}, found {len(sources)}"
+        )
+    service = ClaimLifecycleService(
+        memory.artifacts, memory.consolidator.materializer, memory.consolidator.fact_resolver
+    )
+    result = await service.retract_source(
+        sources[0].source_id, reason=f"Retracted by fixture action retract:{fixture_source_id}"
     )
     return _jsonable(result)
 
@@ -577,9 +596,7 @@ async def _run_checkpoint_probes(
     if not probes:
         return []
     snapshot_match = match_snapshot(fixture, snapshot)
-    gold_facts = {
-        str(row["id"]): row for row in fixture["gold_wiki"].get("facts") or []
-    }
+    gold_facts = gold_fact_definitions(fixture)
     qa = OllamaQaClient(
         model=memory.config.llm.model,
         url=memory.config.llm.url,
@@ -899,17 +916,9 @@ async def run_daily_driver(
                         checkpoint_ids.append(value)
                         event["result"] = snapshot["counts"]
                     elif kind == "approve":
-                        event["result"] = _approve_proposal(memory, fixture, value)
+                        event["result"] = await _approve_proposal(memory, fixture, value)
                     elif kind == "retract":
-                        event.update(
-                            {
-                                "status": "unsupported",
-                                "reason": (
-                                    "Production Mycelium has no source-retraction operation; "
-                                    "the fixture action was not simulated."
-                                ),
-                            }
-                        )
+                        event["result"] = await _retract_source(memory, value)
                     else:
                         raise ValueError(f"Unsupported fixture action: {action}")
                 except Exception as exc:  # Preserve later checkpoints for diagnosis.

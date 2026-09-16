@@ -92,6 +92,30 @@ Ordinary LoCoMo supports resuming a matching run via the same `--run-id` and
 settings. Existing session snapshots stay intact. Enabling snapshots on an old
 run changes settings, so use a fresh ID. Wiki-baseline requires a fresh directory.
 
+### Optional reference-based semantic scoring
+
+Add `--semantic-scoring` to a LoCoMo QA run to evaluate saved predictions with the
+configured QA model. It compares answer meaning against the dataset reference;
+it does not audit source conversations or verify retrieval grounding. The legacy
+token score remains unchanged. The scorer reports correct/partial/incorrect and
+ungradable judgments, grading coverage, and strict accuracy among gradable
+answers. Failed and ungradable judgments are excluded from that denominator and
+reported explicitly. A partially correct answer does not count as fully correct.
+
+Answers are checkpointed before scoring. A matching resume retries unfinished
+judgments without regenerating saved answers or successful judgments. The
+manifest records separate `qa_status` and `scoring_status`, scorer prompt/schema,
+settings and model digest. A run can finish QA with incomplete scoring. Individual
+judgments live in `questions/*.json` and `predictions.jsonl`; the aggregate is
+`summary.json.semantic_scoring`. Per-attempt scoring costs and failures are in
+`diagnostics/scoring-calls.jsonl`, linked to the question and invocation. Scoring
+time is separate from `mean_query_time` and included in total invocation time.
+
+Compare runs only with matching scorer specifications and coverage. Small direct
+probes do not establish scorer reliability on every benchmark question; the
+reference itself may be incomplete, and using the QA model as judge can introduce
+correlated errors. Manual source/artifact review remains necessary.
+
 ## Daily-driver scenarios
 
 All three scenarios use the same runner and evaluator:

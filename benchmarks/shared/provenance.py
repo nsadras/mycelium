@@ -18,11 +18,13 @@ def effective_configuration(system) -> dict:
     return result
 
 
-async def model_inventory(system) -> dict:
+async def model_inventory(system, *, semantic_scorer=None) -> dict:
+    from benchmarks.shared.semantic_scoring import SemanticScorer
+
     qa = getattr(system, 'qa_client', None)
-    if not isinstance(qa, OllamaQaClient):
-        return {}
-    requested = {'qa': (qa.llm.url, qa.model)}
+    requested = {'qa': (qa.llm.url, qa.model)} if isinstance(qa, OllamaQaClient) else {}
+    if isinstance(semantic_scorer, SemanticScorer):
+        requested['scoring'] = (semantic_scorer.llm.url, semantic_scorer.llm.model)
     if isinstance(system, MyceliumMemorySystem):
         requested.update(memory=(system.ollama_url, system.memory_model),
                          embedding=(system.ollama_url, system.config.retrieval.embedding_model))

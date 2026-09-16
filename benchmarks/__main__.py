@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     locomo.add_argument("--sample-index", type=int, default=None, help="Run one 1-based LoCoMo sample index.")
     locomo.add_argument("--wiki-baseline", action="store_true", help="Build fresh per-session wiki snapshots without QA scoring.")
     locomo.add_argument("--snapshot-sessions", action="store_true", help="Save the Mycelium store after each session while retaining ordinary progress output and QA.")
+    locomo.add_argument("--semantic-scoring", action="store_true", help="Also judge saved answers against references using the QA model; record scoring separately from QA and encoding.")
     locomo.add_argument("--user-speaker", default=None, help="For wiki baseline only: exact speaker name to bind to the configured user.")
 
     mab = subparsers.add_parser("mab", help="Run MemoryAgentBench through its data/metric utilities.")
@@ -76,6 +77,8 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     if args.benchmark == "locomo":
+        if args.semantic_scoring and args.wiki_baseline:
+            parser.error("--semantic-scoring requires a QA run")
         if args.user_speaker and not args.wiki_baseline:
             parser.error("--user-speaker requires --wiki-baseline")
         if args.wiki_baseline:
@@ -89,6 +92,11 @@ def main(argv: list[str] | None = None) -> None:
             ))
             print(json.dumps(summary, indent=2, ensure_ascii=False))
             return
+        from benchmarks.shared.semantic_scoring import SemanticScorer
+
+        semantic_scorer = SemanticScorer(
+            system.qa_client.config, output_dir / "diagnostics" / "scoring-calls.jsonl",
+        ) if args.semantic_scoring else None
         summary = run_async(
             run_locomo(
                 data_path=args.locomo_path,
@@ -102,6 +110,7 @@ def main(argv: list[str] | None = None) -> None:
                 sample_index=args.sample_index,
                 snapshot_sessions=args.snapshot_sessions,
                 allow_incomplete_encoding=args.allow_incomplete_encoding,
+                semantic_scorer=semantic_scorer,
             )
         )
     elif args.benchmark == "mab":

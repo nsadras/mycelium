@@ -20,6 +20,7 @@ from benchmarks.shared.adapters import (
     MyceliumMemorySystem,
 )
 from benchmarks.shared.scoring import locomo_score, summarize_scores
+from benchmarks.shared.semantic_scoring import SemanticScorer, summarize_judgments
 from mycelium.telemetry import trace_operation
 from benchmarks.shared.provenance import effective_configuration, model_inventory, validate_model_resume
 from benchmarks.shared.run_tracking import recorded_run, prior_elapsed, environment_manifest, begin_invocation, invocation_started
@@ -39,6 +40,7 @@ async def run_locomo(
     sample_index: int | None = None,
     snapshot_sessions: bool = False,
     allow_incomplete_encoding: bool = False,
+    semantic_scorer: SemanticScorer | None = None,
 ) -> dict[str, Any]:
     if snapshot_sessions and not isinstance(system, MyceliumMemorySystem):
         raise ValueError("--snapshot-sessions requires a Mycelium-backed system")
@@ -57,7 +59,8 @@ async def run_locomo(
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "run_manifest.json"
     settings = {
-        "protocol_version": 4,
+        "protocol_version": 5,
+        "semantic_scorer": semantic_scorer.specification if semantic_scorer else None,
         "allow_incomplete_encoding": allow_incomplete_encoding,
         "dataset_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
         "system": system.name,
@@ -88,7 +91,7 @@ async def run_locomo(
         raise ValueError(
             "Run settings differ from the checkpoint; use a fresh output directory"
         )
-    inventory = await model_inventory(system)
+    inventory = await model_inventory(system, semantic_scorer=semantic_scorer)
     if manifest is not None:
         validate_model_resume(manifest.get('model_inventory', {}), inventory)
     if manifest is None:
@@ -98,6 +101,7 @@ async def run_locomo(
             )
         manifest = {"settings": settings, "status": "running", "execution_status": "running", "encoding_status": "pending", "qa_status": "pending", "environment": environment_manifest(), "cases": {}}
     manifest['model_inventory'] = inventory
+    manifest['scoring_status'] = 'pending' if semantic_scorer else 'disabled'
     manifest['model_provenance_complete'] = all(not value['error'] for value in inventory.values())
     begin_invocation(output_dir)
     manifest.update(status="running", execution_status="running")
@@ -271,11 +275,42 @@ async def run_locomo(
             summarize_locomo_run(flat_rows, started, prediction_key),
         )
 
+    manifest['qa_status'] = 'complete' if completed_questions else 'not_run'
+    if semantic_scorer is not None:
+        manifest['scoring_status'] = 'running'
+        write_json(manifest_path, manifest)
+        for row in flat_rows:
+            if row.get('semantic_judgment', {}).get('status') == 'complete':
+                continue
+            checkpoint_id = hashlib.sha256(f"{row['sample_id']}:{row['question_index']}".encode()).hexdigest()
+            checkpoint_path = checkpoint_dir / f"{checkpoint_id}.json"
+            row['semantic_judgment'] = {'status': 'running'}
+            write_json(checkpoint_path, row)
+            with trace_operation('semantic_judgment', sample_id=row['sample_id'],
+                                 query_id=f"{row['sample_id']}-q{row['question_index']}") as linkage:
+                scoring_started = time.perf_counter()
+                try:
+                    judgment = await semantic_scorer.judge(
+                        question=row['question'], reference=row['answer'],
+                        prediction=row['prediction'], answerable=int(row['category']) != 5,
+                    )
+                    result = {'status': 'complete', 'judgment': judgment}
+                except Exception as exc:
+                    result = {'status': 'failed', 'error': f'{type(exc).__name__}: {exc}'}
+                row['semantic_judgment'] = {
+                    **result, 'trace': linkage, 'seconds': time.perf_counter() - scoring_started,
+                }
+            write_json(checkpoint_path, row)
+            manifest['scoring_status'] = summarize_judgments(flat_rows, enabled=True)['status']
+            write_json(manifest_path, manifest)
+
     summary = summarize_locomo_run(flat_rows, started, prediction_key)
+    summary['semantic_scoring'] = summarize_judgments(flat_rows, enabled=semantic_scorer is not None)
     write_json(output_dir / "predictions.json", predictions)
     write_jsonl(output_dir / "predictions.jsonl", flat_rows)
     write_json(output_dir / "summary.json", summary)
     manifest.update(status="complete", execution_status="complete", qa_status="complete" if completed_questions else "not_run", completed_questions=len(completed_questions))
+    manifest['scoring_status'] = summary['semantic_scoring']['status']
     write_json(manifest_path, manifest)
     return summary
 

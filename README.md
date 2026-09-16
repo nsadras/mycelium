@@ -254,16 +254,17 @@ sources into searchable memories and wiki pages. See
 
 ## Configuration
 
-The main settings live in `mycelium.toml`:
+The server explicitly loads `mycelium.toml`. Library callers select it with
+`config_path=...`, or supply a `Config` object with `config=...`; omitting both
+uses dataclass defaults. Constructor overrides take precedence and are validated
+before creating the store. A requested file must exist.
 
 ```toml
-[store]
-path = "./mycelium_store"
-
 [llm]
 model = "gemma4:12b"
 url = "http://localhost:11434"
-context_window_tokens = 32768
+context_window_tokens = 65536
+reasoning_enabled = false
 
 [session]
 context_budget_tokens = 32768
@@ -277,8 +278,10 @@ tool_search_limit = 3
 tool_evidence_budget_tokens = 6000
 ```
 
-The default memory store is `./mycelium_store`. It consists primarily of Markdown and JSON, so it can be
-inspected with ordinary text tools or opened as a wiki outside the app. Every saved chat message carries its own
+The server's default memory store is `./mycelium_store`; `MYCELIUM_STORE` selects
+another location. Library callers supply `store_path`. Canonical records live in
+SQLite, with derived Markdown files for inspecting the wiki outside the app.
+Every saved chat message carries its own
 timestamp, allowing one conversation to span multiple days without losing temporal context.
 `session.context_budget_tokens` is the total input budget shared by the assistant system prompt, recent transcript,
 initial memory, and follow-up memory evidence; it is capped by `llm.context_window_tokens`. Retrieval tool limits are

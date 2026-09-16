@@ -30,6 +30,7 @@ build-backend = "hatchling.build"
 packages = ["mycelium"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "integration: slow or external-resource integration tests",
 ]

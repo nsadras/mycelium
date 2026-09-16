@@ -21,7 +21,7 @@ from benchmarks.shared.adapters import (
 )
 from benchmarks.shared.scoring import locomo_score, summarize_scores
 from mycelium.telemetry import trace_operation
-from benchmarks.shared.provenance import model_inventory, validate_model_resume
+from benchmarks.shared.provenance import effective_configuration, model_inventory, validate_model_resume
 from benchmarks.shared.run_tracking import recorded_run, prior_elapsed, environment_manifest, begin_invocation, invocation_started
 
 
@@ -56,9 +56,8 @@ async def run_locomo(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "run_manifest.json"
-    config_path = getattr(system, "config_path", None)
     settings = {
-        "protocol_version": 3,
+        "protocol_version": 4,
         "allow_incomplete_encoding": allow_incomplete_encoding,
         "dataset_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
         "system": system.name,
@@ -82,9 +81,7 @@ async def run_locomo(
                 "replay_assignments",
             )
         },
-        "config_sha256": hashlib.sha256(Path(config_path).read_bytes()).hexdigest()
-        if config_path
-        else None,
+        "effective_config": effective_configuration(system),
     }
     manifest = read_json_if_exists(manifest_path, default=None)
     if manifest is not None and manifest["settings"] != settings:

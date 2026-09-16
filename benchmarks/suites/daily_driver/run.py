@@ -25,6 +25,7 @@ from benchmarks.shared.adapters import OllamaQaClient
 from benchmarks.shared.scoring import token_f1
 from mycelium.artifacts import ArtifactStore, MemoryClaim, SourceSegment
 from mycelium.core import Mycelium
+from mycelium.config import Config
 from mycelium.operations import ConsolidationRequest, RetrievalRequest, SourceInput
 from mycelium.reconsolidation import ReconsolidationReviewService
 from mycelium.session import Session
@@ -759,43 +760,43 @@ def refresh_daily_driver_comparison(
 ) -> dict[str, Any]:
     """Recompute diagnostics for a completed run without invoking an LLM."""
     fixture = load_fixture(fixture_dir)
-    memory = Mycelium(
+    with Mycelium(
         output_dir / "store", config_path=config_path, memory_profile="user"
-    )
-    run_path = output_dir / "run.json"
-    if run_path.exists():
-        run = json.loads(run_path.read_text(encoding="utf-8"))
-    else:
-        run = {
-            "scenario_id": fixture["scenario"]["scenario_id"],
-            "model": memory.config.llm.model,
-            "ollama_url": memory.config.llm.url,
-            "config_path": str(config_path) if config_path else None,
-            "extraction_mode": "unknown_recovered_run",
-            "replay_extraction_store": None,
-            "probe_answers": True,
-            "checkpoint_ids": sorted(
-                path.parent.name
-                for path in (output_dir / "checkpoints").glob("*/snapshot.json")
-            ),
-            "actions": [],
-        }
-        _write_json(run_path, run)
-    comparison = compare_final(fixture, memory)
-    snapshots = load_snapshots(output_dir)
-    probe_results = [
-        row
-        for path in sorted((output_dir / "checkpoints").glob("*/probes.json"))
-        for row in json.loads(path.read_text(encoding="utf-8"))
-    ]
-    evaluation = evaluate_run(fixture, snapshots, probe_results)
-    _write_json(output_dir / "comparison.json", comparison)
-    _write_json(output_dir / "evaluation.json", evaluation)
-    (output_dir / "REPORT.md").write_text(
-        _report_markdown(run, evaluation, run["actions"]),
-        encoding="utf-8",
-    )
-    return {"comparison": comparison, "evaluation": evaluation}
+    ) as memory:
+        run_path = output_dir / "run.json"
+        if run_path.exists():
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+        else:
+            run = {
+                "scenario_id": fixture["scenario"]["scenario_id"],
+                "model": memory.config.llm.model,
+                "ollama_url": memory.config.llm.url,
+                "config_path": str(config_path) if config_path else None,
+                "extraction_mode": "unknown_recovered_run",
+                "replay_extraction_store": None,
+                "probe_answers": True,
+                "checkpoint_ids": sorted(
+                    path.parent.name
+                    for path in (output_dir / "checkpoints").glob("*/snapshot.json")
+                ),
+                "actions": [],
+            }
+            _write_json(run_path, run)
+        comparison = compare_final(fixture, memory)
+        snapshots = load_snapshots(output_dir)
+        probe_results = [
+            row
+            for path in sorted((output_dir / "checkpoints").glob("*/probes.json"))
+            for row in json.loads(path.read_text(encoding="utf-8"))
+        ]
+        evaluation = evaluate_run(fixture, snapshots, probe_results)
+        _write_json(output_dir / "comparison.json", comparison)
+        _write_json(output_dir / "evaluation.json", evaluation)
+        (output_dir / "REPORT.md").write_text(
+            _report_markdown(run, evaluation, run["actions"]),
+            encoding="utf-8",
+        )
+        return {"comparison": comparison, "evaluation": evaluation}
 
 
 async def run_daily_driver(
@@ -805,119 +806,125 @@ async def run_daily_driver(
     config_path: Path | None = None,
     replay_extraction_store: Path | None = None,
     run_probe_answers: bool = True,
+    config: Config | None = None,
 ) -> dict[str, Any]:
+    settings = config.with_overrides() if config is not None else (
+        Config.from_toml(config_path) if config_path is not None else Config.defaults()
+    )
     validate_fixture(fixture_dir)
     fixture = load_fixture(fixture_dir)
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    memory = Mycelium(
+    _write_json(output_dir / "configuration.json", asdict(settings))
+    with Mycelium(
         output_dir / "store",
-        config_path=config_path,
+        config=settings,
         memory_profile="user",
-    )
-    replay = None
-    replay_logs = None
-    if replay_extraction_store is not None:
-        if not replay_extraction_store.is_dir():
-            raise ValueError(
-                f"Replay extraction store does not exist: {replay_extraction_store}"
-            )
-        replay = ArtifactStore(replay_extraction_store / "artifacts")
-        replay_logs = LogStore(replay_extraction_store / "logs")
-    _configure_user(memory, str(fixture["scenario"]["user"]["name"]))
-    actions: list[dict[str, Any]] = []
-    checkpoint_ids: list[str] = []
-    snapshots: dict[str, dict[str, Any]] = {}
-    probe_results: list[dict[str, Any]] = []
-    for episode in fixture["scenario"]["episodes"]:
-        if replay is None:
-            await _ingest_episode(
-                memory,
-                episode,
-                user_speaker_label=str(fixture["scenario"]["user"]["speaker_label"]),
-            )
-        else:
-            if replay_logs is None:
-                raise RuntimeError("Replay log store was not initialized")
-            _replay_extracted_episode(memory, replay, replay_logs, episode)
-        for action in episode.get("actions_after") or []:
-            kind, _, value = str(action).partition(":")
-            event: dict[str, Any] = {"episode": episode["id"], "action": action}
-            try:
-                if kind == "dream":
-                    result = await memory.consolidate(ConsolidationRequest())
-                    event["result"] = _jsonable(result.report)
-                elif kind == "checkpoint":
-                    snapshot = _snapshot(memory, value)
-                    checkpoint_dir = output_dir / "checkpoints" / value
-                    _write_json(checkpoint_dir / "snapshot.json", snapshot)
-                    wiki_dir = checkpoint_dir / "wiki"
-                    wiki_dir.mkdir(parents=True, exist_ok=True)
-                    for page in memory.wiki.list_all():
-                        shutil.copy2(
-                            memory.store_path / "wiki" / f"{page.slug}.md",
-                            wiki_dir / f"{page.slug}.md",
-                        )
-                    snapshot_store(memory.store_path, checkpoint_dir / "store")
-                    snapshots[value] = snapshot
-                    checkpoint_probes = await _run_checkpoint_probes(
-                        fixture,
-                        memory,
-                        value,
-                        snapshot,
-                        run_answers=run_probe_answers,
-                    )
-                    _write_json(checkpoint_dir / "probes.json", checkpoint_probes)
-                    probe_results.extend(checkpoint_probes)
-                    checkpoint_ids.append(value)
-                    event["result"] = snapshot["counts"]
-                elif kind == "approve":
-                    event["result"] = _approve_proposal(memory, fixture, value)
-                elif kind == "retract":
-                    event.update(
-                        {
-                            "status": "unsupported",
-                            "reason": (
-                                "Production Mycelium has no source-retraction operation; "
-                                "the fixture action was not simulated."
-                            ),
-                        }
-                    )
-                else:
-                    raise ValueError(f"Unsupported fixture action: {action}")
-            except Exception as exc:  # Preserve later checkpoints for diagnosis.
-                event.update(
-                    {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+    ) as memory:
+        replay = None
+        replay_logs = None
+        if replay_extraction_store is not None:
+            if not replay_extraction_store.is_dir():
+                raise ValueError(
+                    f"Replay extraction store does not exist: {replay_extraction_store}"
                 )
-            actions.append(event)
-    run = {
-        "scenario_id": fixture["scenario"]["scenario_id"],
-        "model": memory.config.llm.model,
-        "ollama_url": memory.config.llm.url,
-        "config_path": str(config_path) if config_path else None,
-        "extraction_mode": "replay" if replay is not None else "fresh",
-        "replay_extraction_store": (
-            str(replay_extraction_store) if replay_extraction_store else None
-        ),
-        "probe_answers": run_probe_answers,
-        "checkpoint_ids": checkpoint_ids,
-        "actions": actions,
-    }
-    _write_json(output_dir / "run.json", run)
-    comparison = compare_final(fixture, memory)
-    evaluation = evaluate_run(fixture, snapshots, probe_results)
-    _write_json(output_dir / "comparison.json", comparison)
-    _write_json(output_dir / "evaluation.json", evaluation)
-    (output_dir / "REPORT.md").write_text(
-        _report_markdown(run, evaluation, actions), encoding="utf-8"
-    )
-    return {
-        "run": run,
-        "comparison": comparison,
-        "evaluation": evaluation,
-        "output_dir": str(output_dir),
-    }
+            replay = ArtifactStore(replay_extraction_store / "artifacts")
+            replay_logs = LogStore(replay_extraction_store / "logs")
+        _configure_user(memory, str(fixture["scenario"]["user"]["name"]))
+        actions: list[dict[str, Any]] = []
+        checkpoint_ids: list[str] = []
+        snapshots: dict[str, dict[str, Any]] = {}
+        probe_results: list[dict[str, Any]] = []
+        for episode in fixture["scenario"]["episodes"]:
+            if replay is None:
+                await _ingest_episode(
+                    memory,
+                    episode,
+                    user_speaker_label=str(fixture["scenario"]["user"]["speaker_label"]),
+                )
+            else:
+                if replay_logs is None:
+                    raise RuntimeError("Replay log store was not initialized")
+                _replay_extracted_episode(memory, replay, replay_logs, episode)
+            for action in episode.get("actions_after") or []:
+                kind, _, value = str(action).partition(":")
+                event: dict[str, Any] = {"episode": episode["id"], "action": action}
+                try:
+                    if kind == "dream":
+                        result = await memory.consolidate(ConsolidationRequest())
+                        event["result"] = _jsonable(result.report)
+                    elif kind == "checkpoint":
+                        snapshot = _snapshot(memory, value)
+                        checkpoint_dir = output_dir / "checkpoints" / value
+                        _write_json(checkpoint_dir / "snapshot.json", snapshot)
+                        wiki_dir = checkpoint_dir / "wiki"
+                        wiki_dir.mkdir(parents=True, exist_ok=True)
+                        for page in memory.wiki.list_all():
+                            shutil.copy2(
+                                memory.store_path / "wiki" / f"{page.slug}.md",
+                                wiki_dir / f"{page.slug}.md",
+                            )
+                        snapshot_store(memory.store_path, checkpoint_dir / "store")
+                        snapshots[value] = snapshot
+                        checkpoint_probes = await _run_checkpoint_probes(
+                            fixture,
+                            memory,
+                            value,
+                            snapshot,
+                            run_answers=run_probe_answers,
+                        )
+                        _write_json(checkpoint_dir / "probes.json", checkpoint_probes)
+                        probe_results.extend(checkpoint_probes)
+                        checkpoint_ids.append(value)
+                        event["result"] = snapshot["counts"]
+                    elif kind == "approve":
+                        event["result"] = _approve_proposal(memory, fixture, value)
+                    elif kind == "retract":
+                        event.update(
+                            {
+                                "status": "unsupported",
+                                "reason": (
+                                    "Production Mycelium has no source-retraction operation; "
+                                    "the fixture action was not simulated."
+                                ),
+                            }
+                        )
+                    else:
+                        raise ValueError(f"Unsupported fixture action: {action}")
+                except Exception as exc:  # Preserve later checkpoints for diagnosis.
+                    event.update(
+                        {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+                    )
+                actions.append(event)
+        run = {
+            "scenario_id": fixture["scenario"]["scenario_id"],
+            "model": memory.config.llm.model,
+            "ollama_url": memory.config.llm.url,
+            "config_path": str(config_path) if config_path else None,
+            "effective_config": asdict(memory.config),
+            "extraction_mode": "replay" if replay is not None else "fresh",
+            "replay_extraction_store": (
+                str(replay_extraction_store) if replay_extraction_store else None
+            ),
+            "probe_answers": run_probe_answers,
+            "checkpoint_ids": checkpoint_ids,
+            "actions": actions,
+        }
+        _write_json(output_dir / "run.json", run)
+        comparison = compare_final(fixture, memory)
+        evaluation = evaluate_run(fixture, snapshots, probe_results)
+        _write_json(output_dir / "comparison.json", comparison)
+        _write_json(output_dir / "evaluation.json", evaluation)
+        (output_dir / "REPORT.md").write_text(
+            _report_markdown(run, evaluation, actions), encoding="utf-8"
+        )
+        return {
+            "run": run,
+            "comparison": comparison,
+            "evaluation": evaluation,
+            "output_dir": str(output_dir),
+        }
 
 
 async def run_daily_driver_trials(
@@ -932,9 +939,11 @@ async def run_daily_driver_trials(
     """Run repeated independent trials and report variance per dimension."""
     if trials < 2:
         raise ValueError("Repeated trial runs require trials >= 2")
+    config = Config.from_toml(config_path) if config_path is not None else Config.defaults()
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(output_dir / "configuration.json", asdict(config))
     results = []
     for trial in range(1, trials + 1):
         trial_dir = output_dir / f"trial-{trial:02d}"
@@ -943,6 +952,7 @@ async def run_daily_driver_trials(
                 fixture_dir,
                 trial_dir,
                 config_path=config_path,
+                config=config.with_overrides(),
                 replay_extraction_store=replay_extraction_store,
                 run_probe_answers=run_probe_answers,
             )

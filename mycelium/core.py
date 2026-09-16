@@ -36,19 +36,19 @@ class Mycelium:
         context_budget_tokens: int | None = None,
         config_path: str | Path | None = None,
         memory_profile: Literal["user", "none"] = "user",
+        *,
+        config: Config | None = None,
     ):
         self.store_path = Path(store_path)
 
-        self.config = Config.from_toml(Path(config_path)) if config_path is not None else Config.defaults()
-        if ollama_model is not None:
-            self.config.llm.model = ollama_model
-        if ollama_url is not None:
-            self.config.llm.url = ollama_url
-        if context_budget_tokens is not None:
-            self.config.context_budget_tokens = context_budget_tokens
-        self.config.llm.__post_init__()
-        if self.config.context_budget_tokens <= 0:
-            raise ValueError("Context budget must be positive")
+        if config is not None and config_path is not None:
+            raise ValueError("Specify config or config_path, not both")
+        base_config = config if config is not None else (
+            Config.from_toml(Path(config_path)) if config_path is not None else Config.defaults()
+        )
+        self.config = base_config.with_overrides(
+            model=ollama_model, url=ollama_url, context_budget_tokens=context_budget_tokens,
+        )
 
         from mycelium.database import database
 

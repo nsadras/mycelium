@@ -5,7 +5,7 @@ from mycelium.snapshots import snapshot_store
 import asyncio
 import copy
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -74,13 +74,20 @@ class OllamaQaClient:
         timeout: int | None = None,
         llm_config: LLMConfig | None = None,
     ) -> None:
-        self.model = model
-        settings = llm_config or LLMConfig()
+        settings = replace(
+            llm_config if llm_config is not None else LLMConfig(), model=model, url=url,
+        )
+        if temperature is not None:
+            settings = replace(settings, temperature=temperature)
+        if timeout is not None:
+            settings = replace(settings, timeout_seconds=timeout)
+        self.config = settings
+        self.model = settings.model
         self.llm = OllamaClient(
             url=url,
             model=model,
-            temperature=settings.temperature if temperature is None else temperature,
-            timeout=settings.timeout_seconds if timeout is None else timeout,
+            temperature=settings.temperature,
+            timeout=settings.timeout_seconds,
             top_p=settings.top_p,
             top_k=settings.top_k,
             context_window_tokens=settings.context_window_tokens,
@@ -303,20 +310,27 @@ class MyceliumMemorySystem:
         memory_model: str,
         ollama_url: str,
         config_path: Path | None = None,
-        context_budget_tokens: int = 32768,
+        context_budget_tokens: int | None = None,
         dream_policy: str = "per-batch",
         replay_store: Path | None = None,
         replay_assignments: bool = False,
         frozen_store: Path | None = None,
         include_retrieval_context: bool = False,
         memory_profile: Literal["user", "none"] = "none",
+        config: Config | None = None,
     ) -> None:
         self.run_dir = run_dir
         self.qa_client = qa_client
-        self.memory_model = memory_model
-        self.ollama_url = ollama_url
+        base_config = config if config is not None else (
+            Config.from_toml(config_path) if config_path is not None else Config.defaults()
+        )
+        self.config = base_config.with_overrides(
+            model=memory_model, url=ollama_url, context_budget_tokens=context_budget_tokens,
+        )
+        self.memory_model = self.config.llm.model
+        self.ollama_url = self.config.llm.url
         self.config_path = config_path
-        self.context_budget_tokens = context_budget_tokens
+        self.context_budget_tokens = self.config.context_budget_tokens
         self.dream_policy = dream_policy
         self.replay_store = replay_store
         self.replay_assignments = replay_assignments
@@ -342,10 +356,7 @@ class MyceliumMemorySystem:
         store_path.mkdir(parents=True, exist_ok=True)
         self.mem = Mycelium(
             store_path=store_path,
-            ollama_model=self.memory_model,
-            ollama_url=self.ollama_url,
-            context_budget_tokens=self.context_budget_tokens,
-            config_path=self.config_path,
+            config=self.config,
             memory_profile=self.memory_profile,
         )
         if self.replay_assignments:
@@ -610,7 +621,7 @@ class MyceliumMemorySystem:
             "errors": self._errors,
             "dream_failures": self._dream_failures,
             "artifact_coverage": coverage,
-            "effective_config": asdict(self.mem.config) if self.mem else None,
+            "effective_config": asdict(self.config),
             "encoding_status": "incomplete" if log_count or coverage.get("pending_extraction_segments", 0) or (self.mem and self.mem.db.publication_status()) else "complete",
         }
 
@@ -760,11 +771,11 @@ def build_memory_system(
     *,
     system_name: str,
     run_dir: Path,
-    qa_model: str,
-    memory_model: str,
-    ollama_url: str,
+    qa_model: str | None,
+    memory_model: str | None,
+    ollama_url: str | None,
     config_path: Path | None,
-    context_budget_tokens: int,
+    context_budget_tokens: int | None,
     dream_policy: str,
     replay_store: Path | None = None,
     replay_assignments: bool = False,
@@ -784,20 +795,25 @@ def build_memory_system(
         raise ValueError("--frozen-store and --replay-store are mutually exclusive")
     if frozen_store is not None and not frozen_store.is_dir():
         raise ValueError(f"Frozen store does not exist: {frozen_store}")
+    base_config = Config.from_toml(config_path) if config_path is not None else Config.defaults()
+    config = base_config.with_overrides(
+        model=memory_model, url=ollama_url, context_budget_tokens=context_budget_tokens,
+    )
     qa_client = OllamaQaClient(
-        model=qa_model,
-        url=ollama_url,
-        llm_config=(Config.from_toml(config_path) if config_path else Config.defaults()).llm,
+        model=base_config.llm.model if qa_model is None else qa_model,
+        url=config.llm.url,
+        llm_config=config.llm,
     )
     qa_client.llm.trace_path = run_dir / "diagnostics" / "qa-calls.jsonl"
     if system_name == "mycelium":
         return MyceliumMemorySystem(
             run_dir=run_dir,
             qa_client=qa_client,
-            memory_model=memory_model,
-            ollama_url=ollama_url,
+            memory_model=config.llm.model,
+            ollama_url=config.llm.url,
             config_path=config_path,
-            context_budget_tokens=context_budget_tokens,
+            context_budget_tokens=config.context_budget_tokens,
+            config=config,
             dream_policy=dream_policy,
             replay_store=replay_store,
             replay_assignments=replay_assignments,
@@ -808,10 +824,11 @@ def build_memory_system(
         return FullWikiMemorySystem(
             run_dir=run_dir,
             qa_client=qa_client,
-            memory_model=memory_model,
-            ollama_url=ollama_url,
+            memory_model=config.llm.model,
+            ollama_url=config.llm.url,
             config_path=config_path,
-            context_budget_tokens=context_budget_tokens,
+            context_budget_tokens=config.context_budget_tokens,
+            config=config,
             dream_policy=dream_policy,
             replay_store=replay_store,
             replay_assignments=replay_assignments,

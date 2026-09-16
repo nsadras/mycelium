@@ -24,9 +24,17 @@ projects/data separately. Have Ollama running with the requested models before
 starting model-backed evaluations; the benchmark does not start the server.
 
 Pass `--config-path mycelium.toml` explicitly for LoCoMo/MAB to use project memory
-settings, including reasoning. Their QA model defaults to `gemma4:latest` and
-memory model defaults to the QA model; examples pin both to `gemma4:12b`.
-Daily-driver defaults to `mycelium.toml` and uses its configured models.
+settings, including reasoning. CLI overrides take precedence over this file;
+unspecified fields use dataclass defaults. Without a file, both models default
+to `gemma4:12b`. `--qa-model` and `--memory-model` override their respective roles
+independently. Daily-driver defaults to `mycelium.toml`.
+
+Each run captures and validates its configuration once; edits to the input file
+do not alter later cases or daily-driver trials. LoCoMo records effective memory
+and QA settings in its manifest and rejects resumes with changed settings. MAB
+and daily-driver write `configuration.json`; daily-driver also includes the
+configuration in `run.json`. These files describe settings, not completion or
+quality. A requested config file that is missing or invalid fails explicitly.
 
 This storage version requires fresh runs; old JSON stores remain offline artifacts and
 cannot be resumed or used as replay stores. New runs write beneath `benchmark_runs/`. `--output-root` changes that location;

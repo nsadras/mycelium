@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import tomllib
 import math
@@ -22,8 +22,10 @@ class LLMConfig:
     reasoning_format: str = "prompt"
 
     def __post_init__(self):
-        if not self.model.strip() or not self.url.strip():
-            raise ValueError("Model and URL must be nonempty")
+        for name in ('model', 'url'):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f'{name} must be a nonempty string')
         for name in ('context_window_tokens', 'timeout_seconds', 'reasoning_output_tokens', 'top_k'):
             _positive_integer(name, getattr(self, name))
         for name in ('temperature', 'top_p'):
@@ -34,9 +36,7 @@ class LLMConfig:
             raise ValueError('temperature must be nonnegative and top_p in (0, 1]')
         if type(self.reasoning_enabled) is not bool:
             raise ValueError("reasoning_enabled must be a boolean")
-        if self.reasoning_output_tokens <= 0:
-            raise ValueError("reasoning_output_tokens must be positive")
-        if self.reasoning_format not in {"prompt", "native"}:
+        if self.reasoning_format not in ("prompt", "native"):
             raise ValueError("reasoning_format must be prompt or native")
 
 @dataclass
@@ -65,6 +65,19 @@ class Config:
 
     def __post_init__(self):
         _positive_integer('context_budget_tokens', self.context_budget_tokens)
+
+    def with_overrides(
+        self, *, model: str | None = None, url: str | None = None,
+        context_budget_tokens: int | None = None,
+    ) -> 'Config':
+        """Copy and validate the entire effective configuration before use."""
+        return Config(
+            context_budget_tokens=(self.context_budget_tokens if context_budget_tokens is None
+                                   else context_budget_tokens),
+            llm=replace(self.llm, model=self.llm.model if model is None else model,
+                        url=self.llm.url if url is None else url),
+            retrieval=replace(self.retrieval),
+        )
 
     @classmethod
     def from_toml(cls, path: Path) -> 'Config':

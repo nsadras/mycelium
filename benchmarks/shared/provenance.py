@@ -1,10 +1,21 @@
 """Read-only model provenance for comparing and resuming evaluations."""
 import asyncio
+from dataclasses import asdict
 
 import httpx
 
 from benchmarks.shared.adapters import OllamaQaClient, MyceliumMemorySystem
-from mycelium.config import Config
+
+
+def effective_configuration(system) -> dict:
+    """Settings captured by the clients, independent of subsequent file edits."""
+    result = {}
+    qa = getattr(system, 'qa_client', None)
+    if isinstance(qa, OllamaQaClient):
+        result['qa'] = asdict(qa.config)
+    if isinstance(system, MyceliumMemorySystem):
+        result['memory'] = asdict(system.config)
+    return result
 
 
 async def model_inventory(system) -> dict:
@@ -13,9 +24,8 @@ async def model_inventory(system) -> dict:
         return {}
     requested = {'qa': (qa.llm.url, qa.model)}
     if isinstance(system, MyceliumMemorySystem):
-        config = Config.from_toml(system.config_path) if system.config_path else Config.defaults()
         requested.update(memory=(system.ollama_url, system.memory_model),
-                         embedding=(system.ollama_url, config.retrieval.embedding_model))
+                         embedding=(system.ollama_url, system.config.retrieval.embedding_model))
 
     async def tags(url):
         try:

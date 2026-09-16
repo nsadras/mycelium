@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 
 from benchmarks.shared.adapters import BenchmarkMessage, MemorySystem
+from benchmarks.shared.provenance import effective_configuration
 
 
 class MyceliumMABAgent:
@@ -80,6 +81,9 @@ async def run_memoryagentbench(
         all_query_answer_pairs = all_query_answer_pairs[:max_contexts]
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "configuration.json").write_text(
+        json.dumps(effective_configuration(system), indent=2), encoding="utf-8",
+    )
     output_path = output_dir / "results.json"
     metrics: dict[str, list[Any]] = defaultdict(list)
     results: list[dict[str, Any]] = []

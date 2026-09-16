@@ -375,8 +375,9 @@ Runtime settings live in `mycelium.toml`:
 [llm]
 model = "gemma4:12b"
 url = "http://localhost:11434"
-temperature = 0.2
-context_window_tokens = 32768
+temperature = 1.0
+context_window_tokens = 65536
+reasoning_enabled = false
 
 [session]
 context_budget_tokens = 32768
@@ -389,6 +390,13 @@ batch_size = 8
 ```
 
 `llm.context_window_tokens` controls token-aware ingestion batching. It is separate from `session.context_budget_tokens`, which limits how much retrieved memory is loaded into chats. Dream projection defaults live in `mycelium/config.py`.
+
+Explicit constructor/CLI overrides take precedence over a requested TOML file,
+then dataclass defaults. Missing requested files and invalid values fail before
+store creation. A `Mycelium` instance takes a copied, validated `Config` or a
+`config_path`. Benchmark clients capture their settings once for all cases;
+daily-driver trials share the same captured configuration. LoCoMo resume checks
+compare full effective memory and QA settings, including URLs and sampling.
 
 ## Engram meeting pipeline
 

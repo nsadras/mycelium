@@ -58,19 +58,13 @@ def main(argv: list[str] | None = None) -> None:
 
         dispatch(args, parser)
         return
-    from mycelium.config import Config
-    config = Config.from_toml(args.config_path) if args.config_path else Config.defaults()
-    args.qa_model = args.qa_model or config.llm.model
-    args.memory_model = args.memory_model or config.llm.model
-    args.ollama_url = args.ollama_url or config.llm.url
-    args.context_budget_tokens = args.context_budget_tokens if args.context_budget_tokens is not None else config.context_budget_tokens
     run_id = args.run_id or default_run_id(args.benchmark, args.system)
     output_dir = args.output_root / run_id
     system = build_memory_system(
         system_name=args.system,
         run_dir=output_dir,
         qa_model=args.qa_model,
-        memory_model=args.memory_model or args.qa_model,
+        memory_model=args.memory_model,
         ollama_url=args.ollama_url,
         config_path=args.config_path,
         context_budget_tokens=args.context_budget_tokens,

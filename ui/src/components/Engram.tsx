@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { AlertTriangle, CheckCircle2, CircleHelp, Clock, FileAudio, Gavel, ListChecks, Loader2, RotateCw, Save, Trash2, Upload } from 'lucide-react';
 import api, { engramAudioUrl, type EngramMeeting } from '../lib/api';
 import type { AssistantStatus } from '../lib/assistantStatus';
-import { useMeetingRequests, type MeetingRequest } from './engram/useMeetingRequests';
+import { useSelectionRequests, type SelectionRequest } from '../lib/useSelectionRequests';
 import {
   AudioTransport, List, ProcessingIndicator, TranscriptTurnRow,
 } from './engram/presentation';
@@ -20,7 +20,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loadedMeeting, setMeeting] = useState<EngramMeeting | null>(null);
   const meeting = loadedMeeting?.id === selectedId ? loadedMeeting : null;
-  const requests = useMeetingRequests();
+  const requests = useSelectionRequests();
   const [requestError, setRequestError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -67,7 +67,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     setPlaybackError(null);
   }, [applyMeeting, requests]);
 
-  const acceptMeeting = useCallback((ticket: MeetingRequest, next: EngramMeeting) => {
+  const acceptMeeting = useCallback((ticket: SelectionRequest, next: EngramMeeting) => {
     if (!requests.latest(ticket)) return false;
     requests.invalidateList();
     setMeetings(prev => prev.map(item => item.id === ticket.id ? next : item));

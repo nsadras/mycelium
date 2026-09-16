@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef } from 'react';
 
-export interface MeetingRequest {
+export interface SelectionRequest {
   id: string;
   selection: number;
   version: number;
 }
 
-export function useMeetingRequests() {
+export function useSelectionRequests() {
   const state = useRef({ mounted: true, selectedId: null as string | null, selection: 0,
     listVersion: 0, versions: new Map<string, number>() });
   const scope = useMemo(() => {
@@ -17,13 +17,13 @@ export function useMeetingRequests() {
       selection() { return state.current.selection; },
       selectedId() { return state.current.selectedId; },
       sameSelection(value: number) { return state.current.mounted && state.current.selection === value; },
-      begin(id: string): MeetingRequest {
+      begin(id: string): SelectionRequest {
         const version = (state.current.versions.get(id) ?? 0) + 1;
         state.current.versions.set(id, version);
         return { id, selection: state.current.selection, version };
       },
-      latest(ticket: MeetingRequest) { return state.current.mounted && state.current.versions.get(ticket.id) === ticket.version; },
-      current(ticket: MeetingRequest) {
+      latest(ticket: SelectionRequest) { return state.current.mounted && state.current.versions.get(ticket.id) === ticket.version; },
+      current(ticket: SelectionRequest) {
         return state.current.mounted && state.current.selectedId === ticket.id && state.current.selection === ticket.selection && state.current.versions.get(ticket.id) === ticket.version;
       },
       beginList() { return ++state.current.listVersion; },

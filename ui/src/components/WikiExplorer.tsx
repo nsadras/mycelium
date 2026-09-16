@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Archive, Book, ChevronRight, GitMerge, Pencil, RotateCcw, Search, ShieldCheck, Split, X } from 'lucide-react';
@@ -6,6 +6,7 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
 import ClaimCorrectionEditor from './ClaimCorrectionEditor';
+import { useSelectionRequests } from '../lib/useSelectionRequests';
 import api, {
   type EntityRecord,
   type ArtifactSource,
@@ -24,7 +25,11 @@ export default function WikiExplorer({ onInspectReview }: { onInspectReview?: (p
   const [proposals, setProposals] = useState<OrganizationProposalArtifact[]>([]);
   const [ontology, setOntology] = useState<MemoryOntology | null>(null);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
-  const [pageData, setPageData] = useState<WikiPage | null>(null);
+  const [pageSnapshot, setPageSnapshot] = useState<{ page: WikiPage; selection: number } | null>(null);
+  const pageData = pageSnapshot?.page.slug === selectedSlug ? pageSnapshot.page : null;
+  const [selectionEpoch, setSelectionEpoch] = useState(0);
+  const requests = useSelectionRequests();
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [showReview, setShowReview] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -33,43 +38,43 @@ export default function WikiExplorer({ onInspectReview }: { onInspectReview?: (p
   const [selectedFacts, setSelectedFacts] = useState<string[]>([]);
   const [groupText, setGroupText] = useState('');
 
-  const refresh = async () => {
-    const [pageResponse, entityResponse, proposalResponse, ontologyResponse] = await Promise.all([
-      api.get<WikiPage[]>('/memory/wiki'),
-      api.get<EntityRecord[]>('/memory/artifacts/entities'),
-      api.get<OrganizationProposalArtifact[]>('/memory/artifacts/organization-proposals?status=pending'),
-      api.get<MemoryOntology>('/memory/ontology'),
-    ]);
-    setPages(pageResponse.data);
-    setEntities(entityResponse.data);
-    setProposals(proposalResponse.data);
-    setOntology(ontologyResponse.data);
-  };
+  const selectPage = useCallback((slug: string | null) => {
+    requests.select(slug);
+    setSelectionEpoch(value => value + 1);
+    setSelectedSlug(slug); setPageSnapshot(null); setError(null);
+    setEditing(false); setExpandedClaim(null); setSelectedClaims([]); setSelectedFacts([]); setGroupText('');
+  }, [requests]);
 
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      api.get<WikiPage[]>('/memory/wiki'),
-      api.get<EntityRecord[]>('/memory/artifacts/entities'),
-      api.get<OrganizationProposalArtifact[]>('/memory/artifacts/organization-proposals?status=pending'),
-      api.get<MemoryOntology>('/memory/ontology'),
+  const refresh = useCallback((signal?: AbortSignal) => {
+    const ticket = requests.beginList();
+    return Promise.all([
+      api.get<WikiPage[]>('/memory/wiki', { signal }),
+      api.get<EntityRecord[]>('/memory/artifacts/entities', { signal }),
+      api.get<OrganizationProposalArtifact[]>('/memory/artifacts/organization-proposals?status=pending', { signal }),
+      api.get<MemoryOntology>('/memory/ontology', { signal }),
     ]).then(([pageResponse, entityResponse, proposalResponse, ontologyResponse]) => {
-      if (cancelled) return;
+      if (signal?.aborted || !requests.currentList(ticket)) return;
       setPages(pageResponse.data);
       setEntities(entityResponse.data);
       setProposals(proposalResponse.data);
       setOntology(ontologyResponse.data);
-    }).catch((error) => console.error('Failed to load wiki', error));
-    return () => { cancelled = true; };
-  }, []);
+    });
+  }, [requests]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    refresh(controller.signal).catch(() => { if (!controller.signal.aborted) setError('Could not load the wiki.'); });
+    return () => { controller.abort(); };
+  }, [refresh]);
   useEffect(() => {
     if (!selectedSlug) return;
-    let cancelled = false;
-    api.get<WikiPage>(`/memory/wiki/${encodeURIComponent(selectedSlug)}`)
-      .then((response) => { if (!cancelled) setPageData(response.data); })
-      .catch((error) => console.error('Failed to fetch page', error));
-    return () => { cancelled = true; };
-  }, [selectedSlug]);
+    const controller = new AbortController();
+    const ticket = requests.begin(selectedSlug);
+    api.get<WikiPage>(`/memory/wiki/${encodeURIComponent(selectedSlug)}`, { signal: controller.signal })
+      .then((response) => { if (!controller.signal.aborted && requests.current(ticket)) setPageSnapshot({ page: response.data, selection: ticket.selection }); })
+      .catch(() => { if (!controller.signal.aborted && requests.current(ticket)) setError('Could not load this wiki page. Select it again to retry.'); });
+    return () => { controller.abort(); };
+  }, [requests, selectedSlug, selectionEpoch]);
 
   const [showDetails, setShowDetails] = useState(false);
   const detailCount = (pageData?.sections ?? []).flatMap(section => section.items)
@@ -93,14 +98,18 @@ export default function WikiExplorer({ onInspectReview }: { onInspectReview?: (p
     .flatMap((item) => item.claim_ids), [pageData]);
 
   const reloadSelected = async (slug = selectedSlug) => {
-    await refresh();
+    const origin = pageSnapshot?.selection;
+    try {
+      await refresh();
+    } catch {
+      if (origin !== undefined && requests.sameSelection(origin)) setError('Memory changed, but the wiki could not refresh. Select the page again to reload it.');
+      return;
+    }
+    if (origin === undefined || !requests.sameSelection(origin)) return;
     if (slug) {
-      const response = await api.get<WikiPage>(`/memory/wiki/${encodeURIComponent(slug)}`);
-      setPageData(response.data);
-      setSelectedSlug(response.data.slug);
+      selectPage(slug);
     } else {
-      setPageData(null);
-      setSelectedSlug(null);
+      selectPage(null);
     }
   };
 
@@ -109,14 +118,17 @@ export default function WikiExplorer({ onInspectReview }: { onInspectReview?: (p
     await reloadSelected();
   };
   const reactivate = async (entityId: string) => {
+    const selection = requests.selection();
     const response = await api.post(`/memory/entities/${entityId}/reactivate`);
     await refresh();
-    setSelectedSlug(response.data.entity.slug);
+    if (requests.sameSelection(selection)) selectPage(response.data.entity.slug);
   };
   const groupFacts = async () => {
     if (selectedFacts.length < 2 || !groupText.trim()) return;
+    const selection = requests.selection();
     await api.post('/memory/facts/group', { fact_ids: selectedFacts, text: groupText, reason: 'Manual wiki fact grouping' });
-    setSelectedFacts([]); setGroupText(''); await reloadSelected();
+    if (requests.sameSelection(selection)) { setSelectedFacts([]); setGroupText(''); }
+    await reloadSelected();
   };
 
   return (
@@ -130,12 +142,13 @@ export default function WikiExplorer({ onInspectReview }: { onInspectReview?: (p
           {showReview ? <ReviewQueue proposals={proposals} entities={entities} onReview={reviewProposal} /> : entityTypes.map((group) => {
             const groupPages = filteredPages.filter((page) => page.page_type === group.key);
             if (!groupPages.length) return null;
-            return <section key={group.key} className="mb-4"><h2 className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">{group.plural_label}</h2><div className="space-y-1">{groupPages.sort((a, b) => a.title.localeCompare(b.title)).map((page) => <button key={page.entity_id} onClick={() => { setSelectedSlug(page.slug); setShowReview(false); }} className={cn('group w-full rounded-xl p-3 text-left', selectedSlug === page.slug ? 'bg-indigo-50' : 'hover:bg-slate-50')}><div className="flex items-center justify-between"><span className={cn('text-sm font-semibold', selectedSlug === page.slug ? 'text-indigo-700' : 'text-slate-700')}>{page.title}</span><ChevronRight size={14} className="text-slate-300" /></div><div className="mt-1 truncate text-[11px] text-slate-400">{page.slug}</div></button>)}</div></section>;
+            return <section key={group.key} className="mb-4"><h2 className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">{group.plural_label}</h2><div className="space-y-1">{groupPages.sort((a, b) => a.title.localeCompare(b.title)).map((page) => <button key={page.entity_id} onClick={() => { selectPage(page.slug); setShowReview(false); }} className={cn('group w-full rounded-xl p-3 text-left', selectedSlug === page.slug ? 'bg-indigo-50' : 'hover:bg-slate-50')}><div className="flex items-center justify-between"><span className={cn('text-sm font-semibold', selectedSlug === page.slug ? 'text-indigo-700' : 'text-slate-700')}>{page.title}</span><ChevronRight size={14} className="text-slate-300" /></div><div className="mt-1 truncate text-[11px] text-slate-400">{page.slug}</div></button>)}</div></section>;
           })}{!showReview && archivedEntities.length > 0 && <section className="mb-4 border-t border-slate-100 pt-2"><h2 className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Archived</h2><div className="space-y-1">{archivedEntities.sort((a, b) => a.title.localeCompare(b.title)).map((entity) => <div key={entity.entity_id} className="flex items-center gap-2 rounded-xl p-3 hover:bg-slate-50"><div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold text-slate-500">{entity.title}</div><div className="truncate text-[11px] text-slate-400">{pageTypeLabel(entity.entity_type)}</div></div><button title="Reactivate entity" onClick={() => reactivate(entity.entity_id)} className="rounded-lg bg-slate-100 p-2 text-slate-500 hover:bg-indigo-50 hover:text-indigo-700"><RotateCcw size={14} /></button></div>)}</div></section>}
         </div>
       </aside>
 
       <main className="flex-1 overflow-y-auto bg-white">
+        {error && <p role="alert" className="m-4 text-sm text-rose-700">{error}</p>}
         {pageData ? <div className="mx-auto max-w-4xl p-6 md:p-12">
           <header className="mb-8">
             <div className="mb-4 flex items-center justify-between"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-indigo-600"><Book size={14} /> Entity-owned wiki</div><button onClick={() => setEditing(!editing)} className="flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700"><Pencil size={14} /> Curate</button></div>
@@ -144,11 +157,11 @@ export default function WikiExplorer({ onInspectReview }: { onInspectReview?: (p
             {detailCount > 0 && <button onClick={() => setShowDetails(value => !value)} className="mt-4 text-sm font-semibold text-indigo-600">{showDetails ? 'Hide' : 'Show'} supporting detail ({detailCount})</button>}
           </header>
 
-          {editing && selectedEntity && ontology && <CurationPanel entity={selectedEntity} entities={entities} ontology={ontology} claimIds={allFactIds} onDone={reloadSelected} onClose={() => setEditing(false)} selectedClaims={selectedClaims} setSelectedClaims={setSelectedClaims} />}
+          {editing && selectedEntity && ontology && <CurationPanel entity={selectedEntity} entities={entities} ontology={ontology} claimIds={allFactIds} onDone={reloadSelected} onClose={() => { if (pageSnapshot && requests.sameSelection(pageSnapshot.selection)) setEditing(false); }} selectedClaims={selectedClaims} setSelectedClaims={(ids) => { if (pageSnapshot && requests.sameSelection(pageSnapshot.selection)) setSelectedClaims(ids); }} />}
 
           {selectedFacts.length >= 2 && <div className="mb-6 flex gap-2 rounded-xl border border-indigo-100 bg-indigo-50 p-3"><input value={groupText} onChange={(event) => setGroupText(event.target.value)} placeholder="Combined fact text" className="min-w-0 flex-1 rounded border-slate-200 text-sm" /><button onClick={groupFacts} className="rounded bg-indigo-600 px-3 py-2 text-xs font-semibold text-white">Group {selectedFacts.length} facts</button></div>}
-          {(pageData.sections?.length ?? 0) > 0 ? <div className="space-y-10">{visibleSections.map((section) => <section key={section.key}><h2 className="mb-4 border-b border-slate-100 pb-2 text-xl font-bold text-slate-900">{section.title}</h2><div className="space-y-3">{section.items.map((item, index) => item.kind === 'link' ? <button key={`${item.entity_id}-${index}`} onClick={() => setSelectedSlug(item.slug)} className="block text-left text-sm font-semibold text-indigo-700 hover:underline">{item.title} <span className="font-normal text-slate-400">· {pageTypeLabel(item.entity_type)}</span></button> : item.kind === 'encounter' ? <div key={item.encounter_id} className="rounded-xl bg-slate-50 p-3 text-sm text-slate-600">{item.text}<div className="mt-1 font-mono text-[10px] text-slate-400">{item.source_id}</div></div> : <div key={item.fact_id} className={cn('rounded-xl border p-4', item.authoritative ? 'border-slate-100 bg-white' : 'border-amber-200 bg-amber-50')}><div className="flex gap-3"><input aria-label="Select fact" type="checkbox" checked={selectedFacts.includes(item.fact_id)} onChange={(event) => { setSelectedFacts((current) => event.target.checked ? [...new Set([...current, item.fact_id])] : current.filter((id) => id !== item.fact_id)); setSelectedClaims((current) => event.target.checked ? [...new Set([...current, ...item.claim_ids])] : current.filter((id) => !item.claim_ids.includes(id))); }} /><button className="flex-1 text-left" onClick={() => setExpandedClaim(expandedClaim === item.fact_id ? null : item.fact_id)}><p className="text-sm leading-relaxed text-slate-800">{item.text}</p><div className="mt-2 flex flex-wrap gap-1"><span className="rounded bg-indigo-50 px-2 py-1 text-[10px] text-indigo-600">{item.synthesis_origin}</span>{item.evidence_modality === 'tool' && <span className="rounded bg-sky-50 px-2 py-1 text-[10px] font-bold uppercase text-sky-700">External research</span>}{item.qualifiers.map((qualifier) => <span key={qualifier} className="rounded bg-slate-100 px-2 py-1 text-[10px] text-slate-500">{qualifier}</span>)}</div></button>{!item.authoritative && item.reconciliation_proposal_ids.length > 0 && <button onClick={() => onInspectReview?.(item.reconciliation_proposal_ids[0])} className="self-start rounded-lg bg-amber-600 px-3 py-2 text-xs font-semibold text-white">Review</button>}</div>{expandedClaim === item.fact_id && ontology && <FactEvidence item={item} entities={entities} ontology={ontology} currentEntityId={pageData.entity_id} onMoved={reloadSelected} />}</div>)}</div></section>)}</div> : <div className="prose prose-slate max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm]}>{pageData.content || ''}</ReactMarkdown></div>}
-        </div> : <div className="flex h-full flex-col items-center justify-center p-8 text-center text-slate-400"><Book size={42} className="mb-4 opacity-30" /><p>Select a wiki entity to inspect it.</p></div>}
+          {(pageData.sections?.length ?? 0) > 0 ? <div className="space-y-10">{visibleSections.map((section) => <section key={section.key}><h2 className="mb-4 border-b border-slate-100 pb-2 text-xl font-bold text-slate-900">{section.title}</h2><div className="space-y-3">{section.items.map((item, index) => item.kind === 'link' ? <button key={`${item.entity_id}-${index}`} onClick={() => selectPage(item.slug)} className="block text-left text-sm font-semibold text-indigo-700 hover:underline">{item.title} <span className="font-normal text-slate-400">· {pageTypeLabel(item.entity_type)}</span></button> : item.kind === 'encounter' ? <div key={item.encounter_id} className="rounded-xl bg-slate-50 p-3 text-sm text-slate-600">{item.text}<div className="mt-1 font-mono text-[10px] text-slate-400">{item.source_id}</div></div> : <div key={item.fact_id} className={cn('rounded-xl border p-4', item.authoritative ? 'border-slate-100 bg-white' : 'border-amber-200 bg-amber-50')}><div className="flex gap-3"><input aria-label="Select fact" type="checkbox" checked={selectedFacts.includes(item.fact_id)} onChange={(event) => { setSelectedFacts((current) => event.target.checked ? [...new Set([...current, item.fact_id])] : current.filter((id) => id !== item.fact_id)); setSelectedClaims((current) => event.target.checked ? [...new Set([...current, ...item.claim_ids])] : current.filter((id) => !item.claim_ids.includes(id))); }} /><button className="flex-1 text-left" onClick={() => setExpandedClaim(expandedClaim === item.fact_id ? null : item.fact_id)}><p className="text-sm leading-relaxed text-slate-800">{item.text}</p><div className="mt-2 flex flex-wrap gap-1"><span className="rounded bg-indigo-50 px-2 py-1 text-[10px] text-indigo-600">{item.synthesis_origin}</span>{item.evidence_modality === 'tool' && <span className="rounded bg-sky-50 px-2 py-1 text-[10px] font-bold uppercase text-sky-700">External research</span>}{item.qualifiers.map((qualifier) => <span key={qualifier} className="rounded bg-slate-100 px-2 py-1 text-[10px] text-slate-500">{qualifier}</span>)}</div></button>{!item.authoritative && item.reconciliation_proposal_ids.length > 0 && <button onClick={() => onInspectReview?.(item.reconciliation_proposal_ids[0])} className="self-start rounded-lg bg-amber-600 px-3 py-2 text-xs font-semibold text-white">Review</button>}</div>{expandedClaim === item.fact_id && ontology && <FactEvidence item={item} entities={entities} ontology={ontology} currentEntityId={pageData.entity_id} onMoved={reloadSelected} />}</div>)}</div></section>)}</div> : <div className="prose prose-slate max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm]}>{pageData.content || ''}</ReactMarkdown></div>}
+        </div> : <div className="flex h-full flex-col items-center justify-center p-8 text-center text-slate-400"><Book size={42} className="mb-4 opacity-30" /><p>{selectedSlug ? (error ? "Wiki page unavailable." : "Loading wiki page…") : "Select a wiki entity to inspect it."}</p></div>}
       </main>
     </div>
   );
@@ -166,15 +179,19 @@ function FactEvidence({ item, entities, ontology, currentEntityId, onMoved }: { 
   const [sourceArtifacts, setSourceArtifacts] = useState<Record<string, ArtifactSource>>({});
   const [scopeDecisions, setScopeDecisions] = useState<{ decision_id: string; claim_id: string; origin: 'automatic' | 'manual' | 'review'; confidence: number; reason: string }[]>([]);
   useEffect(() => {
+    const controller = new AbortController();
     Promise.all([...new Set(item.sources.map((source) => source.source_id))].map(async (sourceId) => {
-      const response = await api.get<ArtifactSource>(`/memory/artifacts/sources/${encodeURIComponent(sourceId)}`);
+      const response = await api.get<ArtifactSource>(`/memory/artifacts/sources/${encodeURIComponent(sourceId)}`, { signal: controller.signal });
       return [sourceId, response.data] as const;
-    })).then((values) => setSourceArtifacts(Object.fromEntries(values))).catch((error) => console.error('Failed to load source evidence', error));
+    })).then((values) => { if (!controller.signal.aborted) setSourceArtifacts(Object.fromEntries(values)); }).catch((error) => { if (!controller.signal.aborted) console.error('Failed to load source evidence', error); });
+    return () => controller.abort();
   }, [item]);
   useEffect(() => {
-    Promise.all(item.claim_ids.map(async (claimId) => (await api.get(`/memory/artifacts/scope-decisions?claim_id=${encodeURIComponent(claimId)}&status=active`)).data))
-      .then((values) => setScopeDecisions(values.flat()))
-      .catch((error) => console.error('Failed to load scope audit', error));
+    const controller = new AbortController();
+    Promise.all(item.claim_ids.map(async (claimId) => (await api.get(`/memory/artifacts/scope-decisions?claim_id=${encodeURIComponent(claimId)}&status=active`, { signal: controller.signal })).data))
+      .then((values) => { if (!controller.signal.aborted) setScopeDecisions(values.flat()); })
+      .catch((error) => { if (!controller.signal.aborted) console.error('Failed to load scope audit', error); });
+    return () => controller.abort();
   }, [item]);
   const changeOwner = (value: string) => { setOwner(value); const selected = entities.find((entity) => entity.entity_id === value); setSection(item.relationship_kind === 'project_role' ? roleSection(selected) : sections(selected)[0] ?? ''); };
   const move = async () => { const target = entities.find((entity) => entity.entity_id === owner); await api.post(`/memory/facts/${item.fact_id}/move`, { owner_entity_id: owner, section_key: section, linked_entity_ids: item.canonical_linked_entity_ids, reason: 'Manual wiki fact organization' }); await onMoved(target?.slug); };

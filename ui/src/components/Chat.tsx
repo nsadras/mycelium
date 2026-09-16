@@ -214,16 +214,33 @@ export default function Chat({
   sessionsOpenMobile = false,
   onCloseSessionsMobile,
 }: ChatProps) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [history, setHistory] = useState<{ key: string; messages: Message[]; error: string | null } | null>(null);
+  const [historyReload, setHistoryReload] = useState(0);
+  const historyKey = JSON.stringify([selectedId, historyReload]);
+  const messages = useMemo(() => history?.key === historyKey ? history.messages : [], [history, historyKey]);
+  const historyReady = history?.key === historyKey && history.error === null;
+  const historyError = history?.key === historyKey ? history.error : null;
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const input = selectedId ? drafts[selectedId] ?? '' : '';
+  const [pendingSessions, setPendingSessions] = useState<Set<string>>(new Set());
+  const isLoading = selectedId ? pendingSessions.has(selectedId) : false;
+  const pending = useRef(new Set<string>());
+  const [sendErrors, setSendErrors] = useState<Record<string, string>>({});
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const activeSession = useRef(selectedId);
   const viewGeneration = useRef(0);
-  const drafts = useRef(new Map<string, string>());
-  useEffect(() => { activeSession.current = selectedId; }, [selectedId]);
+  const mounted = useRef(true);
+  const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      viewGeneration.current += 1;
+      if (statusTimer.current) clearTimeout(statusTimer.current);
+    };
+  }, []);
 
   const [activePromptIndex, setActivePromptIndex] = useState<number | null>(null);
   const [navOpenMobile, setNavOpenMobile] = useState(false);
@@ -282,22 +299,29 @@ export default function Chat({
   };
 
   useEffect(() => {
-    let cancelled = false;
+    activeSession.current = selectedId;
+    const controller = new AbortController();
     const generation = ++viewGeneration.current;
+    if (statusTimer.current) clearTimeout(statusTimer.current);
     const loadHistory = selectedId
-      ? api.get(`/sessions/${selectedId}`).then((res) => res.data.transcript as Message[])
+      ? api.get(`/sessions/${selectedId}`, { signal: controller.signal }).then((res) => res.data.transcript as Message[])
       : Promise.resolve([] as Message[]);
     loadHistory
       .then((transcript) => {
-        if (cancelled || generation !== viewGeneration.current) return;
-        setMessages(transcript);
-        setInput(selectedId ? drafts.current.get(selectedId) ?? '' : '');
-        setAssistantStatus({ activity: 'idle', label: 'Idle', detail: selectedId ? 'Ready' : 'Select a session' });
+        if (controller.signal.aborted || generation !== viewGeneration.current) return;
+        setHistory({ key: historyKey, messages: transcript, error: null });
+        setAssistantStatus(selectedId && pending.current.has(selectedId)
+          ? { activity: 'thinking', label: 'Thinking', detail: 'Reply request is still running' }
+          : { activity: 'idle', label: 'Idle', detail: selectedId ? 'Ready' : 'Select a session' });
         setNavOpenMobile(false);
       })
-      .catch((err) => console.error("Failed to fetch history", err));
-    return () => { cancelled = true; };
-  }, [selectedId, setAssistantStatus]);
+      .catch(() => {
+        if (controller.signal.aborted || generation !== viewGeneration.current) return;
+        setHistory({ key: historyKey, messages: [], error: 'Could not load this session. Your draft is preserved.' });
+        setAssistantStatus({ activity: 'error', label: 'History unavailable', detail: 'Retry loading the session' });
+      });
+    return () => { controller.abort(); };
+  }, [historyKey, selectedId, setAssistantStatus]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -307,23 +331,23 @@ export default function Chat({
 
   const handleSend = async (e: FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || !selectedId || isLoading) return;
+    if (!input.trim() || !selectedId || pending.current.has(selectedId) || !historyReady) return;
 
     const requestSession = selectedId;
     const generation = ++viewGeneration.current;
     const submittedText = input;
-    drafts.current.delete(requestSession);
+    setDrafts(current => ({ ...current, [requestSession]: '' }));
+    setSendErrors(current => ({ ...current, [requestSession]: '' }));
     const optimisticTimestamp = new Date().toISOString();
     const userMsg: Message = { role: 'user', content: input, timestamp: optimisticTimestamp };
-    setMessages([...messages, userMsg]);
-    setInput('');
-    setIsLoading(true);
+    setHistory({ key: historyKey, messages: [...messages, userMsg], error: null });
+    pending.current.add(requestSession);
+    setPendingSessions(new Set(pending.current));
     setAssistantStatus({ activity: 'thinking', label: 'Thinking', detail: 'Calling model' });
-    let shouldResetStatus = true;
 
     try {
       const res = await api.post(`/sessions/${selectedId}/chat`, { message: input });
-      if (activeSession.current !== requestSession || generation !== viewGeneration.current) return;
+      if (!mounted.current || activeSession.current !== requestSession || generation !== viewGeneration.current) return;
       if (res.data.capture_error) {
         alert('Your reply was saved, but memory capture is pending. Build Memory will retry. ' + res.data.capture_error);
       }
@@ -332,9 +356,9 @@ export default function Chat({
       } else {
         setAssistantStatus({ activity: 'responding', label: 'Responding', detail: 'Rendering reply' });
       }
-      setMessages(prev => [
-        ...prev.map(message => (
-          message.role === 'user' && message.timestamp === optimisticTimestamp
+      setHistory(prev => prev?.key !== historyKey ? prev : ({ ...prev, messages: [
+        ...prev.messages.map(message => (
+          message === userMsg
             ? { ...message, timestamp: res.data.user_timestamp }
             : message
         )),
@@ -347,24 +371,23 @@ export default function Chat({
           retrieval_trace: res.data.retrieval_trace,
           memory_workspace: res.data.memory_workspace,
         },
-      ]);
+      ] }));
+      statusTimer.current = window.setTimeout(() => {
+        if (mounted.current && activeSession.current === requestSession && generation === viewGeneration.current) setAssistantStatus({ activity: 'idle', label: 'Idle', detail: 'Ready' });
+      }, 900);
     } catch (err) {
-      drafts.current.set(requestSession, submittedText);
+      if (!mounted.current) return;
+      setDrafts(current => ({ ...current, [requestSession]: current[requestSession] || submittedText }));
+      setSendErrors(current => ({ ...current, [requestSession]: 'The reply request failed. Your draft is preserved.' }));
       if (activeSession.current !== requestSession || generation !== viewGeneration.current) return;
-      setInput(submittedText);
-      setMessages(prev => prev.filter(message => message.timestamp !== optimisticTimestamp));
+      setHistory(prev => prev?.key !== historyKey ? prev : ({ ...prev, messages: prev.messages.filter(message => message !== userMsg) }));
       console.error("Chat error", err);
-      shouldResetStatus = false;
-      setAssistantStatus({ activity: 'error', label: 'Chat failed', detail: 'Check backend logs' });
-      window.setTimeout(() => {
-        if (generation === viewGeneration.current) setAssistantStatus({ activity: 'idle', label: 'Idle', detail: 'Ready' });
-      }, 2500);
+      setAssistantStatus({ activity: 'error', label: 'Chat failed', detail: 'Your draft is preserved' });
     } finally {
-      setIsLoading(false);
-      if (shouldResetStatus && activeSession.current === requestSession) {
-        window.setTimeout(() => {
-          if (activeSession.current === requestSession && generation === viewGeneration.current) setAssistantStatus({ activity: 'idle', label: 'Idle', detail: 'Ready' });
-        }, 900);
+      pending.current.delete(requestSession);
+      if (mounted.current) {
+        setPendingSessions(new Set(pending.current));
+        if (activeSession.current === requestSession && generation !== viewGeneration.current) setHistoryReload(value => value + 1);
       }
     }
   };
@@ -475,6 +498,10 @@ export default function Chat({
 
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col min-w-0 bg-white relative">
+        {historyError && <div role="alert" className="m-4 text-sm text-rose-700">
+          {historyError} <button type="button" onClick={() => setHistoryReload(value => value + 1)} className="underline">Retry history</button>
+        </div>}
+        {selectedId && sendErrors[selectedId] && <p role="alert" className="m-4 text-sm text-rose-700">{sendErrors[selectedId]}</p>}
         <div 
           className={cn(
             "flex-1 overflow-y-auto px-3 py-6 space-y-6 md:pl-6",
@@ -484,7 +511,7 @@ export default function Chat({
         >
           {messages.length === 0 ? (
             <div className="h-full flex items-center justify-center text-slate-400">
-              {selectedId ? "Start the conversation..." : "Select or create a session to start."}
+              {selectedId ? (historyReady ? "Start the conversation..." : historyError ? "Session history is unavailable." : "Loading session...") : "Select or create a session to start."}
             </div>
           ) : (
             messages.map((m, i) => (
@@ -544,8 +571,7 @@ export default function Chat({
               value={input}
               onChange={(e) => {
                 const nextValue = e.target.value;
-                setInput(nextValue);
-                if (selectedId) drafts.current.set(selectedId, nextValue);
+                if (selectedId) setDrafts(current => ({ ...current, [selectedId]: nextValue }));
                 if (!isLoading) {
                   setAssistantStatus(prev => {
                     const isNextEmpty = !nextValue.trim();
@@ -565,7 +591,8 @@ export default function Chat({
             />
             <button
               type="submit"
-              disabled={!selectedId || !input.trim() || isLoading}
+              aria-label="Send message"
+              disabled={!selectedId || !input.trim() || isLoading || !historyReady}
               className="absolute right-2 top-1.5 p-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:hover:bg-indigo-600 transition-colors shadow-md"
             >
               <Send size={18} />

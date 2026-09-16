@@ -148,6 +148,7 @@ class TruthReviewer:
                 return
             response = schema.model_validate(await self.llm.call_structured(
                 system, user, schema, num_predict=4096, debug_label="dream-truth-candidates",
+                cache_store=self.artifacts.db,
             )).model_dump()["decisions"]
             for alias, decision in response.items():
                 for target, relevance in decision["candidates"].items():
@@ -184,6 +185,7 @@ class TruthReviewer:
                 return
             response = schema.model_validate(await self.llm.call_structured(
                 system, user, schema, num_predict=4096, debug_label="dream-truth-comparison", think=True,
+                cache_store=self.artifacts.db,
             )).model_dump()["comparisons"]
             decisions.update({aliases[alias]: TruthComparison.model_validate(value).model_dump()
                               for alias, value in response.items()})

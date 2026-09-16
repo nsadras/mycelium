@@ -144,18 +144,18 @@ class ClaimRouter:
                 work_unit.entity_plan = {}
                 work_unit.allocated_entity_ids = {}
             work_unit.request_digest = request_digest
-            if work_unit.entity_plan:
-                plan = schema.model_validate(work_unit.entity_plan).model_dump()
-            else:
-                plan = schema.model_validate(
-                    await self.llm.call_structured(
-                        system,
-                        user,
-                        schema,
-                        num_predict=8192,
-                        debug_label="dream-identity-plan",
-                    )
-                ).model_dump()
+            plan = schema.model_validate(
+                await self.llm.call_structured(
+                    system,
+                    user,
+                    schema,
+                    num_predict=8192,
+                    debug_label="dream-identity-plan",
+                    cache_store=self.artifacts.db,
+                )
+            ).model_dump()
+            if work_unit.entity_plan != plan:
+                work_unit.allocated_entity_ids = {}
             for node in planned_subjects(plan, planned, participants):
                 reviewed = {
                     ref.entity_id
@@ -331,6 +331,7 @@ class ClaimRouter:
                             routing_model,
                             num_predict=8192,
                             debug_label="dream-claim-routing",
+                            cache_store=self.artifacts.db,
                         )
                     ).model_dump()["decisions"]
                 )

@@ -65,6 +65,10 @@ async def main():
                 artifacts.save_placement(placement)
             wiki = WikiStore(case_root / "wiki")
             PageMaterializer(wiki, artifacts, config).regenerate({e.entity_id for e in owners.values()})
+            before_repeat = len(qa.llm._call_log)
+            repeated = await resolver.resolve(placements, affected_entity_ids={e.entity_id for e in owners.values()},
+                incoming_claim_ids=incoming, dream_run_id=f"repeat-{trial}-{name}")
+            repeat_calls = list(qa.llm._call_log)[before_repeat:]
             if expected == "no_change":
                 passed = not result.proposals
             else:
@@ -76,7 +80,10 @@ async def main():
             record = {"trial": trial, "case": name, "expected": expected, "seconds": time.monotonic()-started,
                       "result": asdict(result), "coverage": artifacts.coverage_report(),
                       "claims": [asdict(c) for c in artifacts.list_claims()],
-                      "passed": passed and not result.failures and all(c.status == "active" for c in artifacts.list_claims())}
+                      "repeat_calls": repeat_calls, "repeat_result": asdict(repeated),
+                      "passed": passed and not result.failures and not repeated.failures
+                                and not repeated.proposals and all(c["metadata"].get("cache_hit") for c in repeat_calls)
+                                and all(c.status == "active" for c in artifacts.list_claims())}
             results.append(record)
             write(case_root / "result.json", record)
             write(root / "results.json", results)

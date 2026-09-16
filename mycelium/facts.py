@@ -424,6 +424,7 @@ class FactResolver:
                 system, user, schema, num_predict=8192,
                 debug_label="dream-fact-synthesis",
                 think=True,
+                cache_store=self.artifacts.db,
             )).model_dump()
             groups = [(group, group["member_claim_aliases"]) for group in response["facts"]]
         for group, member_aliases in groups:
@@ -556,6 +557,7 @@ class FactResolver:
                     schema,
                     num_predict=2048,
                     debug_label="dream-fact-candidate-selection",
+                    cache_store=self.artifacts.db,
                 )
             ).model_dump()["decisions"]
             for alias, claim in claims.items():

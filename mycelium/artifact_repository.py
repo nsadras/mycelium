@@ -57,6 +57,7 @@ KINDS = [
     "consolidated-facts",
     "organization-proposals",
     "lifecycle-operations",
+    "model-decisions",
 ]
 
 

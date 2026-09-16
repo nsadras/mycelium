@@ -18,6 +18,7 @@ from ollama import AsyncClient, RequestError, ResponseError, web_fetch, web_sear
 from pydantic import BaseModel, ValidationError
 from ollama._utils import convert_function_to_tool
 from mycelium.budget import require_request_budget, output_contract
+from mycelium.decision_cache import DecisionCache
 
 logger = logging.getLogger(__name__)
 LLM_DEBUG_DIR_ENV = "MYCELIUM_LLM_DEBUG_DIR"
@@ -548,6 +549,66 @@ class OllamaClient:
         return parsed_model.model_dump()
                     
     async def call_structured(
+        self,
+        system: str,
+        user: str,
+        schema: Union[dict, type[BaseModel]],
+        max_retries: int = 3,
+        num_predict: int = 4096,
+        dump_success: bool = False,
+        debug_label: str | None = None,
+        think: bool = False,
+        *,
+        cache_store=None,
+    ) -> Union[dict, list]:
+        """Reuse only validated results under the same complete inference contract."""
+        arguments = dict(max_retries=max_retries, num_predict=num_predict,
+                         dump_success=dump_success, debug_label=debug_label, think=think)
+        if cache_store is None:
+            return await self._call_structured(system, user, schema, **arguments)
+        output_format, response_model = self._structured_format(schema)
+        if response_model is None:
+            raise ValueError("Cached structured decisions require a validating response model")
+        started = time.perf_counter()
+        # A configured tag can point at new weights during the process lifetime.
+        # Verify the digest on every lookup rather than reusing a stale identity.
+        digest = await self._decision_model_digest()
+        enabled = bool(think and self.reasoning_enabled)
+        request = {
+            "version": 1, "system": system, "user": output_contract(user, output_format), "schema": output_format,
+            "endpoint": self.url, "model": self.model, "digest": digest,
+            "stage": debug_label, "temperature": self.temperature, "top_p": self.top_p,
+            "top_k": self.top_k, "context_window": self.context_window_tokens,
+            "think": enabled, "reasoning_format": self.reasoning_format,
+            "output_tokens": self.output_budget(num_predict, think=enabled), "max_retries": max_retries,
+        }
+        cache = DecisionCache(cache_store, request)
+        async with cache.lock:
+            prior = cache.get()
+            if prior is not None:
+                parsed = response_model.model_validate(prior["response"]).model_dump()
+                self._log_call(str(uuid.uuid4())[:8], 1, system, user,
+                    json.dumps(parsed, ensure_ascii=False), int((time.perf_counter()-started)*1000), True,
+                    {"cache_hit": True, "request_digest": cache.key, "model_digest": digest},
+                    stage=debug_label or "structured")
+                return parsed
+            result = await self._call_structured(system, user, schema, **arguments)
+            if await self._decision_model_digest() != digest:
+                raise ValueError("Configured model weights changed during inference; decision was not cached")
+            cache.save(result, model_digest=digest, stage=debug_label or "structured")
+            return result
+
+    async def _decision_model_digest(self):
+        inventory = await self.client.list()
+        model_name = self.model if ":" in self.model else self.model + ":latest"
+        matching = [row for row in self._field(inventory, "models") or []
+                    if self._field(row, "model") in {self.model, model_name}]
+        digest = self._field(matching[0], "digest") if len(matching) == 1 else None
+        if not isinstance(digest, str) or not digest:
+            raise ValueError(f"Cannot identify configured model weights for decision reuse: {self.model}")
+        return digest
+
+    async def _call_structured(
         self,
         system: str,
         user: str,

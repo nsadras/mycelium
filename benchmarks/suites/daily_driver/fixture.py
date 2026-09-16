@@ -46,9 +46,12 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
     errors: list[str] = []
 
     scenario_id = str(scenario.get("scenario_id") or "")
+    schema_version = scenario.get("schema_version")
     for name, document in data.items():
-        if document.get("schema_version") != 1:
-            errors.append(f"{name}: schema_version must be 1")
+        if type(schema_version) is not int or schema_version not in {1, 2}:
+            errors.append(f"{name}: unsupported schema_version {schema_version!r}")
+        elif document.get("schema_version") != schema_version:
+            errors.append(f"{name}: schema_version must match the scenario")
         if document.get("scenario_id") != scenario_id:
             errors.append(f"{name}: scenario_id does not match {scenario_id!r}")
 
@@ -82,6 +85,19 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
                 f"episode {episode.get('id')}: user speaker label is absent from participants"
             )
         for segment in episode_segments:
+            if schema_version == 2:
+                unknown = set(segment) - {"id", "speaker", "role", "text", "retention"}
+                if unknown:
+                    errors.append(
+                        f"segment {segment.get('id')}: unexpected fields {sorted(unknown)}; check YAML quoting"
+                    )
+                if (
+                    not isinstance(segment.get("text"), str)
+                    or not segment["text"].strip()
+                ):
+                    errors.append(
+                        f"segment {segment.get('id')}: text must be a nonempty string"
+                    )
             if segment.get("role") == "user" and segment.get("speaker") != user_label:
                 errors.append(
                     f"segment {segment.get('id')}: user role must use configured speaker label"
@@ -158,6 +174,25 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
         _validate_checkpoint_claims(
             checkpoint, checkpoint_id, claim_ids, fact_ids, errors
         )
+        for source_id in [
+            *checkpoint.get("captured_sources", []),
+            *checkpoint.get("source_extraction", {}),
+        ]:
+            if source_id not in source_ids:
+                errors.append(
+                    f"checkpoint {checkpoint_id}: unknown captured source {source_id}"
+                )
+        if "claim_count" in checkpoint and (
+            type(checkpoint["claim_count"]) is not int or checkpoint["claim_count"] < 0
+        ):
+            errors.append(
+                f"checkpoint {checkpoint_id}: claim_count must be a nonnegative integer"
+            )
+        if any(
+            value not in {"pending", "partial", "complete", "failed"}
+            for value in checkpoint.get("source_extraction", {}).values()
+        ):
+            errors.append(f"checkpoint {checkpoint_id}: unsupported extraction status")
 
     action_checkpoints = {
         action.split(":", 1)[1]
@@ -355,9 +390,7 @@ def validate_fixture(fixture_dir: Path) -> dict[str, Any]:
         errors.append("rubric acceptance dimensions contain duplicates")
     for dimension_id in acceptance_dimension_ids:
         if dimension_id not in dimension_ids:
-            errors.append(
-                f"rubric acceptance: unknown dimension {dimension_id}"
-            )
+            errors.append(f"rubric acceptance: unknown dimension {dimension_id}")
         elif "target" not in dimensions_by_id[dimension_id]:
             errors.append(
                 f"rubric acceptance: dimension {dimension_id} has no declared target"
@@ -449,6 +482,7 @@ def _validate_checkpoint_claims(
 ) -> None:
     claim_keys = {
         "canonical_claims",
+        "searchable_claims",
         "withheld_from_authoritative_sections",
         "needs_review",
     }

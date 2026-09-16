@@ -56,7 +56,12 @@ No server or firewall changes were executed. The first validated tranche was com
    exact prompts, schemas, responses, failures, model config and timings.
 3. Integrate smallest proven contracts and test structural invariants. No lexical
    semantic fallbacks, benchmark-specific prompts, or legacy-store migrations.
-4. Run all three daily-driver scenarios three times. Investigate artifact quality
+4. Run all three version2 daily-driver scenarios three times. The user confirmed
+   that extraction/search wait for Build Memory and useful independent context
+   can support a page from one conversation. V2 capture and fixture checks pass;
+   v1 reports remain historical evidence with different acceptance rules. The
+   paraphrased v2 also repairs a truncated YAML source sentence, so that input
+   comparison is unmatched. Investigate artifact quality
    as well as test scores before continuing.
 5. Run full sample3: 32 sessions / 193 questions, no execution backlog, exact
    evidence integrity and manual longitudinal wiki audit. Compare only matched

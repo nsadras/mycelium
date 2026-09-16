@@ -1,0 +1,67 @@
+schema_version: 2
+scenario_id: daily-driver-unrelated-v2
+final_checkpoint: cp3_final
+checkpoints:
+- id: cp1_pre_dream
+  after_episode: chat-01
+  queue:
+    pending: []
+    deferred: []
+    retryable: []
+  entities:
+  - you
+  pages:
+  - you
+  forbidden_pages:
+  - project-kitchen-renovation
+  description: Source conversations are captured durably; extraction and search wait for Build Memory.
+  captured_sources:
+  - src-chat-01
+  claim_count: 0
+  source_extraction:
+    src-chat-01: pending
+- id: cp2_first_dream
+  after_episode: chat-01
+  queue:
+    pending: []
+    deferred: []
+    retryable: []
+  entities:
+  - you
+  pages:
+  - you
+  description: Build Memory extracts searchable claims; useful independent context can support a page
+    from this conversation.
+  searchable_claims:
+  - c-profile
+  - c-project
+  - c-cabinets
+  - c-induction
+  source_extraction:
+    src-chat-01: complete
+- id: cp3_final
+  after_episode: tool-01
+  queue:
+    pending: []
+    deferred: []
+    retryable: []
+  entities:
+  - you
+  - project-kitchen-renovation
+  - person-rosa-alvarez
+  pages:
+  - you
+  - project-kitchen-renovation
+  - person-rosa-alvarez
+  required_page_facts:
+    project-kitchen-renovation:
+    - f-project
+    - f-cabinets
+    - f-induction
+    - f-rosa-role
+    - f-budget
+    - f-inspection
+    - f-range-spec
+    person-rosa-alvarez:
+    - f-rosa-role
+  exact_fact_count: 8

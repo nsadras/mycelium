@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter, defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -35,11 +36,17 @@ class ProbeJudgment(BaseModel):
 def probe_judgment_model(required, forbidden):
     def field(ids):
         values = tuple(ids)
-        return (list[Literal.__getitem__(values)] if values else list[str],
-                Field(max_length=len(values)))
+        return (
+            list[Literal.__getitem__(values)] if values else list[str],
+            Field(max_length=len(values)),
+        )
 
-    return create_model("ScopedProbeJudgment", __base__=ProbeJudgment,
-        present_required_fact_ids=field(required), present_forbidden_fact_ids=field(forbidden))
+    return create_model(
+        "ScopedProbeJudgment",
+        __base__=ProbeJudgment,
+        present_required_fact_ids=field(required),
+        present_forbidden_fact_ids=field(forbidden),
+    )
 
 
 def _normalized(value: str | None) -> str:
@@ -183,11 +190,18 @@ def gold_fact_definitions(fixture: dict[str, Any]) -> dict[str, dict[str, Any]]:
         if claim.get("fact_id"):
             grouped[str(claim["fact_id"])].append(claim)
     definitions = {
-        fid: {"id": fid, "text": "\n".join(dict.fromkeys(str(c["text"]) for c in claims)),
-              "claim_ids": [c["id"] for c in claims], "state": claims[0].get("state"), "render_on": []}
+        fid: {
+            "id": fid,
+            "text": "\n".join(dict.fromkeys(str(c["text"]) for c in claims)),
+            "claim_ids": [c["id"] for c in claims],
+            "state": claims[0].get("state"),
+            "render_on": [],
+        }
         for fid, claims in grouped.items()
     }
-    definitions.update({str(row["id"]): dict(row) for row in fixture["gold_wiki"].get("facts") or []})
+    definitions.update(
+        {str(row["id"]): dict(row) for row in fixture["gold_wiki"].get("facts") or []}
+    )
     return definitions
 
 
@@ -479,12 +493,21 @@ async def judge_probe_answer(
     )
     user = render_prompt("benchmarks/probe_judgment.user.jinja", payload=payload)
     schema = probe_judgment_model(required, forbidden)
-    response = await llm.call_structured(system, user, schema, num_predict=512,
-        debug_label="daily-driver-answer-judgment")
+    response = await llm.call_structured(
+        system,
+        user,
+        schema,
+        num_predict=512,
+        debug_label="daily-driver-answer-judgment",
+    )
     judgment = schema.model_validate(response).model_dump()
     allowed_required = set(required)
-    judgment["present_required_fact_ids"] = sorted(set(judgment["present_required_fact_ids"]))
-    judgment["present_forbidden_fact_ids"] = sorted(set(judgment["present_forbidden_fact_ids"]))
+    judgment["present_required_fact_ids"] = sorted(
+        set(judgment["present_required_fact_ids"])
+    )
+    judgment["present_forbidden_fact_ids"] = sorted(
+        set(judgment["present_forbidden_fact_ids"])
+    )
     judgment["passed"] = (
         set(judgment["present_required_fact_ids"]) == allowed_required
         and not judgment["present_forbidden_fact_ids"]
@@ -514,6 +537,112 @@ def _ratio_metric(
         "evaluated": evaluated,
         "passed": passed,
     }
+
+
+def _capture_checks(fixture, snapshot, gold):
+    """Compare exact captured source values independently of extracted semantics."""
+    checks = []
+    episodes = {
+        row["source_id"]: row for row in fixture.get("scenario", {}).get("episodes", [])
+    }
+    user_label = fixture.get("scenario", {}).get("user", {}).get("speaker_label")
+
+    def same_timestamp(actual, expected):
+        try:
+            return datetime.fromisoformat(
+                str(actual).replace("Z", "+00:00")
+            ) == datetime.fromisoformat(str(expected).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+
+    for source_id in gold.get("captured_sources", []):
+        expected = episodes[source_id]
+        sources = [
+            s
+            for s in snapshot.get("sources", [])
+            if s.get("metadata", {}).get("fixture_source_id") == source_id
+        ]
+        source = sources[0] if len(sources) == 1 else None
+        expected_segments = [
+            {
+                "id": row["id"],
+                "index": i,
+                "text": row["text"],
+                "speaker": row["speaker"],
+                "role": "user" if row["speaker"] == user_label else row.get("role"),
+            }
+            for i, row in enumerate(expected["segments"])
+        ]
+        actual_segments = [
+            {
+                "id": row.get("metadata", {}).get("fixture_segment_id"),
+                "index": row.get("index"),
+                "text": row.get("content"),
+                "speaker": row.get("speaker"),
+                "role": row.get("role"),
+            }
+            for row in (source or {}).get("segments", [])
+        ]
+        native_ids = [
+            row.get("segment_id") for row in (source or {}).get("segments", [])
+        ]
+        checks.append(
+            {
+                "kind": "captured_source",
+                "gold_id": source_id,
+                "expected": expected_segments,
+                "actual": actual_segments,
+                "matching_sources": len(sources),
+                "native_segment_ids": native_ids,
+                "passed": bool(
+                    source
+                    and source.get("status") == "active"
+                    and source.get("source_type") == expected["source_type"]
+                    and source.get("participants") == expected["participants"]
+                    and source.get("metadata", {}).get("fixture_episode_id")
+                    == expected["id"]
+                    and same_timestamp(
+                        source.get("occurred_at"), expected["occurred_at"]
+                    )
+                    and len(native_ids) == len(set(native_ids))
+                    and all(isinstance(sid, str) and sid for sid in native_ids)
+                    and actual_segments == expected_segments
+                ),
+            }
+        )
+    if "claim_count" in gold:
+        actual = len(snapshot.get("claims", []))
+        checks.append(
+            {
+                "kind": "claim_count",
+                "expected": gold["claim_count"],
+                "actual": actual,
+                "passed": actual == gold["claim_count"],
+            }
+        )
+    for source_id, expected in gold.get("source_extraction", {}).items():
+        sources = [
+            s
+            for s in snapshot.get("sources", [])
+            if s.get("metadata", {}).get("fixture_source_id") == source_id
+        ]
+        source = sources[0] if len(sources) == 1 else None
+        manifests = [
+            e
+            for e in snapshot.get("episodes", [])
+            if source and e.get("source_id") == source["source_id"]
+        ]
+        actual = manifests[0].get("extraction_status") if len(manifests) == 1 else None
+        checks.append(
+            {
+                "kind": "source_extraction",
+                "gold_id": source_id,
+                "expected": expected,
+                "actual": actual,
+                "passed": actual == expected,
+            }
+        )
+    return checks
 
 
 def _checkpoint_results(
@@ -562,7 +691,22 @@ def _checkpoint_results(
         page_entities = {
             str(row.get("entity_id")) for row in snapshot.get("pages") or []
         }
-        checks: list[dict[str, Any]] = []
+        checks: list[dict[str, Any]] = _capture_checks(fixture, snapshot, gold)
+        for gold_claim_id in gold.get("searchable_claims", []):
+            row = claim_by_gold[gold_claim_id]
+            checks.append(
+                {
+                    "kind": "searchable_claim",
+                    "gold_id": gold_claim_id,
+                    "actual": {
+                        "status": row.get("generated_status"),
+                        "disposition": row.get("generated_disposition"),
+                    },
+                    "passed": bool(row.get("semantic_candidate"))
+                    and row.get("generated_status") == "active"
+                    and row.get("generated_disposition") in {"routed", "deferred"},
+                }
+            )
         for queue_name, expected_claim_ids in (gold.get("queue") or {}).items():
             for claim_id in expected_claim_ids or []:
                 row = claim_by_gold[claim_id]
@@ -891,11 +1035,18 @@ def evaluate_run(
         for row in wiki_fact_rows
         if len(row["rendered_at"]) > expected_render_count[row["gold_fact_id"]]
     ]
-    fixture_probes = [probe for probe in fixture["probes"].get("probes") or []
-                      if probe.get("evaluation_mode") != "artifact"]
+    fixture_probes = [
+        probe
+        for probe in fixture["probes"].get("probes") or []
+        if probe.get("evaluation_mode") != "artifact"
+    ]
     expected_probe_ids = {probe["id"] for probe in fixture_probes}
-    retrieved = [row for row in probe_results if row.get("retrieval_status") == "complete"
-                 and row["probe_id"] in expected_probe_ids]
+    retrieved = [
+        row
+        for row in probe_results
+        if row.get("retrieval_status") == "complete"
+        and row["probe_id"] in expected_probe_ids
+    ]
     retrieval_complete = {row["probe_id"] for row in retrieved} == expected_probe_ids
     retracted_fact_ids = {
         str(row.get("fact_id"))
@@ -933,7 +1084,11 @@ def evaluate_run(
         + len(row.get("present_forbidden_evidence") or [])
         for row in retrieved
     )
-    answered = [row for row in probe_results if row.get("judgment") and row["probe_id"] in expected_probe_ids]
+    answered = [
+        row
+        for row in probe_results
+        if row.get("judgment") and row["probe_id"] in expected_probe_ids
+    ]
 
     raw_metrics: dict[str, dict[str, Any]] = {
         "claim_recall": _ratio_metric(
@@ -1048,8 +1203,7 @@ def evaluate_run(
             evaluated=bool(retracted_claim_checks)
             and (
                 not retraction_probe_ids
-                or retraction_probe_ids
-                <= {str(row["probe_id"]) for row in retrieved}
+                or retraction_probe_ids <= {str(row["probe_id"]) for row in retrieved}
             ),
         ),
         "retrieval_fact_recall": _ratio_metric(

@@ -1,0 +1,64 @@
+schema_version: 2
+scenario_id: daily-driver-paraphrased-v2
+final_checkpoint: cp3_final
+checkpoints:
+- id: cp1_pre_dream
+  after_episode: chat-01
+  queue:
+    pending: []
+    deferred: []
+    retryable: []
+  entities:
+  - you
+  pages:
+  - you
+  forbidden_pages:
+  - project-hearth
+  description: Source conversations are captured durably; extraction and search wait for Build Memory.
+  captured_sources:
+  - src-chat-01
+  claim_count: 0
+  source_extraction:
+    src-chat-01: pending
+- id: cp2_first_dream
+  after_episode: chat-01
+  queue:
+    pending: []
+    deferred: []
+    retryable: []
+  entities:
+  - you
+  pages:
+  - you
+  description: Build Memory extracts searchable claims; useful independent context can support a page
+    from this conversation.
+  searchable_claims:
+  - c-profile
+  - c-intent
+  - c-local
+  - c-traceable
+  source_extraction:
+    src-chat-01: complete
+- id: cp3_final
+  after_episode: meeting-01
+  queue:
+    pending: []
+    deferred: []
+    retryable: []
+  entities:
+  - you
+  - project-hearth
+  - person-tariq-bell
+  pages:
+  - you
+  - project-hearth
+  - person-tariq-bell
+  required_page_facts:
+    project-hearth:
+    - f-purpose
+    - f-local
+    - f-traceable
+    - f-tariq-role
+    person-tariq-bell:
+    - f-tariq-role
+  exact_fact_count: 5

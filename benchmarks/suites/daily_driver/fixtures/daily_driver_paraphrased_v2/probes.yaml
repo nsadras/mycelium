@@ -1,0 +1,42 @@
+schema_version: 2
+scenario_id: daily-driver-paraphrased-v2
+probes:
+- id: q-short-term
+  checkpoint: cp1_pre_dream
+  question: Where must Elena's workshop record live and what traceability does she require?
+  expected_answer: The captured conversation has not been built into searchable memory yet; this information
+    is unavailable.
+  required_facts: []
+  forbidden_facts:
+  - f-local
+  - f-traceable
+  required_evidence: []
+  answerable: false
+  forbidden_evidence:
+  - chat-01-s01
+  - chat-01-s02
+  - chat-01-s03
+  purpose: Do not answer from conversations that have not passed through Build Memory.
+- id: q-first-build
+  checkpoint: cp2_first_dream
+  question: Where must Elena's workshop record live and what traceability does she require?
+  expected_answer: On her computer; every summary links to its exact quotation.
+  required_facts:
+  - f-local
+  - f-traceable
+  forbidden_facts: []
+  required_evidence:
+  - chat-01-s03
+  answerable: true
+  purpose: The first Build makes the captured information searchable, whether or not it receives an independent
+    page.
+- id: q-role
+  checkpoint: cp3_final
+  question: What does Tariq own for Hearth?
+  expected_answer: Transcript imports and facilitator export.
+  required_facts:
+  - f-tariq-role
+  forbidden_facts: []
+  required_evidence:
+  - meeting-01-s02
+  answerable: true

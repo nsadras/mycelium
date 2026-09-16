@@ -123,9 +123,9 @@ async def test_large_store_unchanged_search_has_no_filesystem_scan(
     with artifacts.db.transaction():
         for index in range(50000):
             artifacts.db.put("claims", str(index), {"text": f"Record {index}"})
-    embedder = type("Embedder", (), {"model": "test"})()
+    embedder = type("Embedder", (), {"model": "test", "identity": AsyncMock(return_value="test-weights")})()
     index = LanceClaimIndex(tmp_path / "indexes", artifacts, embedder)
-    monkeypatch.setattr(index, "_claim_records", lambda: [])
+    monkeypatch.setattr(index, "_claim_records", lambda **kwargs: [])
     synchronize = AsyncMock()
     monkeypatch.setattr(index, "_synchronize", synchronize)
     await index.search("first")

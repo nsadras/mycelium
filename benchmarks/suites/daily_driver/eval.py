@@ -549,11 +549,10 @@ def _checkpoint_results(
             str(claim_id)
             for proposal in snapshot.get("reconsolidation_proposals") or []
             if proposal.get("status") == "pending"
-            for claim_id in (
-                proposal.get("incoming_claim_id"),
-                proposal.get("target_claim_id"),
-            )
-            if claim_id
+            for claim_id in [
+                *(proposal.get("incoming_claim_ids") or []),
+                *(proposal.get("target_claim_ids") or []),
+            ]
         }
         generated_entities = {
             str(row.get("entity_id"))
@@ -627,8 +626,10 @@ def _checkpoint_results(
             candidates = [
                 proposal
                 for proposal in snapshot.get("reconsolidation_proposals") or []
-                if proposal.get("incoming_claim_id") == incoming_id
-                and proposal.get("target_claim_id") == target_id
+                if incoming_id
+                and target_id
+                and incoming_id in (proposal.get("incoming_claim_ids") or [])
+                and target_id in (proposal.get("target_claim_ids") or [])
                 and proposal.get("proposed_relation") == reconciliation.get("relation")
                 and proposal.get("status") == reconciliation.get("status")
             ]

@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import weakref
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,6 +18,11 @@ SCHEMA_VERSION = 3
 class MemoryDatabase:
     def __init__(self, root: Path):
         self.root = root.resolve()
+        self._owner_thread = threading.get_ident()
+        self._resource_lock = threading.RLock()
+        self._connection = None
+        self._lease = None
+        self.closed = False
         self.path = self.root / "memory.sqlite3"
         if not self.path.exists() and (
             any((self.root / "artifacts").rglob("*.json"))
@@ -48,7 +54,9 @@ class MemoryDatabase:
             raise RuntimeError(
                 f"Memory store already has a writer: {self.root}"
             ) from exc
-        self.connection = sqlite3.connect(self.path, isolation_level=None)
+        # Database operations remain thread-affine through the connection
+        # property. Only final resource release may run on a GC worker thread.
+        self._connection = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
         if version not in (0, SCHEMA_VERSION):
             self.close()
@@ -76,26 +84,36 @@ class MemoryDatabase:
         self.depth = 0
         self.closed = False
 
+    def _check_thread(self):
+        if threading.get_ident() != self._owner_thread:
+            raise sqlite3.ProgrammingError("MemoryDatabase operations must run on their owning thread")
+
+    @property
+    def connection(self):
+        self._check_thread()
+        return self._connection
+
     @contextmanager
     def transaction(self):
-        name = f"tx_{self.depth}"
-        self.connection.execute(
-            "BEGIN IMMEDIATE" if not self.depth else f"SAVEPOINT {name}"
-        )
-        self.depth += 1
-        try:
-            yield self
-        except BaseException:
-            self.depth -= 1
-            if self.depth:
-                self.connection.execute(f"ROLLBACK TO {name}")
-                self.connection.execute(f"RELEASE {name}")
+        with self._resource_lock:
+            name = f"tx_{self.depth}"
+            self.connection.execute(
+                "BEGIN IMMEDIATE" if not self.depth else f"SAVEPOINT {name}"
+            )
+            self.depth += 1
+            try:
+                yield self
+            except BaseException:
+                self.depth -= 1
+                if self.depth:
+                    self.connection.execute(f"ROLLBACK TO {name}")
+                    self.connection.execute(f"RELEASE {name}")
+                else:
+                    self.connection.execute("ROLLBACK")
+                raise
             else:
-                self.connection.execute("ROLLBACK")
-            raise
-        else:
-            self.depth -= 1
-            self.connection.execute("COMMIT" if not self.depth else f"RELEASE {name}")
+                self.depth -= 1
+                self.connection.execute("COMMIT" if not self.depth else f"RELEASE {name}")
 
     def revision(self, kind):
         row = self.connection.execute(
@@ -249,15 +267,23 @@ class MemoryDatabase:
                 raise
 
     def close(self):
-        if not getattr(self, "closed", False):
-            self.connection.close()
-            self._lease.close()
-            self.closed = True
-            _HANDLES.pop(self.root, None)
+        self._check_thread()
+        self._release_resources()
+
+    def _release_resources(self):
+        with self._resource_lock:
+            if not self.closed:
+                if self._connection is not None:
+                    self._connection.close()
+                if self._lease is not None:
+                    self._lease.close()
+                self.closed = True
+                if _HANDLES.get(self.root) is self:
+                    _HANDLES.pop(self.root)
 
     def __del__(self):
-        if hasattr(self, "connection"):
-            self.close()
+        if hasattr(self, "_resource_lock"):
+            self._release_resources()
 
 
 def database(root: Path) -> MemoryDatabase:

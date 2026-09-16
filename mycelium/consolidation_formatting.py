@@ -197,7 +197,9 @@ class RoutingFormatter:
                 "evidence_modality": claim.evidence_modality,
                 "citations": citations,
                 "identity_references": [
-                    {"role": r.role, "entity_id": r.entity_id, "origin": r.origin}
+                    {"role": r.role, "entity_id": r.entity_id, "origin": r.origin, "surface": r.surface,
+                     **({"reference_id": r.reference_id, "identity_decision_id": r.identity_decision_id}
+                        if r.identity_decision_id else {})}
                     for r in self.artifacts.list_entity_references(
                         claim_id=claim.claim_id, status="active"
                     )

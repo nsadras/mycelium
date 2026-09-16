@@ -249,6 +249,7 @@ class ClaimEntityReference:
     status: str
     created_at: str
     superseded_by_reference_id: str | None = None
+    identity_decision_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.role not in ENTITY_REFERENCE_ROLES:
@@ -259,6 +260,8 @@ class ClaimEntityReference:
             raise ValueError(f"Unsupported entity-reference status: {self.status}")
         if self.status == "superseded" and (not self.superseded_by_reference_id):
             raise ValueError("Superseded references require a successor")
+        if self.role == "identity_subject" and self.origin == "manual" and not self.identity_decision_id:
+            raise ValueError("Reviewed identity occurrences require their exact identity decision ID")
         self.surface = " ".join(str(self.surface or "").split()).strip() or None
         self.confidence = max(0.0, min(1.0, float(self.confidence)))
 

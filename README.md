@@ -34,7 +34,7 @@ Canonical memory and chat state live in `memory.sqlite3`. Markdown under `wiki/`
 and `logs/` is a generated, inspectable view; edit memory through the application,
 not by modifying these files. LanceDB under `indexes/` is rebuildable.
 
-This version requires a **fresh SQLite schema 2 store**. Schema 1 stores, older JSON
+This version requires a **fresh SQLite schema 3 store**. Schema 1/2 stores, older JSON
 stores, and existing benchmark runs are not migrated or modified. The new schema
 preserves separate event, deadline, and condition times with their cited evidence;
 imprecise dates remain explicitly unresolved. For the web app, select a new directory before

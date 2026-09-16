@@ -26,11 +26,10 @@ from mycelium.artifacts import (
 from mycelium.ollama import OllamaClient
 from mycelium.budget import require_request_budget, ContextBudgetError
 from mycelium.identity_plan import (
-    identity_plan_model,
-    identity_plan_prompt,
     planned_subjects,
     declared_user_bindings,
 )
+from mycelium.reviewed_identity_contract import reviewed_identity_model, reviewed_identity_prompt, expand_review_evidence
 from mycelium.page_plan import page_plan_model, page_plan_prompt
 
 
@@ -96,15 +95,12 @@ class ClaimRouter:
         participants = self.resolution.participant_occurrences(
             evidence, source_ids=participant_source_ids
         )
-        schema = identity_plan_model(
-            aliases,
-            {p: role for p, (_, _, role) in participants.items()},
-            {
-                e.entity_id: e.entity_type
-                for e in planned.values()
-                if e.status == "active"
-            },
-        )
+        references = [(alias, ref) for alias, item in aliases.items()
+                      for ref in self.artifacts.list_entity_references(claim_id=item.claim.claim_id, status="active")
+                      if ref.role == "identity_subject" and ref.origin == "manual"]
+        bindings = {f"R{i:03d}": {"reference_id": ref.reference_id, "claim_alias": alias,
+                                  "entity_id": ref.entity_id, "surface": ref.surface}
+                    for i, (alias, ref) in enumerate(sorted(references, key=lambda pair: pair[1].reference_id), 1)}
         work_unit.attempt_count += 1
         work_unit.status = "pending"
         now = datetime.now().astimezone().isoformat()
@@ -120,7 +116,11 @@ class ClaimRouter:
             ),
         ]
         try:
-            system, user = identity_plan_prompt(
+            schema = reviewed_identity_model(
+                aliases, {p: role for p, (_, _, role) in participants.items()},
+                {e.entity_id: e.entity_type for e in planned.values() if e.status == "active"}, bindings,
+            )
+            system, user = reviewed_identity_prompt(
                 self.formatter.entity_planning_catalog(
                     planned.values(), seed_identity_decisions
                 ),
@@ -128,6 +128,7 @@ class ClaimRouter:
                 self.formatter.identity_review_catalog(aliases),
                 self.formatter.format_pending_identity_proposals(pending),
                 declared_user_bindings(participants),
+                bindings,
             )
             request_digest = hashlib.sha256(
                 json.dumps(
@@ -156,24 +157,6 @@ class ClaimRouter:
             ).model_dump()
             if work_unit.entity_plan != plan:
                 work_unit.allocated_entity_ids = {}
-            for node in planned_subjects(plan, planned, participants):
-                reviewed = {
-                    ref.entity_id
-                    for alias in node["supporting_evidence"]
-                    if alias in aliases
-                    for ref in self.artifacts.list_entity_references(
-                        claim_id=aliases[alias].claim.claim_id, status="active"
-                    )
-                    if ref.role == "identity_subject"
-                    and ref.origin == "manual"
-                    and ref.entity_id
-                }
-                if reviewed and (
-                    node["resolution"] != "existing" or reviewed != {node["entity_id"]}
-                ):
-                    raise ValueError(
-                        "Identity plan conflicts with an explicit human identity decision"
-                    )
             work_unit.entity_plan = plan
             work_unit.stage = "claim_routing"
             self.artifacts.save_identity_work_unit(work_unit)
@@ -186,7 +169,7 @@ class ClaimRouter:
             )
         resolved = []
         blockers: dict[str, list[str]] = {}
-        for node in planned_subjects(plan, planned, participants):
+        for node in planned_subjects(expand_review_evidence(plan, bindings), planned, participants):
             support = [aliases[a] for a in node["supporting_evidence"] if a in aliases]
             participant_support = [
                 participants[p] for p in node["participant_evidence"]

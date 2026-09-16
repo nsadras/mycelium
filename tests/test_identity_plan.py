@@ -225,6 +225,7 @@ async def test_human_identity_cannot_be_overridden_by_new_plan(tmp_path):
         surface=None, origin="manual",
         confidence=1.0, reason="Explicit user correction.", dream_run_id="manual",
         status="active", created_at="2026-09-04",
+        identity_decision_id="review-decision",
     ))
     llm.call_structured.side_effect = [{"subjects": [subject(title="Another person", entity_type="person",
         resolution="new", entity_id="", participant_evidence=[])]}]

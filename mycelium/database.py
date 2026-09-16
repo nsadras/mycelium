@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 _HANDLES: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class MemoryDatabase:

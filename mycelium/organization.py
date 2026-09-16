@@ -901,6 +901,8 @@ class IdentityReviewService:
             ):
                 if prior.role != "identity_subject" or prior.origin != "manual":
                     continue
+                if prior.identity_decision_id != record.decision_id:
+                    continue
                 prior.status = "superseded"
                 prior.superseded_by_reference_id = reference_id
                 self.artifacts.save_entity_reference(prior)
@@ -917,6 +919,7 @@ class IdentityReviewService:
                     dream_run_id=record.dream_run_id,
                     status="active",
                     created_at=now,
+                    identity_decision_id=record.decision_id,
                 )
             )
 

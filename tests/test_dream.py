@@ -586,7 +586,7 @@ def test_scope_evidence_preserves_extracted_roles_and_stable_references(tmp_path
     payload = json.loads(rendered)
     assert payload["claims"]["C001"]["about"] == item.about
     assert payload["claims"]["C001"]["identity_references"] == [
-        {"role": "context", "entity_id": "you", "origin": "scope"}
+        {"role": "context", "entity_id": "you", "origin": "scope", "surface": "Recurring endeavor"}
     ]
     segment = payload["sources"][source.source_id]["segments"][
         source.segments[0].segment_id

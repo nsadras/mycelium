@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from benchmarks.experiments.probe_support import fresh_run_root, write
-from benchmarks.experiments.reviewed_identity_probes import CASES
+from benchmarks.experiments.identity_review_cases import CASES
 from benchmarks.shared.adapters import OllamaQaClient
 from mycelium.config import Config
 from mycelium.subject_discovery import subject_discovery_model, subject_discovery_prompt

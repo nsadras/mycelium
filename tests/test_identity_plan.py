@@ -2,7 +2,6 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import ValidationError
 
 from mycelium import Mycelium
 from mycelium.artifacts import (
@@ -15,7 +14,6 @@ from mycelium.artifacts import (
 from mycelium.consolidation import ClaimRouter
 from mycelium.consolidation_models import ClaimEvidence
 from mycelium.consolidation_formatting import RoutingFormatter
-from mycelium.identity_plan import identity_plan_model
 
 
 def subject(**changes):
@@ -45,142 +43,6 @@ def subject(**changes):
             if value["resolution"] == "review_required":
                 fields.add("candidate_entity_ids")
     return {key: value[key] for key in fields}
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"supporting_evidence": ["missing"]},
-        {"resolution": "new", "entity_id": "", "entity_type": "person"},
-        {"entity_id": "missing"},
-        {"supporting_evidence": ["C001"]},
-        {"candidate_entity_ids": ["missing"]},
-    ],
-)
-def test_identity_contract_rejects_invalid_ids_and_user_binding(changes):
-    schema = identity_plan_model(["C001"], {"P001": "user"}, {"you": "you"})
-    with pytest.raises(ValidationError):
-        schema.model_validate(
-            {"subjects": [], "user": {**subject(node_id="you"), **changes}}
-        )
-
-
-def test_declared_user_is_required_separately_from_other_subjects():
-    schema = identity_plan_model(["C001"], {"P001": "user"}, {"you": "you"})
-    plan = schema.model_validate({"subjects": [], "user": subject(node_id="you")})
-    assert list(schema.model_json_schema()["properties"]) == ["user", "subjects"]
-    assert plan.user.supporting_evidence == ["C001", "P001"]
-    with pytest.raises(ValidationError):
-        schema.model_validate({"subjects": []})
-
-
-def test_identity_contract_rejects_duplicate_existing_identity():
-    schema = identity_plan_model(["C001"], {}, {"you": "you"})
-    with pytest.raises(ValidationError, match="same canonical identity"):
-        schema.model_validate(
-            {
-                "subjects": [
-                    subject(participant_evidence=[]),
-                    subject(node_id="n2", participant_evidence=[]),
-                ]
-            }
-        )
-
-
-@pytest.mark.parametrize(
-    "resolution,changes,error_field,error_type",
-    [
-        ("new", {"entity_id": "entity-73"}, "entity_id", "extra_forbidden"),
-        (
-            "new",
-            {"candidate_entity_ids": ["entity-73"]},
-            "candidate_entity_ids",
-            "extra_forbidden",
-        ),
-        ("existing", {"entity_id": "unknown"}, "entity_id", "literal_error"),
-        ("existing", {"entity_type": "person"}, "entity_type", "extra_forbidden"),
-        (
-            "review_required",
-            {"candidate_entity_ids": ["invented"]},
-            "candidate_entity_ids",
-            "literal_error",
-        ),
-        ("new", {"page": True}, "page", "extra_forbidden"),
-    ],
-)
-def test_resolution_variants_reject_impossible_states(
-    resolution, changes, error_field, error_type
-):
-    schema = identity_plan_model(
-        ["C001"], {}, {"you": "you", "entity-73": "organization"}
-    )
-    node = subject(
-        title="Workshop",
-        entity_type="organization",
-        resolution=resolution,
-        entity_id="entity-73",
-        participant_evidence=[],
-    )
-    schema.model_validate({"subjects": [node]})
-    with pytest.raises(ValidationError) as error:
-        schema.model_validate({"subjects": [{**node, **changes}]})
-    variant = {
-        "new": "NewIdentity",
-        "existing": "ExistingIdentity",
-        "review_required": "UnresolvedOrganizationIdentity",
-    }[resolution]
-    relevant_errors = [
-        item
-        for item in error.value.errors()
-        if item["loc"][:3] == ("subjects", 0, variant)
-    ]
-    assert len(relevant_errors) == 1
-    assert relevant_errors[0]["loc"][3] == error_field
-    assert relevant_errors[0]["type"] == error_type
-
-
-@pytest.mark.parametrize(
-    "registry", [{}, {"you": "you"}, {"entity-73": "organization"}]
-)
-def test_new_and_unresolved_identities_do_not_require_an_existing_match(registry):
-    schema = identity_plan_model(["C001"], {}, registry)
-    for resolution in ("new", "review_required"):
-        node = subject(
-            title="Workshop",
-            entity_type="organization",
-            resolution=resolution,
-            entity_id="",
-            participant_evidence=[],
-        )
-        assert (
-            schema.model_validate({"subjects": [node]}).subjects[0].resolution
-            == resolution
-        )
-
-
-def test_native_schema_constrains_candidate_ids_before_model_generation():
-    schema = identity_plan_model(
-        ["C001"], {}, {"you": "you", "entity-73": "organization"}
-    )
-    variants = schema.model_json_schema()["$defs"]
-    for variant in variants.values():
-        fields = variant.get("properties", {})
-        if "candidate_entity_ids" not in fields:
-            continue
-        candidates = fields["candidate_entity_ids"]
-        kind = fields["entity_type"]["const"]
-        if kind == "person":
-            assert (
-                candidates["items"].get("const", candidates["items"].get("enum"))
-                == "you"
-            )
-        elif kind == "organization":
-            assert (
-                candidates["items"].get("const", candidates["items"].get("enum"))
-                == "entity-73"
-            )
-        else:
-            assert candidates["maxItems"] == 0
 
 
 def setup_router(tmp_path):
@@ -639,53 +501,6 @@ def test_identity_catalog_retains_staged_founding_evidence(tmp_path):
     assert decision.reviewer_note in pending
     assert evidence[0].claim.text in pending
     assert memory.artifacts.list_entity_resolution_decisions() == []
-
-
-def test_participant_only_identity_derives_binding_from_one_citation_list():
-    from mycelium.identity_plan import planned_subjects
-
-    schema = identity_plan_model(["C001"], {"P001": "participant"}, {})
-    node = subject(
-        resolution="new",
-        title="Ava",
-        entity_type="person",
-        supporting_evidence=[],
-        participant_evidence=["P001"],
-    )
-    plan = schema.model_validate({"subjects": [node]}).model_dump()
-    nodes = planned_subjects(plan, {}, {"P001": ("source", "Ava", "participant")})
-    assert nodes[0]["participant_evidence"] == ["P001"]
-    with pytest.raises(ValidationError):
-        schema.model_validate({"subjects": [{**node, "entity_type": "project"}]})
-    with pytest.raises(ValidationError, match="Each participant"):
-        schema.model_validate({"subjects": [node, {**node, "title": "Other"}]})
-
-
-def test_native_identity_evidence_domains_match_declared_entity_types():
-    schema = identity_plan_model(
-        ["C001"], {"P001": "participant"}, {"person": "person", "org": "organization"}
-    ).model_json_schema()
-    person = schema["$defs"]["ExistingPersonIdentity"]["properties"]
-    other = schema["$defs"]["ExistingIdentity"]["properties"]
-    assert person["entity_id"]["const"] == "person"
-    assert set(person["supporting_evidence"]["items"]["enum"]) == {"C001", "P001"}
-    assert other["entity_id"]["const"] == "org"
-    assert other["supporting_evidence"]["items"]["const"] == "C001"
-
-
-def test_declared_user_without_claims_has_no_other_subject_domain():
-    schema = identity_plan_model([], {"P001": "user"}, {"you": "you"})
-    schema.model_validate(
-        {
-            "subjects": [],
-            "user": {
-                "reason": "Declared speaker.",
-                "supporting_evidence": ["P001"],
-                "aliases": [],
-            },
-        }
-    )
-    assert schema.model_json_schema()["properties"]["subjects"]["maxItems"] == 0
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@ The maintained benchmark CLI is `python -m benchmarks`; see the [benchmark guide
 
 | Script | Purpose |
 | --- | --- |
-| `contract_simplification_probes.py` | Probe compact production contracts with Gemma. Select extraction, identity, rename, or context cases with the existing flags; the default covers truth and synthesis. |
+| `contract_simplification_probes.py` | Probe compact production contracts with Gemma. Select extraction or context cases with the existing flags; the default covers truth and synthesis. |
 | `model_contract_comparison.py` | Compare Gemma and Qwen on direct contracts and a small cumulative workload. `--natural-only` requires the historical source artifact named in the script. |
 | `reasoning_contract_probes.py` | Compare native constraints and schema-prompted reasoning on small cases. Its explicit SDK settings are experimental; they do not configure production. |
 | `selection_merge_probes.py` | Use configured production prompts/model settings to compare selections across neutral batches. `--pipeline` constrains only the selector's planning envelope to exercise production budget splitting; actual model context remains configured. |
@@ -25,8 +25,6 @@ They are opt-in and may take substantial model time.
 
 ```bash
 .venv/bin/python -m benchmarks.experiments.contract_simplification_probes
-.venv/bin/python -m benchmarks.experiments.contract_simplification_probes --identity
-.venv/bin/python -m benchmarks.experiments.contract_simplification_probes --rename
 .venv/bin/python -m benchmarks.experiments.contract_simplification_probes --context
 .venv/bin/python -m benchmarks.experiments.reasoning_contract_probes
 .venv/bin/python -m benchmarks.experiments.model_contract_comparison

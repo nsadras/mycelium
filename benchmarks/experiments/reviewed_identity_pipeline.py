@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 
 from benchmarks.experiments.probe_support import fresh_run_root, write
-from benchmarks.experiments.reviewed_identity_probes import CASES
+from benchmarks.experiments.identity_review_cases import CASES
 from benchmarks.shared.adapters import OllamaQaClient
 from mycelium.artifacts import ArtifactStore, ClaimEntityReference, ClaimProvenance, EntityRecord, MemoryClaim, SourceDocument, SourceSegment
 from mycelium.config import Config

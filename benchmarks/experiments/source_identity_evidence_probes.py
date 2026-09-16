@@ -4,7 +4,7 @@ import asyncio
 import json
 
 from benchmarks.experiments.probe_support import fresh_run_root, write
-from benchmarks.experiments.reviewed_identity_probes import CASES
+from benchmarks.experiments.identity_review_cases import CASES
 from mycelium import Mycelium
 from mycelium.artifacts import (
     ClaimEntityReference,

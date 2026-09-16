@@ -64,9 +64,9 @@ async def main(args):
                 reviewer._compare_pairs,
             )
 
-            async def candidates(incoming, records):
+            async def candidates(incoming, records, **kwargs):
                 write(root / str(trial) / "records.json", records)
-                pairs = await candidate_call(incoming, records)
+                pairs = await candidate_call(incoming, records, **kwargs)
                 write(root / str(trial) / "candidates.json", sorted(pairs))
                 return pairs
 

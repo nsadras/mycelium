@@ -1,7 +1,6 @@
 """Native neutral owner-independent truth review and page publication probes."""
 
 import asyncio
-import os
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -11,6 +10,7 @@ import httpx
 from benchmarks.experiments.probe_support import fresh_run_root, write
 from benchmarks.experiments.truth_scope_probes import CASES
 from benchmarks.shared.adapters import OllamaQaClient
+from benchmarks.shared.model_recording import RecordingClient
 from mycelium.artifacts import ArtifactStore, ClaimPlacement, ClaimProvenance, MemoryClaim, SourceDocument, SourceSegment
 from mycelium.config import Config
 from mycelium.facts import FactResolver
@@ -20,11 +20,12 @@ from mycelium.store import WikiStore
 
 async def main():
     root = fresh_run_root("truth-pipeline")
+    print("OUTPUT", root, flush=True)
     config = Config.from_toml(Path("mycelium.toml"))
     write(root / "config.json", asdict(config))
-    os.environ["MYCELIUM_LLM_DEBUG_DIR"] = str(root / "requests")
     qa = OllamaQaClient(config.llm.model, config.llm.url, llm_config=config.llm)
     qa.llm.trace_path = root / "calls.jsonl"
+    qa.llm.client = RecordingClient(qa.llm.client, root / "requests")
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.get(config.llm.url.rstrip("/") + "/api/tags")
         response.raise_for_status()
@@ -88,6 +89,8 @@ async def main():
             write(case_root / "result.json", record)
             write(root / "results.json", results)
             print(name, trial, record["passed"], record["seconds"], flush=True)
+            artifacts.db.close()
+    write(root / "completion.json", {"passed": sum(r["passed"] for r in results), "total": len(results)})
     print("OUTPUT", root, flush=True)
     if not all(row["passed"] for row in results):
         raise SystemExit("Native truth review failed a neutral case")

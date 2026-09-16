@@ -65,14 +65,14 @@ class TruthReviewer:
             return result
         try:
             records = {cid: self._record(c, placements, entities) for cid, c in claims.items()}
-            candidates = await self._candidate_pairs(incoming, records)
             reviewed_pairs = {
                 tuple(sorted((left, right)))
                 for proposal in self.artifacts.list_reconsolidation_proposals()
                 if proposal.status in {"pending", "approved", "applied", "rejected"}
                 for left in proposal.incoming_claim_ids for right in proposal.target_claim_ids
             }
-            pairs = sorted(candidates - reviewed_pairs)
+            candidates = await self._candidate_pairs(incoming, records, excluded_pairs=reviewed_pairs)
+            pairs = sorted(candidates)
             decisions = await self._compare_pairs(pairs, records)
             changes = {}
             for (left, right), decision in decisions.items():
@@ -110,10 +110,11 @@ class TruthReviewer:
             result.errors.append(f"Truth comparison failed: {type(exc).__name__}: {exc}")
         return result
 
-    async def _candidate_pairs(self, incoming, records):
+    async def _candidate_pairs(self, incoming, records, *, excluded_pairs=frozenset()):
         """Bound each model request without restricting candidates by page owner."""
         pairs = set()
         group_ids = sorted(records)
+        incoming_ids = set(incoming)
 
         async def select(new_ids, other_ids):
             # A statement cannot be its own comparison target. Other statements
@@ -122,12 +123,19 @@ class TruthReviewer:
                 return
             incoming_aliases = {f"C{i:03d}": cid for i, cid in enumerate(new_ids, 1)}
             group_aliases = {f"X{i:03d}": cid for i, cid in enumerate(other_ids, 1)}
-            allowed = {alias: [target for target, target_id in group_aliases.items() if cid != target_id]
+            # Relevance is symmetric: each exact unordered pair needs one
+            # selection decision. Keep every unreviewed historical candidate.
+            allowed = {alias: [target for target, target_id in group_aliases.items()
+                              if cid != target_id
+                              and not (target_id in incoming_ids and cid > target_id)
+                              and tuple(sorted((cid, target_id))) not in excluded_pairs]
                        for alias, cid in incoming_aliases.items()}
             incoming_aliases = {a: cid for a, cid in incoming_aliases.items() if allowed[a]}
             allowed = {a: allowed[a] for a in incoming_aliases}
             if not allowed:
                 return
+            used_targets = {target for targets in allowed.values() for target in targets}
+            group_aliases = {alias: cid for alias, cid in group_aliases.items() if alias in used_targets}
             schema = truth_candidates_model(allowed)
             system, user = render_prompt_pair("memory/truth_candidates", payload=json.dumps({
                 "incoming": {a: records[c] for a, c in incoming_aliases.items()},

@@ -106,7 +106,7 @@ async def test_truth_comparison_crosses_owners_and_incoming_batch_boundaries(tmp
     llm.call_structured.reset_mock()
     repeated = await TruthReviewer(llm, artifacts).review(incoming, placements, entities, dream_run_id="again")
     assert repeated.proposals == []
-    assert all(call.kwargs["debug_label"] != "dream-truth-comparison" for call in llm.call_structured.call_args_list)
+    llm.call_structured.assert_not_awaited()
 
 
 @pytest.mark.asyncio

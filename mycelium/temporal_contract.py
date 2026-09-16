@@ -69,7 +69,48 @@ class UnresolvedTime(StrictTimeModel):
     reason: str = Field(min_length=1, max_length=300)
 
 
-TimeMeaning = AbsoluteInterval | DayOffset | CalendarPeriod | UnresolvedTime
+WEEKDAYS = (
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+)
+RELATIVE_TIME_KINDS = frozenset(
+    {"day_offset", "calendar_period", "weekday_in_week", "weekday_occurrence"}
+)
+
+
+class WeekdayInWeek(StrictTimeModel):
+    kind: Literal["weekday_in_week"]
+    weekday: Literal.__getitem__(WEEKDAYS)
+    week_offset: int = Field(
+        strict=True,
+        description="Signed whole weeks relative to the cited message's Monday-to-Sunday week; zero means that same calendar week.",
+    )
+
+
+class WeekdayOccurrence(StrictTimeModel):
+    kind: Literal["weekday_occurrence"]
+    weekday: Literal.__getitem__(WEEKDAYS)
+    direction: Literal["next", "previous", "on_or_after", "on_or_before"]
+
+
+class RecurringTime(StrictTimeModel):
+    kind: Literal["recurring"]
+
+
+TimeMeaning = (
+    AbsoluteInterval
+    | DayOffset
+    | CalendarPeriod
+    | UnresolvedTime
+    | WeekdayInWeek
+    | WeekdayOccurrence
+    | RecurringTime
+)
 
 
 class TimeAnnotation(StrictTimeModel):
@@ -116,7 +157,7 @@ class CanonicalTime(TimeAnnotation):
     start: str | None
     end: str | None
     precision: Literal["day", "week", "month", "year", "range"] | None
-    status: Literal["resolved", "unresolved"]
+    status: Literal["resolved", "unresolved", "recurring"]
     resolution_error: (
         Literal["missing_anchor", "invalid_anchor", "calendar_overflow"] | None
     )
@@ -143,6 +184,8 @@ def resolved_fields(meaning: TimeMeaning, anchor: str | None) -> dict:
     )
     if isinstance(meaning, UnresolvedTime):
         return empty
+    if isinstance(meaning, RecurringTime):
+        return {**empty, "status": "recurring"}
     if isinstance(meaning, AbsoluteInterval):
         return dict(
             start=meaning.start,
@@ -160,6 +203,22 @@ def resolved_fields(meaning: TimeMeaning, anchor: str | None) -> dict:
     try:
         if isinstance(meaning, DayOffset):
             start = end = base + timedelta(days=meaning.days)
+            precision = "day"
+        elif isinstance(meaning, WeekdayInWeek):
+            start = end = base + timedelta(
+                days=-base.weekday() + WEEKDAYS.index(meaning.weekday),
+                weeks=meaning.week_offset,
+            )
+            precision = "day"
+        elif isinstance(meaning, WeekdayOccurrence):
+            offset = (WEEKDAYS.index(meaning.weekday) - base.weekday()) % 7
+            if meaning.direction == "next":
+                offset = offset or 7
+            elif meaning.direction == "previous":
+                offset = offset - 7 if offset else -7
+            elif meaning.direction == "on_or_before":
+                offset = offset - 7 if offset else 0
+            start = end = base + timedelta(days=offset)
             precision = "day"
         elif meaning.unit == "week":
             start = (

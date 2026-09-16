@@ -213,7 +213,7 @@ def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
         if record.temporal:
             lines.append("Timing:")
             for value in record.temporal:
-                interval = _text(value.start) if value.start else "unresolved"
+                interval = _text(value.start) if value.start else _text(value.status)
                 if value.end and value.end != value.start:
                     interval += f" through {_text(value.end)}"
                 expression = (

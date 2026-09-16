@@ -9,7 +9,7 @@ from uuid import uuid4
 from mycelium.artifacts import ArtifactStore, MemoryClaim
 from mycelium.structured_outputs import ReplacementMetadata
 from mycelium.temporal import source_time_anchors
-from mycelium.temporal_contract import resolve_annotation
+from mycelium.temporal_contract import RELATIVE_TIME_KINDS, resolve_annotation
 
 
 @dataclass(frozen=True)
@@ -43,7 +43,7 @@ def relative_times(metadata: ReplacementMetadata) -> dict[str, object]:
     return {
         str(index): value
         for index, value in enumerate(metadata.facets.times)
-        if value.meaning.kind in {"day_offset", "calendar_period"}
+        if value.meaning.kind in RELATIVE_TIME_KINDS
     }
 
 
@@ -182,7 +182,7 @@ def resolved_correction_facets(
     for index, value in enumerate(metadata.facets.times):
         annotation = value.model_copy(update={"evidence_segment_id": segment_id})
         anchor = anchor_id = reference_reason = None
-        if value.meaning.kind in {"day_offset", "calendar_period"}:
+        if value.meaning.kind in RELATIVE_TIME_KINDS:
             if draft is None or choices is None:
                 raise ValueError("Relative correction dates require explicit review")
             ref = draft["references"][choices[str(index)]]

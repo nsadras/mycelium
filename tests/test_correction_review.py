@@ -270,3 +270,33 @@ async def test_review_is_bound_to_the_replacement_text(tmp_path):
             time_references={"0": "T001", "1": "T002"},
         )
     assert artifacts.get_claim(original.claim_id).status == "active"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('meaning,expected', [
+    ({'kind': 'weekday_occurrence', 'weekday': 'monday', 'direction': 'next'}, '2026-06-15'),
+    ({'kind': 'weekday_in_week', 'weekday': 'monday', 'week_offset': 1}, '2026-06-15'),
+])
+async def test_weekday_correction_waits_for_exact_reference_choice(tmp_path, meaning, expected):
+    artifacts, _, service, original, first, _ = setup_review(tmp_path)
+    details = time_details('replacement', 'next Monday', meaning, target='Delivery')
+    def response(system, user, schema, **kwargs):
+        result = lifecycle_response(system, user, schema, **kwargs)
+        if kwargs.get('debug_label') == 'memory-correction':
+            result['facets'] = details
+        return result
+    service.resolver.llm.call_structured.side_effect = response
+    text = 'The user will deliver the sculpture next Monday.'
+    review = await service.correct_claim(original.claim_id, text)
+    assert isinstance(review, CorrectionPreview)
+    assert len(artifacts.list_claims()) == 1
+    assert artifacts.get_claim(original.claim_id).status == 'active'
+    choice = next(row for row in review.times[0]['options'] if row['reference_id'] == 'T001')
+    assert choice['start'] == expected
+    result = await service.correct_claim(original.claim_id, text, draft_id=review.draft_id, time_references={'0': 'T001'})
+    stored = artifacts.get_claim(result.claim_ids[0]).facets['temporal'][0]
+    assert stored['start'] == expected and stored['anchor_segment_id'] == first
+    assert stored['reference_reason'] == 'User selected the stored reference date'
+    calls = service.resolver.llm.call_structured.call_count
+    assert await service.correct_claim(original.claim_id, text, draft_id=review.draft_id, time_references={'0': 'T001'}) == result
+    assert service.resolver.llm.call_structured.call_count == calls

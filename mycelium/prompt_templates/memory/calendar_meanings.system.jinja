@@ -1,0 +1,11 @@
+Declare the calendar relationship stated by each expression; the application computes its dates using the cited message's timestamp, or a reference date reviewed by the user for a correction. Do not substitute the current date.
+
+- absolute: a stated calendar date or interval with an evidenced year, expressed as inclusive ISO start/end and precision. A calendar date missing its year remains unresolved unless the source instead establishes a relative relationship.
+- day_offset: an exact signed number of days, including day-relative expressions. Do not convert day-relative words into a weekday name.
+- calendar_period: a whole week, month or year with a signed offset from the reference calendar period. Weeks start Monday.
+- weekday_occurrence: a particular explicitly named weekday, with a direction relative to the reference day. next and previous mean strictly after and before; on_or_after and on_or_before include the reference day. Future or past tense can establish the direction even when no reference date is visible.
+- weekday_in_week: an explicitly named weekday within a specified calendar week; week_offset=0 means the reference week, 1 the following week, -1 the preceding week.
+- recurring: a repeating schedule rather than one occurrence. Preserve its pattern in expression; do not assign one date to the schedule.
+- unresolved: an ambiguous relationship, approximate quantity or vague period, with a short reason.
+
+Classify the stated relationship before any date arithmetic. A missing timestamp does not prevent declaring an exact day offset or an upcoming/past weekday relationship. A weekday declaration requires an actual weekday name in the cited expression; do not invent one. Never convert a named weekday into a numeric day_offset or invent an absolute date.

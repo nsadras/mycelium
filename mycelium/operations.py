@@ -57,7 +57,7 @@ class EvidenceTime:
     evidence_segment_id: str | None = None
     anchor_segment_id: str | None = None
     reference_reason: str | None = None
-    status: Literal["resolved", "unresolved"] = "resolved"
+    status: Literal["resolved", "unresolved", "recurring"] = "resolved"
     resolution_reason: str | None = None
 
 

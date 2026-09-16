@@ -4,6 +4,6 @@ In about, subject is whose action or state is described, owner is a project whos
 
 In facets.times, include each distinct stated time constraint with its verbatim expression, target action or state, and evidence_segment_id=replacement. Use event_time for when the target occurs, deadline for its latest permissible completion, and condition_time for a prerequisite. Preserve multiple targets and dates independently. Include unresolved time wording too; use an empty list only when the replacement contains no time.
 
-Declare meaning as absolute for calendar dates with an evidenced year (inclusive ISO start/end and precision), day_offset for an exact signed number of days, or calendar_period for a whole week, month or year with a signed offset. A week starts Monday. Missing years, ambiguous references, approximate quantities and vague periods remain unresolved with a short reason. Do not invent numeric boundaries. Identify exact relative offsets without calculating dates: the user reviews their reference dates before saving. Missing timestamp metadata is not itself ambiguity in the stated offset.
-
 facets.inference_basis is null for direct assertions; otherwise explain the inference from the supplied text. Resolving a reference with context is direct evidence.
+
+{% include "memory/calendar_meanings.system.jinja" %}

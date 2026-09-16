@@ -79,7 +79,7 @@ def test_resolution_variants_reject_impossible_states(resolution, changes, error
     with pytest.raises(ValidationError) as error:
         schema.model_validate({"subjects": [{**node, **changes}]})
     variant = {"new": "NewIdentity", "existing": "ExistingIdentity",
-               "review_required": "UnresolvedIdentity"}[resolution]
+               "review_required": "UnresolvedOrganizationIdentity"}[resolution]
     relevant_errors = [item for item in error.value.errors() if item["loc"][:3] == ("subjects", 0, variant)]
     assert len(relevant_errors) == 1
     assert relevant_errors[0]["loc"][3] == error_field
@@ -103,8 +103,11 @@ def test_native_schema_constrains_candidate_ids_before_model_generation():
         if "candidate_entity_ids" not in fields:
             continue
         candidates = fields["candidate_entity_ids"]
-        if fields["resolution"].get("const") == "review_required":
-            assert set(candidates["items"]["enum"]) == {"you", "entity-73"}
+        kind = fields["entity_type"]["const"]
+        if kind == "person":
+            assert candidates["items"].get("const", candidates["items"].get("enum")) == "you"
+        elif kind == "organization":
+            assert candidates["items"].get("const", candidates["items"].get("enum")) == "entity-73"
         else:
             assert candidates["maxItems"] == 0
 
@@ -118,7 +121,7 @@ def setup_router(tmp_path):
                         [ClaimProvenance("s1", ["seg1"])], "2026-09-04")
     memory.artifacts.save_claim(claim)
     llm = AsyncMock()
-    return memory, llm, ClaimRouter(llm, memory.artifacts), [ClaimEvidence(claim, source)]
+    return memory, llm, ClaimRouter(llm, memory.artifacts, memory.config), [ClaimEvidence(claim, source)]
 
 
 def test_shared_source_text_is_included_once_with_each_claim_reference(tmp_path):
@@ -190,6 +193,22 @@ def route(owner="you"):
             "reason": None}}}
 
 
+def source_first_responses(plan):
+    discovery, matches = [], []
+    for node in plan["subjects"]:
+        kind = node.get("entity_type") or node["entity_id"].split("-")[0]
+        discovery.append({"entity_type": "person" if kind == "you" else kind,
+            "title": node["title"] or node["entity_id"], "description": node["reason"],
+            "aliases": node["aliases"], "supporting_evidence": node["supporting_evidence"]})
+        decision = {"resolution": node["resolution"], "reason": node["reason"]}
+        if node["resolution"] == "existing":
+            decision.update(entity_id=node["entity_id"], title=node["title"], aliases=node["aliases"])
+        elif node["resolution"] == "review_required":
+            decision["candidate_entity_ids"] = node["candidate_entity_ids"]
+        matches.append({"decision": decision})
+    return [{"subjects": discovery}, *matches]
+
+
 
 @pytest.mark.asyncio
 async def test_retry_replans_after_registry_changes_without_duplicating_identity(tmp_path):
@@ -197,7 +216,7 @@ async def test_retry_replans_after_registry_changes_without_duplicating_identity
     llm.context_window_tokens = 32768
     plan = {"subjects": [subject(title="Exhibit", entity_type="project", resolution="new",
                                 entity_id="", participant_evidence=[])]}
-    llm.call_structured.side_effect = [plan, ValueError("interrupted routing")]
+    llm.call_structured.side_effect = [*source_first_responses(plan), ValueError("interrupted routing")]
     first = await router.route(evidence)
     assert first.failures
     assert len(first.new_entities) == 1
@@ -205,15 +224,15 @@ async def test_retry_replans_after_registry_changes_without_duplicating_identity
         memory.artifacts.save_entity(entity)
     llm.call_structured.reset_mock()
     llm.call_structured.side_effect = [
-        {"subjects": [subject(resolution="existing", entity_id=first.new_entities[0].entity_id,
-                              participant_evidence=[])]},
+        *source_first_responses({"subjects": [subject(resolution="existing", entity_id=first.new_entities[0].entity_id,
+                              participant_evidence=[])]}),
         route(first.new_entities[0].entity_id),
     ]
     second = await router.route(evidence)
     assert not second.failures
     assert second.routes[0].owner_entity_id == first.new_entities[0].entity_id
     assert {e.entity_id for e in second.new_entities} == {first.new_entities[0].entity_id}
-    assert llm.call_structured.await_count == 2
+    assert llm.call_structured.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -227,10 +246,11 @@ async def test_human_identity_cannot_be_overridden_by_new_plan(tmp_path):
         status="active", created_at="2026-09-04",
         identity_decision_id="review-decision",
     ))
-    llm.call_structured.side_effect = [{"subjects": [subject(title="Another person", entity_type="person",
-        resolution="new", entity_id="", participant_evidence=[])]}]
+    llm.call_structured.side_effect = source_first_responses({"subjects": [subject(title="Another person", entity_type="person",
+        resolution="new", entity_id="", participant_evidence=[])]})[:1] + [
+            {"assignments": {"R001": {"subject_alias": "unresolved", "reason": "The reviewed subject is absent."}}}]
     result = await router.route(evidence)
-    assert result.failures and "human identity" in result.failures[0].reason
+    assert result.failures and "Cannot bind human identity review R001" in result.failures[0].reason
     assert result.new_entities == []
 
 
@@ -238,15 +258,15 @@ async def test_human_identity_cannot_be_overridden_by_new_plan(tmp_path):
 async def test_invented_candidate_fails_without_creating_entities_or_routing(tmp_path):
     memory, llm, router, evidence = setup_router(tmp_path)
     llm.context_window_tokens = 32768
-    llm.call_structured.return_value = {"subjects": [subject(
+    llm.call_structured.side_effect = source_first_responses({"subjects": [subject(
         title="Workshop", entity_type="organization", resolution="review_required",
         entity_id="", participant_evidence=[], candidate_entity_ids=["invented"],
-    )]}
+    )]})
     result = await router.route(evidence)
     assert len(result.failures) == 1
     assert result.new_entities == []
     assert result.routes == []
-    assert llm.call_structured.await_count == 1
+    assert llm.call_structured.await_count == 2
     assert [e.entity_id for e in memory.artifacts.list_entities()] == ["you"]
 
 
@@ -260,10 +280,10 @@ async def test_identity_candidates_survive_routing_and_repository_roundtrip(tmp_
         memory.artifacts.save_entity(EntityRecord(
             entity_id, "person", entity_id, entity_id, [], "active", "2026-09-07", "2026-09-07",
         ))
-    llm.call_structured.side_effect = [{"subjects": [subject(
+    llm.call_structured.side_effect = [*source_first_responses({"subjects": [subject(
         title="Unknown organizer", entity_type="person", resolution="review_required",
         entity_id="", participant_evidence=[], candidate_entity_ids=["person-a", "person-b"],
-    )]}, {"decisions": {"C001": {"prominence": "briefing", "pages": {"person-unknown-organizer": {"section_key": "goals_plans", "reason": "The unresolved organizer made the commitment."}}, "owner_entity": "person-unknown-organizer", "reason": None, "uncertainty": "Which organizer is unknown."}}}]
+    )]}), {"decisions": {"C001": {"prominence": "briefing", "pages": {"person-unknown-organizer": {"section_key": "goals_plans", "reason": "The unresolved organizer made the commitment."}}, "owner_entity": "person-unknown-organizer", "reason": None, "uncertainty": "Which organizer is unknown."}}}]
     result = await router.route(evidence)
     assert not result.failures
     assert len(result.new_entities) == 1
@@ -336,3 +356,48 @@ def test_declared_user_without_claims_has_no_other_subject_domain():
         "reason": "Declared speaker.", "supporting_evidence": ["P001"], "aliases": [],
     }})
     assert schema.model_json_schema()["properties"]["subjects"]["maxItems"] == 0
+
+
+@pytest.mark.asyncio
+async def test_review_assignment_binds_one_discovered_subject_without_hiding_the_other(tmp_path):
+    memory, llm, router, evidence = setup_router(tmp_path)
+    llm.context_window_tokens = 32768
+    memory.artifacts.save_entity_reference(ClaimEntityReference("review1", "c1", "identity_subject", "The user", "you",
+        1., "Explicit review", "manual", "review", "active", "2026-09-04", identity_decision_id="d1"))
+    llm.call_structured.side_effect = [
+        {"subjects": [
+            {"entity_type": "person", "title": "The user", "description": "The person preparing the exhibit", "aliases": [], "supporting_evidence": ["C001"]},
+            {"entity_type": "project", "title": "Exhibit", "description": "The exhibit being prepared", "aliases": [], "supporting_evidence": ["C001"]}]},
+        {"assignments": {"R001": {"subject_alias": "S001", "reason": "The reviewed person"}}},
+        {"decision": {"resolution": "new", "reason": "Separate project"}}, route("project-exhibit")]
+    result = await router.route(evidence)
+    assert not result.failures
+    assert {e.entity_id for e in result.new_entities} == {"you", "project-exhibit"}
+    discovery_user = llm.call_structured.await_args_list[0].args[1]
+    assert "identity_references" not in discovery_user and "review1" not in discovery_user
+    plan = memory.artifacts.list_identity_work_units()[0].entity_plan
+    assert plan["review_bindings"]["R001"]["subject_alias"] == "S001"
+    assert plan["subjects"][0]["entity_id"] == "you"
+    assert "R001" in plan["subjects"][0]["supporting_evidence"]
+    assert "R001" not in plan["subjects"][1]["supporting_evidence"]
+
+
+@pytest.mark.asyncio
+async def test_matching_a_provisional_identity_preserves_its_pending_review_on_new_placements(tmp_path):
+    from mycelium.artifacts import EntityResolutionDecision
+    memory, llm, router, evidence = setup_router(tmp_path)
+    llm.context_window_tokens = 32768
+    entity = memory.artifacts.create_entity("person", "Unidentified organizer", materialization_state="provisional")
+    decision = EntityResolutionDecision("pending", "entity_creation", entity.entity_id, "person", entity.title,
+        ["s1"], ["c1"], ["seg1"], .8, "Which organizer is unknown", "review_required", "earlier", "2026-09-04",
+        identity_evidence_claim_ids=["c1"], proposed_scope="independent", proposed_page_state="provisional")
+    memory.artifacts.save_entity_resolution_decision(decision)
+    placement = route(entity.entity_id)
+    placement["decisions"]["C001"]["pages"][entity.entity_id]["section_key"] = "goals_plans"
+    llm.call_structured.side_effect = [*source_first_responses({"subjects": [subject(resolution="existing",
+        entity_id=entity.entity_id, participant_evidence=[])]}), placement]
+    result = await router.route(evidence)
+    assert not result.failures
+    assert result.routes[0].identity_blocker_ids == ("pending",)
+    assert memory.artifacts.get_entity_resolution_decision("pending").review_state == "review_required"
+    assert {e.entity_id for e in result.new_entities} == {entity.entity_id}

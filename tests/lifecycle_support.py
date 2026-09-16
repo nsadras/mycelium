@@ -8,8 +8,10 @@ def lifecycle_response(_system, user, schema, **kwargs):
         return {'about': [{'entity': 'user', 'role': 'subject'}], 'claim_type': 'preference',
                 'predicate': None, 'temporal_status': 'atemporal',
                 'facets': {'times': [], 'inference_basis': None}}
-    if stage == 'dream-identity-plan':
-        return {'subjects': [{'resolution': 'existing', 'entity_id': 'you', 'title': None, 'reason': 'The statement concerns the user.', 'supporting_evidence': ['C001'], 'aliases': []}]}
+    if stage == 'dream-subject-discovery':
+        return {'subjects': [{'entity_type': 'person', 'title': 'You', 'description': 'The statement concerns the user.', 'supporting_evidence': ['C001'], 'aliases': []}]}
+    if stage == 'dream-subject-identity':
+        return {'decision': {'resolution': 'existing', 'entity_id': 'you', 'title': None, 'reason': 'The statement concerns the user.', 'aliases': []}}
     if stage == 'dream-claim-routing':
         return {'decisions': {a: {"prominence": "briefing", 'pages': {'you': {'section_key': 'preferences_working_style', 'reason': 'User preference.'}},
                                  'owner_entity': 'you', 'reason': None, 'uncertainty': None}

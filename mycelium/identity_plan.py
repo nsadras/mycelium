@@ -36,25 +36,23 @@ def identity_plan_model(evidence_ids, participant_roles, registry_types):
             t for t in ENTITY_TYPES if t != "you" and (t == "person") == person
         )
         suffix = "PersonIdentity" if person else "Identity"
-        for resolution, prefix in (("new", "New"), ("review_required", "Unresolved")):
-            extra = {}
-            if resolution == "review_required":
-                extra["candidate_entity_ids"] = (
-                    (list[Literal.__getitem__(tuple(registry_types))], ...)
-                    if registry_types
-                    else (list[str], Field(max_length=0))
-                )
-            variants.append(
-                create_model(
-                    prefix + suffix,
-                    __config__=ConfigDict(extra="forbid"),
-                    **typed_common,
-                    resolution=(Literal.__getitem__((resolution,)), ...),
-                    title=(str, Field(min_length=1)),
-                    entity_type=(Literal.__getitem__(kinds), ...),
-                    **extra,
-                )
-            )
+        variants.append(create_model(
+            "New" + suffix, __config__=ConfigDict(extra="forbid"), **typed_common,
+            resolution=(Literal["new"], ...), title=(str, Field(min_length=1)),
+            entity_type=(Literal.__getitem__(kinds), ...),
+        ))
+        # A proposed review choice must be admissible under its declared type.
+        # The review API cannot bind a person occurrence to a Project ID.
+        for kind in kinds:
+            candidates = tuple(eid for eid, candidate_kind in registry_types.items()
+                               if candidate_kind == kind or (kind == "person" and candidate_kind == "you"))
+            variants.append(create_model(
+                "Unresolved" + kind.title() + "Identity", __config__=ConfigDict(extra="forbid"), **typed_common,
+                resolution=(Literal["review_required"], ...), title=(str, Field(min_length=1)),
+                entity_type=(Literal.__getitem__((kind,)), ...),
+                candidate_entity_ids=((list[Literal.__getitem__(candidates)], Field(max_length=len(candidates)))
+                                      if candidates else (list[str], Field(max_length=0))),
+            ))
         existing_ids = tuple(
             eid
             for eid, kind in registry_types.items()

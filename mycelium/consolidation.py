@@ -27,20 +27,21 @@ from mycelium.ollama import OllamaClient
 from mycelium.budget import require_request_budget, ContextBudgetError
 from mycelium.identity_plan import (
     planned_subjects,
-    declared_user_bindings,
 )
-from mycelium.reviewed_identity_contract import reviewed_identity_model, reviewed_identity_prompt, expand_review_evidence
+from mycelium.reviewed_identity_contract import expand_review_evidence
+from mycelium.identity_planner import IdentityPlanner
 from mycelium.page_plan import page_plan_model, page_plan_prompt
 
 
 class ClaimRouter:
     """Plan one validated entity owner for every admitted claim."""
 
-    def __init__(self, llm: OllamaClient, artifacts: ArtifactStore):
+    def __init__(self, llm: OllamaClient, artifacts: ArtifactStore, config):
         self.llm = llm
         self.artifacts = artifacts
         self.formatter = RoutingFormatter(artifacts)
         self.resolution = ResolutionArtifacts()
+        self.identity = IdentityPlanner(llm, artifacts, config)
 
     async def route(
         self,
@@ -116,45 +117,9 @@ class ClaimRouter:
             ),
         ]
         try:
-            schema = reviewed_identity_model(
-                aliases, {p: role for p, (_, _, role) in participants.items()},
-                {e.entity_id: e.entity_type for e in planned.values() if e.status == "active"}, bindings,
-            )
-            system, user = reviewed_identity_prompt(
-                self.formatter.entity_planning_catalog(
-                    planned.values(), seed_identity_decisions
-                ),
-                self.formatter.format_evidence(aliases, participants),
-                self.formatter.identity_review_catalog(aliases),
-                self.formatter.format_pending_identity_proposals(pending),
-                declared_user_bindings(participants),
-                bindings,
-            )
-            request_digest = hashlib.sha256(
-                json.dumps(
-                    {
-                        "system": system,
-                        "user": user,
-                        "schema": schema.model_json_schema(),
-                        "model": str(getattr(self.llm, "model", "")),
-                    },
-                    sort_keys=True,
-                ).encode()
-            ).hexdigest()
-            if work_unit.request_digest != request_digest:
-                work_unit.entity_plan = {}
-                work_unit.allocated_entity_ids = {}
-            work_unit.request_digest = request_digest
-            plan = schema.model_validate(
-                await self.llm.call_structured(
-                    system,
-                    user,
-                    schema,
-                    num_predict=8192,
-                    debug_label="dream-identity-plan",
-                    cache_store=self.artifacts.db,
-                )
-            ).model_dump()
+            plan = await self.identity.plan(aliases, participants, bindings, planned,
+                seed_identity_decisions, self.formatter)
+            work_unit.request_digest = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
             if work_unit.entity_plan != plan:
                 work_unit.allocated_entity_ids = {}
             work_unit.entity_plan = plan
@@ -169,6 +134,9 @@ class ClaimRouter:
             )
         resolved = []
         blockers: dict[str, list[str]] = {}
+        pending_by_entity = {}
+        for decision in pending:
+            pending_by_entity.setdefault(decision.entity_id, set()).add(decision.decision_id)
         for node in planned_subjects(expand_review_evidence(plan, bindings), planned, participants):
             support = [aliases[a] for a in node["supporting_evidence"] if a in aliases]
             participant_support = [
@@ -253,6 +221,10 @@ class ClaimRouter:
                 created_at=now,
             )
             result.entity_decisions.append(decision)
+            # Matching a provisional identity does not decide its outstanding review.
+            for alias in node["supporting_evidence"]:
+                if alias in aliases:
+                    blockers.setdefault(alias, []).extend(sorted(pending_by_entity.get(entity.entity_id, ())))
             if node["resolution"] == "review_required":
                 for alias in node["supporting_evidence"]:
                     if alias in aliases:
@@ -273,16 +245,16 @@ class ClaimRouter:
                     "participant_bindings": node["participant_evidence"],
                 }
             )
-        routable = {
-            e.entity_id: e.entity_type for e in planned.values() if e.status == "active"
-        }
+        eligible_ids = {node["entity_id"] for node in resolved} | {"you"}
+        routable = {eid: planned[eid].entity_type for eid in sorted(eligible_ids)
+                    if eid in planned and planned[eid].status == "active"}
         routings = {}
         batches = list(self._alias_batches(aliases, entity_count=len(routable)))
         while batches:
             batch = batches.pop(0)
             routing_model = page_plan_model(batch, routable)
             system, user = page_plan_prompt(
-                self.formatter.entity_catalog(planned.values(), include_sections=True),
+                self.formatter.entity_catalog([planned[eid] for eid in routable], include_sections=True),
                 json.dumps(resolved, ensure_ascii=False),
                 self.formatter.format_evidence(
                     batch,

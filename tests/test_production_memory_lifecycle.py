@@ -58,7 +58,8 @@ class DeterministicProductionModel:
             )
         if _kwargs.get("debug_label") in {
             "memory-correction",
-            "dream-identity-plan",
+            "dream-subject-discovery",
+            "dream-subject-identity",
             "dream-claim-routing",
             "dream-fact-synthesis",
             "dream-fact-candidate-selection",

@@ -69,7 +69,7 @@ async def test_identity_plan_real_model(tmp_path, monkeypatch, mode, case):
             memory.artifacts.save_source(source)
             for item in aliases.values():
                 memory.artifacts.save_claim(item.claim)
-            routed = await ClaimRouter(memory.llm, memory.artifacts).route(list(aliases.values()))
+            routed = await ClaimRouter(memory.llm, memory.artifacts, memory.config).route(list(aliases.values()))
             assert not routed.failures
             assert not routed.new_entities
             assert all(r.disposition == "deferred" and r.identity_blocker_ids for r in routed.routes)
@@ -145,7 +145,7 @@ async def test_staged_unnamed_identity_survives_revisit(tmp_path, monkeypatch):
         ["s1"], [c.claim_id for c in claims], [s.segment_id for s in source.segments], 0.9,
         "A particular traveler who repaired and explained a radio at the station.", "accepted", "first", "2026-09-08",
         identity_evidence_claim_ids=[c.claim_id for c in claims])
-    router = ClaimRouter(memory.llm, memory.artifacts)
+    router = ClaimRouter(memory.llm, memory.artifacts, memory.config)
     result = await router.route([ClaimEvidence(claims[1], source)], dream_run_id="revisit",
                                  seed_entities=[entity], seed_identity_decisions=[decision])
     (tmp_path / "routing.json").write_text(json.dumps(asdict(result), indent=2, default=str))

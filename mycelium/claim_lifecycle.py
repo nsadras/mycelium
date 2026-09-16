@@ -306,7 +306,7 @@ class ClaimLifecycleService:
         placement = self.artifacts.placement_for_claim(claim_id)
         if placement and placement.owner_entity_id:
             affected_entity_ids.add(placement.owner_entity_id)
-        routing = await ClaimRouter(self.resolver.llm, self.artifacts).route(
+        routing = await ClaimRouter(self.resolver.llm, self.artifacts, self.materializer.config).route(
             [ClaimEvidence(replacement, source)],
             dream_run_id=f"correction-{short_id}",
         )

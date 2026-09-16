@@ -26,6 +26,25 @@ def test_atomic_records_revisions_and_unique_slug(tmp_path):
     assert db.ids("entities", "slug", "one") == ["a"]
 
 
+def test_pending_identity_lookup_decodes_only_matching_records(tmp_path, monkeypatch):
+    from dataclasses import asdict
+    from mycelium.artifacts import EntityResolutionDecision
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    for i in range(100):
+        decision = EntityResolutionDecision(str(i), "entity_creation", "entity", "person", "Person",
+            [], [], [], .9, "Review fixture", "review_required" if i == 0 else "accepted", "test", "2031-01-01")
+        artifacts.db.put("entity-resolution-decisions", str(i), asdict(decision))
+    reads = []
+    original = artifacts.db.get
+    def get(kind, identifier):
+        if kind == "entity-resolution-decisions":
+            reads.append(identifier)
+        return original(kind, identifier)
+    monkeypatch.setattr(artifacts.db, "get", get)
+    assert [d.decision_id for d in artifacts.list_entity_resolution_decisions(review_state="review_required")] == ["0"]
+    assert reads == ["0"]
+
+
 def test_live_writer_excluded_and_crash_releases_lease(tmp_path):
     code = "from pathlib import Path; from mycelium.database import database; import sys; d=database(Path(sys.argv[1])); print('ready', flush=True); sys.stdin.read()"
     process = subprocess.Popen(

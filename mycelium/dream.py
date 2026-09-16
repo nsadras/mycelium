@@ -80,7 +80,7 @@ class ConsolidationProcess:
         self.config = config
         self.artifacts = artifacts
         self.policy = DreamPolicy(artifacts)
-        self.router = ClaimRouter(llm, artifacts)
+        self.router = ClaimRouter(llm, artifacts, config)
         self.materializer = PageMaterializer(wiki, artifacts, config)
         self.fact_resolver = FactResolver(llm, artifacts)
         self.short_term = ShortTermMemoryQueue(artifacts)

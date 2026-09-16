@@ -141,20 +141,42 @@ def split_scope_plan(plan: dict) -> list[dict]:
                     "reason": participant["reason"],
                 }
             )
+    # Fixture page destinations explicitly declare which stored identities the
+    # source discovery and matching calls must account for.
+    known = {n.get("entity_id") for n in subjects} | set(candidate_entities.values()) | {"you"}
+    for entity_id in dict.fromkeys(eid for d in routing["decisions"].values() for eid in d["pages"]):
+        if entity_id not in known:
+            subjects.append({"resolution": "existing", "entity_id": entity_id, "title": None,
+                "aliases": [], "supporting_evidence": list(assignments), "participant_evidence": [],
+                "reason": "Explicit fixture identity."})
     for node in subjects:
         node["supporting_evidence"] = list(
             dict.fromkeys(
                 node["supporting_evidence"] + node.pop("participant_evidence")
             )
         )
-    return [{"subjects": subjects}, routing]
+    discovered, matches = [], []
+    for node in subjects:
+        kind = node.get("entity_type") or node["entity_id"].split("-")[0]
+        discovered.append({"entity_type": "person" if kind == "you" else kind,
+            "title": node["title"] or node["entity_id"], "description": node["reason"],
+            "aliases": node["aliases"], "supporting_evidence": node["supporting_evidence"]})
+        if node.get("entity_id") == "you" and any(a.startswith("P") for a in node["supporting_evidence"]):
+            continue
+        decision = {"resolution": node["resolution"], "reason": node["reason"]}
+        if node["resolution"] == "existing":
+            decision.update(entity_id=node["entity_id"], title=node["title"], aliases=node["aliases"])
+        elif node["resolution"] == "review_required":
+            decision["candidate_entity_ids"] = node["candidate_entity_ids"]
+        matches.append({"decision": decision})
+    return [{"subjects": discovered}, *matches, routing]
 
 
 def use_existing_identity(responses, entity_id, *, title, aliases):
     node = responses[0]["subjects"][0]
     proposed_id = f"{node['entity_type']}-{slugify(node['title'])}"
     if proposed_id != entity_id:
-        for decision in responses[1]["decisions"].values():
+        for decision in responses[-1]["decisions"].values():
             if not decision["pages"]:
                 continue
             proposed = decision["pages"].pop(proposed_id, None)
@@ -162,12 +184,8 @@ def use_existing_identity(responses, entity_id, *, title, aliases):
                 decision["pages"][entity_id] = proposed
             if decision["owner_entity"] == proposed_id:
                 decision["owner_entity"] = entity_id
-    node.pop("title")
-    node.pop("entity_type")
-    node.pop("candidate_entity_ids", None)
-    node.update(
-        resolution="existing", entity_id=entity_id, title=title, aliases=aliases
-    )
+    responses[1]["decision"] = {"resolution": "existing", "entity_id": entity_id,
+        "title": title, "aliases": aliases, "reason": node["description"]}
     return responses
 
 
@@ -1194,7 +1212,7 @@ async def test_deferred_owner_does_not_block_placed_sibling(no_truth_changes, tm
     assert logs.get(second_entry.entry_id).consolidated is True
     assert wiki.exists("coffee")
     assert artifacts.get_claim("claim-first").dream_disposition == "deferred"
-    assert llm.call_structured.await_count == 2
+    assert llm.call_structured.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -1216,7 +1234,7 @@ async def test_partial_extraction_routes_available_claims_without_repair(tmp_pat
     assert report.failures[0]["stage"] == "extraction"
     assert not logs.get(entry.entry_id).consolidated
     assert wiki.exists("partial-memory")
-    assert llm.call_structured.await_count == 2
+    assert llm.call_structured.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -1339,7 +1357,7 @@ async def test_ambiguous_subject_type_is_published_for_optional_review(tmp_path)
         claim_type="plan",
     )
     responses = split_scope_plan(new_scope("C001", "Neighborhood Salon", "project"))
-    responses[0]["subjects"][0].update(
+    responses[1]["decision"].update(
         {
             "resolution": "review_required",
             "reason": "Project and Series are both materially plausible.",
@@ -1354,7 +1372,7 @@ async def test_ambiguous_subject_type_is_published_for_optional_review(tmp_path)
     assert decision.review_state == "review_required"
     assert result.routes[0].identity_blocker_ids == (decision.decision_id,)
     assert decision.reason == "Project and Series are both materially plausible."
-    assert llm.call_structured.await_count == 2
+    assert llm.call_structured.await_count == 3
 
 
 @pytest.mark.asyncio

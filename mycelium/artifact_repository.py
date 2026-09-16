@@ -370,9 +370,10 @@ class ArtifactStore:
     def list_entity_resolution_decisions(
         self, *, entity_id: str | None = None, review_state: str | None = None
     ) -> list[EntityResolutionDecision]:
+        field, value = ("entity_id", entity_id) if entity_id is not None else ("review_state", review_state)
         values = [
             self.get_entity_resolution_decision(path)
-            for path in sorted(self.db.ids("entity-resolution-decisions"))
+            for path in sorted(self.db.ids("entity-resolution-decisions", field, value))
         ]
         return [
             item

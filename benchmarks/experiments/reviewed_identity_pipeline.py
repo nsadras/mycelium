@@ -19,7 +19,8 @@ from mycelium.consolidation_models import ClaimEvidence
 
 async def main():
     root = fresh_run_root("reviewed-identity-pipeline")
-    config = Config.from_toml(Path("mycelium.toml")).llm
+    memory_config = Config.from_toml(Path("mycelium.toml"))
+    config = memory_config.llm
     write(root / "config.json", vars(config))
     os.environ["MYCELIUM_LLM_DEBUG_DIR"] = str(root / "requests")
     qa = OllamaQaClient(config.model, config.url, llm_config=config)
@@ -46,7 +47,7 @@ async def main():
                     "manual", "review", "active", "2031-01-01", identity_decision_id=f"decision-{i}",
                 ))
             started = time.monotonic()
-            result = await ClaimRouter(qa.llm, artifacts).route([ClaimEvidence(claim, source)], dream_run_id="probe")
+            result = await ClaimRouter(qa.llm, artifacts, memory_config).route([ClaimEvidence(claim, source)], dream_run_id="probe")
             plan = artifacts.list_identity_work_units()[0].entity_plan
             existing = {n["entity_id"] for n in plan.get("subjects", []) if n["resolution"] == "existing"}
             new_types = {n["entity_type"] for n in plan.get("subjects", []) if n["resolution"] == "new"}

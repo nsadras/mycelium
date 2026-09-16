@@ -72,6 +72,21 @@ class OllamaEmbedder:
         )
         return list(response.embeddings[0])
 
+    async def embed_queries(self, queries: list[str]) -> list[list[float]]:
+        if not queries:
+            return []
+        response = await self._embed(stage="embedding-queries",
+            input=[f"task: search result | query: {query}" for query in queries], truncate=False)
+        return [list(vector) for vector in response.embeddings]
+
+    async def identity(self) -> str:
+        inventory = await self.client.list()
+        qualified = self.model if ":" in self.model else self.model + ":latest"
+        matches = [model for model in inventory.models if model.model in {self.model, qualified}]
+        if len(matches) != 1 or not matches[0].digest:
+            raise ValueError(f"Cannot identify configured embedding weights: {self.model}")
+        return str(matches[0].digest)
+
     async def _embed(self, *, stage, input, truncate):
         started = time.perf_counter()
         response = None

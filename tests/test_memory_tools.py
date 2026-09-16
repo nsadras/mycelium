@@ -90,6 +90,34 @@ def test_memory_tool_schemas_expose_search_and_source_inspection():
 
     assert names == ["memory_sources", "memory_search"]
     assert all("parameters" in definition["function"] for definition in MEMORY_TOOL_DEFINITIONS)
+    assert all(definition["function"]["parameters"]["additionalProperties"] is False for definition in MEMORY_TOOL_DEFINITIONS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,arguments", [
+    ("memory_search", {"query": ["unsupported shape"]}),
+    ("memory_search", {"query": "   "}),
+    ("memory_search", {"query": "update", "limit": True}),
+    ("memory_search", {"query": "update", "limit": 2.5}),
+    ("memory_search", {"query": "update", "limit": "3"}),
+    ("memory_search", {"query": "update", "limit": 7}),
+    ("memory_search", {"query": "update", "unexpected": "ignored"}),
+    ("memory_sources", {"claim_ids": "claim-1"}),
+    ("memory_sources", {"claim_ids": [1]}),
+    ("memory_sources", {"claim_ids": ["claim-1", "claim-1"]}),
+    ("memory_sources", {"claim_ids": ["claim-1", "unseen"]}),
+    ("memory_sources", {"claim_ids": [str(i) for i in range(7)]}),
+])
+async def test_invalid_tool_arguments_fail_without_partial_execution(name, arguments):
+    tools, retriever = _toolset()
+    remaining = tools.remaining_evidence_tokens
+    result = await tools.run(name, arguments)
+    assert tools.workspace.snapshot.last_operation_status == "failed"
+    assert result.metadata["workspace_operation"]["error"]
+    retriever.search_evidence.assert_not_awaited()
+    retriever.source_evidence.assert_not_called()
+    assert tools.search_count == 0 and tools.remaining_evidence_tokens == remaining
+    assert tools.workspace.snapshot.evidence.claim_ids == ("claim-1",)
 
 
 @pytest.mark.asyncio
@@ -134,7 +162,10 @@ async def test_memory_sources_only_reads_claims_already_returned():
     tools, retriever = _toolset()
     await tools.search("missing event")
 
-    result = tools.sources(["claim-2", "unseen-claim"])
+    with pytest.raises(ValueError, match="shown in this response"):
+        tools.sources(["claim-2", "unseen-claim"])
+    retriever.source_evidence.assert_not_called()
+    result = tools.sources(["claim-2"])
 
     retriever.source_evidence.assert_called_once()
     assert result.claim_ids == ("claim-2",)

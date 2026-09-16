@@ -7,6 +7,7 @@ from typing import Any
 
 from mycelium.budget import count_tokens
 from mycelium.memory_workspace import MemoryWorkspaceAccumulator
+from mycelium.memory_tool_contracts import MemorySearchArguments, MemorySourcesArguments
 from mycelium.ollama import ToolExecutionResult
 from mycelium.operations import (
     MemoryEvidence,
@@ -38,18 +39,7 @@ MEMORY_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "attribution, chronology, or relationships could affect the response. For a fact, "
                 "pass its supporting claim IDs."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "claim_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "minItems": 1,
-                        "maxItems": 6,
-                    },
-                },
-                "required": ["claim_ids"],
-            },
+            "parameters": MemorySourcesArguments.model_json_schema(),
         },
     },
     {
@@ -62,22 +52,7 @@ MEMORY_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "missing information. Previously returned claims are omitted so distinct queries "
                 "can explore other aspects."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "A focused description of the memory to find.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 6,
-                        "description": "Maximum number of new memory records to return.",
-                    },
-                },
-                "required": ["query"],
-            },
+            "parameters": MemorySearchArguments.model_json_schema(),
         },
     },
 ]
@@ -135,14 +110,9 @@ class MemoryToolset:
         error = None
         try:
             if tool_name == "memory_search":
+                parsed = MemorySearchArguments.model_validate(arguments)
                 search_result = await self.search(
-                    str(arguments.get("query") or ""),
-                    limit=_bounded_int(
-                        arguments.get("limit"),
-                        default=self.result_limit,
-                        low=1,
-                        high=self.result_limit,
-                    ),
+                    parsed.query, limit=min(parsed.limit, self.result_limit),
                 )
                 rendered = render_memory_search_result(
                     search_result.evidence,
@@ -151,9 +121,8 @@ class MemoryToolset:
                 )
                 result_evidence = search_result.evidence
             else:
-                source_result = self.sources(
-                    _string_list(arguments.get("claim_ids"), limit=6)
-                )
+                parsed = MemorySourcesArguments.model_validate(arguments)
+                source_result = self.sources(parsed.claim_ids)
                 rendered = render_memory_source_result(
                     source_result.evidence,
                     requested_claim_ids=list(source_result.claim_ids),
@@ -248,9 +217,10 @@ class MemoryToolset:
     async def search(
         self, query: str, *, limit: int | None = None
     ) -> MemorySearchToolResult:
-        query = " ".join(query.split()).strip()
-        if not query:
-            raise ValueError("memory_search requires a nonempty query")
+        parsed = MemorySearchArguments.model_validate({
+            "query": query, "limit": self.result_limit if limit is None else limit,
+        })
+        query = " ".join(parsed.query.split())
         if self.search_count >= self.search_limit:
             raise ValueError(
                 "The memory search limit for this response has been reached."
@@ -272,7 +242,7 @@ class MemoryToolset:
         self.search_count += 1
         result = await self.retriever.search_evidence(
             query,
-            limit=limit or self.result_limit,
+            limit=min(parsed.limit, self.result_limit),
             budget_tokens=evidence_budget,
             exclude_claim_ids=set(self.returned_claim_ids),
         )
@@ -294,14 +264,9 @@ class MemoryToolset:
         )
 
     def sources(self, claim_ids: list[str]) -> MemorySourceToolResult:
-        if not claim_ids:
-            raise ValueError("memory_sources requires at least one claim ID")
-        permitted = [
-            claim_id
-            for claim_id in dict.fromkeys(claim_ids)
-            if claim_id in self.returned_claim_ids
-        ]
-        if not permitted:
+        parsed = MemorySourcesArguments.model_validate({"claim_ids": claim_ids})
+        permitted = parsed.claim_ids
+        if not set(permitted) <= self.returned_claim_ids:
             raise ValueError(
                 "memory_sources requires claim IDs already shown in this response"
             )
@@ -325,16 +290,3 @@ class MemoryToolset:
             0, self.remaining_evidence_tokens - used_tokens
         )
         return MemorySourceToolResult(tuple(permitted), evidence)
-
-
-def _bounded_int(value: Any, *, default: int, low: int, high: int) -> int:
-    if value is None:
-        return default
-    parsed = int(value)
-    return max(low, min(high, parsed))
-
-
-def _string_list(value: Any, *, limit: int) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [rendered for item in value[:limit] if (rendered := str(item).strip())]

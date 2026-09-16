@@ -341,13 +341,18 @@ class PageMaterializer:
         placements: dict[str, ClaimPlacement],
         entities: dict[str, EntityRecord],
     ) -> list[ConsolidatedFact]:
-        if fact.owner_entity_id == entity_id:
-            return [fact] if set(fact.member_claim_ids) <= claims.keys() else []
+        if fact.owner_entity_id == entity_id and all(
+            claim_id in claims and (placement := placements.get(claim_id))
+            and placement.status == "placed" and placement.owner_entity_id == entity_id
+            for claim_id in fact.member_claim_ids
+        ):
+            return [fact]
         grouped: dict[str, list[str]] = defaultdict(list)
         for claim_id in fact.member_claim_ids:
             placement = placements.get(claim_id)
             if claim_id in claims and placement and placement.status == "placed":
-                section = placement.page_sections.get(entity_id)
+                section = (placement.section_key if placement.owner_entity_id == entity_id
+                           else placement.page_sections.get(entity_id))
                 if section:
                     grouped[section].append(claim_id)
         views = []

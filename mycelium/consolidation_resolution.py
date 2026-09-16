@@ -37,7 +37,7 @@ class ResolutionArtifacts:
             for item in evidence
             if (source_ids is None or item.source.source_id in source_ids)
             if item.source.source_type
-            in {"meeting_transcript", "multi_party_conversation"}
+            in {"meeting_transcript", "multi_party_conversation", "agent_conversation"}
         }
         occurrences: list[tuple[SourceDocument, str, str | None]] = []
         for source in sources.values():
@@ -48,6 +48,8 @@ class ResolutionArtifacts:
                 )
                 for segment in source.segments
                 if str(segment.speaker or "").strip()
+                if source.source_type != "agent_conversation"
+                or str(segment.role or "").strip().lower() == "user"
             )
             occurrences.extend((source, name, role) for name, role in speakers)
         return {

@@ -31,6 +31,7 @@ from mycelium.identity_plan import (
 from mycelium.reviewed_identity_contract import expand_review_evidence
 from mycelium.identity_planner import IdentityPlanner
 from mycelium.page_plan import page_plan_prompt
+from mycelium.page_reviews import reviewed_page_exclusions
 from mycelium.page_admission import NO_PAGE_BASIS, page_admission_model, page_admission_prompt, typed_page_plan_model
 
 
@@ -118,6 +119,7 @@ class ClaimRouter:
             ),
         ]
         try:
+            excluded_pages, page_reviews = reviewed_page_exclusions(self.artifacts, aliases)
             plan = await self.identity.plan(aliases, participants, bindings, planned,
                 seed_identity_decisions, self.formatter)
             work_unit.request_digest = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
@@ -247,6 +249,8 @@ class ClaimRouter:
                     "participant_bindings": node["participant_evidence"],
                 }
             )
+        page_context = ({"subjects": resolved, "human_page_reviews": page_reviews}
+                        if page_reviews else resolved)
         eligible_ids = {node["entity_id"] for node in resolved}
         source_entities = {eid: planned[eid] for eid in sorted(eligible_ids)
                            if eid in planned and planned[eid].status == "active"}
@@ -254,10 +258,11 @@ class ClaimRouter:
                        if entity.materialization_state == "provisional"}
         admissions = {}
         if provisional:
-            admission_schema = page_admission_model(aliases, source_entities)
+            admission_schema = page_admission_model(aliases, source_entities, excluded_pages=excluded_pages)
             system, user = page_admission_prompt(
                 self.formatter.entity_catalog(source_entities.values(), include_sections=False),
-                json.dumps(resolved, ensure_ascii=False), self.formatter.format_evidence(aliases, participants))
+                json.dumps(page_context, ensure_ascii=False), self.formatter.format_evidence(aliases, participants),
+                reviewed_pages=bool(page_reviews))
             try:
                 admissions = admission_schema.model_validate(await self.llm.call_structured(system, user, admission_schema,
                     num_predict=4096, debug_label="dream-page-admission", cache_store=self.artifacts.db)).model_dump()["page_admissions"]
@@ -273,14 +278,15 @@ class ClaimRouter:
         batches = list(self._alias_batches(aliases, entity_count=len(routable)))
         while batches:
             batch = batches.pop(0)
-            routing_model = typed_page_plan_model(batch, routable)
+            routing_model = typed_page_plan_model(batch, routable, excluded_pages=excluded_pages)
             system, user = page_plan_prompt(
                 self.formatter.entity_catalog([planned[eid] for eid in routable], include_sections=True),
-                json.dumps(resolved, ensure_ascii=False),
+                json.dumps(page_context, ensure_ascii=False),
                 self.formatter.format_evidence(
                     batch,
                     self.resolution.participants_for_evidence(batch, participants),
                 ),
+                reviewed_pages=bool(page_reviews),
             )
             try:
                 require_request_budget(

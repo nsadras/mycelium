@@ -86,7 +86,9 @@ def scope_plan(
     return {
         "candidates": list(candidates or []),
         "assignments": assignments,
-        "participants": dict(participants or {}),
+        "participants": dict(participants) if participants is not None else {
+            "P001": {"entity": "you", "reason": "Declared user speaker in the fixture source."}
+        },
     }
 
 
@@ -128,19 +130,6 @@ def split_scope_plan(plan: dict) -> list[dict]:
         {key: value for key, value in candidate.items() if key != "candidate_id"}
         for candidate in candidates
     ]
-    for alias, participant in plan.get("participants", {}).items():
-        if not any((alias in node["participant_evidence"] for node in subjects)):
-            subjects.append(
-                {
-                    "resolution": "existing",
-                    "entity_id": participant["entity"],
-                    "title": None,
-                    "aliases": [],
-                    "supporting_evidence": [alias],
-                    "participant_evidence": [alias],
-                    "reason": participant["reason"],
-                }
-            )
     # Fixture page destinations explicitly declare which stored identities the
     # source discovery and matching calls must account for.
     known = {n.get("entity_id") for n in subjects} | set(candidate_entities.values())
@@ -149,6 +138,16 @@ def split_scope_plan(plan: dict) -> list[dict]:
             subjects.append({"resolution": "existing", "entity_id": entity_id, "title": None,
                 "aliases": [], "supporting_evidence": list(assignments), "participant_evidence": [],
                 "reason": "Explicit fixture identity."})
+    for alias, participant in plan.get("participants", {}).items():
+        if any(alias in node["participant_evidence"] for node in subjects):
+            continue
+        existing = next((node for node in subjects if node.get("entity_id") == participant["entity"]), None)
+        if existing is not None:
+            existing["participant_evidence"].append(alias)
+        else:
+            subjects.append({"resolution": "existing", "entity_id": participant["entity"],
+                "title": None, "aliases": [], "supporting_evidence": [alias],
+                "participant_evidence": [alias], "reason": participant["reason"]})
     for node in subjects:
         node["supporting_evidence"] = list(
             dict.fromkeys(
@@ -156,13 +155,16 @@ def split_scope_plan(plan: dict) -> list[dict]:
             )
         )
     discovered, matches = [], []
+    declared_user = None
     for node in subjects:
         kind = node.get("entity_type") or node["entity_id"].split("-")[0]
+        if node.get("entity_id") == "you" and any(a.startswith("P") for a in node["supporting_evidence"]):
+            declared_user = {"description": node["reason"], "alternate_names": node["aliases"],
+                "supporting_claims": [a for a in node["supporting_evidence"] if a in assignments]}
+            continue
         discovered.append({"entity_type": "person" if kind == "you" else kind,
             "title": node["title"] or node["entity_id"], "description": node["reason"],
             "alternate_names": node["aliases"], "supporting_evidence": node["supporting_evidence"]})
-        if node.get("entity_id") == "you" and any(a.startswith("P") for a in node["supporting_evidence"]):
-            continue
         decision = {"resolution": node["resolution"], "reason": node["reason"]}
         if node["resolution"] == "existing":
             decision.update(entity_id=node["entity_id"], title=node["title"], aliases=node["aliases"])
@@ -178,7 +180,10 @@ def split_scope_plan(plan: dict) -> list[dict]:
         eid = f"{node['entity_type']}-{slugify(node['title'])}"
         admissions[eid] = {"reason": "Explicit fixture admission", "supporting_claims": list(assignments),
             "basis": ADMISSION_BASES[node["entity_type"]][0] if eid in selected_pages else NO_PAGE_BASIS}
-    return [{"subjects": discovered}, *matches, *([{"page_admissions": admissions}] if admissions else []), routing]
+    discovery = {"subjects": discovered}
+    if declared_user is not None:
+        discovery["declared_user"] = declared_user
+    return [discovery, *matches, *([{"page_admissions": admissions}] if admissions else []), routing]
 
 
 def use_existing_identity(responses, entity_id, *, title, aliases):
@@ -545,8 +550,8 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
     async def response(system, user, output_type, **kwargs):
         nonlocal routing_calls
         if "subjects" in output_type.model_fields:
-            return {"subjects": [{"entity_type": "person", "title": "You", "description": "The user whose preferences are recorded",
-                "supporting_evidence": ["C001"], "alternate_names": []}]}
+            return {"declared_user": {"description": "The user whose preferences are recorded",
+                "supporting_claims": ["C001"], "alternate_names": []}, "subjects": []}
         if "decision" in output_type.model_fields:
             return {"decision": {"resolution": "existing", "entity_id": "you", "title": None,
                 "aliases": [], "reason": "Explicit fixture user"}}
@@ -998,6 +1003,7 @@ async def test_ineligible_identity_is_known_before_it_has_a_page(tmp_path):
             )
         },
         [scope_candidate("N001", "Incidental Library", "topic", ["C001"])],
+        participants={},
     )
     set_scope_response(dream.llm, plan)
     await dream.run()
@@ -1410,7 +1416,7 @@ async def test_ambiguous_subject_type_is_published_for_optional_review(tmp_path)
     llm.call_structured.side_effect = responses
     result = await dream.router.route([ClaimEvidence(claim, source)])
     assert result.routes[0].placed
-    assert len(result.new_entities) == 1
+    assert {entity.entity_id for entity in result.new_entities} == {"project-neighborhood-salon", "you"}
     decision = result.entity_decisions[0]
     assert decision.review_state == "review_required"
     assert result.routes[0].identity_blocker_ids == (decision.decision_id,)
@@ -1428,7 +1434,7 @@ async def test_configured_user_routes_to_the_discovered_canonical_identity(tmp_p
     assert result.failures == []
     assert result.routes[0].owner_entity_id == "you"
     assert all((entity.entity_id != "person-you" for entity in result.new_entities))
-    assert llm.call_structured.await_count == 3
+    assert llm.call_structured.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -1452,7 +1458,7 @@ async def test_shorter_person_name_resolves_to_existing_identity(tmp_path):
     )
     llm.call_structured.side_effect = responses
     result = await dream.router.route([ClaimEvidence(claim, source)])
-    assert [entity.entity_id for entity in result.new_entities] == [person.entity_id]
+    assert [entity.entity_id for entity in result.new_entities] == [person.entity_id, "you"]
     assert result.new_entities[0].aliases == ["Priya"]
     assert result.routes[0].owner_entity_id == person.entity_id
 
@@ -1474,7 +1480,7 @@ async def test_new_identity_does_not_mutate_existing_person(tmp_path):
     llm.call_structured.side_effect = responses
     result = await dream.router.route([ClaimEvidence(claim, source)])
     assert [(entity.entity_id, entity.title) for entity in result.new_entities] == [
-        ("person-omar-haddad", "Omar Haddad")
+        ("person-omar-haddad", "Omar Haddad"), ("you", "You")
     ]
     assert artifacts.get_entity(person.entity_id).title == "Priya Raman"
     assert result.routes[0].owner_entity_id == "person-omar-haddad"
@@ -1506,7 +1512,7 @@ async def test_later_project_name_updates_stable_identity_without_duplicate(tmp_
     )
     llm.call_structured.side_effect = responses
     result = await dream.router.route([ClaimEvidence(claim, source)])
-    assert [entity.entity_id for entity in result.new_entities] == [project.entity_id]
+    assert [entity.entity_id for entity in result.new_entities] == [project.entity_id, "you"]
     updated = result.new_entities[0]
     assert updated.title == "Lantern"
     assert "Meeting Memory Assistant" in updated.aliases

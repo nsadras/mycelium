@@ -843,13 +843,13 @@ class IdentityReviewService:
             entity.__post_init__()
             self.artifacts.save_entity(entity)
             return entity
-        if scope != "independent":
-            return None
+        # Identity persists independently of page admission. A no-page review
+        # restricts only this occurrence and must retain a stable binding.
         return self.artifacts.create_entity(
             entity_type,
             title,
             aliases=aliases,
-            materialization_state=page_state or "provisional",
+            materialization_state="provisional" if page_state == "no_page" else page_state or "provisional",
         )
 
     def _validate_selection(

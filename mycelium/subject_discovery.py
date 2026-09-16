@@ -8,7 +8,7 @@ from mycelium.ontology import ENTITY_TYPES, ENTITY_ONTOLOGY
 from mycelium.prompting import render_prompt, render_prompt_pair
 
 
-def subject_discovery_model(claim_ids, participant_roles, reviewed_types):
+def _source_subjects_model(claim_ids, participant_roles, reviewed_types):
     evidence_ids = tuple([*claim_ids, *participant_roles, *reviewed_types])
     if not evidence_ids:
         raise ValueError("Subject discovery requires source evidence")
@@ -37,11 +37,21 @@ def subject_discovery_model(claim_ids, participant_roles, reviewed_types):
                 __config__=ConfigDict(extra="forbid"),
                 supporting_evidence=(
                     list[Literal.__getitem__(tuple(allowed))],
-                    Field(min_length=1, max_length=len(allowed), description="Exact supporting claim and participant IDs. Include each declared participant ID once on its person subject."),
+                    Field(
+                        min_length=1,
+                        max_length=len(allowed),
+                        description="Exact supporting claim and participant IDs. Include each declared participant ID once on its person subject.",
+                    ),
                 ),
                 **common,
                 entity_type=(Literal.__getitem__((kind,)), ...),
-                alternate_names=(list[str], Field(max_length=12, description="Alternate human names explicitly stated for this subject; never operational evidence IDs.")),
+                alternate_names=(
+                    list[str],
+                    Field(
+                        max_length=12,
+                        description="Alternate human names explicitly stated for this subject; never operational evidence IDs.",
+                    ),
+                ),
             )
         )
     from typing import Union
@@ -72,7 +82,42 @@ def subject_discovery_model(claim_ids, participant_roles, reviewed_types):
     return SourceSubjects
 
 
-def subject_discovery_prompt(evidence, reviewed):
+def subject_discovery_model(claim_ids, roles, reviewed, *, canonical_user=False):
+    if not canonical_user:
+        return _source_subjects_model(claim_ids, roles, reviewed)
+    other_roles = {alias: role for alias, role in roles.items() if role != "user"}
+    original = _source_subjects_model(claim_ids, other_roles, reviewed)
+    declared = create_model(
+        "DeclaredUser",
+        __config__=ConfigDict(extra="forbid"),
+        supporting_claims=(
+            list[Literal.__getitem__(tuple(claim_ids))],
+            Field(max_length=len(claim_ids)),
+        ),
+        description=(str, Field(min_length=1, max_length=500)),
+        alternate_names=(list[str], Field(max_length=12)),
+    )
+
+    def validate_subjects(self):
+        original.model_validate({"subjects": self.subjects})
+        if len(self.declared_user.supporting_claims) != len(
+            set(self.declared_user.supporting_claims)
+        ):
+            raise ValueError("User supporting claims must be unique")
+        return self
+
+    return create_model(
+        "SubjectsWithDeclaredUser",
+        __config__=ConfigDict(extra="forbid"),
+        declared_user=(declared, ...),
+        subjects=(original.model_fields["subjects"].annotation, Field(max_length=48)),
+        __validators__={
+            "validate_subjects": model_validator(mode="after")(validate_subjects)
+        },
+    )
+
+
+def subject_discovery_prompt(evidence, reviewed, *, canonical_user=False):
     system, user = render_prompt_pair(
         "memory/subject_discovery", evidence=evidence, reviewed=reviewed
     )
@@ -83,4 +128,6 @@ def subject_discovery_prompt(evidence, reviewed):
         },
     )
     system += "\n\n" + render_prompt("memory/subject_evidence_fields.system.jinja")
+    if canonical_user:
+        system += "\n\n" + render_prompt("memory/declared_user.system.jinja")
     return system, user

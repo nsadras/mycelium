@@ -47,8 +47,17 @@ class IdentityPlanner:
         for claim in evidence["claims"].values():
             del claim["identity_references"]
         evidence_text = json.dumps(evidence, ensure_ascii=False)
-        schema = subject_discovery_model(aliases, roles, {})
-        system, user = subject_discovery_prompt(evidence_text, "none")
+        user_participants = (
+            [alias for alias, role in roles.items() if role == "user"]
+            if "you" in active
+            else []
+        )
+        schema = subject_discovery_model(
+            aliases, roles, {}, canonical_user=bool(user_participants)
+        )
+        system, user = subject_discovery_prompt(
+            evidence_text, "none", canonical_user=bool(user_participants)
+        )
         discovered = schema.model_validate(
             await self.llm.call_structured(
                 system,
@@ -63,6 +72,18 @@ class IdentityPlanner:
         discovered_subjects = {
             f"S{i:03d}": subject for i, subject in enumerate(discovered["subjects"], 1)
         }
+        if user_participants:
+            declared = discovered["declared_user"]
+            discovered_subjects[f"S{len(discovered_subjects) + 1:03d}"] = {
+                "entity_type": "person",
+                "title": active["you"].title,
+                "description": declared["description"],
+                "alternate_names": declared["alternate_names"],
+                "supporting_evidence": [
+                    *declared["supporting_claims"],
+                    *user_participants,
+                ],
+            }
         if reviewed:
             schema = subject_review_model(discovered_subjects, reviewed)
             system, user = subject_review_prompt(
@@ -105,7 +126,9 @@ class IdentityPlanner:
                 for a in subject["supporting_evidence"]
                 if a in bindings
             }
-            if any(roles.get(a) == "user" for a in subject["supporting_evidence"]):
+            if "you" in active and any(
+                roles.get(a) == "user" for a in subject["supporting_evidence"]
+            ):
                 confirmed.add("you")
             if len(confirmed) > 1:
                 raise ValueError(

@@ -72,10 +72,16 @@ def page_plan_model(evidence_aliases, entity_types):
     )
 
 
-def page_plan_prompt(registry, entity_plan, evidence):
-    return render_prompt_pair(
+def page_plan_prompt(registry, entity_plan, evidence, *, reviewed_pages=False):
+    from mycelium.prompting import render_prompt
+
+    system, user = render_prompt_pair(
         "memory/page_plan",
         registry=registry,
         entity_plan=entity_plan,
         evidence=evidence,
     )
+
+    if reviewed_pages:
+        system += "\n\n" + render_prompt("memory/page_review.system.jinja")
+    return system, user

@@ -23,11 +23,17 @@ ADMISSION_BASES = {
 NO_PAGE_BASIS = "insufficient_independent_context"
 
 
-def page_admission_model(evidence_aliases, entities):
+def page_admission_model(evidence_aliases, entities, *, excluded_pages=None):
+    excluded_pages = excluded_pages or {}
     fields = {}
     for eid, entity in entities.items():
         if entity.materialization_state != "provisional":
             continue
+        allowed = tuple(
+            alias
+            for alias in evidence_aliases
+            if eid not in excluded_pages.get(alias, ())
+        )
         fields[eid] = (
             create_model(
                 "Admission" + entity.entity_type.title(),
@@ -36,12 +42,14 @@ def page_admission_model(evidence_aliases, entities):
                 basis=(
                     Literal.__getitem__(
                         (*ADMISSION_BASES[entity.entity_type], NO_PAGE_BASIS)
+                        if allowed
+                        else (NO_PAGE_BASIS,)
                     ),
                     ...,
                 ),
                 supporting_claims=(
-                    list[Literal.__getitem__(tuple(evidence_aliases))],
-                    Field(max_length=len(evidence_aliases)),
+                    list[Literal.__getitem__(allowed)] if allowed else list[str],
+                    Field(max_length=len(allowed)),
                 ),
             ),
             ...,
@@ -66,12 +74,10 @@ def page_admission_model(evidence_aliases, entities):
     return PageAdmissions
 
 
-def typed_page_plan_model(evidence_aliases, entity_types):
-    original = page_plan_model(evidence_aliases, entity_types)
+def _typed_page_decision(entity_types):
+    original = page_plan_model(["claim"], entity_types)
     decision = (
-        original.model_fields["decisions"]
-        .annotation.model_fields[next(iter(evidence_aliases))]
-        .annotation
+        original.model_fields["decisions"].annotation.model_fields["claim"].annotation
     )
     properties = {}
     for eid, kind in entity_types.items():
@@ -95,10 +101,25 @@ def typed_page_plan_model(evidence_aliases, entity_types):
             ),
         ),
     )
+    return typed_decision
+
+
+def typed_page_plan_model(evidence_aliases, entity_types, *, excluded_pages=None):
+    excluded_pages = excluded_pages or {}
+    decisions, fields = {}, {}
+    for alias in evidence_aliases:
+        allowed = tuple(
+            eid for eid in entity_types if eid not in excluded_pages.get(alias, ())
+        )
+        if allowed not in decisions:
+            decisions[allowed] = _typed_page_decision(
+                {eid: entity_types[eid] for eid in allowed}
+            )
+        fields[alias] = (decisions[allowed], ...)
     placements = create_model(
         "TypedPagePlacements",
         __config__=ConfigDict(extra="forbid"),
-        **{alias: (typed_decision, ...) for alias in evidence_aliases},
+        **fields,
     )
     return create_model(
         "TypedPagePlan",
@@ -107,10 +128,16 @@ def typed_page_plan_model(evidence_aliases, entity_types):
     )
 
 
-def page_admission_prompt(registry, entity_plan, evidence):
-    return render_prompt_pair(
+def page_admission_prompt(registry, entity_plan, evidence, *, reviewed_pages=False):
+    from mycelium.prompting import render_prompt
+
+    system, user = render_prompt_pair(
         "memory/page_admission",
         registry=registry,
         entity_plan=entity_plan,
         evidence=evidence,
     )
+
+    if reviewed_pages:
+        system += "\n\n" + render_prompt("memory/page_review.system.jinja")
+    return system, user

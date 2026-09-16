@@ -8,7 +8,8 @@ from typing import Literal, Union
 from pydantic import ConfigDict, Field, create_model
 
 from benchmarks.experiments.memory_tool_probes import CASES, evidence
-from benchmarks.experiments.probe_support import RecordingClient, fresh_run_root, write
+from benchmarks.experiments.probe_support import fresh_run_root, write
+from benchmarks.shared.model_recording import RecordingClient
 from mycelium import Mycelium
 from mycelium.memory_tool_contracts import MemorySearchArguments, MemorySourcesArguments
 from mycelium.memory_tools import MemoryToolset

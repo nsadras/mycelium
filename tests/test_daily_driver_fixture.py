@@ -20,6 +20,7 @@ from mycelium.models import LogEntry
 from mycelium.store import LogStore
 from mycelium.operations import EvidenceRecord, MemoryEvidence
 from benchmarks.suites.daily_driver.eval import retrieved_generated_ids
+from benchmarks.suites.daily_driver.eval import probe_judgment_model
 
 
 FIXTURE_DIR = Path("benchmarks/suites/daily_driver/fixtures/daily_driver_v1")
@@ -27,6 +28,22 @@ TRANSFER_FIXTURES = (
     Path("benchmarks/suites/daily_driver/fixtures/daily_driver_paraphrased_v1"),
     Path("benchmarks/suites/daily_driver/fixtures/daily_driver_unrelated_v1"),
 )
+
+
+def test_probe_judgment_rejects_unknown_and_cross_category_ids():
+    from pydantic import ValidationError
+
+    schema = probe_judgment_model(["required"], ["forbidden"])
+    valid = {"present_required_fact_ids": ["required"], "present_forbidden_fact_ids": [],
+             "answerable_decision_correct": True, "rationale": "The answer states the required fact."}
+    schema.model_validate(valid)
+    for wrong in ["unknown", "forbidden"]:
+        with pytest.raises(ValidationError):
+            schema.model_validate({**valid, "present_required_fact_ids": [wrong]})
+    empty = probe_judgment_model([], [])
+    with pytest.raises(ValidationError):
+        empty.model_validate(valid)
+    empty.model_validate({**valid, "present_required_fact_ids": []})
 
 
 def test_retrieved_ids_use_typed_evidence_without_parsing_page_prose():

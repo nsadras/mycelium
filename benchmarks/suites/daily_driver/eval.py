@@ -11,9 +11,9 @@ import json
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from benchmarks.shared.scoring import token_f1
 from mycelium.operations import MemoryEvidence
@@ -24,10 +24,22 @@ from mycelium.prompting import render_prompt
 class ProbeJudgment(BaseModel):
     """Post-answer semantic judgment; gold facts are never exposed to retrieval."""
 
+    model_config = ConfigDict(extra="forbid")
+
     present_required_fact_ids: list[str] = Field(default_factory=list)
     present_forbidden_fact_ids: list[str] = Field(default_factory=list)
     answerable_decision_correct: bool
     rationale: str
+
+
+def probe_judgment_model(required, forbidden):
+    def field(ids):
+        values = tuple(ids)
+        return (list[Literal.__getitem__(values)] if values else list[str],
+                Field(max_length=len(values)))
+
+    return create_model("ScopedProbeJudgment", __base__=ProbeJudgment,
+        present_required_fact_ids=field(required), present_forbidden_fact_ids=field(forbidden))
 
 
 def _normalized(value: str | None) -> str:
@@ -469,16 +481,13 @@ async def judge_probe_answer(
         ensure_ascii=False,
     )
     user = render_prompt("benchmarks/probe_judgment.user.jinja", payload=payload)
-    response = await llm.call_structured(system, user, ProbeJudgment, num_predict=512)
-    judgment = ProbeJudgment.model_validate(response).model_dump()
+    schema = probe_judgment_model(required, forbidden)
+    response = await llm.call_structured(system, user, schema, num_predict=512,
+        debug_label="daily-driver-answer-judgment")
+    judgment = schema.model_validate(response).model_dump()
     allowed_required = set(required)
-    allowed_forbidden = set(forbidden)
-    judgment["present_required_fact_ids"] = sorted(
-        allowed_required & set(judgment["present_required_fact_ids"])
-    )
-    judgment["present_forbidden_fact_ids"] = sorted(
-        allowed_forbidden & set(judgment["present_forbidden_fact_ids"])
-    )
+    judgment["present_required_fact_ids"] = sorted(set(judgment["present_required_fact_ids"]))
+    judgment["present_forbidden_fact_ids"] = sorted(set(judgment["present_forbidden_fact_ids"]))
     judgment["passed"] = (
         set(judgment["present_required_fact_ids"]) == allowed_required
         and not judgment["present_forbidden_fact_ids"]

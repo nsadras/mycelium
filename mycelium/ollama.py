@@ -1,4 +1,4 @@
-from mycelium.telemetry import trace_metadata
+from mycelium.telemetry import trace_metadata, trace_operation
 import json
 import inspect
 import logging
@@ -281,15 +281,16 @@ class OllamaClient:
                                    output_tokens=options["num_predict"], tools=tools)
             round_started = time.monotonic()
             try:
-                response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    think=think_enabled,
-                    stream=False,
-                    format=None,
-                    options=options,
-                )
+                with trace_operation("llm_attempt", llm_call_id=call_id, llm_attempt=attempt_index, llm_round=round_idx + 1):
+                    response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
+                        model=self.model,
+                        messages=messages,
+                        tools=tools,
+                        think=think_enabled,
+                        stream=False,
+                        format=None,
+                        options=options,
+                    )
             except (RequestError, ResponseError, TimeoutException):
                 self._log_call(call_id, attempt_index, "", "", "",
                                int((time.monotonic() - round_started) * 1000), False,
@@ -660,14 +661,15 @@ class OllamaClient:
                 options=options,
             )
             try:
-                response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
-                    model=self.model,
-                    messages=messages,
-                    think=think,
-                    stream=False,
-                    format=api_format,
-                    options=options,
-                )
+                with trace_operation("llm_attempt", llm_call_id=call_id, llm_attempt=attempt + 1):
+                    response = await self.client.chat(  # type: ignore[call-overload]  # SDK overload rejects equivalent mappings
+                        model=self.model,
+                        messages=messages,
+                        think=think,
+                        stream=False,
+                        format=api_format,
+                        options=options,
+                    )
                 assistant_message = self._assistant_message_dict(response)
                 content = str(assistant_message.get("content", "")).strip()
                 metadata = self._response_metadata(response)

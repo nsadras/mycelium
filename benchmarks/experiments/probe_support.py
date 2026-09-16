@@ -51,31 +51,3 @@ class RecordedSdk:
 
     async def close(self):
         await self.sdk._client.aclose()
-
-
-class RecordingClient:
-    """Record native requests unchanged, including model tools and sampler settings."""
-
-    def __init__(self, client, root):
-        self.client, self.root = client, root
-        self.index = 0
-
-    def __getattr__(self, name):
-        return getattr(self.client, name)
-
-    async def chat(self, **request):
-        self.index += 1
-        path = self.root / f"{self.index:04d}.json"
-        record = {"request": request}
-        write(path, record)
-        started = time.monotonic()
-        try:
-            response = await self.client.chat(**request)
-            record["response"] = response.model_dump(mode="json", exclude_none=True)
-            return response
-        except Exception as exc:
-            record["error"] = f"{type(exc).__name__}: {exc}"
-            raise
-        finally:
-            record["seconds"] = time.monotonic() - started
-            write(path, record)

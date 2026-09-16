@@ -203,7 +203,7 @@ def test_server_engram_config_reaches_summary_client(tmp_path, config_path, monk
 
 @pytest.mark.asyncio
 async def test_daily_run_records_configuration_and_closes_store(tmp_path, config_path, monkeypatch):
-    fixture = {"scenario": {"scenario_id": "test", "user": {"name": "User"}, "episodes": []}}
+    fixture = {"scenario": {"scenario_id": "test", "user": {"name": "User"}, "episodes": []}, "probes": {"probes": []}}
     monkeypatch.setattr(daily_run, "validate_fixture", lambda _: None)
     monkeypatch.setattr(daily_run, "load_fixture", lambda _: fixture)
     monkeypatch.setattr(daily_run, "compare_final", lambda *_: {})
@@ -213,6 +213,7 @@ async def test_daily_run_records_configuration_and_closes_store(tmp_path, config
 
     def memory(*args, **kwargs):
         instances.append(Mycelium(*args, **kwargs))
+        instances[-1].llm.client.list = AsyncMock(return_value=SimpleNamespace(model_dump=lambda: {"models": []}))
         return instances[-1]
 
     monkeypatch.setattr(daily_run, "Mycelium", memory)
@@ -223,6 +224,10 @@ async def test_daily_run_records_configuration_and_closes_store(tmp_path, config
     assert json.loads((output / "configuration.json").read_text()) == expected
     assert json.loads((output / "run.json").read_text())["effective_config"] == expected
     assert instances[0]._closed
+    manifest = json.loads((output / "run_manifest.json").read_text())
+    assert {manifest[k] for k in ["status", "execution_status", "encoding_status", "qa_status"]} == {"complete"}
+    events = [json.loads(line) for line in (output / "invocations.jsonl").read_text().splitlines()]
+    assert events[0]["status"] == "running" and events[-1]["status"] == "complete"
 
 
 @pytest.mark.asyncio

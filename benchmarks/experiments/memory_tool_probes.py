@@ -8,7 +8,8 @@ from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
-from benchmarks.experiments.probe_support import RecordingClient, fresh_run_root, write
+from benchmarks.experiments.probe_support import fresh_run_root, write
+from benchmarks.shared.model_recording import RecordingClient
 from mycelium import Mycelium
 from mycelium.memory_tool_contracts import MEMORY_TOOL_ARGUMENTS
 from mycelium.memory_tools import MEMORY_TOOL_DEFINITIONS, MemoryToolset

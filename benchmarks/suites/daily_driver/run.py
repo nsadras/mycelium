@@ -8,6 +8,7 @@ import copy
 import json
 import re
 import shutil
+import time
 from collections import Counter, defaultdict
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -23,6 +24,8 @@ from benchmarks.suites.daily_driver.eval import (
 )
 from benchmarks.shared.adapters import OllamaQaClient
 from benchmarks.shared.scoring import token_f1
+from benchmarks.shared.run_tracking import begin_invocation, recorded_run
+from benchmarks.shared.model_recording import RecordingClient
 from mycelium.artifacts import ArtifactStore, MemoryClaim, SourceSegment
 from mycelium.core import Mycelium
 from mycelium.config import Config
@@ -30,6 +33,7 @@ from mycelium.operations import ConsolidationRequest, RetrievalRequest, SourceIn
 from mycelium.reconsolidation import ReconsolidationReviewService
 from mycelium.session import Session
 from mycelium.store import LogStore
+from mycelium.telemetry import trace_operation
 
 
 def _jsonable(value: Any) -> Any:
@@ -581,13 +585,17 @@ async def _run_checkpoint_probes(
         url=memory.config.llm.url,
         llm_config=memory.config.llm,
     )
+    qa.llm.trace_path = memory.store_path / "diagnostics" / "qa-calls.jsonl"
+    qa.llm.client = RecordingClient(qa.llm.client, memory.store_path / "diagnostics" / "qa-requests")
     rows: list[dict[str, Any]] = []
     for probe in probes:
+        retrieval_started = time.perf_counter()
         retrieval = await memory.retrieve_context(
             RetrievalRequest(
                 query=str(probe["question"]),
             )
         )
+        retrieval_seconds = time.perf_counter() - retrieval_started
         loaded_pages = list(retrieval.page_references)
         retrieved_gold_facts, retrieved_claim_ids = retrieved_generated_ids(
             retrieval.evidence, snapshot_match
@@ -635,6 +643,9 @@ async def _run_checkpoint_probes(
                 for page in loaded_pages
             ],
             "context": context,
+            "retrieval_seconds": retrieval_seconds,
+            "retrieval_trace": retrieval.trace,
+            "evidence": _jsonable(retrieval.evidence),
             "answer": None,
             "judgment": None,
         }
@@ -643,17 +654,17 @@ async def _run_checkpoint_probes(
                 answer = str(probe.get("expected_answer") or "")
                 result["answer_origin"] = "artifact observation"
             else:
-                answer_result = await qa.answer(str(probe["question"]), context)
+                with trace_operation("daily_driver_qa", checkpoint_id=checkpoint_id, probe_id=str(probe["id"])):
+                    answer_result = await qa.answer(str(probe["question"]), context)
                 answer = answer_result.output
                 result["answer_origin"] = "production retrieval context"
                 result["answer_metadata"] = answer_result.metadata
+                result["answer_seconds"] = answer_result.query_time_len
             result["answer"] = answer
-            result["judgment"] = await judge_probe_answer(
-                llm=memory.llm,
-                probe=probe,
-                answer=answer,
-                gold_facts=gold_facts,
-            )
+            with trace_operation("daily_driver_judgment", checkpoint_id=checkpoint_id, probe_id=str(probe["id"])):
+                result["judgment"] = await judge_probe_answer(
+                    llm=memory.llm, probe=probe, answer=answer, gold_facts=gold_facts,
+                )
         rows.append(result)
     return rows
 
@@ -675,6 +686,8 @@ def _report_markdown(
         f"- Model: `{run['model']}`",
         f"- Fixture: `{run['scenario_id']}`",
         f"- Extraction mode: `{run.get('extraction_mode', 'fresh')}`",
+        f"- Completion: execution `{run.get('execution_status', 'unknown')}`, encoding `{run.get('encoding_status', 'unknown')}`, QA `{run.get('qa_status', 'unknown')}`.",
+        "- QA mode: one grounded answer call over the initial retrieval evidence.",
         "- Scope: production encoding, Dream, reviewed reconsolidation, wiki projection, retrieval probes, and semantic answer checks.",
         "- Comparison policy: provenance, state, ownership, sections, and rendered IDs are authoritative. Text matching is an exposed diagnostic used only to associate source-grounded propositions.",
         "- Dimensions remain separate; there is no aggregate quality score.",
@@ -799,6 +812,7 @@ def refresh_daily_driver_comparison(
         return {"comparison": comparison, "evaluation": evaluation}
 
 
+@recorded_run
 async def run_daily_driver(
     fixture_dir: Path,
     output_dir: Path,
@@ -817,11 +831,17 @@ async def run_daily_driver(
         raise FileExistsError(f"Output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_json(output_dir / "configuration.json", asdict(settings))
+    manifest = {"status": "running", "execution_status": "running", "encoding_status": "running",
+                "qa_status": "running" if run_probe_answers else "disabled", "effective_config": asdict(settings)}
+    _write_json(output_dir / "run_manifest.json", manifest)
+    begin_invocation(output_dir)
     with Mycelium(
         output_dir / "store",
         config=settings,
         memory_profile="user",
     ) as memory:
+        _write_json(output_dir / "models.json", (await memory.llm.client.list()).model_dump())
+        memory.llm.client = RecordingClient(memory.llm.client, output_dir / "diagnostics" / "requests")
         replay = None
         replay_logs = None
         if replay_extraction_store is not None:
@@ -897,6 +917,7 @@ async def run_daily_driver(
                         {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
                     )
                 actions.append(event)
+                _write_json(output_dir / "actions.json", actions)
         run = {
             "scenario_id": fixture["scenario"]["scenario_id"],
             "model": memory.config.llm.model,
@@ -916,6 +937,22 @@ async def run_daily_driver(
         evaluation = evaluate_run(fixture, snapshots, probe_results)
         _write_json(output_dir / "comparison.json", comparison)
         _write_json(output_dir / "evaluation.json", evaluation)
+        coverage = memory.artifacts.coverage_report()
+        backlog = bool(memory.log_store.get_unconsolidated(days=None) or coverage.get("pending_extraction_segments", 0)
+                       or memory.db.publication_status())
+        execution_errors = [event for event in actions if event.get("status") in {"error", "unsupported"}]
+        qa_status = (("complete" if len(probe_results) == len(fixture["probes"].get("probes", [])) else "incomplete")
+                     if run_probe_answers else "disabled")
+        manifest.update(
+            status="incomplete" if backlog or execution_errors or qa_status == "incomplete" else "complete",
+            execution_status="complete_with_errors" if execution_errors else "complete",
+            encoding_status="incomplete" if backlog else "complete",
+            qa_status=qa_status,
+            artifact_coverage=coverage, action_errors=execution_errors,
+        )
+        _write_json(output_dir / "run_manifest.json", manifest)
+        run.update({key: manifest[key] for key in ["execution_status", "encoding_status", "qa_status"]})
+        _write_json(output_dir / "run.json", run)
         (output_dir / "REPORT.md").write_text(
             _report_markdown(run, evaluation, actions), encoding="utf-8"
         )

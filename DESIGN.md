@@ -80,6 +80,11 @@ state: it is synchronized from canonical SQLite claim records and can be deleted
 
 Hybrid similarity only proposes candidates. A structured model decision orders complementary claim IDs and reports
 supported aspects and remaining gaps using canonical text, timing, and consolidated representations.
+When complete candidates exceed the input budget, selection runs in bounded
+chunks and then compares the surviving complete records together. That final
+decision supplies the global order and gap report. If the survivors cannot fit
+one comparison, admission returns an explicit budget error; failed chunks never
+publish a partial selection. Single-batch requests retain one selection call.
 Admission reads a canonical snapshot and reselects once if consulted state changes during inference; a repeated
 conflict or broken citation produces a typed error. Admitted order forms a small initial evidence result. The stable system prompt contains only the
 assistant's behavior contract; the current request carries runtime-supplied evidence as a separate structured

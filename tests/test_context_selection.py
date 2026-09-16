@@ -47,7 +47,7 @@ async def test_context_selector_fails_closed_on_invalid_model_output():
 
 
 @pytest.mark.asyncio
-async def test_admission_batches_complete_records_without_truncating_tail():
+async def test_admission_rejects_winners_that_cannot_be_compared_together():
     from mycelium.context_selection import AssistantContextCandidate, AssistantContextSelector
     llm = AsyncMock()
     llm.context_window_tokens = 11000
@@ -59,10 +59,65 @@ async def test_admission_batches_complete_records_without_truncating_tail():
         return {"selected_ids": list(aliases), "supported_aspects": [], "remaining_gaps": []}
     llm.call_structured.side_effect = select
     candidates = [AssistantContextCandidate(str(i), "claim", "Record", "material " * 1500 + f"TAIL-{i}")
-                  for i in range(10)]
+                  for i in range(6)]
     result = await AssistantContextSelector(llm).select_with_trace("Retrieve these records", candidates)
-    assert set(result.selected_ids) == {str(i) for i in range(10)}
-    assert result.error is None
+    assert result.selected_ids == ()
+    assert "budget" in result.error
     assert len(seen) > 1
-    for i in range(10):
+    for i in range(6):
         assert sum(f"TAIL-{i}" in prompt for prompt in seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_global_selection_overrides_chunk_order_and_restores_diagnostics():
+    llm = AsyncMock()
+    llm.context_window_tokens = 10000
+    llm.call_structured.side_effect = [
+        {"selected_ids": ["M001", "M002"], "supported_aspects": ["Left"], "remaining_gaps": ["Other details"]},
+        {"selected_ids": ["M001", "M002"], "supported_aspects": ["Right"], "remaining_gaps": ["Other details"]},
+        {"selected_ids": ["M003", "M002"], "supported_aspects": ["Combined support"], "remaining_gaps": []},
+    ]
+    candidates = [AssistantContextCandidate(str(i), "claim", "Record", "material " * 1200 + f"TAIL-{i}")
+                  for i in range(6)]
+    result = await AssistantContextSelector(llm).select_with_trace("Retrieve these records", candidates)
+    assert llm.call_structured.await_count == 3
+    assert result.error is None
+    assert result.selected_ids == ("3", "1")
+    assert result.supported_aspects == ("Combined support",)
+    assert result.remaining_gaps == ()
+    assert result.decisions == {str(i): {"disposition": "include" if i in {1, 3} else "exclude"}
+                                for i in range(6)}
+    final_prompt = llm.call_structured.call_args.args[1]
+    assert all(f"TAIL-{i}" in final_prompt for i in (0, 1, 3, 4))
+    assert all(f"TAIL-{i}" not in final_prompt for i in (2, 5))
+
+
+@pytest.mark.asyncio
+async def test_failed_chunk_cannot_admit_successful_chunk_evidence():
+    llm = AsyncMock()
+    llm.context_window_tokens = 10000
+    llm.call_structured.side_effect = [ValueError("Invalid selection")]
+    candidates = [AssistantContextCandidate(str(i), "claim", "Record", "material " * 1200)
+                  for i in range(6)]
+    result = await AssistantContextSelector(llm).select_with_trace("Retrieve these records", candidates)
+    assert result.selected_ids == ()
+    assert "Invalid selection" in result.error
+    assert llm.call_structured.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_chunks_preserve_gaps_without_a_merge_call():
+    llm = AsyncMock()
+    llm.context_window_tokens = 10000
+    llm.call_structured.side_effect = [
+        {"selected_ids": [], "supported_aspects": [], "remaining_gaps": ["Missing date"]},
+        {"selected_ids": [], "supported_aspects": [], "remaining_gaps": ["Missing place"]},
+    ]
+    candidates = [AssistantContextCandidate(str(i), "claim", "Record", "material " * 1200)
+                  for i in range(6)]
+    result = await AssistantContextSelector(llm).select_with_trace("Retrieve these records", candidates)
+    assert result.error is None
+    assert result.selected_ids == ()
+    assert result.remaining_gaps == ("Missing date", "Missing place")
+    assert all(row["disposition"] == "exclude" for row in result.decisions.values())
+    assert llm.call_structured.await_count == 2

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from mycelium import prompts
 from mycelium.budget import require_request_budget, ContextBudgetError
@@ -51,6 +51,15 @@ class AssistantContextSelector:
         query: str,
         candidates: list[AssistantContextCandidate],
     ) -> AssistantContextSelection:
+        return await self._select_with_trace(query, candidates, allow_split=True)
+
+    async def _select_with_trace(
+        self,
+        query: str,
+        candidates: list[AssistantContextCandidate],
+        *,
+        allow_split: bool,
+    ) -> AssistantContextSelection:
         if not candidates:
             return AssistantContextSelection((), {})
         aliases = {
@@ -77,15 +86,34 @@ class AssistantContextSelector:
                 schema=schema.model_json_schema(),
             )
         except ContextBudgetError:
-            if len(candidates) > 1:
+            if allow_split and len(candidates) > 1:
                 midpoint = len(candidates) // 2
                 left = await self.select_with_trace(query, candidates[:midpoint])
+                if left.error:
+                    return AssistantContextSelection((), {}, left.error)
                 right = await self.select_with_trace(query, candidates[midpoint:])
-                return AssistantContextSelection(
-                    (*left.selected_ids, *right.selected_ids),
-                    {**left.decisions, **right.decisions},
-                    "; ".join(error for error in (left.error, right.error) if error) or None,
+                if right.error:
+                    return AssistantContextSelection((), {}, right.error)
+                admitted_ids = set(left.selected_ids) | set(right.selected_ids)
+                admitted = [candidate for candidate in candidates if candidate.candidate_id in admitted_ids]
+                if not admitted:
+                    return AssistantContextSelection(
+                        (), {**left.decisions, **right.decisions},
+                        remaining_gaps=(*left.remaining_gaps, *right.remaining_gaps),
+                    )
+                # Chunk order is not a relevance ranking. A final model decision
+                # must compare the complete surviving records before admission.
+                merged = await self._select_with_trace(query, admitted, allow_split=False)
+                if merged.error:
+                    return merged
+                return replace(
+                    merged,
+                    decisions={candidate.candidate_id: {
+                        "disposition": "include" if candidate.candidate_id in merged.selected_ids else "exclude"
+                    } for candidate in candidates},
                 )
+            if not allow_split:
+                return AssistantContextSelection((), {}, "Selected candidates exceed the joint comparison budget")
             return AssistantContextSelection((), {}, "A complete candidate exceeds the request budget")
         try:
             response = await self.llm.call_structured(
@@ -93,7 +121,7 @@ class AssistantContextSelector:
                 user,
                 schema,
                 num_predict=1024,
-                debug_label="assistant-context-selection",
+                debug_label="assistant-context-selection" if allow_split else "assistant-context-merge",
             )
             decision = schema.model_validate(response).model_dump()
         except Exception as exc:

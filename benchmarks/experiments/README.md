@@ -7,6 +7,7 @@ The maintained benchmark CLI is `python -m benchmarks`; see the [benchmark guide
 | `contract_simplification_probes.py` | Probe compact production contracts with Gemma. Select extraction, identity, rename, or context cases with the existing flags; the default covers truth and synthesis. |
 | `model_contract_comparison.py` | Compare Gemma and Qwen on direct contracts and a small cumulative workload. `--natural-only` requires the historical source artifact named in the script. |
 | `reasoning_contract_probes.py` | Compare native constraints and schema-prompted reasoning on small cases. Its explicit SDK settings are experimental; they do not configure production. |
+| `selection_merge_probes.py` | Use configured production prompts/model settings to compare selections across neutral batches. `--pipeline` constrains only the selector's planning envelope to exercise production budget splitting; actual model context remains configured. |
 | `historical/reasoning_comparison.py` | Historical September 9 reasoning investigation. It relies on dated input/output paths and reuses saved results. Retained for interpreting the original experiment, not as a current-contract validation runner. |
 
 The first three scripts now allocate a fresh timestamped output directory under `benchmark_runs` and print its path. Existing results are never silently substituted for a new evaluation. `CONTRACT_PROBE_REVISION` is no longer used. Keep earlier results for comparisons rather than overwriting them.
@@ -46,3 +47,14 @@ Its modes (`probes`, `diagnose`, `recommended`, `grounded`, `natural`,
 `unconstrained`, `builds`) depend on dated paths/settings in that file and can reuse
 prior results. Inspect those prerequisites before invoking a mode; it is not a
 fresh current-pipeline benchmark. Existing historical artifacts were not migrated.
+
+Current selection merge probes use `mycelium.toml`, retain exact requests and
+timings in fresh directories, and perform three trials per neutral case:
+
+```bash
+.venv/bin/python -m benchmarks.experiments.selection_merge_probes
+.venv/bin/python -m benchmarks.experiments.selection_merge_probes --pipeline
+```
+
+These small contract probes do not establish benchmark recall, QA accuracy or
+compute improvements on large stores.

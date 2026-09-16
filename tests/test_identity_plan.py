@@ -206,7 +206,21 @@ def source_first_responses(plan):
         elif node["resolution"] == "review_required":
             decision["candidate_entity_ids"] = node["candidate_entity_ids"]
         matches.append({"decision": decision})
-    return [{"subjects": discovery}, *matches]
+    admissions = {}
+    for node in plan["subjects"]:
+        if node["resolution"] != "existing":
+            from mycelium.consolidation_models import slugify
+            from mycelium.page_admission import ADMISSION_BASES
+            admissions[f"{node['entity_type']}-{slugify(node['title'])}"] = {
+                "reason": "Explicit fixture admission", "basis": ADMISSION_BASES[node["entity_type"]][0],
+                "supporting_claims": [a for a in node["supporting_evidence"] if a.startswith("C")]}
+    return [{"subjects": discovery}, *matches, *([{"page_admissions": admissions}] if admissions else [])]
+
+
+def admit(entity_id, kind):
+    from mycelium.page_admission import ADMISSION_BASES
+    return {"page_admissions": {entity_id: {"reason": "Useful fixture profile", "basis": ADMISSION_BASES[kind][0],
+                                          "supporting_claims": ["C001"]}}}
 
 
 
@@ -226,13 +240,14 @@ async def test_retry_replans_after_registry_changes_without_duplicating_identity
     llm.call_structured.side_effect = [
         *source_first_responses({"subjects": [subject(resolution="existing", entity_id=first.new_entities[0].entity_id,
                               participant_evidence=[])]}),
+        admit(first.new_entities[0].entity_id, "project"),
         route(first.new_entities[0].entity_id),
     ]
     second = await router.route(evidence)
     assert not second.failures
     assert second.routes[0].owner_entity_id == first.new_entities[0].entity_id
     assert {e.entity_id for e in second.new_entities} == {first.new_entities[0].entity_id}
-    assert llm.call_structured.await_count == 3
+    assert llm.call_structured.await_count == 4
 
 
 @pytest.mark.asyncio
@@ -369,7 +384,7 @@ async def test_review_assignment_binds_one_discovered_subject_without_hiding_the
             {"entity_type": "person", "title": "The user", "description": "The person preparing the exhibit", "aliases": [], "supporting_evidence": ["C001"]},
             {"entity_type": "project", "title": "Exhibit", "description": "The exhibit being prepared", "aliases": [], "supporting_evidence": ["C001"]}]},
         {"assignments": {"R001": {"subject_alias": "S001", "reason": "The reviewed person"}}},
-        {"decision": {"resolution": "new", "reason": "Separate project"}}, route("project-exhibit")]
+        {"decision": {"resolution": "new", "reason": "Separate project"}}, admit("project-exhibit", "project"), route("project-exhibit")]
     result = await router.route(evidence)
     assert not result.failures
     assert {e.entity_id for e in result.new_entities} == {"you", "project-exhibit"}
@@ -395,9 +410,23 @@ async def test_matching_a_provisional_identity_preserves_its_pending_review_on_n
     placement = route(entity.entity_id)
     placement["decisions"]["C001"]["pages"][entity.entity_id]["section_key"] = "goals_plans"
     llm.call_structured.side_effect = [*source_first_responses({"subjects": [subject(resolution="existing",
-        entity_id=entity.entity_id, participant_evidence=[])]}), placement]
+        entity_id=entity.entity_id, participant_evidence=[])]}), admit(entity.entity_id, "person"), placement]
     result = await router.route(evidence)
     assert not result.failures
     assert result.routes[0].identity_blocker_ids == ("pending",)
     assert memory.artifacts.get_entity_resolution_decision("pending").review_state == "review_required"
     assert {e.entity_id for e in result.new_entities} == {entity.entity_id}
+
+
+@pytest.mark.asyncio
+async def test_rejected_page_admission_is_not_an_eligible_destination(tmp_path):
+    memory, llm, router, evidence = setup_router(tmp_path)
+    llm.context_window_tokens = 32768
+    entity = memory.artifacts.create_entity("project", "Exhibit", materialization_state="provisional")
+    llm.call_structured.side_effect = [*source_first_responses({"subjects": [subject(resolution="existing",
+        entity_id=entity.entity_id, participant_evidence=[])]}), {"page_admissions": {entity.entity_id: {"basis": "insufficient_independent_context", "reason": "Only incidental context", "supporting_claims": ["C001"]}}}, route(entity.entity_id)]
+    result = await router.route(evidence)
+    assert result.failures
+    assert not result.routes
+    assert memory.artifacts.get_entity(entity.entity_id).materialization_state == "provisional"
+    assert any(call.kwargs["debug_label"] == "dream-page-admission" for call in llm.call_structured.await_args_list)

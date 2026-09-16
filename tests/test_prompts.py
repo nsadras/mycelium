@@ -31,6 +31,7 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
         "registry": "registry",
         "subject": "subject",
         "subjects": "subjects",
+        "entity_types": {"person": "A person"},
         "reviewed": "none",
         "pending": "none",
         "bindings": "none",

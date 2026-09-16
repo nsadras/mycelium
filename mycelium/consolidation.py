@@ -30,7 +30,8 @@ from mycelium.identity_plan import (
 )
 from mycelium.reviewed_identity_contract import expand_review_evidence
 from mycelium.identity_planner import IdentityPlanner
-from mycelium.page_plan import page_plan_model, page_plan_prompt
+from mycelium.page_plan import page_plan_prompt
+from mycelium.page_admission import NO_PAGE_BASIS, page_admission_model, page_admission_prompt, typed_page_plan_model
 
 
 class ClaimRouter:
@@ -120,7 +121,8 @@ class ClaimRouter:
             plan = await self.identity.plan(aliases, participants, bindings, planned,
                 seed_identity_decisions, self.formatter)
             work_unit.request_digest = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
-            if work_unit.entity_plan != plan:
+            identity_plan = {key: value for key, value in work_unit.entity_plan.items() if key != "page_admissions"}
+            if identity_plan != plan:
                 work_unit.allocated_entity_ids = {}
             work_unit.entity_plan = plan
             work_unit.stage = "claim_routing"
@@ -245,14 +247,33 @@ class ClaimRouter:
                     "participant_bindings": node["participant_evidence"],
                 }
             )
-        eligible_ids = {node["entity_id"] for node in resolved} | {"you"}
-        routable = {eid: planned[eid].entity_type for eid in sorted(eligible_ids)
-                    if eid in planned and planned[eid].status == "active"}
+        eligible_ids = {node["entity_id"] for node in resolved}
+        source_entities = {eid: planned[eid] for eid in sorted(eligible_ids)
+                           if eid in planned and planned[eid].status == "active"}
+        provisional = {eid: entity for eid, entity in source_entities.items()
+                       if entity.materialization_state == "provisional"}
+        admissions = {}
+        if provisional:
+            admission_schema = page_admission_model(aliases, source_entities)
+            system, user = page_admission_prompt(
+                self.formatter.entity_catalog(source_entities.values(), include_sections=False),
+                json.dumps(resolved, ensure_ascii=False), self.formatter.format_evidence(aliases, participants))
+            try:
+                admissions = admission_schema.model_validate(await self.llm.call_structured(system, user, admission_schema,
+                    num_predict=4096, debug_label="dream-page-admission", cache_store=self.artifacts.db)).model_dump()["page_admissions"]
+            except Exception as exc:
+                return self._fail_work_unit(work_unit, evidence, "page_admission",
+                    f"Page admission failed: {type(exc).__name__}: {exc}")
+        work_unit.entity_plan["page_admissions"] = admissions
+        self.artifacts.save_identity_work_unit(work_unit)
+        routable = {eid: entity.entity_type for eid, entity in source_entities.items()
+                    if entity.materialization_state == "materialized"
+                    or (eid in admissions and admissions[eid]["basis"] != NO_PAGE_BASIS)}
         routings = {}
         batches = list(self._alias_batches(aliases, entity_count=len(routable)))
         while batches:
             batch = batches.pop(0)
-            routing_model = page_plan_model(batch, routable)
+            routing_model = typed_page_plan_model(batch, routable)
             system, user = page_plan_prompt(
                 self.formatter.entity_catalog([planned[eid] for eid in routable], include_sections=True),
                 json.dumps(resolved, ensure_ascii=False),

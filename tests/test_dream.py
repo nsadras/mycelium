@@ -143,7 +143,7 @@ def split_scope_plan(plan: dict) -> list[dict]:
             )
     # Fixture page destinations explicitly declare which stored identities the
     # source discovery and matching calls must account for.
-    known = {n.get("entity_id") for n in subjects} | set(candidate_entities.values()) | {"you"}
+    known = {n.get("entity_id") for n in subjects} | set(candidate_entities.values())
     for entity_id in dict.fromkeys(eid for d in routing["decisions"].values() for eid in d["pages"]):
         if entity_id not in known:
             subjects.append({"resolution": "existing", "entity_id": entity_id, "title": None,
@@ -169,7 +169,16 @@ def split_scope_plan(plan: dict) -> list[dict]:
         elif node["resolution"] == "review_required":
             decision["candidate_entity_ids"] = node["candidate_entity_ids"]
         matches.append({"decision": decision})
-    return [{"subjects": discovered}, *matches, routing]
+    from mycelium.page_admission import ADMISSION_BASES, NO_PAGE_BASIS
+    selected_pages = {eid for choice in routing["decisions"].values() for eid in choice["pages"]}
+    admissions = {}
+    for node in subjects:
+        if node["resolution"] == "existing":
+            continue
+        eid = f"{node['entity_type']}-{slugify(node['title'])}"
+        admissions[eid] = {"reason": "Explicit fixture admission", "supporting_claims": list(assignments),
+            "basis": ADMISSION_BASES[node["entity_type"]][0] if eid in selected_pages else NO_PAGE_BASIS}
+    return [{"subjects": discovered}, *matches, *([{"page_admissions": admissions}] if admissions else []), routing]
 
 
 def use_existing_identity(responses, entity_id, *, title, aliases):
@@ -186,6 +195,11 @@ def use_existing_identity(responses, entity_id, *, title, aliases):
                 decision["owner_entity"] = entity_id
     responses[1]["decision"] = {"resolution": "existing", "entity_id": entity_id,
         "title": title, "aliases": aliases, "reason": node["description"]}
+    for response in list(responses):
+        if "page_admissions" in response:
+            response["page_admissions"].pop(proposed_id, None)
+            if not response["page_admissions"]:
+                responses.remove(response)
     return responses
 
 
@@ -531,7 +545,11 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
     async def response(system, user, output_type, **kwargs):
         nonlocal routing_calls
         if "subjects" in output_type.model_fields:
-            return {"subjects": []}
+            return {"subjects": [{"entity_type": "person", "title": "You", "description": "The user whose preferences are recorded",
+                "supporting_evidence": ["C001"], "aliases": []}]}
+        if "decision" in output_type.model_fields:
+            return {"decision": {"resolution": "existing", "entity_id": "you", "title": None,
+                "aliases": [], "reason": "Explicit fixture user"}}
         decision_field = output_type.model_fields.get("decisions")
         annotation = getattr(decision_field, "annotation", None)
         fields = getattr(annotation, "model_fields", {})
@@ -1212,7 +1230,7 @@ async def test_deferred_owner_does_not_block_placed_sibling(no_truth_changes, tm
     assert logs.get(second_entry.entry_id).consolidated is True
     assert wiki.exists("coffee")
     assert artifacts.get_claim("claim-first").dream_disposition == "deferred"
-    assert llm.call_structured.await_count == 3
+    assert llm.call_structured.await_count == 4
 
 
 @pytest.mark.asyncio
@@ -1234,7 +1252,7 @@ async def test_partial_extraction_routes_available_claims_without_repair(tmp_pat
     assert report.failures[0]["stage"] == "extraction"
     assert not logs.get(entry.entry_id).consolidated
     assert wiki.exists("partial-memory")
-    assert llm.call_structured.await_count == 3
+    assert llm.call_structured.await_count == 4
 
 
 @pytest.mark.asyncio
@@ -1372,11 +1390,11 @@ async def test_ambiguous_subject_type_is_published_for_optional_review(tmp_path)
     assert decision.review_state == "review_required"
     assert result.routes[0].identity_blocker_ids == (decision.decision_id,)
     assert decision.reason == "Project and Series are both materially plausible."
-    assert llm.call_structured.await_count == 3
+    assert llm.call_structured.await_count == 4
 
 
 @pytest.mark.asyncio
-async def test_configured_user_routes_without_subject_identity_proposal(tmp_path):
+async def test_configured_user_routes_to_the_discovered_canonical_identity(tmp_path):
     dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
     _, source = add_source(logs, artifacts)
     claim = add_claim(artifacts, source, text="The user prefers concise reports.")
@@ -1385,7 +1403,7 @@ async def test_configured_user_routes_without_subject_identity_proposal(tmp_path
     assert result.failures == []
     assert result.routes[0].owner_entity_id == "you"
     assert all((entity.entity_id != "person-you" for entity in result.new_entities))
-    assert llm.call_structured.await_count == 2
+    assert llm.call_structured.await_count == 3
 
 
 @pytest.mark.asyncio

@@ -4,8 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
-from mycelium.ontology import ENTITY_TYPES
-from mycelium.prompting import render_prompt_pair
+from mycelium.ontology import ENTITY_TYPES, ENTITY_ONTOLOGY
+from mycelium.prompting import render_prompt, render_prompt_pair
 
 
 def subject_discovery_model(claim_ids, participant_roles, reviewed_types):
@@ -73,6 +73,13 @@ def subject_discovery_model(claim_ids, participant_roles, reviewed_types):
 
 
 def subject_discovery_prompt(evidence, reviewed):
-    return render_prompt_pair(
+    system, user = render_prompt_pair(
         "memory/subject_discovery", evidence=evidence, reviewed=reviewed
     )
+    system += "\n\n" + render_prompt(
+        "memory/source_subject_types.system.jinja",
+        entity_types={
+            kind.key: kind.description for kind in ENTITY_ONTOLOGY if kind.key != "you"
+        },
+    )
+    return system, user

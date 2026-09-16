@@ -468,14 +468,6 @@ class EntityCurationService:
                 continue
             changed = False
             for field_name in (
-                "subject_nodes",
-                "identity_node_decisions",
-                "local_identity_decisions",
-                "identity_groups",
-                "existing_identity_verdicts",
-                "type_proposals",
-                "type_verdicts",
-                "new_identity_verdicts",
                 "entity_plan",
                 "allocated_entity_ids",
             ):

@@ -21,10 +21,15 @@ its text preserves how uncertain it is. Use predicate="project_role" only for an
 ongoing role or responsibility in a project, otherwise null. evidence_modality identifies speech, visual evidence,
 a tool observation, or mixed evidence. Written dialogue counts as speech.
 
-Put stated time words in facets.when. A scheduled day is when; a deadline is the latest allowed completion
-time. Put only that completion limit in facets.deadline, preserving relative wording.
-Use null when absent. For a relative time, set temporal_anchor_segment_id to the cited segment supplying that time phrase. facets.inference_basis is null for direct assertions; otherwise explain the
-inference from the cited evidence. Resolving a reference using cited conversation context is direct evidence. Metadata supplements the sentence rather than replacing its details.
+In facets.times, list each distinct stated time constraint, with its verbatim expression, the action it applies to as target, and the exact evidence_segment_id containing the time words. Use event_time for when that action occurs, deadline for its latest permissible completion, and condition_time for a prerequisite on which another action depends. A condition's date does not date the main action. Preserve multiple times independently; use an empty list when absent.
+
+Declare each time's meaning: absolute only for calendar dates with an evidenced year; day_offset for an exact number of days relative to its cited message; calendar_period for a whole named week, month or year relative to its cited message's calendar period. A week starts Monday. Unclear week references, missing years, approximate quantities and vague periods remain unresolved with a short reason. Do not invent numeric boundaries for imprecise expressions. The application computes dates from these declarations and the cited message's timestamp. Do not use the ingestion date. Each time's evidence_segment_id must be in that claim's citations, including the establishing new segment.
+
+facets.inference_basis is null for direct assertions; otherwise explain the inference from cited evidence. Resolving a reference with cited context is direct evidence. Metadata supplements the sentence; preserve time wording and conditions in the sentence itself.
+
+Exact relative declarations do not require a visible calendar date. Identify the stated day offset or calendar-period relationship even when the timestamp is not shown; the application supplies the cited message's date. Missing timestamp metadata is not itself ambiguity in the stated relationship.
+
+Include unresolved time wording as an annotation too. An empty times list means the claim contains no time information, not that its time cannot be converted into a date.
 
 Return null for segments containing only greetings, acknowledgments, general advice, or suggestions nobody adopted.
 

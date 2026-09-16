@@ -1,3 +1,4 @@
+from tests.extraction_support import time_details
 from tests.extraction_support import extraction_response
 import pytest
 from pydantic import ValidationError
@@ -36,7 +37,7 @@ def test_combined_extraction_enforces_exact_accounting_and_citations():
         "context_segment_ids": ["prior"],
         "claim_type": "unknown",
         "evidence_modality": "unknown",
-        "facets": {"when": None, "deadline": None, "inference_basis": None},
+        "facets": {"times": [], "inference_basis": None},
     }
     valid = extraction_response([claim], ["b"])
     assert extraction_records(schema.model_validate(valid).model_dump())["claims"][0][
@@ -73,7 +74,7 @@ async def test_encoder_persists_source_episode_and_atomic_claims(tmp_path):
                 "temporal_status": "atemporal",
                 "about": [{"entity": "Ava", "role": "subject"}],
                 "segment_ids": ["source-fixed-later"],
-                "facets": {"when": None, "deadline": None, "inference_basis": None},
+                "facets": {"times": [], "inference_basis": None},
             }
         ]
     )
@@ -125,7 +126,7 @@ async def test_encoder_preserves_repeated_claims_as_separate_source_events(tmp_p
                     "about": [{"entity": "Ava", "role": "subject"}],
                     "segment_ids": [segment_id],
                     "evidence_modality": "unknown",
-                    "facets": {"when": None, "deadline": None, "inference_basis": None},
+                    "facets": {"times": [], "inference_basis": None},
                 }
             ]
         )
@@ -193,7 +194,7 @@ async def test_encoder_persists_general_semantics_across_source_types(
                     "temporal_status": temporal_status,
                     "about": [{"entity": text.split()[0], "role": "subject"}],
                     "segment_ids": [segment_id],
-                    "facets": {"when": None, "deadline": None, "inference_basis": None},
+                    "facets": {"times": [], "inference_basis": None},
                 }
             ]
         )
@@ -235,11 +236,7 @@ async def test_meeting_encoder_anchors_deadline_to_meeting_time(tmp_path):
                     "temporal_status": "future",
                     "about": [{"entity": "Ava", "role": "subject"}],
                     "segment_ids": [segment_id],
-                    "facets": {
-                        "when": None,
-                        "deadline": "Friday",
-                        "inference_basis": None,
-                    },
+                    "facets": time_details(segment_id, "Friday", {"kind":"day_offset", "days":2}, role="deadline"),
                     "evidence_modality": "unknown",
                 }
             ]
@@ -253,7 +250,7 @@ async def test_meeting_encoder_anchors_deadline_to_meeting_time(tmp_path):
         source_type="meeting_transcript",
         occurred_at="2024-01-10T14:00:00-08:00",
     )
-    temporal = artifacts.list_claims()[0].facets["temporal"]
+    temporal = artifacts.list_claims()[0].facets["temporal"][0]
     assert temporal["anchor"] == "2024-01-10T14:00:00-08:00"
     assert temporal["role"] == "deadline"
     assert temporal["start"] == "2024-01-12"
@@ -281,12 +278,7 @@ async def test_chat_claim_uses_its_cited_message_as_temporal_anchor(tmp_path):
                     "temporal_status": "future",
                     "about": [{"entity": "Ava", "role": "subject"}],
                     "segment_ids": [original_ids[1]],
-                    "temporal_anchor_segment_id": original_ids[1],
-                    "facets": {
-                        "when": None,
-                        "deadline": "tomorrow",
-                        "inference_basis": None,
-                    },
+                                        "facets": time_details(original_ids[1], "tomorrow", {"kind":"day_offset", "days":1}, role="deadline"),
                     "evidence_modality": "unknown",
                 }
             ],
@@ -319,13 +311,13 @@ async def test_chat_claim_uses_its_cited_message_as_temporal_anchor(tmp_path):
             ),
         ],
     )
-    temporal = artifacts.list_claims()[0].facets["temporal"]
+    temporal = artifacts.list_claims()[0].facets["temporal"][0]
     assert temporal["anchor"] == "2026-08-27T08:00:00+00:00"
     assert temporal["start"] == "2026-08-28"
 
 
 @pytest.mark.asyncio
-async def test_single_cited_source_time_anchors_relative_phrase_without_model_choice(
+async def test_relative_phrase_uses_explicit_time_evidence(
     tmp_path,
 ):
     llm = AsyncMock()
@@ -348,11 +340,7 @@ async def test_single_cited_source_time_anchors_relative_phrase_without_model_ch
                     "temporal_status": "future",
                     "about": [{"entity": "Ava", "role": "subject"}],
                     "segment_ids": [segment_id],
-                    "facets": {
-                        "when": None,
-                        "deadline": "tomorrow",
-                        "inference_basis": None,
-                    },
+                    "facets": time_details(segment_id, "tomorrow", {"kind":"day_offset", "days":1}, role="deadline"),
                     "evidence_modality": "unknown",
                 }
             ]
@@ -376,7 +364,7 @@ async def test_single_cited_source_time_anchors_relative_phrase_without_model_ch
             )
         ],
     )
-    temporal = artifacts.list_claims()[0].facets["temporal"]
+    temporal = artifacts.list_claims()[0].facets["temporal"][0]
     assert temporal["anchor"] == "2026-08-27T08:00:00+00:00"
     assert temporal["start"] == "2026-08-28"
 
@@ -404,7 +392,7 @@ async def test_chat_rejects_time_anchor_outside_claim_citations(tmp_path):
                     "segment_ids": [original_ids[0]],
                     "claim_type": "unknown",
                     "evidence_modality": "unknown",
-                    "facets": {"when": None, "deadline": None, "inference_basis": None},
+                    "facets": {"times": [], "inference_basis": None},
                 },
                 {
                     "text": "Ava will finish the report tomorrow.",
@@ -412,12 +400,7 @@ async def test_chat_rejects_time_anchor_outside_claim_citations(tmp_path):
                     "temporal_status": "future",
                     "about": [{"entity": "Ava", "role": "subject"}],
                     "segment_ids": [original_ids[1]],
-                    "temporal_anchor_segment_id": original_ids[0],
-                    "facets": {
-                        "when": None,
-                        "deadline": "tomorrow",
-                        "inference_basis": None,
-                    },
+                                        "facets": time_details(original_ids[0], "tomorrow", {"kind":"day_offset", "days":1}, role="deadline"),
                     "evidence_modality": "unknown",
                 },
             ]
@@ -474,7 +457,7 @@ async def test_encoder_rejects_claim_without_explicit_about_entity(tmp_path):
                     "text": "Ava enjoys teaching dance.",
                     "about": [],
                     "segment_ids": segment_ids,
-                    "facets": {"when": None, "deadline": None, "inference_basis": None},
+                    "facets": {"times": [], "inference_basis": None},
                     "claim_type": "unknown",
                     "evidence_modality": "unknown",
                 }
@@ -522,7 +505,7 @@ async def test_encoder_retries_failed_combined_batch(tmp_path):
                     "about": [{"entity": "Ava", "role": "subject"}],
                     "segment_ids": [segment_id],
                     "evidence_modality": "unknown",
-                    "facets": {"when": None, "deadline": None, "inference_basis": None},
+                    "facets": {"times": [], "inference_basis": None},
                 }
             ]
         )
@@ -572,8 +555,7 @@ async def test_encoder_records_inference_only_on_provenance(tmp_path):
                     "segment_ids": [segment_id],
                     "evidence_modality": "speech",
                     "facets": {
-                        "when": None,
-                        "deadline": None,
+                        "times": [],
                         "inference_basis": "Ava's son Ben has a daughter named Clara.",
                     },
                     "claim_type": "unknown",
@@ -608,7 +590,7 @@ async def test_encoder_records_uncovered_segments_without_repair(tmp_path):
                     "text": "Ava likes tea.",
                     "about": [{"entity": "Ava", "role": "subject"}],
                     "segment_ids": [segment_ids[0]],
-                    "facets": {"when": None, "deadline": None, "inference_basis": None},
+                    "facets": {"times": [], "inference_basis": None},
                     "claim_type": "unknown",
                     "evidence_modality": "unknown",
                 }
@@ -696,7 +678,7 @@ async def test_encoder_does_not_lexically_reject_model_valid_claim_text(tmp_path
                     "text": "I prefer tea.",
                     "about": [{"entity": "Ava", "role": "subject"}],
                     "segment_ids": [segment_id],
-                    "facets": {"when": None, "deadline": None, "inference_basis": None},
+                    "facets": {"times": [], "inference_basis": None},
                     "claim_type": "unknown",
                     "evidence_modality": "unknown",
                 }
@@ -731,7 +713,7 @@ async def test_encoder_persists_contract_output_without_final_normalization(tmp_
                     "text": "My store is doing great!",
                     "about": [{"entity": "Ava", "role": "subject"}],
                     "segment_ids": [segment_id],
-                    "facets": {"when": None, "deadline": None, "inference_basis": None},
+                    "facets": {"times": [], "inference_basis": None},
                     "claim_type": "unknown",
                     "evidence_modality": "unknown",
                 }
@@ -795,7 +777,7 @@ async def test_encoder_routes_image_urls_through_semantic_coverage(tmp_path):
             "text": "Ava shared a painting.",
             "about": [{"entity": "Ava", "role": "subject"}],
             "segment_ids": [target_ids[0]],
-            "facets": {"when": None, "deadline": None, "inference_basis": None},
+            "facets": {"times": [], "inference_basis": None},
             "claim_type": "unknown",
             "evidence_modality": "unknown",
         }
@@ -877,171 +859,11 @@ def test_semantic_envelope_does_not_infer_from_kind_or_prose():
     assert unknown.temporal_status == "unknown"
 
 
-def test_human_readable_timestamp_anchors_relative_dates():
-    facets = normalize_temporal_facets(
-        {"when": "yesterday"}, "4:24 pm on 16 March, 2023"
-    )
-    assert facets["observed_at"] == "4:24 pm on 16 March, 2023"
-    assert facets["temporal"] == {
-        "expression": "yesterday",
-        "anchor": "4:24 pm on 16 March, 2023",
-        "anchor_date": "2023-03-16",
-        "role": "event_time",
-        "start": "2023-03-15",
-        "end": "2023-03-15",
-        "precision": "day",
-        "status": "resolved",
-        "certainty": "exact",
-    }
-
-
-def test_omitted_temporal_fields_stay_unresolved():
-    facets = normalize_temporal_facets({}, "4:24 pm on 16 March, 2023")
-    assert "temporal" not in facets
-
-
-def test_month_relative_time_preserves_month_precision():
-    facets = normalize_temporal_facets(
-        {"when": "this month"}, "4:24 pm on 16 March, 2023"
-    )
-    assert facets["temporal"]["start"] == "2023-03-01"
-    assert facets["temporal"]["end"] == "2023-03-31"
-    assert facets["temporal"]["precision"] == "month"
-
-
-@pytest.mark.parametrize(
-    ("expression", "start", "end"),
-    [
-        ("last week", "2023-03-06", "2023-03-12"),
-        ("this week", "2023-03-13", "2023-03-19"),
-        ("next week", "2023-03-20", "2023-03-26"),
-        ("last month", "2023-02-01", "2023-02-28"),
-        ("next month", "2023-04-01", "2023-04-30"),
-    ],
-)
-def test_calendar_relative_periods_preserve_full_bounds(expression, start, end):
-    facets = normalize_temporal_facets(
-        {"when": expression}, "4:24 pm on 16 March, 2023"
-    )
-    assert facets["temporal"]["start"] == start
-    assert facets["temporal"]["end"] == end
-
-
-def test_next_month_crosses_year_boundary():
-    facets = normalize_temporal_facets(
-        {"when": "next month"}, "10:00 am on 20 December, 2023"
-    )
-    assert facets["temporal"]["start"] == "2024-01-01"
-    assert facets["temporal"]["end"] == "2024-01-31"
-
-
-def test_this_weekday_resolves_within_anchor_calendar_week():
-    facets = normalize_temporal_facets(
-        {"when": "this Friday"}, "4:24 pm on 16 March, 2023"
-    )
-    assert facets["temporal"]["start"] == "2023-03-17"
-    assert facets["temporal"]["precision"] == "day"
-
-
-def test_last_and_next_weekdays_use_adjacent_calendar_weeks():
-    last = normalize_temporal_facets(
-        {"when": "last Monday"}, "4:24 pm on 16 March, 2023"
-    )
-    next_ = normalize_temporal_facets(
-        {"when": "next Friday"}, "4:24 pm on 16 March, 2023"
-    )
-    assert last["temporal"]["start"] == "2023-03-06"
-    assert next_["temporal"]["start"] == "2023-03-24"
-
-
-@pytest.mark.parametrize(
-    ("expression", "expected"),
-    [
-        ("Friday", "2023-03-17"),
-        ("by Friday", "2023-03-17"),
-        ("end of this week", "2023-03-19"),
-        ("end of next week", "2023-03-26"),
-        ("end of next month", "2023-04-30"),
-        ("in three days", "2023-03-19"),
-    ],
-)
-def test_meeting_deadlines_resolve_as_due_dates(expression, expected):
-    facets = normalize_temporal_facets(
-        {"deadline": expression}, "4:24 pm on 16 March, 2023"
-    )
-    assert facets["temporal"]["role"] == "deadline"
-    assert facets["temporal"]["start"] == expected
-    assert facets["temporal"]["end"] == expected
-
-
-def test_year_relative_time_preserves_year_precision():
-    facets = normalize_temporal_facets(
-        {"when": "three years ago"}, "4:24 pm on 16 March, 2023"
-    )
-    assert facets["temporal"]["start"] == "2020-01-01"
-    assert facets["temporal"]["end"] == "2020-12-31"
-    assert facets["temporal"]["precision"] == "year"
-
-
-def test_unquantified_years_do_not_invent_a_calendar_year():
-    facets = normalize_temporal_facets(
-        {"when": "years ago"}, "4:24 pm on 16 March, 2023"
-    )
-    assert facets["temporal"]["expression"] == "years ago"
-    assert facets["temporal"]["status"] == "unresolved"
-    assert "start" not in facets["temporal"]
-    assert "end" not in facets["temporal"]
-
-
-@pytest.mark.parametrize(
-    ("expression", "expected"),
-    [
-        ("in three days from now", "2023-03-19"),
-        ("two weeks ago", "2023-03-02"),
-        ("the day after tomorrow", "2023-03-18"),
-        ("the day before yesterday", "2023-03-14"),
-    ],
-)
-def test_exact_relative_offsets_resolve_against_source_time(expression, expected):
-    facets = normalize_temporal_facets(
-        {"when": expression}, "4:24 pm on 16 March, 2023"
-    )
-    assert facets["temporal"]["start"] == expected
-    assert facets["temporal"]["end"] == expected
-    assert facets["temporal"]["certainty"] == "exact"
-
-
-@pytest.mark.parametrize(
-    ("expression", "start", "end"),
-    [
-        ("a few days ago", "2023-03-11", "2023-03-14"),
-        ("in several weeks from now", "2023-04-06", "2023-05-04"),
-        ("early next week", "2023-03-20", "2023-03-22"),
-        ("late next week", "2023-03-24", "2023-03-26"),
-        ("later this week", "2023-03-17", "2023-03-19"),
-    ],
-)
-def test_vague_but_bounded_time_is_marked_approximate(expression, start, end):
-    facets = normalize_temporal_facets(
-        {"when": expression}, "4:24 pm on 16 March, 2023"
-    )
-    assert facets["temporal"]["start"] == start
-    assert facets["temporal"]["end"] == end
-    assert facets["temporal"]["status"] == "bounded"
-    assert facets["temporal"]["certainty"] == "approximate"
-
-
-@pytest.mark.parametrize(
-    ("expression", "direction"), [("soon", "future"), ("recently", "past")]
-)
-def test_unbounded_vague_time_remains_unresolved(expression, direction):
-    facets = normalize_temporal_facets(
-        {"when": expression}, "4:24 pm on 16 March, 2023"
-    )
-    assert facets["temporal"]["status"] == "unresolved"
-    assert facets["temporal"]["certainty"] == "vague"
-    assert facets["temporal"]["direction"] == direction
-    assert "start" not in facets["temporal"]
+def test_human_readable_source_timestamp_anchors_declared_offset():
+    facets = normalize_temporal_facets(time_details('s1', 'yesterday', {'kind':'day_offset','days':-1}),
+                                      {'s1': '4:24 pm on 16 March, 2023'})
+    assert facets['temporal'][0]['start'] == '2023-03-15'
+    assert facets['temporal'][0]['anchor'] == '4:24 pm on 16 March, 2023'
 
 
 def test_temporal_interval_overlap_is_inclusive():
@@ -1130,7 +952,7 @@ async def test_ingestion_idempotency_key_reuses_one_source_episode_claim_and_log
                     "about": [{"entity": "Ava", "role": "subject"}],
                     "segment_ids": [segment_id],
                     "evidence_modality": "unknown",
-                    "facets": {"when": None, "deadline": None, "inference_basis": None},
+                    "facets": {"times": [], "inference_basis": None},
                 }
             ]
         )
@@ -1177,7 +999,7 @@ async def test_ingestion_retry_repairs_claim_saved_before_episode_checkpoint(
                     "about": [{"entity": "Ava", "role": "subject"}],
                     "segment_ids": [segment_id],
                     "evidence_modality": "unknown",
-                    "facets": {"when": None, "deadline": None, "inference_basis": None},
+                    "facets": {"times": [], "inference_basis": None},
                 }
             ]
         )

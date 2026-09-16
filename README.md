@@ -34,12 +34,14 @@ Canonical memory and chat state live in `memory.sqlite3`. Markdown under `wiki/`
 and `logs/` is a generated, inspectable view; edit memory through the application,
 not by modifying these files. LanceDB under `indexes/` is rebuildable.
 
-This version requires a **fresh store**. Existing JSON stores and benchmark runs
-are not migrated or modified. For the web app, select a new directory before
+This version requires a **fresh SQLite schema 2 store**. Schema 1 stores, older JSON
+stores, and existing benchmark runs are not migrated or modified. The new schema
+preserves separate event, deadline, and condition times with their cited evidence;
+imprecise dates remain explicitly unresolved. For the web app, select a new directory before
 running your normal launch command:
 
 ```bash
-MYCELIUM_STORE=./mycelium_store_sqlite ./start.sh
+MYCELIUM_STORE=./mycelium_store_v2 ./start.sh
 ```
 
 One process owns each writable store. A second server, worker, or library process
@@ -54,12 +56,28 @@ updates, and a later build can recompute them.
 Export canonical records into a fresh directory for offline inspection:
 
 ```bash
-.venv/bin/python -m mycelium.snapshots mycelium_store_sqlite memory-export
+.venv/bin/python -m mycelium.snapshots mycelium_store_v2 memory-export
 ```
 
 The export is JSONL by record collection, not another writable backend. Existing
 Engram meeting storage remains separate; old meetings are not automatically imported
 into a fresh memory store.
+
+### Reviewing correction dates
+
+Corrections with relative dates show a preview before changing memory. Choose a
+reference date for each event, deadline, or condition: a cited message, a stored
+reference date, this correction's submission, or unresolved. The preview shows
+the resulting dates; saving preserves both the source wording and your choices.
+An edited statement or changed source requires a new preview. A delayed save
+uses the reviewed submission date, even across midnight.
+
+API clients receive `status: "review_required"` and a `draft_id` from
+`POST /api/memory/claims/{claim_id}/correct`. Apply the review by repeating the
+same replacement fields with that `draft_id` and a `time_references` mapping from
+every returned `time_id` to an offered `reference_id`. Preparing a preview leaves
+the original claim active; repeated prepare/apply requests are idempotent.
+Absolute dates and statements without relative dates apply directly.
 
 ## Quick start
 

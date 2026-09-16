@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 _HANDLES: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class MemoryDatabase:
@@ -49,13 +49,13 @@ class MemoryDatabase:
                 f"Memory store already has a writer: {self.root}"
             ) from exc
         self.connection = sqlite3.connect(self.path, isolation_level=None)
-        self.connection.execute("PRAGMA foreign_keys=ON")
-        self.connection.execute("PRAGMA journal_mode=WAL")
-        self.connection.execute("PRAGMA synchronous=FULL")
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
         if version not in (0, SCHEMA_VERSION):
             self.close()
-            raise ValueError(f"Unsupported memory database version: {version}")
+            raise ValueError(f"Unsupported memory database version: {version}; select a fresh store directory")
+        self.connection.execute("PRAGMA foreign_keys=ON")
+        self.connection.execute("PRAGMA journal_mode=WAL")
+        self.connection.execute("PRAGMA synchronous=FULL")
         self.connection.executescript("""
             CREATE TABLE IF NOT EXISTS generations(kind TEXT PRIMARY KEY, revision INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS records(

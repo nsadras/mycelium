@@ -22,9 +22,17 @@ from mycelium.materialization import PageMaterializer
 from mycelium.reconsolidation import add_claim_link
 from mycelium.lifecycle_transaction import LifecycleTransaction, mutation_lock
 from mycelium.store import WikiStore
-from mycelium.structured_outputs import CorrectionMetadata
+from mycelium.structured_outputs import ReplacementMetadata
 from mycelium.prompting import render_prompt
-from mycelium.temporal import normalize_temporal_facets
+from mycelium.correction_review import (
+    CorrectionPreview,
+    create_draft,
+    load_review,
+    relative_times,
+    resolved_correction_facets,
+    review_is_current,
+    preview as correction_preview,
+)
 from mycelium.consolidation import ClaimRouter, placement_from_route
 from mycelium.consolidation_models import ClaimEvidence
 
@@ -63,7 +71,9 @@ class ClaimLifecycleService:
         claim_type: str | None = None,
         predicate: str | None = None,
         temporal_status: str | None = None,
-    ) -> ClaimLifecycleResult:
+        draft_id: str | None = None,
+        time_references: dict[str, str] | None = None,
+    ) -> ClaimLifecycleResult | CorrectionPreview:
         return await self._transaction(
             "correct",
             dict(
@@ -73,6 +83,8 @@ class ClaimLifecycleService:
                 claim_type=claim_type,
                 predicate=predicate,
                 temporal_status=temporal_status,
+                draft_id=draft_id,
+                time_references=time_references,
             ),
         )
 
@@ -83,7 +95,9 @@ class ClaimLifecycleService:
             "retract", dict(source_id=source_id, reason=reason)
         )
 
-    async def _transaction(self, kind: str, inputs: dict) -> ClaimLifecycleResult:
+    async def _transaction(
+        self, kind: str, inputs: dict
+    ) -> ClaimLifecycleResult | CorrectionPreview:
         async with mutation_lock(self.artifacts.root):
             transaction = LifecycleTransaction(
                 self.artifacts.root, self.materializer.wiki.wiki_dir
@@ -92,7 +106,16 @@ class ClaimLifecycleService:
             operation_id = transaction.operation_id(kind, inputs)
             prior = transaction.completed(operation_id)
             if prior is not None:
-                return ClaimLifecycleResult(**prior)
+                if prior.get("status") == "review_required":
+                    draft = self.artifacts.db.get(
+                        "correction-drafts", prior["draft_id"]
+                    )
+                    if draft["status"] == "applied":
+                        return ClaimLifecycleResult(**draft["result"])
+                    if review_is_current(self.artifacts, draft):
+                        return correction_preview(draft)
+                else:
+                    return ClaimLifecycleResult(**prior)
             async with transaction.stage() as (paths, before):
                 artifacts = ArtifactStore(self.artifacts.root, db=paths["db"])
                 materializer = PageMaterializer(
@@ -109,7 +132,12 @@ class ClaimLifecycleService:
                     else service._retract_source
                 )
                 result = await action(**inputs)
-                transaction.publish(operation_id, paths, before, asdict(result))
+                recorded = (
+                    {"status": "review_required", "draft_id": result.draft_id}
+                    if isinstance(result, CorrectionPreview)
+                    else asdict(result)
+                )
+                transaction.publish(operation_id, paths, before, recorded)
                 return result
 
     async def _correct_claim(
@@ -121,7 +149,9 @@ class ClaimLifecycleService:
         claim_type: str | None = None,
         predicate: str | None = None,
         temporal_status: str | None = None,
-    ) -> ClaimLifecycleResult:
+        draft_id: str | None,
+        time_references: dict[str, str] | None,
+    ) -> ClaimLifecycleResult | CorrectionPreview:
         target = self.artifacts.get_claim(claim_id)
         if target.status != "active":
             raise ClaimLifecycleConflictError("Only active claims can be corrected")
@@ -133,37 +163,39 @@ class ClaimLifecycleService:
             raise ValueError("A correction requires a reason")
 
         now = datetime.now().astimezone().isoformat()
-        original_time = next(
-            (
-                self.artifacts.get_source(p.source_id).occurred_at
-                for p in target.provenance
-                if self.artifacts.get_source(p.source_id).occurred_at
-            ),
-            None,
+        inputs = dict(
+            text=corrected_text,
+            reason=correction_reason,
+            claim_type=claim_type,
+            predicate=predicate,
+            temporal_status=temporal_status,
         )
-        metadata = CorrectionMetadata.model_validate(
-            await self.resolver.llm.call_structured(
-                render_prompt("memory/correction.system.jinja"),
-                json.dumps(
-                    {
-                        "original_statement": target.text,
-                        "original_time": original_time,
-                        "correction_time": now,
-                        "replacement": corrected_text,
-                    }
-                ),
-                CorrectionMetadata,
-                num_predict=2048,
-                debug_label="memory-correction",
+        draft = None
+        if draft_id is not None:
+            draft = load_review(
+                self.artifacts, target, draft_id, inputs, time_references
             )
-        )
-        anchor = (
-            original_time
-            if metadata.time_anchor == "original"
-            else now
-            if metadata.time_anchor == "correction"
-            else None
-        )
+            metadata = ReplacementMetadata.model_validate(draft["metadata"])
+        else:
+            if time_references is not None:
+                raise ValueError("Time choices require a saved correction preview")
+            metadata = ReplacementMetadata.model_validate(
+                await self.resolver.llm.call_structured(
+                    render_prompt("memory/correction.system.jinja"),
+                    json.dumps(
+                        {
+                            "original_statement": target.text,
+                            "replacement": corrected_text,
+                        }
+                    ),
+                    ReplacementMetadata,
+                    num_predict=2048,
+                    debug_label="memory-correction",
+                )
+            )
+            if relative_times(metadata):
+                return create_draft(self.artifacts, target, metadata, inputs, now)
+        source_time = draft["created_at"] if draft is not None else now
         short_id = uuid.uuid4().hex[:12]
         source_id = f"source-correction-{short_id}"
         segment_id = f"{source_id}#seg-0001"
@@ -173,7 +205,7 @@ class ClaimLifecycleService:
             source_type="manual_correction",
             session_id=f"correction-{claim_id}",
             recorded_at=now,
-            occurred_at=now,
+            occurred_at=source_time,
             participants=["user"],
             segments=[
                 SourceSegment(
@@ -182,6 +214,7 @@ class ClaimLifecycleService:
                     content=corrected_text,
                     speaker="user",
                     role="user",
+                    timestamp=source_time,
                 )
             ],
             metadata={
@@ -189,21 +222,42 @@ class ClaimLifecycleService:
                 "correction_reason": correction_reason,
             },
         )
+        facets, context_refs = resolved_correction_facets(
+            metadata, segment_id, draft, time_references
+        )
+        provenance = [
+            ClaimProvenance(
+                source_id=source_id,
+                segment_ids=[segment_id],
+                speaker="user",
+                evidence_type="explicit",
+            )
+        ]
+        for context_source_id, context_ids in context_refs.items():
+            context_source = self.artifacts.get_source(context_source_id)
+            provenance.append(
+                ClaimProvenance(
+                    source_id=context_source_id,
+                    segment_ids=sorted(context_ids),
+                    raw_log_entry_id=context_source.raw_log_entry_id,
+                    evidence_type="context",
+                )
+            )
+        if draft is not None:
+            draft.update(
+                status="applied",
+                replacement_claim_id=replacement_id,
+                choices=time_references,
+            )
+            self.artifacts.db.put("correction-drafts", draft["draft_id"], draft)
         replacement = MemoryClaim(
             claim_id=replacement_id,
             text=corrected_text,
             about=[item.model_dump() for item in metadata.about],
-            provenance=[
-                ClaimProvenance(
-                    source_id=source_id,
-                    segment_ids=[segment_id],
-                    speaker="user",
-                    evidence_type="explicit",
-                )
-            ],
+            provenance=provenance,
             recorded_at=now,
             confidence=1.0,
-            facets=normalize_temporal_facets(metadata.facets.model_dump(), anchor),
+            facets=facets,
             claim_type=claim_type or metadata.claim_type,
             predicate=predicate if predicate is not None else metadata.predicate,
             evidence_modality="speech",
@@ -277,12 +331,16 @@ class ClaimLifecycleService:
             incoming_claim_ids={replacement_id, *reconsider},
             operation_id=f"correction-{short_id}",
         )
-        return ClaimLifecycleResult(
+        result = ClaimLifecycleResult(
             claim_ids=[replacement_id],
             source_ids=[source_id],
             pages_updated=sorted(pages.updated_slugs | pages.created_slugs),
             pages_deleted=sorted(pages.deleted_slugs),
         )
+        if draft is not None:
+            draft["result"] = asdict(result)
+            self.artifacts.db.put("correction-drafts", draft["draft_id"], draft)
+        return result
 
     async def _retract_source(
         self, source_id: str, *, reason: str

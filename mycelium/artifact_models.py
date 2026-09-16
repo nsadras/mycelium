@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from mycelium.temporal_contract import CanonicalTime
 from mycelium.ontology import (
     CLAIM_TYPES,
     ENTITY_TYPES,
@@ -130,6 +131,19 @@ class MemoryClaim:
         if temporal not in TEMPORAL_STATUSES:
             temporal = "unknown"
         self.temporal_status = temporal
+        if any(key in self.facets for key in ('when', 'deadline', 'time_expression', 'times')):
+            raise ValueError('Stored claim timing must use normalized temporal annotations')
+        times = self.facets.get('temporal', [])
+        if not isinstance(times, list):
+            raise ValueError('Stored temporal evidence must be a list')
+        cited_ids = {sid for provenance in self.provenance for sid in provenance.segment_ids}
+        for value in times:
+            annotation = CanonicalTime.model_validate(value)
+            if annotation.evidence_segment_id not in cited_ids:
+                raise ValueError('Time anchor must be cited by the claim')
+            if annotation.anchor_segment_id is not None and annotation.anchor_segment_id not in cited_ids:
+                raise ValueError('Time reference must be cited by the claim')
+
         if self.predicate is not None:
             self.predicate = " ".join(str(self.predicate).split()).strip() or None
         disposition = str(self.dream_disposition or "pending").strip().lower()
@@ -317,18 +331,9 @@ class IdentityWorkUnit:
     claim_ids: list[str]
     source_ids: list[str]
     status: str = "pending"
-    stage: str = "subject_nodes"
+    stage: str = "identity_plan"
     request_digest: str | None = None
     attempt_count: int = 0
-    subject_nodes: list[dict[str, Any]] = field(default_factory=list)
-    identity_node_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
-    local_identity_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
-    pending_identity_decisions: dict[str, dict[str, Any]] = field(default_factory=dict)
-    identity_groups: list[dict[str, Any]] = field(default_factory=list)
-    existing_identity_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
-    type_proposals: dict[str, dict[str, Any]] = field(default_factory=dict)
-    type_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
-    new_identity_verdicts: dict[str, dict[str, Any]] = field(default_factory=dict)
     entity_plan: dict[str, Any] = field(default_factory=dict)
     allocated_entity_ids: dict[str, str] = field(default_factory=dict)
     last_error: str | None = None

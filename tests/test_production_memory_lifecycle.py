@@ -1,3 +1,4 @@
+from tests.extraction_support import time_details
 from tests.session_support import configure_sessions, read_sessions, seed_sessions
 import asyncio
 
@@ -48,14 +49,9 @@ class DeterministicProductionModel:
                         "predicate": None,
                         "evidence_modality": "speech",
                         "temporal_status": "future",
-                        "temporal_anchor_segment_id": segment_id,
                         "about": [{"entity": "user", "role": "subject"}],
                         "segment_ids": [segment_id],
-                        "facets": {
-                            "when": "tomorrow",
-                            "deadline": None,
-                            "inference_basis": None,
-                        },
+                        "facets": time_details(segment_id, "tomorrow", {"kind":"day_offset", "days":1}),
                     }
                 ],
                 segment_ids[1:],
@@ -185,7 +181,7 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
         for episode in memory.artifacts.list_episodes()
     ]
     claim = active_claims[0]
-    temporal = claim.facets["temporal"]
+    temporal = claim.facets["temporal"][0]
     assert temporal["anchor"] == "2026-08-31T23:55:00+00:00"
     assert temporal["start"] == "2026-09-01"
     assert temporal["end"] == "2026-09-01"

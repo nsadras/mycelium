@@ -26,7 +26,7 @@ CASES = [
 ]
 
 
-async def main(system_suffix: Path | None = None, require_time_anchor: bool = False):
+async def main(system_suffix: Path | None = None):
     config = Config.from_toml(Path('mycelium.toml')).llm
     root = fresh_run_root('audit-extraction-contract')
     root.mkdir(parents=True)
@@ -47,13 +47,8 @@ async def main(system_suffix: Path | None = None, require_time_anchor: bool = Fa
                 system += '\n\n' + system_suffix.read_text().strip()
             schema = extraction_output_model(['new'], ['earlier'])
             sent_schema = schema.model_json_schema()
-            if require_time_anchor:
-                for definition in sent_schema.get('$defs', {}).values():
-                    if 'temporal_anchor_segment_id' in definition.get('properties', {}):
-                        definition['required'] = list(dict.fromkeys([*definition.get('required', []), 'temporal_anchor_segment_id']))
-                        definition['properties']['temporal_anchor_segment_id'].pop('default', None)
             with trace_operation('extraction_probe', case=name, trial=trial):
-                result = await client.call_structured(system, user, sent_schema if require_time_anchor else schema, num_predict=8192,
+                result = await client.call_structured(system, user, schema, num_predict=8192,
                                                       debug_label='extraction-probe')
             record={'case':name,'trial':trial,'system':system,'user':user,
                     'schema':sent_schema,'response':schema.model_validate(result).model_dump()}
@@ -66,6 +61,5 @@ async def main(system_suffix: Path | None = None, require_time_anchor: bool = Fa
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--system-suffix', type=Path)
-    parser.add_argument('--require-time-anchor', action='store_true')
     args = parser.parse_args()
-    asyncio.run(main(args.system_suffix, args.require_time_anchor))
+    asyncio.run(main(args.system_suffix))

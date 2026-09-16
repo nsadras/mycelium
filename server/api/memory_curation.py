@@ -102,6 +102,8 @@ async def correct_claim(claim_id: str, req: ClaimCorrectionRequest):
             claim_type=req.claim_type,
             predicate=req.predicate,
             temporal_status=req.temporal_status,
+            draft_id=req.draft_id,
+            time_references=req.time_references,
         )
         return _claim_lifecycle_response(result)
     except FileNotFoundError as exc:

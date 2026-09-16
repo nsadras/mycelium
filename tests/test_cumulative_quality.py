@@ -88,7 +88,7 @@ async def test_temporal_scope_contract(
         return {
             "text": text,
             "temporal_status": "unknown",
-            "temporal": None,
+            "temporal": [],
             "source_times": [
                 {
                     "source_id": "s" + date,
@@ -117,7 +117,7 @@ async def test_temporal_scope_contract(
 def test_extraction_requires_explicit_temporal_classification():
     from mycelium.structured_outputs import extraction_output_model
     schema = extraction_output_model(["s1"])
-    claim = {'text': 'A stored assertion.', 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': ['s1'], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'when': None, 'deadline': None, 'inference_basis': None}}
+    claim = {'text': 'A stored assertion.', 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': ['s1'], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'times': [], 'inference_basis': None}}
     with pytest.raises(ValidationError, match="temporal_status"):
         schema.model_validate({"segments": {"s1": {"claims": [claim]}}})
     claim["temporal_status"] = "unknown"

@@ -7,7 +7,7 @@ def lifecycle_response(_system, user, schema, **kwargs):
     if stage == 'memory-correction':
         return {'about': [{'entity': 'user', 'role': 'subject'}], 'claim_type': 'preference',
                 'predicate': None, 'temporal_status': 'atemporal',
-                'facets': {'when': None, 'deadline': None, 'inference_basis': None}, 'time_anchor': None}
+                'facets': {'times': [], 'inference_basis': None}}
     if stage == 'dream-identity-plan':
         return {'subjects': [{'resolution': 'existing', 'entity_id': 'you', 'title': None, 'reason': 'The statement concerns the user.', 'supporting_evidence': ['C001'], 'aliases': []}]}
     if stage == 'dream-claim-routing':

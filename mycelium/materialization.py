@@ -21,7 +21,7 @@ from mycelium.models import Edge, UpdateLogEntry, WikiPage
 from mycelium.ontology import ENTITY_ONTOLOGY, PageType, section_pairs
 from mycelium.projection import display_claim_text
 from mycelium.store import WikiStore
-from mycelium.temporal import temporal_record
+from mycelium.temporal import temporal_records
 
 
 INDEX_GROUPS: tuple[tuple[PageType, str], ...] = tuple(
@@ -527,8 +527,8 @@ class PageMaterializer:
                 str(temporal["start"])
                 for claim_id in value.member_claim_ids
                 if claim_id in claims_by_id
-                for temporal in [temporal_record(claims_by_id[claim_id].facets)]
-                if temporal and temporal.get("start")
+                for temporal in temporal_records(claims_by_id[claim_id].facets)
+                if temporal.get("role") == "event_time" and temporal.get("start")
             )
             return (
                 not bool(starts),
@@ -575,13 +575,13 @@ class PageMaterializer:
             temporal_evidence = [
                 dict(temporal)
                 for member in members
-                for temporal in [temporal_record(member.facets)]
+                for temporal in temporal_records(member.facets)
                 if temporal
             ]
             event_times = sorted({
                 str(temporal["start"])
                 for temporal in temporal_evidence
-                if temporal.get("start")
+                if temporal.get("role") == "event_time" and temporal.get("start")
             })
             for temporal in temporal_evidence:
                 start = str(temporal.get("start") or "")
@@ -590,7 +590,7 @@ class PageMaterializer:
                     continue
                 normalized = start if not end or end == start else f"{start}–{end}"
                 role = str(temporal.get("role") or "date").replace("_", " ")
-                qualifiers.append(f"{role}: {normalized}")
+                qualifiers.append(f"{role} for {temporal['target']}: {normalized}")
             sources = [
                 {
                     "source_id": provenance.source_id,

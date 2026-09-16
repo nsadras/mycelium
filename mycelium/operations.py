@@ -50,9 +50,15 @@ class EvidenceCitation:
 class EvidenceTime:
     claim_id: str
     role: str
-    start: str
+    start: str | None
     end: str | None = None
     expression: str | None = None
+    target: str | None = None
+    evidence_segment_id: str | None = None
+    anchor_segment_id: str | None = None
+    reference_reason: str | None = None
+    status: Literal["resolved", "unresolved"] = "resolved"
+    resolution_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +154,7 @@ class MemoryWorkspace:
     operations: tuple[MemoryWorkspaceOperation, ...]
     remaining_searches: int
     remaining_evidence_tokens: int
+    last_operation_status: Literal["none", "complete", "failed"] = "none"
 
 
 @dataclass(frozen=True)

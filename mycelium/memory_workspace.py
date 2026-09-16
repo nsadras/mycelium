@@ -17,6 +17,8 @@ from mycelium.operations import (
 class MemoryWorkspaceAccumulator:
     """Accumulate complete typed evidence without asking the model to manage state."""
 
+    operation_history_limit = 8
+
     def __init__(
         self,
         request: str,
@@ -28,18 +30,22 @@ class MemoryWorkspaceAccumulator:
         self.request = request
         self.evidence = initial_evidence
         self.operations: list[MemoryWorkspaceOperation] = []
+        self.revision = 0
         self.remaining_searches = remaining_searches
         self.remaining_evidence_tokens = remaining_evidence_tokens
 
     @property
     def snapshot(self) -> MemoryWorkspace:
         return MemoryWorkspace(
-            revision=len(self.operations),
+            revision=self.revision,
             request=self.request,
             evidence=self.evidence,
             operations=tuple(self.operations),
             remaining_searches=self.remaining_searches,
             remaining_evidence_tokens=self.remaining_evidence_tokens,
+            last_operation_status=self.operations[-1].status
+            if self.operations
+            else "none",
         )
 
     def record_success(
@@ -51,18 +57,14 @@ class MemoryWorkspaceAccumulator:
         remaining_searches: int,
         remaining_evidence_tokens: int,
     ) -> MemoryWorkspace:
-        previous_record_ids = {
-            record.record_id for record in self.evidence.records
-        }
-        previous_source_ids = {
-            source.source_id for source in self.evidence.sources
-        }
+        previous_record_ids = {record.record_id for record in self.evidence.records}
+        previous_source_ids = {source.source_id for source in self.evidence.sources}
         self.evidence = merge_memory_evidence(self.evidence, evidence)
         self.remaining_searches = remaining_searches
         self.remaining_evidence_tokens = remaining_evidence_tokens
-        self.operations.append(
+        self._append_operation(
             MemoryWorkspaceOperation(
-                sequence=len(self.operations) + 1,
+                sequence=self.revision + 1,
                 tool_name=_memory_tool_name(tool_name),
                 status="complete",
                 query=(
@@ -100,9 +102,9 @@ class MemoryWorkspaceAccumulator:
     ) -> MemoryWorkspace:
         self.remaining_searches = remaining_searches
         self.remaining_evidence_tokens = remaining_evidence_tokens
-        self.operations.append(
+        self._append_operation(
             MemoryWorkspaceOperation(
-                sequence=len(self.operations) + 1,
+                sequence=self.revision + 1,
                 tool_name=_memory_tool_name(tool_name),
                 status="failed",
                 query=(
@@ -120,6 +122,11 @@ class MemoryWorkspaceAccumulator:
         )
         return self.snapshot
 
+    def _append_operation(self, operation: MemoryWorkspaceOperation) -> None:
+        self.revision = operation.sequence
+        self.operations.append(operation)
+        del self.operations[: -self.operation_history_limit]
+
 
 def merge_memory_evidence(
     current: MemoryEvidence, incoming: MemoryEvidence
@@ -134,12 +141,28 @@ def merge_memory_evidence(
             records[record.record_id] = replace(
                 prior,
                 claim_ids=tuple(dict.fromkeys((*prior.claim_ids, *record.claim_ids))),
-                canonical_claims=tuple({c.claim_id: c for c in (*prior.canonical_claims, *record.canonical_claims)}.values()),
+                canonical_claims=tuple(
+                    {
+                        c.claim_id: c
+                        for c in (*prior.canonical_claims, *record.canonical_claims)
+                    }.values()
+                ),
                 citations=tuple(dict.fromkeys((*prior.citations, *record.citations))),
                 temporal=tuple(dict.fromkeys((*prior.temporal, *record.temporal))),
-                reviews=tuple({r.proposal_id: r for r in (*prior.reviews, *record.reviews)}.values()),
-                uncertainty=tuple(dict.fromkeys((*prior.uncertainty, *record.uncertainty))),
-                revisions=tuple({(r['relation'], r['claim_id']): r for r in (*prior.revisions, *record.revisions)}.values()),
+                reviews=tuple(
+                    {
+                        r.proposal_id: r for r in (*prior.reviews, *record.reviews)
+                    }.values()
+                ),
+                uncertainty=tuple(
+                    dict.fromkeys((*prior.uncertainty, *record.uncertainty))
+                ),
+                revisions=tuple(
+                    {
+                        (r["relation"], r["claim_id"]): r
+                        for r in (*prior.revisions, *record.revisions)
+                    }.values()
+                ),
             )
 
     sources = {source.source_id: source for source in current.sources}

@@ -181,9 +181,15 @@ export interface WikiFactItem {
   event_time?: string | null;
   temporal_evidence: {
     expression: string;
+    target: string;
+    evidence_segment_id: string;
+    anchor_segment_id: string | null;
+    anchor: string | null;
+    reference_reason: string | null;
+    resolution_error: string | null;
     role?: string;
-    start?: string;
-    end?: string;
+    start?: string | null;
+    end?: string | null;
     status?: string;
     certainty?: string;
   }[];

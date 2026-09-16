@@ -1,3 +1,4 @@
+from tests.extraction_support import stored_time
 import pytest
 from mycelium.artifacts import (
     ArtifactStore,
@@ -139,31 +140,13 @@ def test_timeline_uses_normalized_time_and_markdown_cites_exact_evidence(tmp_pat
         "claim-later",
         "The launch review is next Friday.",
         "event",
-        facets={
-            "temporal": {
-                "expression": "next Friday",
-                "role": "event_time",
-                "status": "resolved",
-                "certainty": "exact",
-                "start": "2026-08-21",
-                "end": "2026-08-21",
-            }
-        },
+        facets=stored_time('source-1#claim-later', 'next Friday', {'kind':'day_offset','days':9}, '2026-08-12', target='Scheduled event'),
     )
     earlier = claim(
         "claim-earlier",
         "The planning session is tomorrow.",
         "event",
-        facets={
-            "temporal": {
-                "expression": "tomorrow",
-                "role": "event_time",
-                "status": "resolved",
-                "certainty": "exact",
-                "start": "2026-08-13",
-                "end": "2026-08-13",
-            }
-        },
+        facets=stored_time('source-1#claim-earlier', 'tomorrow', {'kind':'day_offset','days':1}, '2026-08-12', target='Scheduled event'),
     )
     place(artifacts, later, project, "timeline")
     place(artifacts, earlier, project, "timeline")
@@ -176,7 +159,7 @@ def test_timeline_uses_normalized_time_and_markdown_cites_exact_evidence(tmp_pat
     ]
     assert items[0]["event_time"] == "2026-08-13"
     assert items[0]["temporal_evidence"][0]["expression"] == "tomorrow"
-    assert "event time: 2026-08-13" in items[0]["qualifiers"]
+    assert "event time for Scheduled event: 2026-08-13" in items[0]["qualifiers"]
     assert "[^e1]" in page.content
     assert "[^e1]: `source-1` · `source-1#claim-earlier`" in page.content
 

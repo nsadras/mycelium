@@ -56,7 +56,7 @@ async def test_grounded_synthesis(tmp_path, monkeypatch, name, texts, count, exp
                  "relation": "supersedes", "explanation": "The newer statement explicitly replaces the prior state."}]
                if name in {"conflict", "conflict_with_other_memories"} else [])
     schema = fact_synthesis_output_model(claims, ["profile", "history", "needs_review"], changes)
-    canonical = {alias: {"text": text, "temporal_status": "unknown", "temporal": None}
+    canonical = {alias: {"text": text, "temporal_status": "unknown", "temporal": []}
                  for alias, text in claims.items()}
     system, user = prompts.fact_synthesis_prompt(
         "Mira (person)", json.dumps(canonical),
@@ -95,7 +95,7 @@ async def test_repartitions_overbroad_existing_group(tmp_path, monkeypatch):
              "Rina plans to take a ceramics course in October."]
     claims = {f"C{i:03d}": text for i, text in enumerate(texts, 1)}
     canonical = {alias: {"text": text, "temporal_status": "past" if alias in {"C003", "C004", "C005", "C006"} else "current",
-                         "temporal": None} for alias, text in claims.items()}
+                         "temporal": []} for alias, text in claims.items()}
     system, user = prompts.fact_synthesis_prompt("Rina (person)", json.dumps(canonical),
         "An existing display fact groups C001 through C006 into one long sentence.", "[]",
         "profile: preferences and plans; history: completed occurrences")

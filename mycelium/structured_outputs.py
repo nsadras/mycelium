@@ -13,6 +13,8 @@ from pydantic import (
     model_validator,
 )
 
+from mycelium.temporal_contract import ExtractedDetails, temporal_details_model
+
 from mycelium.ontology import (
     ClaimType,
 )
@@ -24,27 +26,14 @@ class ExtractedEntityOutput(BaseModel):
     role: Literal["subject", "owner", "participant"]
 
 
-class ExtractedDetails(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    when: str | None = Field(
-        description="Time words stated for the event or state; null if absent"
-    )
-    deadline: str | None = Field(
-        description="Latest permissible completion time explicitly imposed by the source; a scheduled day alone gives when, with deadline null"
-    )
-    inference_basis: str | None = Field(
-        description="Evidence for an inferred assertion; null for a directly stated assertion"
-    )
 
-
-class CorrectionMetadata(BaseModel):
+class ReplacementMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
     about: list[ExtractedEntityOutput] = Field(min_length=1)
     claim_type: ClaimType
     predicate: Literal["project_role"] | None
     temporal_status: Literal["past", "current", "future", "recurring", "atemporal", "unknown"]
-    facets: ExtractedDetails
-    time_anchor: Literal["original", "correction"] | None
+    facets: temporal_details_model(["replacement"])
 
 
 class ExtractedClaimOutput(BaseModel):
@@ -60,7 +49,6 @@ class ExtractedClaimOutput(BaseModel):
     temporal_status: Literal[
         "past", "current", "future", "recurring", "atemporal", "unknown"
     ]
-    temporal_anchor_segment_id: str | None = None
     about: list[ExtractedEntityOutput] = Field(min_length=1, max_length=12)
     segment_ids: list[str] = Field(min_length=1, max_length=32)
     facets: ExtractedDetails
@@ -88,11 +76,7 @@ def extraction_output_model(
         "ExtractedStatement",
         __base__=ExtractedClaimOutput,
         segment_ids=(list[id_type], Field(max_length=32)),
-        temporal_anchor_segment_id=(
-            Literal.__getitem__(tuple(sorted(set(ids) | set(context_segment_ids))))
-            | None,
-            None,
-        ),
+        facets=(temporal_details_model([*ids, *context_segment_ids]), ...),
         **fields,
     )
     evidence_order = ["segment_ids", *fields, "temporal_status", "facets"]
@@ -132,18 +116,10 @@ def extraction_output_model(
                 if not isinstance(value, claimed):
                     continue
                 for item in value.claims:
-                    if (
-                        item.temporal_anchor_segment_id is not None
-                        and item.temporal_anchor_segment_id
-                        not in [
-                            sid,
-                            *item.segment_ids,
-                            *getattr(item, "context_segment_ids", []),
-                        ]
-                    ):
-                        raise ValueError(
-                            "A time anchor must be one of the claim's cited evidence segments"
-                        )
+                    cited = {sid, *item.segment_ids, *getattr(item, 'context_segment_ids', [])}
+                    for annotation in item.facets.times:
+                        if annotation.evidence_segment_id not in cited:
+                            raise ValueError("A time anchor must be one of the claim's cited evidence segments")
             return self
 
     return ExactExtractionResponse
@@ -175,12 +151,6 @@ class GroundedAnswerOutput(BaseModel):
     evidence: str | None = None
 
 
-class AssistantContextCandidateDecisionOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    disposition: Literal["include", "exclude"]
-    reason: str = Field(min_length=1, max_length=500)
-
-
 def complementary_selection_model(candidate_aliases: Collection[str], limit: int = 5) -> type[BaseModel]:
     aliases = tuple(candidate_aliases)
     if not aliases:
@@ -200,25 +170,6 @@ def complementary_selection_model(candidate_aliases: Collection[str], limit: int
             return self
 
     return ComplementarySelection
-
-
-def assistant_context_selection_output_model(
-    candidate_aliases: Collection[str],
-) -> type[BaseModel]:
-    """Require an explicit relevance disposition for every supplied candidate."""
-    aliases = tuple(sorted({str(value) for value in candidate_aliases if value}))
-    if not aliases:
-        raise ValueError("Context selection requires at least one candidate alias")
-    decisions_model = create_model(
-        "AssistantContextCandidateDecisions",
-        __config__=ConfigDict(extra="forbid"),
-        **{alias: (AssistantContextCandidateDecisionOutput, ...) for alias in aliases},
-    )
-    return create_model(
-        "AssistantContextSelectionOutput",
-        __config__=ConfigDict(extra="forbid"),
-        decisions=(decisions_model, ...),
-    )
 
 
 class FactCandidateSelectionOutput(BaseModel):

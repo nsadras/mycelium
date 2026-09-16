@@ -31,7 +31,7 @@ from mycelium.temporal import (
     normalize_temporal_facets,
     parse_source_datetime,
     temporal_intervals_overlap,
-    temporal_record,
+    temporal_records,
 )
 
 __all__ = [
@@ -63,5 +63,5 @@ __all__ = [
     "parse_source_datetime",
     "segment_transcript",
     "temporal_intervals_overlap",
-    "temporal_record",
+    "temporal_records",
 ]

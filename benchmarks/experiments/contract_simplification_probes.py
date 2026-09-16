@@ -292,7 +292,7 @@ async def context_selection():
             "context-" + name,
             system,
             user,
-            contracts.assistant_context_selection_output_model(
+            contracts.complementary_selection_model(
                 ["M001", "M002", "M003"]
             ),
         )

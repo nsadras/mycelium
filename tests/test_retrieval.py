@@ -1,3 +1,4 @@
+from tests.extraction_support import stored_time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -84,14 +85,8 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
         provenance=[ClaimProvenance("source-1", ["segment-1"])],
         recorded_at="2026-01-01T00:00:00+00:00",
         dream_disposition="routed",
-        facets={
-            "temporal": {
-                "role": "recurrence",
-                "start": "2026-01-03",
-                "end": "2026-01-03",
-                "expression": "every Saturday",
-            }
-        },
+        facets=stored_time('segment-1', 'every Saturday', {'kind':'unresolved', 'reason':'A recurrence has no single bounded interval'}, None,
+                           target='Mira practices cello'),
     )
     artifacts.save_claim(claim)
     entity = artifacts.create_entity("person", "Mira")
@@ -153,8 +148,9 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
     assert record.subject_entity_id == entity.entity_id
     assert record.subject_name == "Mira"
     assert record.claim_ids == ("claim-1",)
-    assert record.temporal[0].role == "recurrence"
-    assert record.temporal[0].start == "2026-01-03"
+    assert record.temporal[0].role == "event_time"
+    assert record.temporal[0].start is None
+    assert record.temporal[0].status == "unresolved"
     assert record.citations[0].segment_ids == ("segment-1",)
     assert record.citations[0].source_time == "2026-01-01T00:00:00+00:00"
     assert result.evidence.sources == ()

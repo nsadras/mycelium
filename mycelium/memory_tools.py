@@ -8,7 +8,12 @@ from typing import Any
 from mycelium.budget import count_tokens
 from mycelium.memory_workspace import MemoryWorkspaceAccumulator
 from mycelium.ollama import ToolExecutionResult
-from mycelium.operations import MemoryEvidence, MemoryWorkspace, RetrievalError
+from mycelium.operations import (
+    MemoryEvidence,
+    MemoryWorkspace,
+    MemoryWorkspaceOperation,
+    RetrievalError,
+)
 from mycelium.retrieval import MemoryRetriever
 from mycelium.retrieval_context import (
     render_memory_search_result,
@@ -116,7 +121,10 @@ class MemoryToolset:
             remaining_searches=self.search_limit,
             remaining_evidence_tokens=self.remaining_evidence_tokens,
         )
-        self.workspace_budget_tokens = count_tokens(render_memory_workspace(self.workspace.snapshot)) + self.remaining_evidence_tokens
+        self.workspace_budget_tokens = (
+            count_tokens(render_memory_workspace(self.workspace.snapshot))
+            + self.remaining_evidence_tokens
+        )
 
     async def run(
         self, tool_name: str, arguments: dict[str, Any]
@@ -151,7 +159,8 @@ class MemoryToolset:
                 )
                 result_evidence = source_result.evidence
             self.workspace.evidence = self.retriever.refresh_evidence(
-                self.workspace.evidence, budget_tokens=self.workspace_budget_tokens,
+                self.workspace.evidence,
+                budget_tokens=self.workspace_budget_tokens,
             )
             workspace = self.workspace.record_success(
                 tool_name,
@@ -160,12 +169,9 @@ class MemoryToolset:
                 remaining_searches=self.search_limit - self.search_count,
                 remaining_evidence_tokens=self.remaining_evidence_tokens,
             )
-            self.workspace.evidence = fit_memory_evidence(
-                self.workspace.evidence,
-                lambda trial: count_tokens(render_memory_workspace(replace(workspace, evidence=trial))) <= self.workspace_budget_tokens,
+            return self._execution_result(
+                rendered, self._fit_workspace(), workspace.operations[-1]
             )
-            workspace = self.workspace.snapshot
-            return self._execution_result(rendered, workspace)
         except (TypeError, ValueError, RetrievalError) as exc:
             rendered = render_memory_tool_error(str(exc))
             workspace = self.workspace.record_failure(
@@ -175,13 +181,49 @@ class MemoryToolset:
                 remaining_searches=self.search_limit - self.search_count,
                 remaining_evidence_tokens=self.remaining_evidence_tokens,
             )
-            return self._execution_result(rendered, workspace)
+            return self._execution_result(
+                rendered, self._fit_workspace(), workspace.operations[-1]
+            )
+
+    def _fit_workspace(self) -> MemoryWorkspace:
+        """Bound diagnostics before admitting complete evidence, including on failure."""
+        workspace = self.workspace.snapshot
+        operations = list(workspace.operations)
+
+        def fits(value):
+            return (
+                count_tokens(render_memory_workspace(value))
+                <= self.workspace_budget_tokens
+            )
+
+        while len(operations) > 1 and not fits(
+            replace(workspace, operations=tuple(operations))
+        ):
+            operations.pop(0)
+        if operations and not fits(replace(workspace, operations=tuple(operations))):
+            operations = [
+                replace(
+                    operations[0],
+                    query=None,
+                    requested_claim_ids=(),
+                    added_record_ids=(),
+                    added_source_ids=(),
+                    error=None,
+                )
+            ]
+        if not fits(replace(workspace, operations=tuple(operations))):
+            operations = []
+        workspace = replace(workspace, operations=tuple(operations))
+        self.workspace.evidence = fit_memory_evidence(
+            self.workspace.evidence,
+            lambda trial: fits(replace(workspace, evidence=trial)),
+        )
+        return replace(workspace, evidence=self.workspace.evidence)
 
     @staticmethod
     def _execution_result(
-        rendered: str, workspace: MemoryWorkspace
+        rendered: str, workspace: MemoryWorkspace, operation: MemoryWorkspaceOperation
     ) -> ToolExecutionResult:
-        operation = workspace.operations[-1]
         return ToolExecutionResult(
             result=rendered,
             model_result=render_memory_workspace(workspace),
@@ -202,7 +244,9 @@ class MemoryToolset:
         if not query:
             raise ValueError("memory_search requires a nonempty query")
         if self.search_count >= self.search_limit:
-            raise ValueError("The memory search limit for this response has been reached.")
+            raise ValueError(
+                "The memory search limit for this response has been reached."
+            )
         if self.remaining_evidence_tokens <= 0:
             raise ValueError("The memory evidence budget has been exhausted.")
 
@@ -257,9 +301,7 @@ class MemoryToolset:
             raise ValueError("The memory evidence budget has been exhausted.")
 
         envelope_tokens = count_tokens(
-            render_memory_source_result(
-                MemoryEvidence(), requested_claim_ids=permitted
-            )
+            render_memory_source_result(MemoryEvidence(), requested_claim_ids=permitted)
         )
         evidence_budget = self.remaining_evidence_tokens - envelope_tokens
         if evidence_budget <= 0:

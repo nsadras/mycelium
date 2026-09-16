@@ -5,7 +5,7 @@ import shutil
 import sqlite3
 from pathlib import Path
 
-from mycelium.database import database
+from mycelium.database import database, SCHEMA_VERSION
 
 
 def snapshot_store(source: Path, destination: Path) -> None:
@@ -53,7 +53,7 @@ def export_records(source: Path, destination: Path) -> None:
     )
     try:
         connection.execute("BEGIN")
-        if connection.execute("PRAGMA user_version").fetchone()[0] != 1:
+        if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
             raise ValueError("Export requires a current SQLite store")
         for kind, identifier, payload in connection.execute(
             "SELECT kind,id,payload FROM records ORDER BY kind,id"

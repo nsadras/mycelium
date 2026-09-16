@@ -50,6 +50,8 @@ class ClaimCorrectionRequest(BaseModel):
     claim_type: str | None = None
     predicate: str | None = None
     temporal_status: str | None = None
+    draft_id: str | None = None
+    time_references: dict[str, str] | None = None
 
 
 class SourceRetractionRequest(BaseModel):

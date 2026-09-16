@@ -29,6 +29,7 @@ from mycelium.operations import (
     WikiPageReference,
 )
 from mycelium.store import WikiStore
+from mycelium.temporal import temporal_records
 
 
 def fit_memory_evidence(
@@ -83,7 +84,7 @@ def render_memory_workspace(workspace: MemoryWorkspace, *, include_request: bool
     return _render_evidence_envelope(
         "memory-workspace",
         workspace.evidence,
-        attributes={"revision": str(workspace.revision)},
+        attributes={"revision": str(workspace.revision), "last_operation_status": workspace.last_operation_status},
         preamble=(
             *([f"Original request: {_text(workspace.request)}"] if include_request else []),
             f"Remaining searches: {workspace.remaining_searches}",
@@ -196,7 +197,7 @@ def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
         if record.temporal:
             lines.append("Timing:")
             for value in record.temporal:
-                interval = _text(value.start)
+                interval = _text(value.start) if value.start else "unresolved"
                 if value.end and value.end != value.start:
                     interval += f" through {_text(value.end)}"
                 expression = (
@@ -207,6 +208,11 @@ def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
                 lines.append(
                     f"- Claim `{_text(value.claim_id)}`: {_text(value.role)} "
                     f"{interval}{expression}"
+                    + (f"; applies to: {_text(value.target)}" if value.target else "")
+                    + (f"; time evidence: `{_text(value.evidence_segment_id)}`" if value.evidence_segment_id else "")
+                    + (f"; reference date from: `{_text(value.anchor_segment_id)}`" if value.anchor_segment_id and value.anchor_segment_id != value.evidence_segment_id else "")
+                    + (f"; reference choice: {_text(value.reference_reason)}" if value.reference_reason else "")
+                    + (f"; reason: {_text(value.resolution_reason)}" if value.resolution_reason else "")
                 )
         if record.citations:
             lines.append("Evidence references:")
@@ -476,21 +482,15 @@ class RetrievedContextBuilder:
         citations: list[EvidenceCitation] = []
         seen_citations: set[tuple[str, str, tuple[str, ...]]] = set()
         for claim in claims:
-            value = claim.facets.get("temporal")
-            if isinstance(value, dict) and value.get("start"):
-                temporal.append(
-                    EvidenceTime(
-                        claim_id=claim.claim_id,
-                        role=str(value.get("role") or "time"),
-                        start=str(value["start"]),
-                        end=str(value["end"]) if value.get("end") else None,
-                        expression=(
-                            str(value["expression"])
-                            if value.get("expression")
-                            else None
-                        ),
-                    )
-                )
+            for value in temporal_records(claim.facets):
+                temporal.append(EvidenceTime(
+                    claim_id=claim.claim_id, role=value['role'], start=value['start'],
+                    end=value['end'], expression=value['expression'], target=value['target'],
+                    evidence_segment_id=value['evidence_segment_id'], status=value['status'],
+                    anchor_segment_id=value['anchor_segment_id'],
+                    reference_reason=value['reference_reason'],
+                    resolution_reason=value['meaning'].get('reason') or value['resolution_error'],
+                ))
             for provenance in claim.provenance:
                 key = (
                     claim.claim_id,
@@ -679,24 +679,22 @@ class RetrievedContextBuilder:
     @staticmethod
     def _timing_lines(claims: list[MemoryClaim]) -> list[str]:
         lines: list[str] = []
-        seen: set[tuple[str, str, str, str]] = set()
+        seen = set()
         for claim in claims:
-            temporal = claim.facets.get("temporal")
-            if not isinstance(temporal, dict):
-                continue
-            role = str(temporal.get("role") or "time")
-            start = str(temporal.get("start") or "")
-            end = str(temporal.get("end") or "")
-            expression = str(temporal.get("expression") or "")
-            if not start:
-                continue
-            key = (role, start, end, expression)
-            if key in seen:
-                continue
-            seen.add(key)
-            interval = start if not end or end == start else f"{start} through {end}"
-            source_phrase = f"; source expression: {expression}" if expression else ""
-            lines.append(f"  - Structured timing: {role} {interval}{source_phrase}")
+            for temporal in temporal_records(claim.facets):
+                role, target = temporal['role'], temporal['target']
+                start, end = temporal['start'], temporal['end']
+                expression = temporal['expression']
+                key = (role, target, start, end, expression, temporal['evidence_segment_id'], temporal['anchor_segment_id'])
+                if key in seen:
+                    continue
+                seen.add(key)
+                interval = start or 'unresolved'
+                if end and end != start:
+                    interval += f' through {end}'
+                lines.append(f"  - Structured timing: {role} for {target}: {interval}; source expression: {expression}; time evidence: {temporal['evidence_segment_id']}")
+                if temporal['anchor_segment_id'] and temporal['anchor_segment_id'] != temporal['evidence_segment_id']:
+                    lines.append(f"    Reference date from: {temporal['anchor_segment_id']}")
         return lines
 
     @staticmethod

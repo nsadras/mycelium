@@ -15,7 +15,7 @@ from mycelium.artifacts import (
     EntityRecord,
     MemoryClaim,
     ReconsolidationProposal,
-    temporal_record,
+    temporal_records,
 )
 from mycelium.batching import structured_input_budget
 from mycelium.budget import request_tokens
@@ -705,7 +705,7 @@ class FactResolver:
 
     def _canonical_record(self, claim: MemoryClaim) -> dict:
         return {"text": display_claim_text(claim), "temporal_status": claim.temporal_status,
-                "temporal": temporal_record(claim.facets), "source_times": self._source_times(claim)}
+                "temporal": temporal_records(claim.facets), "source_times": self._source_times(claim)}
 
     def _source_times(self, claim: MemoryClaim) -> list[dict]:
         """Carry cited occurrence anchors, never ingestion wall-clock time."""
@@ -769,7 +769,7 @@ class FactResolver:
                 "predicate": claim.predicate,
                 "text": claim.text,
                 "temporal_status": claim.temporal_status,
-                "temporal": temporal_record(claim.facets),
+                "temporal": temporal_records(claim.facets),
                 "citations": citations,
                 "linked_entities": [
                     alias_for_entity[e]

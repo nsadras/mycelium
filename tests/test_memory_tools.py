@@ -203,6 +203,24 @@ async def test_failed_memory_operation_is_recorded_without_changing_evidence():
     assert workspace.operations[0].error
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget", [1, 500])
+async def test_rejected_tools_keep_workspace_bounded_and_preserve_evidence(budget):
+    tools, retriever = _toolset(evidence_budget_tokens=budget)
+    original = tools.workspace.snapshot.evidence
+    for index in range(100):
+        result = await tools.run("memory_sources", {"claim_ids": ["unknown-" + str(index) + "x" * 1000]})
+        assert count_tokens(result.model_result) <= tools.workspace_budget_tokens
+        assert 'last_operation_status="failed"' in result.model_result
+        assert result.metadata["workspace_revision"] == index + 1
+        assert result.metadata["workspace_operation"]["status"] == "failed"
+        assert tools.workspace.snapshot.evidence == original
+    assert len(tools.workspace.operations) == tools.workspace.operation_history_limit
+    assert tools.workspace.operations[0].sequence == 93
+    assert tools.workspace.operations[-1].sequence == 100
+    retriever.source_evidence.assert_not_called()
+
+
 def test_workspace_merges_source_segments_in_chronological_order():
     def evidence(segment_id: str, index: int, claim_id: str) -> MemoryEvidence:
         return MemoryEvidence(sources=(EvidenceSource(

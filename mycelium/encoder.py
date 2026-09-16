@@ -11,6 +11,7 @@ from mycelium.models import LogEntry
 from mycelium.operations import IngestionResult, SourceInput
 from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
+from mycelium.temporal import source_time_anchors
 from mycelium.config import Config
 from mycelium import prompts
 from mycelium.structured_outputs import extraction_output_model, extraction_records
@@ -385,10 +386,11 @@ class Encoder:
                 for source_id in source.metadata.get("context_source_ids", [])
             ]
             # Bound earlier context independently; never truncate a cited segment.
+            time_by_id = source_time_anchors([source, *context_sources])
             selected_context = []
             context_tokens = 0
             for prior in reversed(context_sources):
-                cost = count_tokens(self._render_segments(prior.segments))
+                cost = count_tokens(self._render_segments(prior.segments, time_by_id))
                 if (
                     prior.status == "active"
                     and context_tokens + cost
@@ -417,14 +419,14 @@ class Encoder:
                 context_limit = self.config.llm.context_window_tokens // 4
                 for segment in reversed(source.segments[:start]):
                     trial = [segment, *neighbors]
-                    if count_tokens(self._render_segments(trial)) > context_limit:
+                    if count_tokens(self._render_segments(trial, time_by_id)) > context_limit:
                         break
                     neighbors = trial
                 # The adjacent same-source context has priority over older sources.
                 supplied_context = list(neighbors)
                 for segment in reversed(context_segments):
                     trial = [segment, *supplied_context]
-                    if count_tokens(self._render_segments(trial)) > context_limit:
+                    if count_tokens(self._render_segments(trial, time_by_id)) > context_limit:
                         break
                     supplied_context = trial
                 schema = extraction_output_model(
@@ -435,8 +437,8 @@ class Encoder:
                     source.source_type,
                     source.source_id,
                     list(source.participants),
-                    self._render_claim_segments(batch),
-                    context=self._render_segments(supplied_context),
+                    self._render_claim_segments(batch, time_by_id),
+                    context=self._render_segments(supplied_context, time_by_id),
                 )
                 return system, user, schema, neighbors, bool(supplied_context)
 
@@ -583,21 +585,16 @@ class Encoder:
         self.artifacts.save_episode(episode)
 
     @staticmethod
-    def _render_segments(segments: list[SourceSegment]) -> str:
+    def _render_segments(segments: list[SourceSegment], time_by_id: dict | None = None) -> str:
         return "\n\n".join(
             f"[{segment.segment_id}] speaker={segment.speaker or 'unknown'}; role={segment.role or 'unknown'}; "
-            f"time={segment.timestamp or 'unknown'}\n{segment.content}"
+            f"message_time={segment.timestamp or (time_by_id or {}).get(segment.segment_id) or 'unknown'}\n{segment.content}"
             for segment in segments
         )
 
     @staticmethod
-    def _render_claim_segments(segments: list[SourceSegment]) -> str:
-        """Render semantic evidence without exposing recording-time metadata."""
-        return "\n\n".join(
-            f"[{segment.segment_id}] speaker={segment.speaker or 'unknown'}; "
-            f"role={segment.role or 'unknown'}\n{segment.content}"
-            for segment in segments
-        )
+    def _render_claim_segments(segments: list[SourceSegment], time_by_id: dict | None = None) -> str:
+        return Encoder._render_segments(segments, time_by_id)
 
     @staticmethod
     def _segment_batches(
@@ -632,6 +629,7 @@ class Encoder:
     ) -> list[MemoryClaim]:
         """Build a validated batch before any claim in it is persisted."""
         claims: list[MemoryClaim] = []
+        time_by_id = source_time_anchors([source, *(context_sources or [])])
         for claim_index, raw in enumerate(response["claims"], start=1):
             claim_text = str(raw["text"]).strip()
             segment_ids = list(dict.fromkeys(raw["segment_ids"]))
@@ -649,48 +647,10 @@ class Encoder:
             facets = dict(raw.get("facets", {}) or {})
             # The model declares an inference by supplying its evidence basis.
             is_inferred = facets.get("inference_basis") is not None
-            cited_segments = [
-                segment
-                for segment in source.segments
-                if segment.segment_id in segment_ids
-            ]
-            anchor_segment_id = str(raw.get("temporal_anchor_segment_id") or "").strip()
-            cited_context_ids = set(raw.get("context_segment_ids", []))
-            anchor_candidates = [
-                *cited_segments,
-                *(
-                    segment
-                    for prior in context_sources or []
-                    for segment in prior.segments
-                    if segment.segment_id in cited_context_ids
-                ),
-            ]
-            anchor_segment = next(
-                (
-                    segment
-                    for segment in anchor_candidates
-                    if segment.segment_id == anchor_segment_id
-                ),
-                None,
-            )
-            timestamped_evidence = [
-                segment for segment in anchor_candidates if segment.timestamp
-            ]
-            unambiguous_timestamp = None
-            if not anchor_segment_id:
-                cited_timestamps = {
-                    segment.timestamp for segment in timestamped_evidence
-                }
-                if len(cited_timestamps) == 1:
-                    unambiguous_timestamp = next(iter(cited_timestamps))
-            if anchor_segment is not None:
-                temporal_anchor = anchor_segment.timestamp
-            elif unambiguous_timestamp is not None:
-                temporal_anchor = unambiguous_timestamp
-            elif timestamped_evidence:
-                temporal_anchor = None
-            else:
-                temporal_anchor = source.occurred_at
+            cited_context_ids = set(raw.get('context_segment_ids', []))
+            for annotation in facets.get('times', []):
+                if annotation['evidence_segment_id'] not in {*segment_ids, *cited_context_ids}:
+                    raise ValueError("A time anchor must be one of the claim's cited evidence segments")
             context_provenance = []
             for prior in context_sources or []:
                 cited = [
@@ -733,7 +693,7 @@ class Encoder:
                     ],
                     recorded_at=source.recorded_at,
                     confidence=0.8,
-                    facets=normalize_temporal_facets(facets, temporal_anchor),
+                    facets=normalize_temporal_facets(facets, time_by_id),
                     claim_type=str(raw.get("claim_type") or "unknown"),
                     predicate=str(raw["predicate"]) if raw.get("predicate") else None,
                     evidence_modality=raw_modality,

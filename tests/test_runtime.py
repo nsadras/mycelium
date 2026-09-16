@@ -151,7 +151,7 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
                 "evidence_modality": "tool",
                 "about": [{"entity": "Ollama", "role": "subject"}],
                 "segment_ids": ["source-placeholder"],
-                "facets": {"when": None, "deadline": None, "inference_basis": None},
+                "facets": {"times": [], "inference_basis": None},
             }
         ],
     }

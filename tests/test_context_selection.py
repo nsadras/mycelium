@@ -7,26 +7,16 @@ from mycelium.context_selection import (
     AssistantContextCandidate,
     AssistantContextSelector,
 )
-from mycelium.structured_outputs import assistant_context_selection_output_model
+from mycelium.structured_outputs import complementary_selection_model
 
 
-def test_context_selection_schema_requires_every_exact_candidate():
-    schema = assistant_context_selection_output_model(["M001", "M002"])
-    valid = {"decisions": {
-        "M001": {
-            "disposition": "include",
-            "reason": "This record directly answers the request.",
-        },
-        "M002": {
-            "disposition": "exclude",
-            "reason": "This record does not help answer the request.",
-        },
-    }}
-
-    assert schema.model_validate(valid).decisions.M001.disposition == "include"
-    del valid["decisions"]["M002"]
-    with pytest.raises(ValidationError):
-        schema.model_validate(valid)
+def test_context_selection_schema_preserves_order_and_rejects_invalid_ids():
+    schema = complementary_selection_model(["M001", "M002"])
+    valid = {"selected_ids": ["M002", "M001"], "supported_aspects": [], "remaining_gaps": []}
+    assert schema.model_validate(valid).selected_ids == ["M002", "M001"]
+    for invalid in (["M003"], ["M001", "M001"]):
+        with pytest.raises(ValidationError):
+            schema.model_validate({**valid, "selected_ids": invalid})
 
 
 @pytest.mark.asyncio

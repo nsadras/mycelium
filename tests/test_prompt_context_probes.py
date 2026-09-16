@@ -32,7 +32,7 @@ def record(text, date, temporal="current"):
     return {
         "text": text,
         "temporal_status": temporal,
-        "temporal": None,
+        "temporal": [],
         "source_times": [
             {
                 "source_id": "source-" + date,

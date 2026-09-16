@@ -161,6 +161,41 @@ async def test_global_truth_review_includes_unplaced_claims(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("persisted", [False, True])
+async def test_source_only_statements_cannot_trigger_or_influence_truth_review(tmp_path, persisted):
+    artifacts, llm, placements, entities = fixture(tmp_path)
+    excluded = artifacts.get_claim("left")
+    if persisted:
+        excluded.dream_disposition = "excluded_source_policy"
+        artifacts.save_claim(excluded)
+    exclusions = frozenset() if persisted else frozenset({"left"})
+    # Broken provenance in excluded source history must not block canonical work.
+    source = artifacts.get_source("source-left")
+    source.segments = []
+    artifacts.save_source(source)
+    for incoming in ({"left"}, {"right"}, {"left", "right"}):
+        result = await TruthReviewer(llm, artifacts).review(
+            incoming, placements, entities, dream_run_id="test", excluded_claim_ids=exclusions)
+        assert not result.errors and not result.proposals
+    llm.call_structured.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fact_resolution_passes_current_build_exclusions_to_truth_review(tmp_path):
+    artifacts, llm, placements, entities = fixture(tmp_path)
+    # Keep only the admitted destination. The excluded active claim has not yet
+    # received the source-only disposition that Dream commits at the end.
+    result = await FactResolver(llm, artifacts).resolve(
+        [placements["right"]], affected_entity_ids={"person-mara"},
+        incoming_claim_ids={"left", "right"}, dream_run_id="test",
+        excluded_claim_ids=frozenset({"left"}),
+    )
+    assert not result.proposals and not result.failures
+    assert {cid for fact in result.facts for cid in fact.member_claim_ids} == {"right"}
+    llm.call_structured.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_approval_invalidates_overlapping_reviews_atomically(tmp_path):
     from mycelium.artifacts import ReconsolidationProposal
     from mycelium.config import Config

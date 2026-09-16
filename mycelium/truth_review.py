@@ -53,9 +53,13 @@ class TruthReviewer:
             "citations": citations,
         }
 
-    async def review(self, incoming_claim_ids, placements, entities, *, dream_run_id):
+    async def review(self, incoming_claim_ids, placements, entities, *, dream_run_id,
+                     excluded_claim_ids=frozenset()):
         result = TruthReviewResult()
-        claims = {c.claim_id: c for c in self.artifacts.list_claims(status="active")}
+        # A retained source statement is not canonical evidence. Current-build
+        # exclusions arrive before their disposition is committed to the store.
+        claims = {c.claim_id: c for c in self.artifacts.list_claims(status="active")
+                  if c.dream_disposition != "excluded_source_policy" and c.claim_id not in excluded_claim_ids}
         incoming = sorted(incoming_claim_ids & claims.keys())
         if not incoming or len(claims) < 2:
             return result

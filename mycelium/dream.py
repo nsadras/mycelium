@@ -234,6 +234,10 @@ class ConsolidationProcess:
             incoming_claim_ids=incoming_claim_ids,
             dream_run_id=run_id,
             seed_entities=retained_new_entities,
+            excluded_claim_ids=frozenset(
+                cid for cid, decision in decisions.items()
+                if decision.disposition == "excluded_source_policy"
+            ),
         )
         for failure in fact_result.failures:
             failures.append(

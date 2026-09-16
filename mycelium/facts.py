@@ -74,6 +74,7 @@ class FactResolver:
         incoming_claim_ids: set[str],
         dream_run_id: str,
         seed_entities: list[EntityRecord] | None = None,
+        excluded_claim_ids: frozenset[str] = frozenset(),
     ) -> FactResolutionResult:
         result = FactResolutionResult()
         placement_by_claim = {
@@ -85,6 +86,7 @@ class FactResolver:
         entities.update({entity.entity_id: entity for entity in seed_entities or []})
         truth = await TruthReviewer(self.llm, self.artifacts).review(
             incoming_claim_ids, placement_by_claim, entities, dream_run_id=dream_run_id,
+            excluded_claim_ids=excluded_claim_ids,
         )
         if truth.failure_claim_ids:
             # A failed comparison never publishes unchecked additions. Prior
@@ -113,6 +115,8 @@ class FactResolver:
         active_claims = {
             c.claim_id: c for c in self.artifacts.list_claims(status="active")
             if c.claim_id not in held_claim_ids
+            and c.claim_id not in excluded_claim_ids
+            and c.dream_disposition != "excluded_source_policy"
         }
         for owner_id in sorted(affected_entity_ids):
             retained = [f for f in protected_facts if f.owner_entity_id == owner_id]

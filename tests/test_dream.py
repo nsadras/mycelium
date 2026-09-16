@@ -953,6 +953,31 @@ async def test_source_policy_exclusion_is_typed_and_not_canonical_memory(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_fresh_assistant_exclusion_reaches_truth_review_before_dream_commit(tmp_path):
+    dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
+    _, source = add_source(logs, artifacts, suffix="assistant")
+    source.segments[0].speaker = "Assistant"
+    source.segments[0].role = "assistant"
+    artifacts.save_source(source)
+    excluded = add_claim(artifacts, source, claim_id="excluded", role="assistant")
+    _, source = add_source(logs, artifacts, suffix="user")
+    admitted = add_claim(artifacts, source, claim_id="admitted")
+    dream.router.route = AsyncMock(return_value=RoutingResult(routes=[ClaimRoute(
+        claim_id=admitted.claim_id,
+        owner_entity_id="you", section_key="preferences_working_style", linked_entity_ids=(),
+        raw_log_entry_id=source.raw_log_entry_id, reason="Declared useful user preference", disposition="canonical",
+    )]))
+    report = await dream.run()
+    assert not report.failures
+    assert artifacts.get_claim(excluded.claim_id).dream_disposition == "excluded_source_policy"
+    assert artifacts.get_claim(admitted.claim_id).dream_disposition == "routed"
+    assert artifacts.facts_for_claim(excluded.claim_id) == []
+    assert artifacts.facts_for_claim(admitted.claim_id)
+    assert artifacts.list_reconsolidation_proposals() == []
+    llm.call_structured.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_ineligible_identity_is_known_before_it_has_a_page(tmp_path):
     dream, _, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
     _, source = add_source(

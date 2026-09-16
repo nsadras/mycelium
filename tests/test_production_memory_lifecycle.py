@@ -61,6 +61,7 @@ class DeterministicProductionModel:
             "dream-subject-discovery",
             "dream-subject-identity",
             "dream-claim-routing",
+            "dream-source-attribution",
             "dream-fact-grouping",
             "dream-fact-candidate-selection",
         }:

@@ -4,8 +4,6 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field, create_model, model_validator
 
-from mycelium.ontology import section_keys
-from mycelium.page_plan import page_plan_model
 from mycelium.prompting import render_prompt_pair
 
 
@@ -72,60 +70,6 @@ def page_admission_model(evidence_aliases, entities, *, excluded_pages=None):
             return self
 
     return PageAdmissions
-
-
-def _typed_page_decision(entity_types):
-    original = page_plan_model(["claim"], entity_types)
-    decision = (
-        original.model_fields["decisions"].annotation.model_fields["claim"].annotation
-    )
-    properties = {}
-    for eid, kind in entity_types.items():
-        page = create_model(
-            "PageSection",
-            __config__=ConfigDict(extra="forbid"),
-            section_key=(Literal.__getitem__(section_keys(kind)), ...),
-            reason=(str, Field(min_length=1)),
-        )
-        properties[eid] = page.model_json_schema()
-    typed_decision = create_model(
-        "TypedPagePlacement",
-        __base__=decision,
-        pages=(
-            decision.model_fields["pages"].annotation,
-            Field(
-                json_schema_extra={
-                    "properties": properties,
-                    "additionalProperties": False,
-                }
-            ),
-        ),
-    )
-    return typed_decision
-
-
-def typed_page_plan_model(evidence_aliases, entity_types, *, excluded_pages=None):
-    excluded_pages = excluded_pages or {}
-    decisions, fields = {}, {}
-    for alias in evidence_aliases:
-        allowed = tuple(
-            eid for eid in entity_types if eid not in excluded_pages.get(alias, ())
-        )
-        if allowed not in decisions:
-            decisions[allowed] = _typed_page_decision(
-                {eid: entity_types[eid] for eid in allowed}
-            )
-        fields[alias] = (decisions[allowed], ...)
-    placements = create_model(
-        "TypedPagePlacements",
-        __config__=ConfigDict(extra="forbid"),
-        **fields,
-    )
-    return create_model(
-        "TypedPagePlan",
-        __config__=ConfigDict(extra="forbid"),
-        decisions=(placements, ...),
-    )
 
 
 def page_admission_prompt(registry, entity_plan, evidence, *, reviewed_pages=False):

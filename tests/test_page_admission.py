@@ -2,12 +2,11 @@ import pytest
 from pydantic import ValidationError
 
 from mycelium.artifacts import EntityRecord
-from mycelium.ontology import ENTITY_TYPES, section_keys
+from mycelium.ontology import ENTITY_TYPES
 from mycelium.page_admission import (
     ADMISSION_BASES,
     NO_PAGE_BASIS,
     page_admission_model,
-    typed_page_plan_model,
 )
 
 
@@ -69,42 +68,3 @@ def test_existing_pages_are_not_readmitted():
                 }
             }
         )
-
-
-def test_native_section_schema_is_specific_to_each_actual_entity_id():
-    kinds = {"person-1": "person", "project-1": "project", "event-1": "event"}
-    model = typed_page_plan_model(["C001"], kinds)
-    root = model.model_json_schema()
-    definition = root["$defs"]["TypedPagePlacement"]["properties"]["pages"]
-    assert definition["additionalProperties"] is False
-    assert set(definition["properties"]) == set(kinds)
-    for eid, kind in kinds.items():
-        assert set(
-            definition["properties"][eid]["properties"]["section_key"]["enum"]
-        ) == set(section_keys(kind))
-    value = {
-        "pages": {"person-1": {"section_key": "follow_ups", "reason": "Wrong type"}},
-        "owner_entity": "person-1",
-        "reason": None,
-        "uncertainty": None,
-        "prominence": "briefing",
-    }
-    with pytest.raises(ValidationError, match="selected entity type"):
-        model.model_validate({"decisions": {"C001": value}})
-
-
-def test_empty_page_domain_preserves_explicit_deferral():
-    model = typed_page_plan_model(["C001"], {})
-    value = {
-        "pages": {},
-        "owner_entity": "",
-        "reason": "No admitted subject page",
-        "uncertainty": None,
-        "prominence": "detail",
-    }
-    assert (
-        model.model_validate({"decisions": {"C001": value}}).model_dump()["decisions"][
-            "C001"
-        ]
-        == value
-    )

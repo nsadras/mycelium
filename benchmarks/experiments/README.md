@@ -60,3 +60,24 @@ timings in fresh directories, and perform three trials per neutral case:
 
 These small contract probes do not establish benchmark recall, QA accuracy or
 compute improvements on large stores.
+
+## Current source attribution and page review
+
+These probes use the configured host model in `mycelium.toml` and retain fresh
+requests, responses, config, model inventory, per-call timings and completion:
+
+```bash
+.venv/bin/python -m benchmarks.experiments.attribution_contract_probes
+.venv/bin/python -m benchmarks.experiments.agent_user_role_probes
+.venv/bin/python -m benchmarks.experiments.page_review_pipeline
+```
+
+Attribution is assessed independently from page admission. An unplaced described
+subject must retain its reference; a source reporter is not automatically a
+subject. Page presentation must cover the eligible described subjects using their
+own section domains. The direct contract also scores the primary page choice
+separately. The role probe exercises both configured-user and no-user profiles,
+including both endpoints of an explicit relationship. The page-review pipeline
+checks evidence-scoped exclusions, other supporting evidence and combined-fact
+projection across rebuilds. These tests do not establish overall page usefulness,
+longitudinal wiki coherence or a whole-benchmark compute improvement.

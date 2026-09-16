@@ -30,9 +30,18 @@ from mycelium.identity_plan import (
 )
 from mycelium.reviewed_identity_contract import expand_review_evidence
 from mycelium.identity_planner import IdentityPlanner
-from mycelium.page_plan import page_plan_prompt
+from mycelium.page_plan import page_plan_model, page_plan_prompt
+from mycelium.source_attribution import (
+    source_attribution_model,
+    source_attribution_prompt,
+    attributed_pages,
+)
 from mycelium.page_reviews import reviewed_page_exclusions
-from mycelium.page_admission import NO_PAGE_BASIS, page_admission_model, page_admission_prompt, typed_page_plan_model
+from mycelium.page_admission import (
+    NO_PAGE_BASIS,
+    page_admission_model,
+    page_admission_prompt,
+)
 
 
 class ClaimRouter:
@@ -98,12 +107,25 @@ class ClaimRouter:
         participants = self.resolution.participant_occurrences(
             evidence, source_ids=participant_source_ids
         )
-        references = [(alias, ref) for alias, item in aliases.items()
-                      for ref in self.artifacts.list_entity_references(claim_id=item.claim.claim_id, status="active")
-                      if ref.role == "identity_subject" and ref.origin == "manual"]
-        bindings = {f"R{i:03d}": {"reference_id": ref.reference_id, "claim_alias": alias,
-                                  "entity_id": ref.entity_id, "surface": ref.surface}
-                    for i, (alias, ref) in enumerate(sorted(references, key=lambda pair: pair[1].reference_id), 1)}
+        references = [
+            (alias, ref)
+            for alias, item in aliases.items()
+            for ref in self.artifacts.list_entity_references(
+                claim_id=item.claim.claim_id, status="active"
+            )
+            if ref.role == "identity_subject" and ref.origin == "manual"
+        ]
+        bindings = {
+            f"R{i:03d}": {
+                "reference_id": ref.reference_id,
+                "claim_alias": alias,
+                "entity_id": ref.entity_id,
+                "surface": ref.surface,
+            }
+            for i, (alias, ref) in enumerate(
+                sorted(references, key=lambda pair: pair[1].reference_id), 1
+            )
+        }
         work_unit.attempt_count += 1
         work_unit.status = "pending"
         now = datetime.now().astimezone().isoformat()
@@ -119,11 +141,25 @@ class ClaimRouter:
             ),
         ]
         try:
-            excluded_pages, page_reviews = reviewed_page_exclusions(self.artifacts, aliases)
-            plan = await self.identity.plan(aliases, participants, bindings, planned,
-                seed_identity_decisions, self.formatter)
-            work_unit.request_digest = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
-            identity_plan = {key: value for key, value in work_unit.entity_plan.items() if key != "page_admissions"}
+            excluded_pages, page_reviews = reviewed_page_exclusions(
+                self.artifacts, aliases
+            )
+            plan = await self.identity.plan(
+                aliases,
+                participants,
+                bindings,
+                planned,
+                seed_identity_decisions,
+                self.formatter,
+            )
+            work_unit.request_digest = hashlib.sha256(
+                json.dumps(plan, sort_keys=True).encode()
+            ).hexdigest()
+            identity_plan = {
+                key: value
+                for key, value in work_unit.entity_plan.items()
+                if key not in {"page_admissions", "source_attributions"}
+            }
             if identity_plan != plan:
                 work_unit.allocated_entity_ids = {}
             work_unit.entity_plan = plan
@@ -140,8 +176,12 @@ class ClaimRouter:
         blockers: dict[str, list[str]] = {}
         pending_by_entity = {}
         for decision in pending:
-            pending_by_entity.setdefault(decision.entity_id, set()).add(decision.decision_id)
-        for node in planned_subjects(expand_review_evidence(plan, bindings), planned, participants):
+            pending_by_entity.setdefault(decision.entity_id, set()).add(
+                decision.decision_id
+            )
+        for node in planned_subjects(
+            expand_review_evidence(plan, bindings), planned, participants
+        ):
             support = [aliases[a] for a in node["supporting_evidence"] if a in aliases]
             participant_support = [
                 participants[p] for p in node["participant_evidence"]
@@ -228,7 +268,9 @@ class ClaimRouter:
             # Matching a provisional identity does not decide its outstanding review.
             for alias in node["supporting_evidence"]:
                 if alias in aliases:
-                    blockers.setdefault(alias, []).extend(sorted(pending_by_entity.get(entity.entity_id, ())))
+                    blockers.setdefault(alias, []).extend(
+                        sorted(pending_by_entity.get(entity.entity_id, ()))
+                    )
             if node["resolution"] == "review_required":
                 for alias in node["supporting_evidence"]:
                     if alias in aliases:
@@ -249,114 +291,166 @@ class ClaimRouter:
                     "participant_bindings": node["participant_evidence"],
                 }
             )
-        page_context = ({"subjects": resolved, "human_page_reviews": page_reviews}
-                        if page_reviews else resolved)
-        eligible_ids = {node["entity_id"] for node in resolved}
-        source_entities = {eid: planned[eid] for eid in sorted(eligible_ids)
-                           if eid in planned and planned[eid].status == "active"}
-        provisional = {eid: entity for eid, entity in source_entities.items()
-                       if entity.materialization_state == "provisional"}
+        page_context = (
+            {"subjects": resolved, "human_page_reviews": page_reviews}
+            if page_reviews
+            else resolved
+        )
+        eligible_ids = {
+            node["entity_id"] for node in resolved if node["entity_id"] is not None
+        }
+        source_entities = {
+            eid: planned[eid]
+            for eid in sorted(eligible_ids)
+            if eid in planned and planned[eid].status == "active"
+        }
+        provisional = {
+            eid: entity
+            for eid, entity in source_entities.items()
+            if entity.materialization_state == "provisional"
+        }
         admissions = {}
         if provisional:
-            admission_schema = page_admission_model(aliases, source_entities, excluded_pages=excluded_pages)
+            admission_schema = page_admission_model(
+                aliases, source_entities, excluded_pages=excluded_pages
+            )
             system, user = page_admission_prompt(
-                self.formatter.entity_catalog(source_entities.values(), include_sections=False),
-                json.dumps(page_context, ensure_ascii=False), self.formatter.format_evidence(aliases, participants),
-                reviewed_pages=bool(page_reviews))
-            try:
-                admissions = admission_schema.model_validate(await self.llm.call_structured(system, user, admission_schema,
-                    num_predict=4096, debug_label="dream-page-admission", cache_store=self.artifacts.db)).model_dump()["page_admissions"]
-            except Exception as exc:
-                return self._fail_work_unit(work_unit, evidence, "page_admission",
-                    f"Page admission failed: {type(exc).__name__}: {exc}")
-        work_unit.entity_plan["page_admissions"] = admissions
-        self.artifacts.save_identity_work_unit(work_unit)
-        routable = {eid: entity.entity_type for eid, entity in source_entities.items()
-                    if entity.materialization_state == "materialized"
-                    or (eid in admissions and admissions[eid]["basis"] != NO_PAGE_BASIS)}
-        routings = {}
-        batches = list(self._alias_batches(aliases, entity_count=len(routable)))
-        while batches:
-            batch = batches.pop(0)
-            routing_model = typed_page_plan_model(batch, routable, excluded_pages=excluded_pages)
-            system, user = page_plan_prompt(
-                self.formatter.entity_catalog([planned[eid] for eid in routable], include_sections=True),
-                json.dumps(page_context, ensure_ascii=False),
-                self.formatter.format_evidence(
-                    batch,
-                    self.resolution.participants_for_evidence(batch, participants),
+                self.formatter.entity_catalog(
+                    source_entities.values(), include_sections=False
                 ),
+                json.dumps(page_context, ensure_ascii=False),
+                self.formatter.format_evidence(aliases, participants),
                 reviewed_pages=bool(page_reviews),
             )
             try:
-                require_request_budget(
-                    [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    context_window=getattr(self.llm, "context_window_tokens", 32768),
-                    output_tokens=8192,
-                    schema=routing_model.model_json_schema(),
+                admissions = admission_schema.model_validate(
+                    await self.llm.call_structured(
+                        system,
+                        user,
+                        admission_schema,
+                        num_predict=4096,
+                        debug_label="dream-page-admission",
+                        cache_store=self.artifacts.db,
+                    )
+                ).model_dump()["page_admissions"]
+            except Exception as exc:
+                return self._fail_work_unit(
+                    work_unit,
+                    evidence,
+                    "page_admission",
+                    f"Page admission failed: {type(exc).__name__}: {exc}",
                 )
-            except ContextBudgetError:
-                if len(batch) > 1:
-                    items = list(batch.items())
-                    midpoint = len(items) // 2
-                    batches[:0] = [dict(items[:midpoint]), dict(items[midpoint:])]
-                    continue
+        work_unit.entity_plan["page_admissions"] = admissions
+        self.artifacts.save_identity_work_unit(work_unit)
+        routable = {
+            eid: entity.entity_type
+            for eid, entity in source_entities.items()
+            if entity.materialization_state == "materialized"
+            or (eid in admissions and admissions[eid]["basis"] != NO_PAGE_BASIS)
+        }
+        subjects = [
+            {
+                "entity_id": eid,
+                "entity_type": entity.entity_type,
+                "title": entity.title,
+                "participant_bindings": sorted(
+                    {
+                        p
+                        for node in resolved
+                        if node["entity_id"] == eid
+                        for p in node["participant_bindings"]
+                    }
+                ),
+            }
+            for eid, entity in source_entities.items()
+        ]
+        registry = json.loads(
+            self.formatter.entity_catalog(
+                [planned[eid] for eid in routable], include_sections=True
+            )
+        )
+        routings, attributions = {}, {}
+        batches = list(self._alias_batches(aliases, entity_count=len(source_entities)))
+        while batches:
+            batch = batches.pop(0)
+            batch_participants = self.resolution.participants_for_evidence(
+                batch, participants
+            )
+            evidence_payload = json.loads(
+                self.formatter.format_evidence(batch, batch_participants)
+            )
+            source_participants = {
+                s["entity_id"]
+                for s in subjects
+                if set(s["participant_bindings"]) & batch_participants.keys()
+            }
             try:
-                routings.update(
-                    routing_model.model_validate(
+                if subjects:
+                    schema = source_attribution_model(
+                        batch, source_entities, source_participants
+                    )
+                    system, user = source_attribution_prompt(subjects, evidence_payload)
+                    self._check_request_budget(system, user, schema)
+                    attributed = schema.model_validate(
                         await self.llm.call_structured(
                             system,
                             user,
-                            routing_model,
+                            schema,
+                            num_predict=8192,
+                            debug_label="dream-source-attribution",
+                            cache_store=self.artifacts.db,
+                        )
+                    ).model_dump()["attributions"]
+                else:
+                    attributed = {alias: {} for alias in batch}
+                pages = attributed_pages(attributed, routable, excluded_pages)
+                decisions = {}
+                if any(pages.values()):
+                    schema = page_plan_model(pages, routable)
+                    system, user = page_plan_prompt(
+                        registry, attributed, evidence_payload
+                    )
+                    self._check_request_budget(system, user, schema)
+                    decisions = schema.model_validate(
+                        await self.llm.call_structured(
+                            system,
+                            user,
+                            schema,
                             num_predict=8192,
                             debug_label="dream-claim-routing",
                             cache_store=self.artifacts.db,
                         )
                     ).model_dump()["decisions"]
-                )
-            except Exception as exc:
-                result.failures.extend(
-                    (
+                attributions.update(attributed)
+                routings.update({alias: decisions.get(alias) for alias in batch})
+            except ContextBudgetError as exc:
+                if len(batch) > 1:
+                    items = list(batch.items())
+                    midpoint = len(items) // 2
+                    batches[:0] = [dict(items[:midpoint]), dict(items[midpoint:])]
+                else:
+                    result.failures.extend(
                         self._failure(
-                            item, f"Claim routing failed: {type(exc).__name__}: {exc}"
+                            item,
+                            f"Claim attribution/presentation exceeded its context budget: {exc}",
                         )
                         for item in batch.values()
                     )
-                )
-        for alias, routing in routings.items():
-            kind = "general" if routing["pages"] else "deferred"
-            destinations = {
-                entity_id: page["section_key"]
-                for entity_id, page in routing.get("pages", {}).items()
-            }
-            normalized = {
-                "disposition": "deferred" if kind == "deferred" else "canonical",
-                "owner_entity": routing.get("owner_entity", ""),
-                "linked_entities": list(destinations),
-                "subject_entity": "",
-                "object_entities": [],
-                "contextual_entities": [],
-                "relationship_kind": "none",
-                "page_sections": destinations,
-                "uncertainty": routing["uncertainty"],
-                "prominence": routing["prominence"],
-                "supporting_claims": [],
-                "identity_blocker_ids": blockers.get(alias, []),
-                "confidence": aliases[alias].claim.confidence,
-                "reason": routing["reason"]
-                if kind == "deferred"
-                else "\n".join(
-                    (
-                        f"Page {entity_id} ({page['section_key']}): {page['reason']}"
-                        for entity_id, page in routing["pages"].items()
+            except Exception as exc:
+                result.failures.extend(
+                    self._failure(
+                        item,
+                        f"Claim attribution/presentation failed: {type(exc).__name__}: {exc}",
                     )
-                ),
-            }
+                    for item in batch.values()
+                )
+        work_unit.entity_plan["source_attributions"] = attributions
+        for alias, presentation in routings.items():
             route = self._route_decision(
-                alias, aliases[alias], normalized, aliases, planned, {}, {}
+                aliases[alias],
+                attributions[alias],
+                presentation,
+                blockers.get(alias, ()),
             )
             result.routes.append(route)
             if route.placed:
@@ -439,135 +533,71 @@ class ClaimRouter:
         self.artifacts.save_identity_work_unit(work_unit)
         return self._fail_batch(evidence, reason)
 
-    def _route_decision(
-        self,
-        alias: str,
-        item: ClaimEvidence,
-        decision: dict,
-        aliases: dict[str, ClaimEvidence],
-        entities: dict[str, EntityRecord],
-        candidates: dict[str, EntityRecord],
-        candidate_support: dict[str, tuple[str, ...]],
-    ) -> ClaimRoute:
-        disposition = str(decision["disposition"])
-        support_aliases = tuple(
-            dict.fromkeys(
-                [
-                    alias,
-                    *decision["supporting_claims"],
-                    *candidate_support.get(str(decision.get("owner_entity") or ""), ()),
-                ]
-            )
-        )
-        supporting_ids = tuple(
-            (
-                aliases[value].claim.claim_id
-                for value in support_aliases
-                if value in aliases
-            )
-        )
-        identity_blockers = tuple(
-            sorted(
-                {
-                    *self._unresolved_identity_blockers(item.claim.claim_id, entities),
-                    *decision.get("identity_blocker_ids", []),
-                }
-            )
-        )
-        if disposition != "canonical":
-            return ClaimRoute(
-                item.claim.claim_id,
-                None,
-                None,
-                (),
-                item.raw_log_entry_id,
-                str(decision["reason"]),
-                disposition,
-                supporting_ids,
-                float(decision["confidence"]),
-                identity_blocker_ids=identity_blockers,
-            )
-        owner_ref = str(decision["owner_entity"])
-        owner = candidates.get(owner_ref) or entities.get(owner_ref)
-        if owner is None or owner.status != "active":
-            return ClaimRoute(
-                item.claim.claim_id,
-                None,
-                None,
-                (),
-                item.raw_log_entry_id,
-                f"Proposed owner {owner_ref!r} is not yet materialized. {decision['reason']}",
-                "deferred",
-                supporting_ids,
-                float(decision["confidence"]),
-            )
-        link_refs = [str(value) for value in decision["linked_entities"]]
-        subject_ref = str(decision.get("subject_entity") or "")
-        object_refs = [str(value) for value in decision.get("object_entities", [])]
-        contextual_refs = [
-            str(value) for value in decision.get("contextual_entities", [])
-        ]
-        endpoint_refs = [
-            *link_refs,
-            *([subject_ref] if subject_ref else []),
-            *object_refs,
-        ]
-        linked = set()
-        resolved_references: dict[str, str] = {}
-        for value in dict.fromkeys([*endpoint_refs, *contextual_refs]):
-            linked_entity = candidates.get(value) or entities.get(value)
-            if linked_entity is None or linked_entity.status != "active":
-                return ClaimRoute(
-                    item.claim.claim_id,
-                    None,
-                    None,
-                    (),
-                    item.raw_log_entry_id,
-                    f"Proposed linked entity {value!r} was not admitted or active. {decision['reason']}",
-                    "deferred",
-                    supporting_ids,
-                    float(decision["confidence"]),
-                )
-            resolved_references[value] = linked_entity.entity_id
-        linked.update((resolved_references[value] for value in endpoint_refs))
-        linked.discard(owner.entity_id)
-        relationship_kind = str(decision.get("relationship_kind") or "none")
-        if item.claim.evidence_modality == "tool":
-            if "you" in decision.get("page_sections", {}):
-                return ClaimRoute(
-                    item.claim.claim_id,
-                    None,
-                    None,
-                    (),
-                    item.raw_log_entry_id,
-                    "External evidence cannot automatically establish a personal fact on You.",
-                    "deferred",
-                    supporting_ids,
-                    float(decision["confidence"]),
-                )
-        return ClaimRoute(
-            item.claim.claim_id,
-            owner.entity_id,
-            decision["page_sections"][owner.entity_id],
-            tuple(sorted(linked)),
-            item.raw_log_entry_id,
-            str(decision["reason"]),
-            "canonical",
-            supporting_ids,
-            float(decision["confidence"]),
-            resolved_references.get(subject_ref) if subject_ref else None,
-            tuple(sorted({resolved_references[value] for value in object_refs})),
-            tuple(sorted({resolved_references[value] for value in contextual_refs})),
-            None if relationship_kind == "none" else relationship_kind,
-            page_sections=dict(decision["page_sections"]),
-            identity_blocker_ids=identity_blockers,
-            uncertainty=decision.get("uncertainty"),
-            prominence=decision.get("prominence", "briefing"),
+    def _check_request_budget(self, system, user, schema):
+        require_request_budget(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            context_window=getattr(self.llm, "context_window_tokens", 32768),
+            output_tokens=8192,
+            schema=schema.model_json_schema(),
         )
 
-    def _unresolved_identity_blockers(
-        self, claim_id: str, entities: dict[str, EntityRecord]
-    ) -> tuple[str, ...]:
+    def _route_decision(
+        self, item, attribution, presentation, blockers=()
+    ) -> ClaimRoute:
+        """Persist semantic attribution separately from its page projection."""
+        pages = dict(presentation["pages"]) if presentation is not None else {}
+        owner = presentation["primary_subject"] if presentation is not None else None
+        reasons = [
+            f"{eid} ({row['relation_to_claim']}): {row['reason']}"
+            for eid, row in attribution.items()
+            if row["reason"] is not None
+        ]
+        if presentation is not None:
+            reasons.append(presentation["primary_reason"])
+        reason = "\n".join(reasons) or "No resolved subject is described by this claim."
+        if not pages:
+            reason += " No attributed subject has an eligible page for this evidence."
+        # Preserve the existing policy boundary for external personal evidence.
+        if item.claim.evidence_modality == "tool" and "you" in pages:
+            pages, owner = {}, None
+            reason = (
+                "External evidence cannot automatically establish a personal fact on You. "
+                + reason
+            )
+        return ClaimRoute(
+            claim_id=item.claim.claim_id,
+            owner_entity_id=owner,
+            section_key=pages.get(owner),
+            linked_entity_ids=tuple(eid for eid in pages if eid != owner),
+            raw_log_entry_id=item.raw_log_entry_id,
+            reason=reason,
+            disposition="canonical" if pages else "deferred",
+            supporting_claim_ids=(item.claim.claim_id,),
+            confidence=item.claim.confidence,
+            described_entity_ids=tuple(
+                eid
+                for eid, row in attribution.items()
+                if row["relation_to_claim"] == "described"
+            ),
+            contextual_entity_ids=tuple(
+                eid
+                for eid, row in attribution.items()
+                if row["relation_to_claim"] == "reporting_only"
+            ),
+            identity_blocker_ids=tuple(
+                sorted(
+                    {
+                        *self._unresolved_identity_blockers(item.claim.claim_id),
+                        *blockers,
+                    }
+                )
+            ),
+            page_sections=pages,
+            uncertainty=presentation["uncertainty"] if presentation else None,
+            prominence=presentation["prominence"] if presentation else "detail",
+        )
+
+    def _unresolved_identity_blockers(self, claim_id: str) -> tuple[str, ...]:
         placement = self.artifacts.placement_for_claim(claim_id)
         if placement is None:
             return ()
@@ -590,6 +620,7 @@ class ClaimRouter:
         aliases: dict[str, ClaimEvidence], size: int = 24, *, entity_count: int = 1
     ) -> Iterable[dict[str, ClaimEvidence]]:
         """Bound claim/page decisions, preserving every claim and eligible page."""
+        size = min(size, max(1, 48 // max(1, entity_count)))
         items = list(aliases.items())
         for start in range(0, len(items), size):
             yield dict(items[start : start + size])

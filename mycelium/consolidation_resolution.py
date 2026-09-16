@@ -116,12 +116,7 @@ class ResolutionArtifacts:
                     )
                 )
             stable_roles = [
-                *(
-                    [("subject", route.subject_entity_id)]
-                    if route.subject_entity_id
-                    else []
-                ),
-                *(("object", entity_id) for entity_id in route.object_entity_ids),
+                *(("subject", entity_id) for entity_id in route.described_entity_ids),
                 *(("context", entity_id) for entity_id in route.contextual_entity_ids),
             ]
             explicitly_typed_ids = {entity_id for _, entity_id in stable_roles}

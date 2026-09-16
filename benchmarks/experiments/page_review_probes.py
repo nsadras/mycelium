@@ -17,9 +17,8 @@ from mycelium.page_admission import (
     NO_PAGE_BASIS,
     page_admission_model,
     page_admission_prompt,
-    typed_page_plan_model,
 )
-from mycelium.page_plan import page_plan_prompt
+from benchmarks.experiments.attribution_contract_probes import decide
 from mycelium.telemetry import trace_operation
 
 
@@ -163,36 +162,30 @@ async def main(args):
                     if e.materialization_state == "materialized"
                     or admissions[eid]["basis"] != NO_PAGE_BASIS
                 }
-                schema = typed_page_plan_model(
-                    claims, routable, excluded_pages=excluded
-                )
-                system, user = page_plan_prompt(
-                    RoutingFormatter.entity_catalog(
-                        [entities[eid] for eid in routable], include_sections=True
-                    ),
-                    plan,
-                    evidence,
-                    reviewed_pages=True,
-                )
+                subjects = [
+                    {
+                        "entity_id": eid,
+                        "entity_type": e.entity_type,
+                        "title": e.title,
+                        "participant_bindings": [],
+                    }
+                    for eid, e in entities.items()
+                ]
                 with trace_operation(
                     "page_review_placement_probe", case=name, trial=trial
                 ):
-                    placements = schema.model_validate(
-                        await llm.call_structured(
-                            system,
-                            user,
-                            schema,
-                            num_predict=8192,
-                            debug_label="page-review-placement-probe",
-                        )
-                    ).model_dump()["decisions"]
-                scope_passed = (
-                    subject_id not in placements["C001"]["pages"]
-                    and "you" in placements["C001"]["pages"]
-                )
+                    attribution, placements, _ = await decide(
+                        llm, subjects, json.loads(evidence), routable, excluded
+                    )
+                record["attribution"] = attribution
+                scope_passed = subject_id not in placements.get("C001", {}).get(
+                    "pages", {}
+                ) and "you" in placements.get("C001", {}).get("pages", {})
                 passed = scope_passed
                 if "C002" in claims:
-                    passed = passed and subject_id in placements["C002"]["pages"]
+                    passed = passed and subject_id in placements.get("C002", {}).get(
+                        "pages", {}
+                    )
                 else:
                     passed = passed and admissions[subject_id]["basis"] == NO_PAGE_BASIS
                 record.update(

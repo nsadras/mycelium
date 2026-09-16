@@ -1,87 +1,51 @@
-"""Explicit source-backed subject relevance before wiki destination selection."""
+"""Typed presentation on already attributed subject pages."""
 
+import json
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import ConfigDict, Field, create_model
 from mycelium.ontology import section_keys
-from mycelium.prompting import render_prompt_pair
+from mycelium.prompting import render_prompt
 
 
-def page_plan_model(evidence_aliases, entity_types):
-    page = create_model(
-        "SelectedPage",
-        __config__=ConfigDict(extra="forbid"),
-        section_key=(
-            Literal.__getitem__(
-                tuple(
-                    dict.fromkeys(
-                        key
-                        for kind in entity_types.values()
-                        for key in section_keys(kind)
-                    )
-                )
-            )
-            if entity_types
-            else str,
-            ...,
-        ),
-        reason=(str, Field(min_length=1)),
-    )
-    pages_model = dict[
-        Literal.__getitem__(tuple(entity_types)) if entity_types else str, page
-    ]
-
-    class Decision(BaseModel):
-        model_config = ConfigDict(extra="forbid")
-        pages: pages_model
-        owner_entity: Literal.__getitem__((*entity_types, ""))
-        reason: str | None
-        uncertainty: str | None
-        prominence: Literal["briefing", "detail"]
-
-        @model_validator(mode="after")
-        def validate_destinations(self):
-            selected = set(self.pages)
-            for entity_id, page in self.pages.items():
-                if entity_id not in entity_types:
-                    raise ValueError("The page ID must belong to the eligible registry")
-                if page.section_key not in section_keys(entity_types[entity_id]):
-                    raise ValueError(
-                        "The section must belong to the selected entity type"
-                    )
-            if selected and self.owner_entity not in selected:
-                raise ValueError("The primary owner must be a selected page")
-            if not selected and (self.owner_entity or not self.reason):
-                raise ValueError(
-                    "An empty destination set requires no owner and a reason"
-                )
-            if selected and self.reason is not None:
-                raise ValueError(
-                    "Selected pages carry their own explanations; the overall reason is null"
-                )
-            return self
-
+def page_plan_model(pages_by_claim, entity_types):
+    fields = {}
+    for cid, pages in pages_by_claim.items():
+        if not pages:
+            continue
+        if len(set(pages)) != len(pages) or not set(pages) <= entity_types.keys():
+            raise ValueError("Attributed pages must be unique resolved subject IDs")
+        sections = create_model(
+            "PageSections",
+            __config__=ConfigDict(extra="forbid"),
+            **{
+                eid: (Literal.__getitem__(section_keys(entity_types[eid])), ...)
+                for eid in pages
+            },
+        )
+        decision = create_model(
+            "SubjectPresentation",
+            __config__=ConfigDict(extra="forbid"),
+            primary_reason=(str, Field(min_length=1, max_length=500)),
+            primary_subject=(Literal.__getitem__(tuple(pages)), ...),
+            pages=(sections, ...),
+            uncertainty=(str | None, ...),
+            prominence=(Literal["briefing", "detail"], ...),
+        )
+        fields[cid] = (decision, ...)
     decisions = create_model(
-        "PagePlacementDecisions",
-        __config__=ConfigDict(extra="forbid"),
-        **{alias: (Decision, ...) for alias in evidence_aliases},
+        "StatementPresentations", __config__=ConfigDict(extra="forbid"), **fields
     )
     return create_model(
-        "PagePlacementPlan",
+        "PagePresentations",
         __config__=ConfigDict(extra="forbid"),
         decisions=(decisions, ...),
     )
 
 
-def page_plan_prompt(registry, entity_plan, evidence, *, reviewed_pages=False):
-    from mycelium.prompting import render_prompt
-
-    system, user = render_prompt_pair(
-        "memory/page_plan",
-        registry=registry,
-        entity_plan=entity_plan,
-        evidence=evidence,
+def page_plan_prompt(registry, attributions, evidence):
+    return (
+        render_prompt("memory/page_plan.system.jinja"),
+        json.dumps(
+            {"registry": registry, "attributions": attributions, "evidence": evidence}
+        ),
     )
-
-    if reviewed_pages:
-        system += "\n\n" + render_prompt("memory/page_review.system.jinja")
-    return system, user

@@ -86,8 +86,13 @@ def scope_plan(
     return {
         "candidates": list(candidates or []),
         "assignments": assignments,
-        "participants": dict(participants) if participants is not None else {
-            "P001": {"entity": "you", "reason": "Declared user speaker in the fixture source."}
+        "participants": dict(participants)
+        if participants is not None
+        else {
+            "P001": {
+                "entity": "you",
+                "reason": "Declared user speaker in the fixture source.",
+            }
         },
     }
 
@@ -133,21 +138,46 @@ def split_scope_plan(plan: dict) -> list[dict]:
     # Fixture page destinations explicitly declare which stored identities the
     # source discovery and matching calls must account for.
     known = {n.get("entity_id") for n in subjects} | set(candidate_entities.values())
-    for entity_id in dict.fromkeys(eid for d in routing["decisions"].values() for eid in d["pages"]):
+    for entity_id in dict.fromkeys(
+        eid for d in routing["decisions"].values() for eid in d["pages"]
+    ):
         if entity_id not in known:
-            subjects.append({"resolution": "existing", "entity_id": entity_id, "title": None,
-                "aliases": [], "supporting_evidence": list(assignments), "participant_evidence": [],
-                "reason": "Explicit fixture identity."})
+            subjects.append(
+                {
+                    "resolution": "existing",
+                    "entity_id": entity_id,
+                    "title": None,
+                    "aliases": [],
+                    "supporting_evidence": list(assignments),
+                    "participant_evidence": [],
+                    "reason": "Explicit fixture identity.",
+                }
+            )
     for alias, participant in plan.get("participants", {}).items():
         if any(alias in node["participant_evidence"] for node in subjects):
             continue
-        existing = next((node for node in subjects if node.get("entity_id") == participant["entity"]), None)
+        existing = next(
+            (
+                node
+                for node in subjects
+                if node.get("entity_id") == participant["entity"]
+            ),
+            None,
+        )
         if existing is not None:
             existing["participant_evidence"].append(alias)
         else:
-            subjects.append({"resolution": "existing", "entity_id": participant["entity"],
-                "title": None, "aliases": [], "supporting_evidence": [alias],
-                "participant_evidence": [alias], "reason": participant["reason"]})
+            subjects.append(
+                {
+                    "resolution": "existing",
+                    "entity_id": participant["entity"],
+                    "title": None,
+                    "aliases": [],
+                    "supporting_evidence": [alias],
+                    "participant_evidence": [alias],
+                    "reason": participant["reason"],
+                }
+            )
     for node in subjects:
         node["supporting_evidence"] = list(
             dict.fromkeys(
@@ -158,32 +188,103 @@ def split_scope_plan(plan: dict) -> list[dict]:
     declared_user = None
     for node in subjects:
         kind = node.get("entity_type") or node["entity_id"].split("-")[0]
-        if node.get("entity_id") == "you" and any(a.startswith("P") for a in node["supporting_evidence"]):
-            declared_user = {"description": node["reason"], "alternate_names": node["aliases"],
-                "supporting_claims": [a for a in node["supporting_evidence"] if a in assignments]}
+        if node.get("entity_id") == "you" and any(
+            a.startswith("P") for a in node["supporting_evidence"]
+        ):
+            declared_user = {
+                "description": node["reason"],
+                "alternate_names": node["aliases"],
+                "supporting_claims": [
+                    a for a in node["supporting_evidence"] if a in assignments
+                ],
+            }
             continue
-        discovered.append({"entity_type": "person" if kind == "you" else kind,
-            "title": node["title"] or node["entity_id"], "description": node["reason"],
-            "alternate_names": node["aliases"], "supporting_evidence": node["supporting_evidence"]})
+        discovered.append(
+            {
+                "entity_type": "person" if kind == "you" else kind,
+                "title": node["title"] or node["entity_id"],
+                "description": node["reason"],
+                "alternate_names": node["aliases"],
+                "supporting_evidence": node["supporting_evidence"],
+            }
+        )
         decision = {"resolution": node["resolution"], "reason": node["reason"]}
         if node["resolution"] == "existing":
-            decision.update(entity_id=node["entity_id"], title=node["title"], aliases=node["aliases"])
+            decision.update(
+                entity_id=node["entity_id"],
+                title=node["title"],
+                aliases=node["aliases"],
+            )
         elif node["resolution"] == "review_required":
             decision["candidate_entity_ids"] = node["candidate_entity_ids"]
         matches.append({"decision": decision})
     from mycelium.page_admission import ADMISSION_BASES, NO_PAGE_BASIS
-    selected_pages = {eid for choice in routing["decisions"].values() for eid in choice["pages"]}
+
+    selected_pages = {
+        eid for choice in routing["decisions"].values() for eid in choice["pages"]
+    }
     admissions = {}
     for node in subjects:
         if node["resolution"] == "existing":
             continue
         eid = f"{node['entity_type']}-{slugify(node['title'])}"
-        admissions[eid] = {"reason": "Explicit fixture admission", "supporting_claims": list(assignments),
-            "basis": ADMISSION_BASES[node["entity_type"]][0] if eid in selected_pages else NO_PAGE_BASIS}
+        admissions[eid] = {
+            "reason": "Explicit fixture admission",
+            "supporting_claims": list(assignments),
+            "basis": ADMISSION_BASES[node["entity_type"]][0]
+            if eid in selected_pages
+            else NO_PAGE_BASIS,
+        }
     discovery = {"subjects": discovered}
     if declared_user is not None:
         discovery["declared_user"] = declared_user
-    return [discovery, *matches, *([{"page_admissions": admissions}] if admissions else []), routing]
+    resolved_ids = {
+        n.get("entity_id") or f"{n['entity_type']}-{slugify(n['title'])}"
+        for n in subjects
+    }
+    participant_ids = {
+        n.get("entity_id") or f"{n['entity_type']}-{slugify(n['title'])}"
+        for n in subjects
+        if any(a.startswith("P") for a in n["supporting_evidence"])
+    }
+    attribution = {
+        "attributions": {
+            alias: {
+                eid: {
+                    "relation_to_claim": "described"
+                    if eid in d["pages"]
+                    else "reporting_only"
+                    if eid in participant_ids
+                    else "unrelated",
+                    "reason": "Explicit fixture attribution"
+                    if eid in d["pages"] or eid in participant_ids
+                    else None,
+                }
+                for eid in sorted(resolved_ids)
+            }
+            for alias, d in routing["decisions"].items()
+        }
+    }
+    presentation = {
+        "decisions": {
+            alias: {
+                "primary_reason": "Explicit fixture primary subject",
+                "primary_subject": d["owner_entity"],
+                "pages": {eid: page["section_key"] for eid, page in d["pages"].items()},
+                "uncertainty": d["uncertainty"],
+                "prominence": d["prominence"],
+            }
+            for alias, d in routing["decisions"].items()
+            if d["pages"]
+        }
+    }
+    return [
+        discovery,
+        *matches,
+        *([{"page_admissions": admissions}] if admissions else []),
+        *([attribution] if resolved_ids else []),
+        *([presentation] if presentation["decisions"] else []),
+    ]
 
 
 def use_existing_identity(responses, entity_id, *, title, aliases):
@@ -196,10 +297,21 @@ def use_existing_identity(responses, entity_id, *, title, aliases):
             proposed = decision["pages"].pop(proposed_id, None)
             if entity_id not in decision["pages"] and proposed is not None:
                 decision["pages"][entity_id] = proposed
-            if decision["owner_entity"] == proposed_id:
-                decision["owner_entity"] = entity_id
-    responses[1]["decision"] = {"resolution": "existing", "entity_id": entity_id,
-        "title": title, "aliases": aliases, "reason": node["description"]}
+            if decision["primary_subject"] == proposed_id:
+                decision["primary_subject"] = entity_id
+    for response in responses:
+        for decision in response.get("attributions", {}).values():
+            if proposed_id in decision:
+                prior = decision.pop(proposed_id)
+                if entity_id not in decision:
+                    decision[entity_id] = prior
+    responses[1]["decision"] = {
+        "resolution": "existing",
+        "entity_id": entity_id,
+        "title": title,
+        "aliases": aliases,
+        "reason": node["description"],
+    }
     for response in list(responses):
         if "page_admissions" in response:
             response["page_admissions"].pop(proposed_id, None)
@@ -293,7 +405,9 @@ def fact_resolution_plan(
             ]
         }
     )
-    responses.extend({"text": text} for aliases, text, _section in facts.values() if len(aliases) > 1)
+    responses.extend(
+        {"text": text} for aliases, text, _section in facts.values() if len(aliases) > 1
+    )
     return responses
 
 
@@ -331,36 +445,28 @@ def test_route_keeps_relationship_endpoints_separate_from_context(tmp_path):
     claim = add_claim(artifacts, source, text="Ava agreed to meet Ben.")
     item = ClaimEvidence(claim, source)
     route = dream.router._route_decision(
-        "C001",
         item,
         {
-            "disposition": "canonical",
-            "owner_entity": owner.entity_id,
-            "linked_entities": [],
-            "page_sections": {
-                owner.entity_id: "profile",
-                endpoint.entity_id: "profile",
+            owner.entity_id: {"relation_to_claim": "described", "reason": "Actor"},
+            endpoint.entity_id: {
+                "relation_to_claim": "described",
+                "reason": "Recipient",
             },
-            "subject_entity": owner.entity_id,
-            "object_entities": [endpoint.entity_id],
-            "contextual_entities": [context.entity_id],
-            "relationship_kind": "none",
-            "supporting_claims": [],
-            "identity_blocker_ids": [],
-            "confidence": 1.0,
-            "reason": "Ava owns the commitment; Ben is its endpoint.",
+            context.entity_id: {
+                "relation_to_claim": "reporting_only",
+                "reason": "Reporter",
+            },
         },
-        {"C001": item},
         {
-            owner.entity_id: owner,
-            endpoint.entity_id: endpoint,
-            context.entity_id: context,
+            "primary_subject": owner.entity_id,
+            "primary_reason": "Owns the commitment",
+            "pages": {owner.entity_id: "profile", endpoint.entity_id: "profile"},
+            "uncertainty": None,
+            "prominence": "briefing",
         },
-        {},
-        {},
     )
     assert route.linked_entity_ids == (endpoint.entity_id,)
-    assert route.object_entity_ids == (endpoint.entity_id,)
+    assert route.described_entity_ids == (owner.entity_id, endpoint.entity_id)
     assert route.contextual_entity_ids == (context.entity_id,)
 
 
@@ -372,11 +478,11 @@ def test_claim_decision_batches_preserve_every_alias_once():
 
 
 @pytest.mark.parametrize("entity_count", [1, 2, 8, 16, 40])
-def test_routing_batches_preserve_claims_without_a_page_matrix(entity_count):
+def test_attribution_batches_bound_claim_entity_pairs(entity_count):
     aliases = {f"C{i:03d}": object() for i in range(1, 30)}
     batches = list(ClaimRouter._alias_batches(aliases, entity_count=entity_count))
     assert [alias for batch in batches for alias in batch] == list(aliases)
-    assert [len(batch) for batch in batches] == [24, 5]
+    assert all(len(batch) * entity_count <= 48 for batch in batches)
     assert all((batch for batch in batches))
 
 
@@ -413,52 +519,23 @@ def test_revision_can_place_uncertain_claim_without_losing_review():
 
 
 def test_claim_routing_contract_requires_exact_claims_and_registry_values():
-    schema = page_plan_model(
-        ["C001", "C002"], {"you": "you", "project-cedar": "project"}
-    )
+    schema = page_plan_model({"C001": ["you"], "C002": ["you"]}, {"you": "you"})
     decision = {
-        "prominence": "briefing",
+        "primary_reason": "Personal fact",
+        "primary_subject": "you",
+        "pages": {"you": "profile"},
         "uncertainty": None,
-        "owner_entity": "you",
-        "pages": {"you": {"section_key": "profile", "reason": "Personal fact."}},
-        "reason": None,
+        "prominence": "briefing",
     }
-    valid = {"decisions": {"C001": decision, "C002": decision}}
-    assert set(schema.model_validate(valid).decisions.model_dump()) == {"C001", "C002"}
+    schema.model_validate({"decisions": {"C001": decision, "C002": decision}})
     with pytest.raises(ValidationError):
         schema.model_validate({"decisions": {"C001": decision}})
     for pages in [
         {},
-        {
-            **decision["pages"],
-            "missing": {"section_key": "profile", "reason": "Invalid ID."},
-        },
-        {
-            **decision["pages"],
-            "you": {"section_key": "invalid", "reason": "Invalid section."},
-        },
-        {
-            **decision["pages"],
-            "you": {
-                "section_key": "people_organizations",
-                "reason": "Wrong entity type's section.",
-            },
-        },
-        {
-            **decision["pages"],
-            "you": [decision["pages"]["you"], decision["pages"]["you"]],
-        },
-        {
-            **decision["pages"],
-            "you": {"section_key": "not_selected", "reason": "Missing primary."},
-        },
-        {
-            **decision["pages"],
-            "you": {
-                "section_key": ["profile", "current_context"],
-                "reason": "Two sections.",
-            },
-        },
+        {"unknown": "profile"},
+        {"you": "invalid"},
+        {"you": "people_organizations"},
+        {"you": ["profile", "current_context"]},
     ]:
         with pytest.raises(ValidationError):
             schema.model_validate(
@@ -550,11 +627,38 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
     async def response(system, user, output_type, **kwargs):
         nonlocal routing_calls
         if "subjects" in output_type.model_fields:
-            return {"declared_user": {"description": "The user whose preferences are recorded",
-                "supporting_claims": ["C001"], "alternate_names": []}, "subjects": []}
+            return {
+                "declared_user": {
+                    "description": "The user whose preferences are recorded",
+                    "supporting_claims": ["C001"],
+                    "alternate_names": [],
+                },
+                "subjects": [],
+            }
         if "decision" in output_type.model_fields:
-            return {"decision": {"resolution": "existing", "entity_id": "you", "title": None,
-                "aliases": [], "reason": "Explicit fixture user"}}
+            return {
+                "decision": {
+                    "resolution": "existing",
+                    "entity_id": "you",
+                    "title": None,
+                    "aliases": [],
+                    "reason": "Explicit fixture user",
+                }
+            }
+        if "attributions" in output_type.model_fields:
+            return {
+                "attributions": {
+                    alias: {
+                        "you": {
+                            "relation_to_claim": "described",
+                            "reason": "Fixture user preference",
+                        }
+                    }
+                    for alias in output_type.model_fields[
+                        "attributions"
+                    ].annotation.model_fields
+                }
+            }
         decision_field = output_type.model_fields.get("decisions")
         annotation = getattr(decision_field, "annotation", None)
         fields = getattr(annotation, "model_fields", {})
@@ -566,13 +670,11 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
         return {
             "decisions": {
                 alias: {
-                    "prominence": "briefing",
+                    "primary_reason": "Personal fact",
+                    "primary_subject": "you",
+                    "pages": {"you": "profile"},
                     "uncertainty": None,
-                    "owner_entity": "you",
-                    "pages": {
-                        "you": {"section_key": "profile", "reason": "Personal fact."}
-                    },
-                    "reason": None,
+                    "prominence": "briefing",
                 }
                 for alias in fields
             }
@@ -627,7 +729,12 @@ def test_scope_evidence_preserves_extracted_roles_and_stable_references(tmp_path
     payload = json.loads(rendered)
     assert payload["claims"]["C001"]["about"] == item.about
     assert payload["claims"]["C001"]["identity_references"] == [
-        {"role": "context", "entity_id": "you", "origin": "scope", "surface": "Recurring endeavor"}
+        {
+            "role": "context",
+            "entity_id": "you",
+            "origin": "scope",
+            "surface": "Recurring endeavor",
+        }
     ]
     segment = payload["sources"][source.source_id]["segments"][
         source.segments[0].segment_id
@@ -804,9 +911,17 @@ async def test_dream_routes_claim_and_materializes_deterministic_page(tmp_path):
     assert {(item.role, item.entity_id) for item in references} == {
         ("context", None),
         ("canonical_owner", entity.entity_id),
+        ("subject", entity.entity_id),
+        ("context", "you"),
     }
     assert (
-        next((item for item in references if item.role == "context")).surface
+        next(
+            (
+                item
+                for item in references
+                if item.role == "context" and item.entity_id is None
+            )
+        ).surface
         == "Memory Design"
     )
     assert logs.get(entry.entry_id).consolidated is True
@@ -842,7 +957,9 @@ async def test_dream_defers_claim_without_a_clear_owner_and_completes_episode(tm
 
 
 @pytest.mark.asyncio
-async def test_rerouting_placed_claim_to_deferred_removes_its_fact(no_truth_changes, tmp_path):
+async def test_rerouting_placed_claim_to_deferred_removes_its_fact(
+    no_truth_changes, tmp_path
+):
     dream, _, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
     entry, source = add_source(logs, artifacts)
     claim = add_claim(
@@ -958,7 +1075,9 @@ async def test_source_policy_exclusion_is_typed_and_not_canonical_memory(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_fresh_assistant_exclusion_reaches_truth_review_before_dream_commit(tmp_path):
+async def test_fresh_assistant_exclusion_reaches_truth_review_before_dream_commit(
+    tmp_path,
+):
     dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
     _, source = add_source(logs, artifacts, suffix="assistant")
     source.segments[0].speaker = "Assistant"
@@ -967,14 +1086,27 @@ async def test_fresh_assistant_exclusion_reaches_truth_review_before_dream_commi
     excluded = add_claim(artifacts, source, claim_id="excluded", role="assistant")
     _, source = add_source(logs, artifacts, suffix="user")
     admitted = add_claim(artifacts, source, claim_id="admitted")
-    dream.router.route = AsyncMock(return_value=RoutingResult(routes=[ClaimRoute(
-        claim_id=admitted.claim_id,
-        owner_entity_id="you", section_key="preferences_working_style", linked_entity_ids=(),
-        raw_log_entry_id=source.raw_log_entry_id, reason="Declared useful user preference", disposition="canonical",
-    )]))
+    dream.router.route = AsyncMock(
+        return_value=RoutingResult(
+            routes=[
+                ClaimRoute(
+                    claim_id=admitted.claim_id,
+                    owner_entity_id="you",
+                    section_key="preferences_working_style",
+                    linked_entity_ids=(),
+                    raw_log_entry_id=source.raw_log_entry_id,
+                    reason="Declared useful user preference",
+                    disposition="canonical",
+                )
+            ]
+        )
+    )
     report = await dream.run()
     assert not report.failures
-    assert artifacts.get_claim(excluded.claim_id).dream_disposition == "excluded_source_policy"
+    assert (
+        artifacts.get_claim(excluded.claim_id).dream_disposition
+        == "excluded_source_policy"
+    )
     assert artifacts.get_claim(admitted.claim_id).dream_disposition == "routed"
     assert artifacts.facts_for_claim(excluded.claim_id) == []
     assert artifacts.facts_for_claim(admitted.claim_id)
@@ -1062,7 +1194,9 @@ async def test_model_declared_project_role_projects_to_both_endpoint_pages(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_new_entity_revises_prior_you_scope_without_string_matching(no_truth_changes, tmp_path):
+async def test_new_entity_revises_prior_you_scope_without_string_matching(
+    no_truth_changes, tmp_path
+):
     dream, _, wiki, logs, artifacts = build_dream(tmp_path, llm_response=you_scope())
     _, first_source = add_source(logs, artifacts, suffix="early")
     early = add_claim(
@@ -1130,7 +1264,9 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(no_tru
 
 
 @pytest.mark.asyncio
-async def test_later_dream_discovers_page_from_claims_across_episodes(no_truth_changes, tmp_path):
+async def test_later_dream_discovers_page_from_claims_across_episodes(
+    no_truth_changes, tmp_path
+):
     dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
     _, first_source = add_source(logs, artifacts, suffix="first")
     first = add_claim(
@@ -1261,7 +1397,7 @@ async def test_deferred_owner_does_not_block_placed_sibling(no_truth_changes, tm
     assert logs.get(second_entry.entry_id).consolidated is True
     assert wiki.exists("coffee")
     assert artifacts.get_claim("claim-first").dream_disposition == "deferred"
-    assert llm.call_structured.await_count == 4
+    assert llm.call_structured.await_count == 5
 
 
 @pytest.mark.asyncio
@@ -1283,7 +1419,7 @@ async def test_partial_extraction_routes_available_claims_without_repair(tmp_pat
     assert report.failures[0]["stage"] == "extraction"
     assert not logs.get(entry.entry_id).consolidated
     assert wiki.exists("partial-memory")
-    assert llm.call_structured.await_count == 4
+    assert llm.call_structured.await_count == 5
 
 
 @pytest.mark.asyncio
@@ -1416,12 +1552,15 @@ async def test_ambiguous_subject_type_is_published_for_optional_review(tmp_path)
     llm.call_structured.side_effect = responses
     result = await dream.router.route([ClaimEvidence(claim, source)])
     assert result.routes[0].placed
-    assert {entity.entity_id for entity in result.new_entities} == {"project-neighborhood-salon", "you"}
+    assert {entity.entity_id for entity in result.new_entities} == {
+        "project-neighborhood-salon",
+        "you",
+    }
     decision = result.entity_decisions[0]
     assert decision.review_state == "review_required"
     assert result.routes[0].identity_blocker_ids == (decision.decision_id,)
     assert decision.reason == "Project and Series are both materially plausible."
-    assert llm.call_structured.await_count == 4
+    assert llm.call_structured.await_count == 5
 
 
 @pytest.mark.asyncio
@@ -1434,7 +1573,7 @@ async def test_configured_user_routes_to_the_discovered_canonical_identity(tmp_p
     assert result.failures == []
     assert result.routes[0].owner_entity_id == "you"
     assert all((entity.entity_id != "person-you" for entity in result.new_entities))
-    assert llm.call_structured.await_count == 2
+    assert llm.call_structured.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -1458,7 +1597,10 @@ async def test_shorter_person_name_resolves_to_existing_identity(tmp_path):
     )
     llm.call_structured.side_effect = responses
     result = await dream.router.route([ClaimEvidence(claim, source)])
-    assert [entity.entity_id for entity in result.new_entities] == [person.entity_id, "you"]
+    assert [entity.entity_id for entity in result.new_entities] == [
+        person.entity_id,
+        "you",
+    ]
     assert result.new_entities[0].aliases == ["Priya"]
     assert result.routes[0].owner_entity_id == person.entity_id
 
@@ -1480,7 +1622,8 @@ async def test_new_identity_does_not_mutate_existing_person(tmp_path):
     llm.call_structured.side_effect = responses
     result = await dream.router.route([ClaimEvidence(claim, source)])
     assert [(entity.entity_id, entity.title) for entity in result.new_entities] == [
-        ("person-omar-haddad", "Omar Haddad"), ("you", "You")
+        ("person-omar-haddad", "Omar Haddad"),
+        ("you", "You"),
     ]
     assert artifacts.get_entity(person.entity_id).title == "Priya Raman"
     assert result.routes[0].owner_entity_id == "person-omar-haddad"
@@ -1512,7 +1655,10 @@ async def test_later_project_name_updates_stable_identity_without_duplicate(tmp_
     )
     llm.call_structured.side_effect = responses
     result = await dream.router.route([ClaimEvidence(claim, source)])
-    assert [entity.entity_id for entity in result.new_entities] == [project.entity_id, "you"]
+    assert [entity.entity_id for entity in result.new_entities] == [
+        project.entity_id,
+        "you",
+    ]
     updated = result.new_entities[0]
     assert updated.title == "Lantern"
     assert "Meeting Memory Assistant" in updated.aliases
@@ -1544,7 +1690,9 @@ async def test_dream_dry_run_reports_but_does_not_write(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dream_regenerates_existing_page_without_rewrite_call(no_truth_changes, tmp_path):
+async def test_dream_regenerates_existing_page_without_rewrite_call(
+    no_truth_changes, tmp_path
+):
     dream, llm, wiki, logs, artifacts = build_dream(
         tmp_path, llm_response=new_scope("C001", "Stable Page")
     )
@@ -1651,11 +1799,17 @@ async def test_dream_preserves_accepted_fact_while_contradiction_is_pending(tmp_
         artifacts, second_source, claim_id="claim-new", text="The user dislikes tea."
     )
     from tests.truth_support import truth_response
+
     routing = iter(split_scope_plan(you_scope()))
 
     async def respond(system, user, schema, **kwargs):
-        if kwargs["debug_label"] in {"dream-truth-candidates", "dream-truth-comparison"}:
-            return truth_response(user, schema, {("claim-new", "claim-old"): "contradicts"}, **kwargs)
+        if kwargs["debug_label"] in {
+            "dream-truth-candidates",
+            "dream-truth-comparison",
+        }:
+            return truth_response(
+                user, schema, {("claim-new", "claim-old"): "contradicts"}, **kwargs
+            )
         return next(routing)
 
     llm.output_budget = lambda requested, **kwargs: requested
@@ -1681,7 +1835,8 @@ async def test_dream_preserves_accepted_fact_while_contradiction_is_pending(tmp_
 
 @pytest.mark.asyncio
 async def test_partial_fact_failure_commits_successes_and_retries_only_missing_claims(
-    no_truth_changes, tmp_path,
+    no_truth_changes,
+    tmp_path,
 ):
     dream, llm, wiki, logs, artifacts = build_dream(
         tmp_path,

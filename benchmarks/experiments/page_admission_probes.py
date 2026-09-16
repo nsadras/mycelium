@@ -24,9 +24,8 @@ from mycelium.page_admission import (
     NO_PAGE_BASIS,
     page_admission_model,
     page_admission_prompt,
-    typed_page_plan_model,
 )
-from mycelium.page_plan import page_plan_prompt
+from benchmarks.experiments.attribution_contract_probes import decide
 
 
 CASES = [
@@ -265,31 +264,19 @@ async def main():
                 for eid, entity in entities.items()
                 if entity.materialization_state == "materialized" or admitted.get(eid)
             }
-            placement_schema = typed_page_plan_model(
-                claims, {eid: e.entity_type for eid, e in eligible.items()}
+            subjects = [
+                {
+                    "entity_id": eid,
+                    "entity_type": e.entity_type,
+                    "title": e.title,
+                    "participant_bindings": [],
+                }
+                for eid, e in entities.items()
+            ]
+            attribution, presentation, _ = await decide(
+                qa.llm, subjects, evidence, eligible, {}
             )
-            system, user = page_plan_prompt(
-                RoutingFormatter.entity_catalog(
-                    eligible.values(), include_sections=True
-                ),
-                json.dumps(
-                    {
-                        eid: {"entity_type": e.entity_type, "title": e.title}
-                        for eid, e in entities.items()
-                    }
-                ),
-                json.dumps(evidence),
-            )
-            placement = placement_schema.model_validate(
-                await qa.llm.call_structured(
-                    system,
-                    user,
-                    placement_schema,
-                    num_predict=4096,
-                    debug_label="typed-page-placement-probe",
-                )
-            ).model_dump()
-            response.update(placement)
+            response.update(attribution=attribution, decisions=presentation)
             selected = {
                 eid
                 for decision in response["decisions"].values()

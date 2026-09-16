@@ -38,8 +38,7 @@ class ClaimRoute:
     disposition: str = "canonical"
     supporting_claim_ids: tuple[str, ...] = ()
     confidence: float = 0.8
-    subject_entity_id: str | None = None
-    object_entity_ids: tuple[str, ...] = ()
+    described_entity_ids: tuple[str, ...] = ()
     contextual_entity_ids: tuple[str, ...] = ()
     relationship_kind: str | None = None
     identity_blocker_ids: tuple[str, ...] = ()

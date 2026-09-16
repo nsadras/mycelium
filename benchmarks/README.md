@@ -122,17 +122,23 @@ All three scenarios use the same runner and evaluator:
 
 | Fixture directory | Role |
 | --- | --- |
-| `daily_driver_v1` | Primary cumulative memory, ownership, correction, and retraction scenario. |
-| `daily_driver_paraphrased_v1` | Renamed/rephrased transfer case for generalization. |
-| `daily_driver_unrelated_v1` | Transfer case in a home-renovation setting. |
+| `daily_driver_v2` | Primary cumulative memory, ownership, correction, and retraction scenario. |
+| `daily_driver_paraphrased_v2` | Renamed/rephrased transfer case for generalization. |
+| `daily_driver_unrelated_v2` | Transfer case in a home-renovation setting. |
+
+Version 2 requires durable capture before Build Memory; extraction and search begin
+at Build. Useful independent context can justify a page from one conversation.
+The original v1 fixtures and results remain historical evidence with different
+acceptance rules. The paraphrased v2 also repairs a truncated YAML source sentence;
+its input comparison with v1 is unmatched.
 
 Set a fixture path and validate it without model calls:
 
 ```bash
-fixture=benchmarks/suites/daily_driver/fixtures/daily_driver_v1
+fixture=benchmarks/suites/daily_driver/fixtures/daily_driver_v2
 .venv/bin/python -m benchmarks daily-driver validate "$fixture"
 .venv/bin/python -m benchmarks daily-driver run "$fixture" \
-  --config-path mycelium.toml --run-id daily-driver-v1-baseline
+  --config-path mycelium.toml --run-id daily-driver-v2-baseline
 ```
 
 Substitute either other directory to run its scenario. Add `--trials 3` for
@@ -144,19 +150,19 @@ Replay extraction while rerunning downstream memory work:
 
 ```bash
 .venv/bin/python -m benchmarks daily-driver run "$fixture" \
-  --replay-extraction-store benchmark_runs/daily-driver-v1-baseline/store \
-  --run-id daily-driver-v1-replay
+  --replay-extraction-store benchmark_runs/daily-driver-v2-baseline/store \
+  --run-id daily-driver-v2-replay
 ```
 
 Refresh deterministic comparisons of an existing run without model calls:
 
 ```bash
 .venv/bin/python -m benchmarks daily-driver compare "$fixture" \
-  --output-dir benchmark_runs/daily-driver-v1-baseline
+  --output-dir benchmark_runs/daily-driver-v2-baseline
 ```
 
 For repeated trials, compare a specific trial directory. See the
-[primary fixture guide](suites/daily_driver/fixtures/daily_driver_v1/README.md)
+[primary fixture guide](suites/daily_driver/fixtures/daily_driver_v2/README.md)
 for checkpoint expectations and acceptance details.
 
 ## MemoryAgentBench

@@ -4,47 +4,180 @@ import pytest
 from pydantic import ValidationError
 
 from mycelium.ollama import OllamaClient
+from mycelium.ontology import ENTITY_TYPES, section_keys
 from mycelium.page_plan import page_plan_model
+from mycelium.source_attribution import (
+    attributed_pages,
+    source_attribution_model,
+    source_attribution_prompt,
+)
 
 
-@pytest.mark.parametrize("second_section", ["overview", "not_selected"])
-def test_page_choices_survive_structured_response_roundtrip(second_section):
-    schema = page_plan_model(["C001"], {"you": "you", "project-1": "project"})
-    response = {"decisions": {"C001": {"prominence": "briefing", "uncertainty": None,
-        "owner_entity": "you", "reason": None,
-        "pages": {
-            "you": {"section_key": "priorities_plans", "reason": "Personal goal."},
-            "project-1": {"section_key": second_section, "reason": "Explicit page decision."},
-        },
-    }}}
-    if second_section == "not_selected":
-        del response["decisions"]["C001"]["pages"]["project-1"]
-    # No network request: exercise the parser/serializer that previously dropped
-    # required null decisions, and the router's subsequent validation boundary.
+def presentation(pages, owner):
+    return {
+        "primary_reason": "Source-backed main subject",
+        "primary_subject": owner,
+        "pages": pages,
+        "uncertainty": None,
+        "prominence": "briefing",
+    }
+
+
+def attribution(relation):
+    return {
+        "relation_to_claim": relation,
+        "reason": None if relation == "unrelated" else "Cited source relationship",
+    }
+
+
+def test_attribution_native_roundtrip_retains_unplaced_subject_and_reporting_context():
+    schema = source_attribution_model(["C001"], ["you", "other"], {"you"})
+    response = {
+        "attributions": {
+            "C001": {
+                "you": attribution("reporting_only"),
+                "other": attribution("described"),
+            }
+        }
+    }
     client = OllamaClient(url="http://localhost:11434", model="unused")
-    parsed = client._parse_structured_response(json.dumps(response), schema)
-    assert schema.model_validate(parsed).model_dump() == response
+    assert (
+        schema.model_validate(
+            client._parse_structured_response(json.dumps(response), schema)
+        ).model_dump()
+        == response
+    )
+    assert attributed_pages(response["attributions"], {"you"}, {}) == {"C001": []}
+    assert attributed_pages(response["attributions"], {"you", "other"}, {}) == {
+        "C001": ["other"]
+    }
+    assert attributed_pages(
+        response["attributions"], {"you", "other"}, {"C001": {"other"}}
+    ) == {"C001": []}
+    assert response["attributions"]["C001"]["other"]["relation_to_claim"] == "described"
 
 
-def test_no_eligible_pages_requires_deferral():
-    schema = page_plan_model(["C001"], {})
-    decision = {"prominence": "briefing", "uncertainty": None, "pages": {}, "owner_entity": "", "reason": "No eligible identity."}
-    schema.model_validate({"decisions": {"C001": decision}})
+@pytest.mark.parametrize("kind", ENTITY_TYPES)
+def test_native_schema_requires_one_allowed_section_for_each_attributed_page(kind):
+    schema = page_plan_model({"C001": ["subject"]}, {"subject": kind})
+    definitions = schema.model_json_schema()["$defs"]
+    page_sections = next(
+        d for d in definitions.values() if d.get("title") == "PageSections"
+    )
+    assert page_sections["required"] == ["subject"]
+    assert set(page_sections["properties"]["subject"]["enum"]) == set(
+        section_keys(kind)
+    )
+    assert page_sections["additionalProperties"] is False
+    for section in section_keys(kind):
+        response = {
+            "decisions": {"C001": presentation({"subject": section}, "subject")}
+        }
+        assert schema.model_validate(response).model_dump() == response
+    for section in [None, "invalid", ["overview", "profile"]]:
+        with pytest.raises(ValidationError):
+            schema.model_validate(
+                {"decisions": {"C001": presentation({"subject": section}, "subject")}}
+            )
+
+
+def test_attribution_requires_every_exact_pair_and_limits_reporting_to_source_participants():
+    schema = source_attribution_model(
+        ["C001", "C002"], ["person", "project"], {"person"}
+    )
+    row = {"person": attribution("reporting_only"), "project": attribution("described")}
+    schema.model_validate({"attributions": {"C001": row, "C002": row}})
+    invalid = [
+        {"C001": row},
+        {"C001": {"person": attribution("described")}, "C002": row},
+        {"C001": {**row, "extra": attribution("described")}, "C002": row},
+        {"C001": {**row, "project": attribution("reporting_only")}, "C002": row},
+        {"C001": {**row, "project": attribution("invented")}, "C002": row},
+        {
+            "C001": {
+                **row,
+                "project": {"relation_to_claim": "described", "reason": None},
+            },
+            "C002": row,
+        },
+        {
+            "C001": {
+                **row,
+                "project": {"relation_to_claim": "unrelated", "reason": "Guess"},
+            },
+            "C002": row,
+        },
+    ]
+    for response in invalid:
+        with pytest.raises(ValidationError):
+            schema.model_validate({"attributions": response})
+
+
+def test_presentation_cannot_add_omit_or_reassign_pages():
+    schema = page_plan_model(
+        {"C001": ["you", "project"], "C002": []},
+        {"you": "you", "project": "project", "other": "person"},
+    )
+    row = presentation(
+        {"you": "current_context", "project": "current_status"}, "project"
+    )
+    schema.model_validate({"decisions": {"C001": row}})
+    for change in [
+        {"primary_subject": "other"},
+        {"pages": {"you": "current_context"}},
+        {"pages": {**row["pages"], "other": "profile"}},
+        {"pages": {"you": "overview", "project": "profile"}},
+    ]:
+        with pytest.raises(ValidationError):
+            schema.model_validate({"decisions": {"C001": {**row, **change}}})
     with pytest.raises(ValidationError):
-        schema.model_validate({"decisions": {"C001": {**decision, "reason": None}}})
+        schema.model_validate({"decisions": {"C001": row, "C002": row}})
+    for pages in [["unknown"], ["you", "you"]]:
+        with pytest.raises(ValueError, match="unique resolved"):
+            page_plan_model({"C001": pages}, {"you": "you"})
 
 
-def test_selection_requires_valid_owner_and_destination_reason():
-    schema = page_plan_model(["C001"], {"you": "you"})
-    decision = {"prominence": "briefing", "uncertainty": None, "pages": {"you": {"section_key": "profile", "reason": "Personal statement."}},
-                "owner_entity": "", "reason": None}
-    with pytest.raises(ValidationError, match="primary owner"):
-        schema.model_validate({"decisions": {"C001": decision}})
-    decision["owner_entity"] = "you"
-    schema.model_validate({"decisions": {"C001": decision}})
-    decision["pages"] = {}
-    decision["reason"] = "No supported destination."
-    with pytest.raises(ValidationError, match="no owner"):
-        schema.model_validate({"decisions": {"C001": decision}})
-    decision["owner_entity"] = ""
-    schema.model_validate({"decisions": {"C001": decision}})
+def test_empty_domains_are_explicit_and_cannot_invent_attribution_or_pages():
+    schema = source_attribution_model(["C001"], [], set())
+    schema.model_validate({"attributions": {"C001": {}}})
+    with pytest.raises(ValidationError):
+        schema.model_validate(
+            {"attributions": {"C001": {"invented": attribution("described")}}}
+        )
+    schema = page_plan_model({"C001": []}, {})
+    schema.model_validate({"decisions": {}})
+    with pytest.raises(ValidationError):
+        schema.model_validate(
+            {"decisions": {"C001": presentation({"invented": "overview"}, "invented")}}
+        )
+
+
+def test_attribution_input_carries_evidence_and_identity_without_page_state():
+    subjects = [
+        {
+            "entity_id": "p",
+            "entity_type": "person",
+            "title": "Person",
+            "participant_bindings": [],
+        }
+    ]
+    evidence = {
+        "claims": {
+            "C001": {
+                "text": "A source statement",
+                "citations": [{"source_id": "s", "segment_id": "x"}],
+            }
+        },
+        "sources": {"s": {"segments": {"x": {"text": "A source statement"}}}},
+    }
+    _, user = source_attribution_prompt(subjects, evidence)
+    assert json.loads(user) == {"resolved_subjects": subjects, **evidence}
+    evidence["claims"]["C001"].update(
+        identity_references=[
+            {"role": "identity_subject", "entity_id": "other", "origin": "manual"}
+        ],
+        about=[{"entity": "old inferred subject"}],
+        claim_id="stored-c1",
+    )
+    _, changed = source_attribution_prompt(subjects, evidence)
+    assert changed == user

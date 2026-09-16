@@ -9,8 +9,9 @@ from mycelium.organization import IdentityReviewService
 from mycelium.page_admission import (
     NO_PAGE_BASIS,
     page_admission_model,
-    typed_page_plan_model,
 )
+from mycelium.page_plan import page_plan_model
+from mycelium.source_attribution import attributed_pages
 from mycelium.page_reviews import reviewed_page_exclusions
 from tests.memory_helpers import claim, place
 from tests.test_page_admission import entity
@@ -97,24 +98,22 @@ def test_admission_cannot_use_excluded_support_but_can_use_other_claims():
 
 
 def test_placement_restricts_exact_claim_page_pair_and_retains_other_subjects():
-    schema = typed_page_plan_model(
-        ["C001", "C002"],
-        {"artifact": "artifact", "you": "you"},
-        excluded_pages={"C001": {"artifact"}},
-    )
+    attributions = {
+        "C001": {
+            "artifact": {"relation_to_claim": "described"},
+            "you": {"relation_to_claim": "described"},
+        },
+        "C002": {"artifact": {"relation_to_claim": "described"}},
+    }
+    pages = attributed_pages(attributions, {"artifact", "you"}, {"C001": {"artifact"}})
+    assert pages == {"C001": ["you"], "C002": ["artifact"]}
+    schema = page_plan_model(pages, {"artifact": "artifact", "you": "you"})
 
     def decision(owner):
         return {
-            "pages": {
-                owner: {
-                    "section_key": "overview"
-                    if owner == "artifact"
-                    else "current_context",
-                    "reason": "Source establishes context",
-                }
-            },
-            "owner_entity": owner,
-            "reason": None,
+            "primary_subject": owner,
+            "primary_reason": "Source context",
+            "pages": {owner: "overview" if owner == "artifact" else "current_context"},
             "uncertainty": None,
             "prominence": "detail",
         }

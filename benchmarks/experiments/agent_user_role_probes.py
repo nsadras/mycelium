@@ -44,7 +44,7 @@ CASES = [
             "Morgan Vale is a cabinetmaker who repairs the user's furniture.",
             "The user prefers repairing furniture to replacing it.",
         ],
-        {"C002"},
+        {"C001", "C002"},
         set(),
     ),
 ]
@@ -114,6 +114,9 @@ async def main(args):
                         [ClaimEvidence(c, source) for c in claims]
                     )
                 selected = {r.claim_id: set(r.page_sections) for r in result.routes}
+                described = {
+                    r.claim_id: set(r.described_entity_ids) for r in result.routes
+                }
                 work_unit = memory.artifacts.list_identity_work_units()[0]
                 plan = work_unit.entity_plan
                 author_ids = {
@@ -129,6 +132,7 @@ async def main(args):
                     "case": name,
                     "result": asdict(result),
                     "plan": plan,
+                    "page_coverage": selected,
                     "passed": not result.failures
                     and len(author_ids) == 1
                     and (
@@ -137,12 +141,20 @@ async def main(args):
                         else "you" not in author_ids
                     )
                     and all(
-                        author_ids <= selected.get(cid, set()) for cid in require_author
+                        author_ids <= described.get(cid, set())
+                        and (
+                            profile != "user" or author_ids <= selected.get(cid, set())
+                        )
+                        for cid in require_author
                     )
                     and all(
-                        not author_ids.intersection(selected.get(cid, ()))
-                        and selected.get(cid)
+                        not author_ids.intersection(described.get(cid, ()))
+                        and described.get(cid)
                         for cid in forbid_author
+                    )
+                    and (
+                        name == "self"
+                        or bool(described.get("C001", set()) - author_ids)
                     ),
                 }
                 write(case / "result.json", record)

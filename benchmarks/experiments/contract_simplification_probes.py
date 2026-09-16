@@ -15,8 +15,6 @@ from pathlib import Path
 
 from mycelium import structured_outputs as contracts
 from mycelium.identity_plan import identity_plan_model
-from mycelium.page_plan import page_plan_model
-from mycelium.ontology import section_keys
 from benchmarks.experiments.probe_support import RecordedSdk, fresh_run_root, write
 from mycelium import prompts
 from mycelium.ollama import OllamaClient
@@ -231,34 +229,7 @@ async def identity_routing():
         + json.dumps(evidence),
         identity_plan_model(evidence, {"P001": "user"}, {"you": "you"}),
     )
-    entities = {"p1": "person", "p2": "person"}
-    registry = {
-        key: {"title": name, "sections": section_keys(kind)}
-        for (key, kind), name in zip(entities.items(), ["Nora", "Lena"])
-    }
-    await call(
-        "routing-listener-and-joint",
-        (PROMPTS / "page_plan.system.jinja").read_text(),
-        "REGISTRY\n"
-        + json.dumps(registry)
-        + "\nCLAIMS\n"
-        + json.dumps(
-            {
-                "C001": "Nora told Lena that Nora is learning Italian.",
-                "C002": "Nora and Lena organized a neighborhood picnic together.",
-            }
-        ),
-        page_plan_model(["C001", "C002"], entities),
-    )
-    await call(
-        "routing-deferred",
-        (PROMPTS / "page_plan.system.jinja").read_text(),
-        "REGISTRY\n"
-        + json.dumps(registry)
-        + "\nCLAIMS\n"
-        + json.dumps({"C001": "An unidentified visitor owns a bicycle."}),
-        page_plan_model(["C001"], entities),
-    )
+    # Current attribution/presentation probes live in attribution_contract_probes.
 
 
 async def identity_rename():

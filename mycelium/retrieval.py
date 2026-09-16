@@ -12,7 +12,12 @@ from mycelium.context_selection import (
     AssistantContextSelector,
 )
 from mycelium.ollama import OllamaClient
-from mycelium.operations import MemoryEvidence, RetrievalRequest, RetrievalResult, RetrievalError
+from mycelium.operations import (
+    MemoryEvidence,
+    RetrievalRequest,
+    RetrievalResult,
+    RetrievalError,
+)
 from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
 from mycelium.store import WikiStore
 from mycelium.database import UnitOfWork
@@ -43,13 +48,18 @@ class MemoryRetriever:
         if count_tokens(query) <= 1024:
             return query
         response = await self.llm.call_structured(
-            render_prompt("assistant/search_query.system.jinja"), query,
-            SearchQueryOutput, num_predict=512, debug_label="retrieval-query",
+            render_prompt("assistant/search_query.system.jinja"),
+            query,
+            SearchQueryOutput,
+            num_predict=512,
+            debug_label="retrieval-query",
         )
         return SearchQueryOutput.model_validate(response).query
 
     async def retrieve(self, request: RetrievalRequest) -> RetrievalResult:
-        LifecycleTransaction(self.artifacts.root, self.context_builder.wiki.wiki_dir).recover()
+        LifecycleTransaction(
+            self.artifacts.root, self.context_builder.wiki.wiki_dir
+        ).recover()
         budget_tokens = (
             request.budget_tokens
             if request.budget_tokens is not None
@@ -70,6 +80,11 @@ class MemoryRetriever:
                 WikiStore(self.context_builder.wiki.wiki_dir, db=unit), artifacts
             )
             try:
+                hits = [
+                    current
+                    for hit in hits
+                    if (current := builder.current_hit(hit)) is not None
+                ]
                 candidates = [
                     AssistantContextCandidate(
                         candidate_id=f"claim:{hit.claim_id}",
@@ -95,11 +110,10 @@ class MemoryRetriever:
                 unit.close()
         # No await after validation: rendering sees one event-loop-consistent state.
         builder = RetrievedContextBuilder(self.context_builder.wiki, self.artifacts)
-        selected_ids = {
-            value.removeprefix("claim:") for value in selection.selected_ids
-        }
         hits_by_id = {hit.claim_id: hit for hit in hits}
-        admitted_hits = [hits_by_id[value.removeprefix("claim:")] for value in selection.selected_ids if value.removeprefix("claim:") in selected_ids]
+        admitted_hits = [
+            hits_by_id[value.removeprefix("claim:")] for value in selection.selected_ids
+        ]
         selected_hits = builder.distinct_hits(admitted_hits, self.initial_result_limit)
         evidence = builder.build(
             selected_hits,
@@ -147,14 +161,23 @@ class MemoryRetriever:
         exclude_claim_ids: set[str] | None = None,
     ) -> RetrievalResult:
         """Return additional ranked evidence without a separate model gate."""
-        LifecycleTransaction(self.artifacts.root, self.context_builder.wiki.wiki_dir).recover()
+        LifecycleTransaction(
+            self.artifacts.root, self.context_builder.wiki.wiki_dir
+        ).recover()
         builder = RetrievedContextBuilder(self.context_builder.wiki, self.artifacts)
         excluded = exclude_claim_ids or set()
         try:
-            hits = await self.claim_index.search(await self._search_query(query), limit=limit + len(excluded))
+            hits = await self.claim_index.search(
+                await self._search_query(query), limit=limit + len(excluded)
+            )
         except Exception as exc:
             raise RetrievalError("search", str(exc)) from exc
-        available_hits = [hit for hit in hits if hit.claim_id not in excluded]
+        available_hits = [
+            current
+            for hit in hits
+            if hit.claim_id not in excluded
+            and (current := builder.current_hit(hit)) is not None
+        ]
         selected_hits = builder.distinct_hits(available_hits, limit)
         evidence = builder.build(
             selected_hits,
@@ -180,35 +203,50 @@ class MemoryRetriever:
     def source_evidence(
         self, claim_ids: list[str], *, budget_tokens: int
     ) -> MemoryEvidence:
-        return RetrievedContextBuilder(self.context_builder.wiki, self.artifacts).source_evidence(
-            claim_ids, budget_tokens=budget_tokens
-        )
+        return RetrievedContextBuilder(
+            self.context_builder.wiki, self.artifacts
+        ).source_evidence(claim_ids, budget_tokens=budget_tokens)
 
-    def refresh_evidence(self, evidence: MemoryEvidence, *, budget_tokens: int) -> MemoryEvidence:
+    def refresh_evidence(
+        self, evidence: MemoryEvidence, *, budget_tokens: int
+    ) -> MemoryEvidence:
         """Rebase a workspace on current canonical state before a tool result."""
         from dataclasses import replace
+
         builder = RetrievedContextBuilder(self.context_builder.wiki, self.artifacts)
         hits = []
-        for claim_id in evidence.claim_ids:
+        claim_ids = dict.fromkeys(
+            [
+                *evidence.claim_ids,
+                *(
+                    citation.claim_id
+                    for source in evidence.sources
+                    for citation in source.citations
+                ),
+            ]
+        )
+        for claim_id in claim_ids:
             try:
                 claim = self.artifacts.get_claim(claim_id)
             except FileNotFoundError:
                 continue
             if claim.status not in {"active", "superseded"}:
                 continue
-            placement = self.artifacts.placement_for_claim(claim_id)
-            owner = placement.owner_entity_id if placement else None
             from mycelium.claim_index import ClaimSearchHit
-            hits.append(ClaimSearchHit(claim_id, claim.text, claim.status, owner,
-                                       builder._entity_title(owner), None, None, None))
+
+            hits.append(
+                ClaimSearchHit(
+                    claim_id, claim.text, claim.status, None, None, None, None, None
+                )
+            )
         records = builder.build(hits, budget_tokens=budget_tokens)
-        sources = []
-        for source in evidence.sources:
-            try:
-                current = self.artifacts.get_source(source.source_id)
-            except FileNotFoundError:
-                continue
-            sources.append(replace(source, status=current.status, retraction_reason=current.retraction_reason))
         from mycelium.retrieval_context import fit_memory_evidence
-        return fit_memory_evidence(replace(records, sources=tuple(sources)),
-                                   lambda trial: count_tokens(render_memory_evidence(trial)) <= budget_tokens)
+
+        return fit_memory_evidence(
+            replace(
+                records,
+                sources=builder.refresh_sources(evidence.sources),
+                more_available=evidence.more_available or records.more_available,
+            ),
+            lambda trial: count_tokens(render_memory_evidence(trial)) <= budget_tokens,
+        )

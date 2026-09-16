@@ -117,6 +117,7 @@ class EvidenceSource:
     segments: tuple[EvidenceSegment, ...]
     status: str = "active"
     retraction_reason: str | None = None
+    revision: int = 0
 
 
 @dataclass(frozen=True)

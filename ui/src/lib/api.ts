@@ -65,8 +65,11 @@ export interface MemoryEvidenceRecord {
 }
 
 export interface MemoryEvidenceSource {
+  revision: number;
   source_id: string;
   conversation_time: string;
+  status: string;
+  retraction_reason?: string | null;
   citations: Array<{ claim_id: string; segment_ids: string[] }>;
   segments: Array<{
     segment_id: string;
@@ -99,6 +102,7 @@ export interface MemoryWorkspace {
   operations: MemoryWorkspaceOperation[];
   remaining_searches: number;
   remaining_evidence_tokens: number;
+  last_operation_status: 'none' | 'complete' | 'failed';
 }
 
 export interface LoadedPage {

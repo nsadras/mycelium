@@ -26,6 +26,7 @@ from mycelium.operations import (
     EvidenceTime,
     MemoryEvidence,
     MemoryWorkspace,
+    RetrievalError,
     WikiPageReference,
 )
 from mycelium.store import WikiStore
@@ -58,7 +59,9 @@ def render_memory_evidence(evidence: MemoryEvidence) -> str:
     return _render_evidence_envelope("memory-evidence", evidence)
 
 
-def render_memory_workspace(workspace: MemoryWorkspace, *, include_request: bool = True) -> str:
+def render_memory_workspace(
+    workspace: MemoryWorkspace, *, include_request: bool = True
+) -> str:
     """Render the one current accumulated evidence workspace for an agent round."""
     operation_lines: list[str] = []
     if workspace.operations:
@@ -84,9 +87,16 @@ def render_memory_workspace(workspace: MemoryWorkspace, *, include_request: bool
     return _render_evidence_envelope(
         "memory-workspace",
         workspace.evidence,
-        attributes={"revision": str(workspace.revision), "last_operation_status": workspace.last_operation_status},
+        attributes={
+            "revision": str(workspace.revision),
+            "last_operation_status": workspace.last_operation_status,
+        },
         preamble=(
-            *([f"Original request: {_text(workspace.request)}"] if include_request else []),
+            *(
+                [f"Original request: {_text(workspace.request)}"]
+                if include_request
+                else []
+            ),
             f"Remaining searches: {workspace.remaining_searches}",
             f"Remaining evidence tokens: {workspace.remaining_evidence_tokens}",
             "",
@@ -179,19 +189,25 @@ def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
         for qualification in record.uncertainty:
             lines.append(f"Uncertainty: {_text(qualification)}")
         for revision in record.revisions:
-            lines.append(f"Revision: {_text(revision['relation'])} `{_text(revision['claim_id'])}` "
-                         f"({_text(revision['status'])}): {_text(revision['text'])}")
+            lines.append(
+                f"Revision: {_text(revision['relation'])} `{_text(revision['claim_id'])}` "
+                f"({_text(revision['status'])}): {_text(revision['text'])}"
+            )
         lines.append("Supporting claims:")
         lines.extend(f"- `{_text(value)}`" for value in record.claim_ids)
         if record.canonical_claims:
             lines.append("Matched canonical assertions:")
-            lines.extend(f"- `{_text(c.claim_id)}`: {_text(c.text)}" for c in record.canonical_claims)
+            lines.extend(
+                f"- `{_text(c.claim_id)}`: {_text(c.text)}"
+                for c in record.canonical_claims
+            )
         for review in record.reviews:
             lines.append(
                 f"Review `{_text(review.proposal_id)}`: {_text(review.status)}; "
                 f"relation: {_text(review.relation)}; incoming claims: "
                 + ", ".join(_text(c) for c in review.incoming_claim_ids)
-                + "; target claims: " + ", ".join(_text(c) for c in review.target_claim_ids)
+                + "; target claims: "
+                + ", ".join(_text(c) for c in review.target_claim_ids)
                 + ". This relationship is unresolved; incoming claims do not establish a replacement."
             )
         if record.temporal:
@@ -209,10 +225,27 @@ def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
                     f"- Claim `{_text(value.claim_id)}`: {_text(value.role)} "
                     f"{interval}{expression}"
                     + (f"; applies to: {_text(value.target)}" if value.target else "")
-                    + (f"; time evidence: `{_text(value.evidence_segment_id)}`" if value.evidence_segment_id else "")
-                    + (f"; reference date from: `{_text(value.anchor_segment_id)}`" if value.anchor_segment_id and value.anchor_segment_id != value.evidence_segment_id else "")
-                    + (f"; reference choice: {_text(value.reference_reason)}" if value.reference_reason else "")
-                    + (f"; reason: {_text(value.resolution_reason)}" if value.resolution_reason else "")
+                    + (
+                        f"; time evidence: `{_text(value.evidence_segment_id)}`"
+                        if value.evidence_segment_id
+                        else ""
+                    )
+                    + (
+                        f"; reference date from: `{_text(value.anchor_segment_id)}`"
+                        if value.anchor_segment_id
+                        and value.anchor_segment_id != value.evidence_segment_id
+                        else ""
+                    )
+                    + (
+                        f"; reference choice: {_text(value.reference_reason)}"
+                        if value.reference_reason
+                        else ""
+                    )
+                    + (
+                        f"; reason: {_text(value.resolution_reason)}"
+                        if value.resolution_reason
+                        else ""
+                    )
                 )
         if record.citations:
             lines.append("Evidence references:")
@@ -242,7 +275,12 @@ def _render_sources(sources: tuple[EvidenceSource, ...]) -> list[str]:
             [
                 f"## Source `{_text(source.source_id)}`",
                 f"Conversation time: {_text(source.conversation_time)}",
-                f"Source status: {_text(source.status)}" + (f" — {_text(source.retraction_reason)}" if source.retraction_reason else ""),
+                f"Source status: {_text(source.status)}"
+                + (
+                    f" — {_text(source.retraction_reason)}"
+                    if source.retraction_reason
+                    else ""
+                ),
                 "Supports claims:",
             ]
         )
@@ -289,12 +327,69 @@ class RetrievedContextBuilder:
     def _facts_for_claim(self, claim_id):
         return self.artifacts.facts_for_claim(claim_id)
 
+    def current_hit(self, hit: ClaimSearchHit) -> ClaimSearchHit | None:
+        """The index supplies identity/rank; canonical records supply interpretation."""
+        try:
+            claim = self.artifacts.get_claim(hit.claim_id)
+        except FileNotFoundError:
+            return None
+        if claim.status not in {"active", "superseded"}:
+            return None
+        placement = self.artifacts.placement_for_claim(claim.claim_id)
+        owner = placement.owner_entity_id if placement else None
+        try:
+            entity = self.artifacts.get_entity(owner) if owner else None
+        except FileNotFoundError as exc:
+            raise RetrievalError(
+                "evidence_integrity",
+                f"Claim {claim.claim_id} has missing owner {owner}",
+            ) from exc
+        return replace(
+            hit,
+            claim_text=claim.text,
+            memory_tier=self.artifacts.memory_tier(claim.claim_id),
+            owner_entity_id=owner,
+            owner_title=entity.title if entity else None,
+            page_slug=entity.slug if entity else None,
+            section_key=placement.section_key if placement else None,
+        )
+
+    def _source_uncertainty(self, claims):
+        notes = []
+        for claim in claims:
+            for provenance in claim.provenance:
+                try:
+                    source = self.artifacts.get_source(provenance.source_id)
+                except FileNotFoundError as exc:
+                    raise RetrievalError(
+                        "evidence_integrity",
+                        f"Claim {claim.claim_id} cites missing source {provenance.source_id}",
+                    ) from exc
+                missing = set(provenance.segment_ids) - {
+                    s.segment_id for s in source.segments
+                }
+                if missing:
+                    raise RetrievalError(
+                        "evidence_integrity",
+                        f"Claim {claim.claim_id} cites missing segments {sorted(missing)}",
+                    )
+                if source.status == "retracted":
+                    notes.append(
+                        f"Supporting source {source.source_id} is retracted; interpretation may be incomplete."
+                    )
+        return tuple(dict.fromkeys(notes))
+
     @cached_property
     def reviews_by_claim(self):
         result = defaultdict(list)
         for p in self.artifacts.list_reconsolidation_proposals(status="pending"):
-            review = EvidenceReview(p.proposal_id, p.status, p.proposed_relation,
-                                    tuple(p.incoming_claim_ids), tuple(p.target_claim_ids))
+            review = EvidenceReview(
+                p.proposal_id,
+                p.status,
+                p.proposed_relation,
+                tuple(p.incoming_claim_ids),
+                tuple(p.target_claim_ids),
+            )
             for claim_id in {*p.incoming_claim_ids, *p.target_claim_ids}:
                 result[claim_id].append(review)
         return result
@@ -302,7 +397,9 @@ class RetrievedContextBuilder:
     def distinct_hits(self, hits, limit):
         selected, seen = [], set()
         for hit in hits:
-            ids = {f.fact_id for f in self._facts_for_claim(hit.claim_id)} or {hit.claim_id}
+            ids = {f.fact_id for f in self._facts_for_claim(hit.claim_id)} or {
+                hit.claim_id
+            }
             if ids <= seen:
                 selected.append(hit)
                 continue
@@ -353,15 +450,26 @@ class RetrievedContextBuilder:
 
     def admission_content(self, hit: ClaimSearchHit) -> str:
         """Describe the evidence a hit can contribute before admission."""
-        try:
-            claim = self.artifacts.get_claim(hit.claim_id)
-        except FileNotFoundError:
-            return hit.claim_text
+        claim = self.artifacts.get_claim(hit.claim_id)
 
         lines = [f"Claim ({claim.status}): {claim.text}", *self._timing_lines([claim])]
+        lines.extend(self._source_uncertainty([claim]))
         for revision in self._revisions([claim]):
             lines.append(f"Revision: {revision}")
-        facts = self._facts_for_claim(hit.claim_id)
+        facts = []
+        for fact in self._facts_for_claim(hit.claim_id):
+            members = []
+            for claim_id in fact.member_claim_ids:
+                try:
+                    member = self.artifacts.get_claim(claim_id)
+                except FileNotFoundError:
+                    break
+                if member.status != "active":
+                    break
+                members.append(member)
+            else:
+                lines.extend(self._source_uncertainty(members))
+                facts.append(fact)
         for review in self.reviews_by_claim.get(hit.claim_id, []):
             lines.append(f"Unresolved review: {review}")
         if facts:
@@ -392,10 +500,14 @@ class RetrievedContextBuilder:
             ],
             budget_tokens=budget_tokens,
         )
-        records = self._memory_evidence([
-            ClaimSearchHit(c.claim_id, c.text, c.status, None, None, None, None, None)
-            for c in claims.values()
-        ]).records
+        records = self._memory_evidence(
+            [
+                ClaimSearchHit(
+                    c.claim_id, c.text, c.status, None, None, None, None, None
+                )
+                for c in claims.values()
+            ]
+        ).records
         # Carry interpretation status with transcript excerpts, so inspecting an
         # older source cannot silently revive a superseded interpretation.
         return fit_memory_evidence(
@@ -404,9 +516,19 @@ class RetrievedContextBuilder:
         )
 
     def _memory_evidence(self, hits: list[ClaimSearchHit]) -> MemoryEvidence:
+        hits = [
+            current for hit in hits if (current := self.current_hit(hit)) is not None
+        ]
         matched_ids = {hit.claim_id for hit in hits}
-        facts_by_claim = {hit.claim_id: self._facts_for_claim(hit.claim_id) for hit in hits}
-        wanted = matched_ids | {cid for hit in hits for f in facts_by_claim.get(hit.claim_id, []) for cid in f.member_claim_ids}
+        facts_by_claim = {
+            hit.claim_id: self._facts_for_claim(hit.claim_id) for hit in hits
+        }
+        wanted = matched_ids | {
+            cid
+            for hit in hits
+            for f in facts_by_claim.get(hit.claim_id, [])
+            for cid in f.member_claim_ids
+        }
         claims = {}
         for cid in wanted:
             try:
@@ -420,8 +542,14 @@ class RetrievedContextBuilder:
             claim = claims.get(hit.claim_id)
             if claim is None or claim.status not in {"active", "superseded"}:
                 continue
-            facts = [f for f in facts_by_claim.get(hit.claim_id, [])
-                     if all(cid in claims and claims[cid].status == "active" for cid in f.member_claim_ids)]
+            facts = [
+                f
+                for f in facts_by_claim.get(hit.claim_id, [])
+                if all(
+                    cid in claims and claims[cid].status == "active"
+                    for cid in f.member_claim_ids
+                )
+            ]
             if facts:
                 for fact in sorted(facts, key=lambda item: item.fact_id):
                     if fact.fact_id in seen_record_ids:
@@ -456,7 +584,9 @@ class RetrievedContextBuilder:
                     subject_entity_id=hit.owner_entity_id,
                     subject_name=hit.owner_title,
                     claim_ids=(claim.claim_id,),
-                    state="superseded" if claim.status == "superseded" else self.artifacts.memory_tier(claim.claim_id),
+                    state="superseded"
+                    if claim.status == "superseded"
+                    else self.artifacts.memory_tier(claim.claim_id),
                     claims=[claim],
                 )
             )
@@ -483,14 +613,22 @@ class RetrievedContextBuilder:
         seen_citations: set[tuple[str, str, tuple[str, ...]]] = set()
         for claim in claims:
             for value in temporal_records(claim.facets):
-                temporal.append(EvidenceTime(
-                    claim_id=claim.claim_id, role=value['role'], start=value['start'],
-                    end=value['end'], expression=value['expression'], target=value['target'],
-                    evidence_segment_id=value['evidence_segment_id'], status=value['status'],
-                    anchor_segment_id=value['anchor_segment_id'],
-                    reference_reason=value['reference_reason'],
-                    resolution_reason=value['meaning'].get('reason') or value['resolution_error'],
-                ))
+                temporal.append(
+                    EvidenceTime(
+                        claim_id=claim.claim_id,
+                        role=value["role"],
+                        start=value["start"],
+                        end=value["end"],
+                        expression=value["expression"],
+                        target=value["target"],
+                        evidence_segment_id=value["evidence_segment_id"],
+                        status=value["status"],
+                        anchor_segment_id=value["anchor_segment_id"],
+                        reference_reason=value["reference_reason"],
+                        resolution_reason=value["meaning"].get("reason")
+                        or value["resolution_error"],
+                    )
+                )
             for provenance in claim.provenance:
                 key = (
                     claim.claim_id,
@@ -519,23 +657,35 @@ class RetrievedContextBuilder:
             state=state,
             temporal=tuple(temporal),
             citations=tuple(citations),
-            canonical_claims=tuple(EvidenceClaim(c.claim_id, c.text) for c in claims
-                                  if matched_claim_ids is None or c.claim_id in matched_claim_ids),
-            reviews=tuple({r.proposal_id: r for cid in claim_ids
-                           for r in self.reviews_by_claim.get(cid, [])}.values()),
-            uncertainty=tuple(dict.fromkeys(
-                note for cid in claim_ids
-                for placement in [self.artifacts.placement_for_claim(cid)]
-                if placement is not None
-                for note in [placement.uncertainty, *(
-                    f"Identity unresolved; optional review {decision_id}"
-                    for decision_id in placement.identity_blocker_ids
-                )] if note
-            )) + tuple(dict.fromkeys(
-                f"Supporting source {p.source_id} is retracted; interpretation may be incomplete."
-                for claim in claims for p in claim.provenance
-                if self.artifacts.get_source(p.source_id).status == "retracted"
-            )),
+            canonical_claims=tuple(
+                EvidenceClaim(c.claim_id, c.text)
+                for c in claims
+                if matched_claim_ids is None or c.claim_id in matched_claim_ids
+            ),
+            reviews=tuple(
+                {
+                    r.proposal_id: r
+                    for cid in claim_ids
+                    for r in self.reviews_by_claim.get(cid, [])
+                }.values()
+            ),
+            uncertainty=tuple(
+                dict.fromkeys(
+                    note
+                    for cid in claim_ids
+                    for placement in [self.artifacts.placement_for_claim(cid)]
+                    if placement is not None
+                    for note in [
+                        placement.uncertainty,
+                        *(
+                            f"Identity unresolved; optional review {decision_id}"
+                            for decision_id in placement.identity_blocker_ids
+                        ),
+                    ]
+                    if note
+                )
+            )
+            + self._source_uncertainty(claims),
             revisions=tuple(self._revisions(claims)),
         )
 
@@ -543,7 +693,11 @@ class RetrievedContextBuilder:
         seen = set()
         for claim in claims:
             for link in claim.links:
-                if link["relation"] not in {"supersedes", "superseded_by", "contradicts"}:
+                if link["relation"] not in {
+                    "supersedes",
+                    "superseded_by",
+                    "contradicts",
+                }:
                     continue
                 key = (link["relation"], link["target"])
                 if key in seen:
@@ -553,8 +707,12 @@ class RetrievedContextBuilder:
                 except FileNotFoundError:
                     continue
                 seen.add(key)
-                yield {"relation": link["relation"], "claim_id": other.claim_id,
-                       "status": other.status, "text": other.text}
+                yield {
+                    "relation": link["relation"],
+                    "claim_id": other.claim_id,
+                    "status": other.status,
+                    "text": other.text,
+                }
 
     def _entity_title(self, entity_id: str | None) -> str | None:
         if not entity_id:
@@ -616,6 +774,7 @@ class RetrievedContextBuilder:
                     if value.segment_id in trial_ids
                 )
                 trial_source = EvidenceSource(
+                    revision=self.artifacts.db.evidence_revision(),
                     source_id=source.source_id,
                     conversation_time=source.occurred_at or source.recorded_at,
                     citations=self._source_citations(cited_by_claim, trial_ids),
@@ -631,6 +790,7 @@ class RetrievedContextBuilder:
             if accepted_ids:
                 sources.append(
                     EvidenceSource(
+                        revision=self.artifacts.db.evidence_revision(),
                         source_id=source.source_id,
                         conversation_time=source.occurred_at or source.recorded_at,
                         citations=self._source_citations(cited_by_claim, accepted_ids),
@@ -644,6 +804,58 @@ class RetrievedContextBuilder:
                     )
                 )
         return MemoryEvidence(sources=tuple(sources), more_available=more_available)
+
+    def refresh_sources(
+        self, sources: tuple[EvidenceSource, ...]
+    ) -> tuple[EvidenceSource, ...]:
+        """Refresh only previously shown excerpts and currently valid citation links."""
+        refreshed = []
+        for prior in sources:
+            try:
+                source = self.artifacts.get_source(prior.source_id)
+            except FileNotFoundError:
+                continue
+            shown_ids = {segment.segment_id for segment in prior.segments}
+            segments = [
+                segment
+                for segment in source.segments
+                if segment.segment_id in shown_ids
+            ]
+            available_ids = {segment.segment_id for segment in segments}
+            cited_by_claim = {}
+            for citation in prior.citations:
+                try:
+                    claim = self.artifacts.get_claim(citation.claim_id)
+                except FileNotFoundError:
+                    continue
+                if claim.status not in {"active", "superseded"}:
+                    continue
+                cited_by_claim[claim.claim_id] = {
+                    sid
+                    for provenance in claim.provenance
+                    if provenance.source_id == source.source_id
+                    for sid in provenance.segment_ids
+                    if sid in available_ids
+                }
+            citations = self._source_citations(cited_by_claim, available_ids)
+            if not citations:
+                continue
+            cited_ids = {sid for citation in citations for sid in citation.segment_ids}
+            refreshed.append(
+                EvidenceSource(
+                    source_id=source.source_id,
+                    conversation_time=source.occurred_at or source.recorded_at,
+                    citations=citations,
+                    segments=tuple(
+                        self._evidence_segment(segment, cited_ids)
+                        for segment in segments
+                    ),
+                    status=source.status,
+                    retraction_reason=source.retraction_reason,
+                    revision=self.artifacts.db.evidence_revision(),
+                )
+            )
+        return tuple(refreshed)
 
     @staticmethod
     def _evidence_segment(
@@ -682,19 +894,34 @@ class RetrievedContextBuilder:
         seen = set()
         for claim in claims:
             for temporal in temporal_records(claim.facets):
-                role, target = temporal['role'], temporal['target']
-                start, end = temporal['start'], temporal['end']
-                expression = temporal['expression']
-                key = (role, target, start, end, expression, temporal['evidence_segment_id'], temporal['anchor_segment_id'])
+                role, target = temporal["role"], temporal["target"]
+                start, end = temporal["start"], temporal["end"]
+                expression = temporal["expression"]
+                key = (
+                    role,
+                    target,
+                    start,
+                    end,
+                    expression,
+                    temporal["evidence_segment_id"],
+                    temporal["anchor_segment_id"],
+                )
                 if key in seen:
                     continue
                 seen.add(key)
-                interval = start or 'unresolved'
+                interval = start or "unresolved"
                 if end and end != start:
-                    interval += f' through {end}'
-                lines.append(f"  - Structured timing: {role} for {target}: {interval}; source expression: {expression}; time evidence: {temporal['evidence_segment_id']}")
-                if temporal['anchor_segment_id'] and temporal['anchor_segment_id'] != temporal['evidence_segment_id']:
-                    lines.append(f"    Reference date from: {temporal['anchor_segment_id']}")
+                    interval += f" through {end}"
+                lines.append(
+                    f"  - Structured timing: {role} for {target}: {interval}; source expression: {expression}; time evidence: {temporal['evidence_segment_id']}"
+                )
+                if (
+                    temporal["anchor_segment_id"]
+                    and temporal["anchor_segment_id"] != temporal["evidence_segment_id"]
+                ):
+                    lines.append(
+                        f"    Reference date from: {temporal['anchor_segment_id']}"
+                    )
         return lines
 
     @staticmethod

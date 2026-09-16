@@ -132,6 +132,7 @@ class MemoryToolset:
         """Run a memory tool, or defer non-memory tools to the Ollama client."""
         if tool_name not in MEMORY_TOOL_NAMES:
             return None
+        error = None
         try:
             if tool_name == "memory_search":
                 search_result = await self.search(
@@ -158,32 +159,39 @@ class MemoryToolset:
                     requested_claim_ids=list(source_result.claim_ids),
                 )
                 result_evidence = source_result.evidence
+        except (TypeError, ValueError, RetrievalError) as exc:
+            error = str(exc)
+        try:
             self.workspace.evidence = self.retriever.refresh_evidence(
                 self.workspace.evidence,
                 budget_tokens=self.workspace_budget_tokens,
             )
-            workspace = self.workspace.record_success(
-                tool_name,
-                arguments,
-                result_evidence,
-                remaining_searches=self.search_limit - self.search_count,
-                remaining_evidence_tokens=self.remaining_evidence_tokens,
-            )
-            return self._execution_result(
-                rendered, self._fit_workspace(), workspace.operations[-1]
-            )
         except (TypeError, ValueError, RetrievalError) as exc:
-            rendered = render_memory_tool_error(str(exc))
+            # Never send a stale evidence snapshot after its canonical refresh fails.
+            self.workspace.evidence = MemoryEvidence()
+            error = f"{error}; workspace refresh failed: {exc}" if error else str(exc)
+        if error is not None:
+            rendered = render_memory_tool_error(error)
             workspace = self.workspace.record_failure(
                 tool_name,
                 arguments,
-                str(exc),
+                error,
                 remaining_searches=self.search_limit - self.search_count,
                 remaining_evidence_tokens=self.remaining_evidence_tokens,
             )
             return self._execution_result(
                 rendered, self._fit_workspace(), workspace.operations[-1]
             )
+        workspace = self.workspace.record_success(
+            tool_name,
+            arguments,
+            result_evidence,
+            remaining_searches=self.search_limit - self.search_count,
+            remaining_evidence_tokens=self.remaining_evidence_tokens,
+        )
+        return self._execution_result(
+            rendered, self._fit_workspace(), workspace.operations[-1]
+        )
 
     def _fit_workspace(self) -> MemoryWorkspace:
         """Bound diagnostics before admitting complete evidence, including on failure."""

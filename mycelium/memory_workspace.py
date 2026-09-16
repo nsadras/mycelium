@@ -180,6 +180,10 @@ def merge_memory_evidence(
 
 
 def _merge_source(current: EvidenceSource, incoming: EvidenceSource) -> EvidenceSource:
+    if incoming.revision > current.revision:
+        return incoming
+    if incoming.revision < current.revision:
+        return current
     citations: dict[str, list[str]] = {}
     for citation in (*current.citations, *incoming.citations):
         segment_ids = citations.setdefault(citation.claim_id, [])
@@ -190,8 +194,15 @@ def _merge_source(current: EvidenceSource, incoming: EvidenceSource) -> Evidence
     segments = {segment.segment_id: segment for segment in current.segments}
     for segment in incoming.segments:
         segments.setdefault(segment.segment_id, segment)
+    cited_ids = {sid for ids in citations.values() for sid in ids}
     ordered_segments = tuple(
-        sorted(segments.values(), key=lambda item: (item.index, item.segment_id))
+        replace(
+            segment,
+            relationship="cited" if segment.segment_id in cited_ids else "context",
+        )
+        for segment in sorted(
+            segments.values(), key=lambda item: (item.index, item.segment_id)
+        )
     )
     accepted_ids = {segment.segment_id for segment in ordered_segments}
 

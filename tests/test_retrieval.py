@@ -259,6 +259,10 @@ def test_compact_record_fits_exact_budget_without_expanding_transcript(compact_c
 
 def test_retrieval_page_references_only_describe_real_pages(compact_claim):
     builder, hit, entity = compact_claim
+    builder.artifacts.save_placement(ClaimPlacement(
+        hit.claim_id, entity.entity_id, "interests_views", [], "placed",
+        "Reviewed ownership", "2026-09-01", "2026-09-01",
+    ))
     evidence = builder.build([hit, hit], budget_tokens=2000)
     assert len(evidence.records) == 1
     assert builder.page_references(evidence) == ()

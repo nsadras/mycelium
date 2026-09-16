@@ -276,19 +276,19 @@ def fact_resolution_plan(
     responses = []
     responses.append(
         {
-            "facts": [
+            "groups": [
                 {
                     "prominence": "briefing",
                     "memory_scope": "The fixture memory.",
                     "member_claim_aliases": aliases,
                     "state": "current",
                     "section_key": section,
-                    "text": None if len(aliases) == 1 else text,
                 }
                 for aliases, text, section in facts.values()
             ]
         }
     )
+    responses.extend({"text": text} for aliases, text, _section in facts.values() if len(aliases) > 1)
     return responses
 
 
@@ -775,7 +775,7 @@ async def test_dream_routes_claim_and_materializes_deterministic_page(tmp_path):
     assert report.entries_consolidated == 1
     assert report.completed_source_ids == [entry.entry_id]
     page = wiki.get("memory-design")
-    assert "## Why It Matters" in page.content
+    assert "## Current Understanding" in page.content
     assert claim.text in page.content
     assert page.tags == []
     assert (
@@ -1592,7 +1592,7 @@ async def test_entity_type_is_authoritative_at_creation_without_taxonomy_pass(tm
     assert second.pages_updated == 0
     assert page.page_type == "topic"
     assert page.title == "Memory Design"
-    assert "## Why It Matters" in page.content
+    assert "## Current Understanding" in page.content
 
 
 @pytest.mark.asyncio
@@ -1604,7 +1604,7 @@ async def test_you_entity_is_typed_without_a_taxonomy_call(tmp_path):
     assert report.completed_source_ids == [entry.entry_id]
     assert wiki.get("you").page_type == "you"
     assert wiki.get("you").title == "You"
-    assert "## Preferences & Working Style" in wiki.get("you").content
+    assert "## Current Context" in wiki.get("you").content
 
 
 @pytest.mark.asyncio

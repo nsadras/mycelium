@@ -61,7 +61,7 @@ class DeterministicProductionModel:
             "dream-subject-discovery",
             "dream-subject-identity",
             "dream-claim-routing",
-            "dream-fact-synthesis",
+            "dream-fact-grouping",
             "dream-fact-candidate-selection",
         }:
             from tests.lifecycle_support import lifecycle_response

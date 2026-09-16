@@ -100,10 +100,10 @@ async def test_independent_same_batch_claims_skip_truth_adjudication(tmp_path):
         if kwargs["debug_label"] == "dream-truth-candidates":
             from tests.lifecycle_support import unrelated_truth_candidates
             return unrelated_truth_candidates(_schema)
-        assert kwargs["debug_label"] == "dream-fact-synthesis"
+        assert kwargs["debug_label"] == "dream-fact-grouping"
         return {
-            "facts": [
-                {"prominence": "briefing", 'memory_scope': 'An independent observation.', 'member_claim_aliases': [f'C{i:03d}'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}
+            "groups": [
+                {"prominence": "briefing", 'memory_scope': 'An independent observation.', 'member_claim_aliases': [f'C{i:03d}'], 'state': 'current', 'section_key': 'preferences_working_style'}
                 for i, c in enumerate(incoming, 1)
             ]
         }

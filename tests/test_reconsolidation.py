@@ -126,14 +126,13 @@ async def test_owner_plan_groups_independent_support(no_truth_changes, tmp_path)
     placements = [place(artifacts, first), place(artifacts, second)]
     llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = [{
-        "facts": [{"prominence": "briefing",
+        "groups": [{"prominence": "briefing",
             "member_claim_aliases": ["C001", "C002"],
             "memory_scope": "Preferred update format.",
             "state": "current",
             "section_key": "preferences_working_style",
-            "text": "The user prefers written updates.",
         }],
-    }]
+    }, {"text": "The user prefers written updates."}]
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -163,11 +162,13 @@ async def test_synthesis_uses_corrected_claim_not_original_source(no_truth_chang
     llm = AsyncMock(context_window_tokens=32768)
 
     async def respond(_system, user, _schema, **kwargs):
-        assert kwargs["debug_label"] == "dream-fact-synthesis"
+        assert kwargs["debug_label"] in {"dream-fact-grouping", "dream-fact-text"}
         assert corrected.text in user and related.text in user
         assert "I prefer tea." not in user
         assert corrected.recorded_at not in user
-        return {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001', 'C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': 'The user prefers coffee and drinks it each morning.'}]}
+        if kwargs["debug_label"] == "dream-fact-text":
+            return {"text": "The user prefers coffee and drinks it each morning."}
+        return {"groups": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001', 'C002'], 'state': 'current', 'section_key': 'preferences_working_style'}]}
 
     llm.call_structured.side_effect = respond
     result = await FactResolver(llm, artifacts).resolve(
@@ -180,13 +181,12 @@ async def test_synthesis_uses_corrected_claim_not_original_source(no_truth_chang
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("manual", [False, True])
-async def test_synthesis_receives_only_manual_previous_presentations(tmp_path, manual):
+async def test_grouping_receives_canonical_members_without_previous_prose(tmp_path):
     artifacts = setup_owner(tmp_path)
     old = claim("old", "The user prefers written updates.", "2026-08-01")
     new = claim("new", "The user prefers concise updates.", "2026-08-02")
     placements = {c.claim_id: place(artifacts, c) for c in (old, new)}
-    previous = replace(fact(old), text="Previous presentation wording.", manual_text=manual)
+    previous = replace(fact(old), text="Previous presentation wording.")
     llm = AsyncMock(context_window_tokens=32768)
 
     async def respond(_system, user, schema, **kwargs):
@@ -194,10 +194,12 @@ async def test_synthesis_receives_only_manual_previous_presentations(tmp_path, m
             return {"decisions": {alias: {
                 "candidate_fact_ids": ["X001"], "reason": "Related canonical members."
             } for alias in schema.model_fields["decisions"].annotation.model_fields}}
-        assert kwargs["debug_label"] == "dream-fact-synthesis"
+        assert kwargs["debug_label"] in {"dream-fact-grouping", "dream-fact-text"}
         assert old.text in user and new.text in user
-        assert (previous.text in user) == manual
-        return {"facts": [{"prominence": "briefing", 'memory_scope': "The user's update preference.", 'member_claim_aliases': ['C001', 'C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': 'The user prefers concise written updates.'}]}
+        assert previous.text not in user
+        if kwargs["debug_label"] == "dream-fact-text":
+            return {"text": "The user prefers concise written updates."}
+        return {"groups": [{"prominence": "briefing", 'memory_scope': "The user's update preference.", 'member_claim_aliases': ['C001', 'C002'], 'state': 'current', 'section_key': 'preferences_working_style'}]}
 
     llm.call_structured.side_effect = respond
     result = await FactResolver(llm, artifacts)._resolve_owner_step(
@@ -205,10 +207,8 @@ async def test_synthesis_receives_only_manual_previous_presentations(tmp_path, m
         {"you": artifacts.get_entity("you")},
     )
     assert result.facts[0].member_claim_ids == ["new", "old"]
-    assert result.facts[0].manual_text == manual
-    assert result.facts[0].text == (
-        previous.text if manual else "The user prefers concise written updates."
-    )
+    assert not result.facts[0].manual_text
+    assert result.facts[0].text == "The user prefers concise written updates."
 
 
 @pytest.mark.asyncio
@@ -219,20 +219,18 @@ async def test_synthesis_keeps_distinct_claim_groups(no_truth_changes, tmp_path)
     placements = [place(artifacts, first), place(artifacts, second)]
     llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = [{
-        "facts": [
+        "groups": [
             {"prominence": "briefing",
                 "member_claim_aliases": ["C001"],
                 "memory_scope": "Cooking class.",
                 "state": "history",
                 "section_key": "preferences_working_style",
-                "text": None,
             },
             {"prominence": "briefing",
                 "member_claim_aliases": ["C002"],
                 "memory_scope": "Exercise.",
                 "state": "history",
                 "section_key": "preferences_working_style",
-                "text": None,
             },
         ],
     }]
@@ -277,14 +275,13 @@ async def test_grouped_project_roles_preserve_each_claims_exact_project_link(no_
         placements.append(placement)
     llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = [{
-        "facts": [{"prominence": "briefing",
+        "groups": [{"prominence": "briefing",
             "member_claim_aliases": ["C001", "C002"],
             "memory_scope": "Permit coordination responsibilities.",
             "state": "current",
             "section_key": "shared_projects",
-            "text": "Rosa coordinates permits for two projects.",
         }],
-    }]
+    }, {"text": "Rosa coordinates permits for two projects."}]
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -350,13 +347,13 @@ async def test_repeated_evidence_joins_and_preserves_the_existing_fact(no_truth_
             "reason": "The prior fact describes the same preference.",
         }}},
 
-        {"facts": [{"prominence": "briefing",
+        {"groups": [{"prominence": "briefing",
             "member_claim_aliases": ["C001", "C002"],
             "memory_scope": "Preferred update format.",
             "state": "current",
             "section_key": "preferences_working_style",
-            "text": old.text,
         }]},
+        {"text": old.text},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -426,7 +423,7 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(no_truth
             "reason": "The prior preference may express the same durable state.",
         }}},
 
-        {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}, {"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
+        {"groups": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001'], 'state': 'current', 'section_key': 'preferences_working_style'}, {"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style'}]},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -458,7 +455,7 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(no_truth_chang
             "reason": "The prior fact may express the same durable state.",
         }}},
 
-        {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
+        {"groups": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style'}]},
     ]
 
     result = await FactResolver(llm, artifacts).resolve(
@@ -469,7 +466,7 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(no_truth_chang
     )
 
     assert len(result.failures) == 1
-    assert "exactly one display group" in result.failures[0].reason
+    assert "exactly one bounded group" in result.failures[0].reason
     assert result.facts == [old_fact]
     assert result.deleted_fact_ids == set()
     assert result.proposals == []
@@ -615,10 +612,10 @@ async def test_large_new_claim_sets_are_grouped_incrementally(no_truth_changes, 
                 "candidate_fact_ids": [],
                 "reason": "The incoming memory is independent.",
             }}}
-        if label == "dream-fact-synthesis":
+        if label == "dream-fact-grouping":
             call_counts["synthesis"] += 1
             batch = claims[:12] if call_counts["synthesis"] == 1 else claims[12:]
-            return {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': [f'C{index:03d}'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None} for index, item in enumerate(batch, 1)]}
+            return {"groups": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': [f'C{index:03d}'], 'state': 'current', 'section_key': 'preferences_working_style'} for index, item in enumerate(batch, 1)]}
         raise AssertionError(f"Unexpected model call: {label}")
 
     llm.call_structured.side_effect = respond
@@ -634,7 +631,7 @@ async def test_large_new_claim_sets_are_grouped_incrementally(no_truth_changes, 
     assert len(result.facts) == 13
     synthesis_calls = [
         call for call in llm.call_structured.await_args_list
-        if call.kwargs.get("debug_label") == "dream-fact-synthesis"
+        if call.kwargs.get("debug_label") == "dream-fact-grouping"
     ]
     assert len(synthesis_calls) == 2
 

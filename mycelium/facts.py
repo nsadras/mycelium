@@ -19,13 +19,18 @@ from mycelium.artifacts import (
 )
 from mycelium.batching import structured_input_budget
 from mycelium.budget import request_tokens
+from mycelium.fact_groups import (
+    FactText,
+    fact_groups_model,
+    fact_groups_prompt,
+    fact_text_prompt,
+)
 from mycelium.ollama import OllamaClient
-from mycelium.ontology import default_section, entity_type_definition
+from mycelium.ontology import entity_type_definition
 from mycelium.projection import display_claim_text
 from mycelium.truth_review import TruthReviewer
 from mycelium.structured_outputs import (
     fact_candidate_selection_output_model,
-    fact_synthesis_output_model,
 )
 
 
@@ -285,9 +290,9 @@ class FactResolver:
         claim: MemoryClaim,
         placement: ClaimPlacement,
     ) -> tuple[ConsolidatedFact, ClaimPlacement]:
-        section = default_section(
-            owner.entity_type, claim.claim_type, claim.predicate
-        )
+        # Routing already chose this exact presentation section. Projecting one
+        # statement does not justify replacing that decision with a type default.
+        section = placement.section_key
         now = datetime.now().astimezone().isoformat()
         return (
             ConsolidatedFact(
@@ -323,6 +328,21 @@ class FactResolver:
         owner = entities[owner_id]
         definition = entity_type_definition(owner.entity_type)
         owner_claim_ids = {claim.claim_id for claim in claims}
+        active_owner_ids = {
+            claim.claim_id for claim in claims
+            if claim.status == "active" and self._owned_by(placements.get(claim.claim_id), owner_id)
+        }
+        # A manual edit governs its exact evidence membership. Automatic merging
+        # must not silently assign new evidence to prose the user never reviewed.
+        # Retractions or ownership changes invalidate that protected presentation.
+        manual_facts = [
+            fact for fact in existing if fact.manual_text
+            and set(fact.member_claim_ids) <= active_owner_ids
+        ]
+        manual_ids = {fact.fact_id for fact in manual_facts}
+        manual_members = {cid for fact in manual_facts for cid in fact.member_claim_ids}
+        existing = [fact for fact in existing if fact.fact_id not in manual_ids]
+        claims = [claim for claim in claims if claim.claim_id not in manual_members]
         represented_claim_ids = {
             claim_id for fact in existing for claim_id in fact.member_claim_ids
         }
@@ -351,9 +371,9 @@ class FactResolver:
         selected_existing = [
             fact for fact in existing if fact.fact_id in selected_fact_ids
         ]
-        untouched_existing = [
+        untouched_existing = [*manual_facts, *[
             fact for fact in existing if fact.fact_id not in selected_fact_ids
-        ]
+        ]]
         selected_claim_ids = {
             claim_id for fact in selected_existing
             for claim_id in fact.member_claim_ids
@@ -369,7 +389,6 @@ class FactResolver:
         aliases = {
             f"C{index:03d}": claim for index, claim in enumerate(claims, start=1)
         }
-        alias_for_claim = {claim.claim_id: alias for alias, claim in aliases.items()}
         owner_text = self._owner_text(owner)
         now = datetime.now().astimezone().isoformat()
         output = FactResolutionResult(facts=list(untouched_existing))
@@ -403,30 +422,17 @@ class FactResolver:
         }
         groups = []
         if canonical:
-            # Canonical members contain the evidence. Previous model-written
-            # display groups bias repartitioning toward their old boundaries.
-            # Only explicit manual presentation constraints belong in this input.
-            presentation_existing = [
-                fact for fact in existing
-                if fact.manual_text
-                and not set(fact.member_claim_ids) & (pending_incoming | preserved_member_ids)
-            ]
-            system, user = prompts.fact_synthesis_prompt(
+            system, user = fact_groups_prompt(
                 owner_text, json.dumps(canonical, ensure_ascii=False, indent=2),
-                self._existing_facts_text(presentation_existing, alias_for_claim), "[]",
                 "\n".join(f"{section.key}: {section.description}" for section in definition.sections),
             )
-            schema = fact_synthesis_output_model(
-                {alias: value["text"] for alias, value in canonical.items()},
-                definition.section_keys(),
-            )
+            schema = fact_groups_model(canonical, definition.section_keys())
             response = schema.model_validate(await self.llm.call_structured(
-                system, user, schema, num_predict=8192,
-                debug_label="dream-fact-synthesis",
-                think=True,
+                system, user, schema, num_predict=4096,
+                debug_label="dream-fact-grouping",
                 cache_store=self.artifacts.db,
             )).model_dump()
-            groups = [(group, group["member_claim_aliases"]) for group in response["facts"]]
+            groups = [(group, group["member_claim_aliases"]) for group in response["groups"]]
         for group, member_aliases in groups:
             members = [aliases[alias] for alias in member_aliases]
             member_ids = {claim.claim_id for claim in members}
@@ -439,28 +445,27 @@ class FactResolver:
             prior_candidates = [
                 fact for fact in existing
                 if fact.owner_entity_id == owner_id
+                and not fact.manual_text
                 and fact.section_key == section
                 and set(fact.member_claim_ids) <= member_ids
             ]
             prior = (
                 prior_candidates[0] if len(prior_candidates) == 1 else None
             )
-            manual = prior is not None and prior.manual_text
+            text = await self._render_group(owner_text, members)
             output.facts.append(ConsolidatedFact(
                 fact_id=prior.fact_id if prior else f"fact-{uuid.uuid4().hex[:12]}",
-                text=(prior.text if manual else display_claim_text(members[0])
-                      if len(members) == 1 else group["text"]),
+                text=text,
                 member_claim_ids=sorted(member_ids),
                 owner_entity_id=owner_id,
                 section_key=section,
                 state=group["state"],
                 linked_entity_ids=linked,
-                synthesis_origin="manual" if manual else "model",
-                confidence=prior.confidence if manual else min(member.confidence for member in members),
-                reason=prior.reason if manual else group["memory_scope"],
+                synthesis_origin="claim" if len(members) == 1 else "model",
+                confidence=min(member.confidence for member in members),
+                reason=group["memory_scope"],
                 created_at=prior.created_at if prior else now,
                 updated_at=now,
-                manual_text=manual,
                 prominence=group["prominence"],
             ))
             for member in members:
@@ -478,6 +483,23 @@ class FactResolver:
                     fact, _ = self._direct_projection(owner, claim, placement)
                     output.facts.append(fact)
         return output
+
+    async def _render_group(self, owner_text: str, members: list[MemoryClaim]) -> str:
+        if len(members) == 1:
+            return display_claim_text(members[0])
+        # Local, stable aliases keep unrelated groups and changing cohort IDs out
+        # of this request's durable cache key. Only the actual evidence matters.
+        canonical = {
+            f"C{index:03d}": self._canonical_record(claim)
+            for index, claim in enumerate(sorted(members, key=lambda c: c.claim_id), 1)
+        }
+        system, user = fact_text_prompt(
+            owner_text, json.dumps(canonical, ensure_ascii=False, indent=2, sort_keys=True),
+        )
+        return FactText.model_validate(await self.llm.call_structured(
+            system, user, FactText, num_predict=1024,
+            debug_label="dream-fact-text", cache_store=self.artifacts.db,
+        )).text
 
     async def _select_prior_facts(
         self,
@@ -679,30 +701,6 @@ class FactResolver:
         }
         return json.dumps(
             {"claims": claims, "linked_entities": registry, "sources": sources},
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    @staticmethod
-    def _existing_facts_text(
-        facts: list[ConsolidatedFact], alias_for_claim: dict[str, str]
-    ) -> str:
-        return json.dumps(
-            {
-                f"X{i:03d}": {
-                    "fact_id": f.fact_id,
-                    "state": f.state,
-                    "section": f.section_key,
-                    "member_claim_aliases": [
-                        alias_for_claim[c]
-                        for c in f.member_claim_ids
-                        if c in alias_for_claim
-                    ],
-                    "manual_text": f.manual_text,
-                    "text": f.text,
-                }
-                for i, f in enumerate(facts, 1)
-            },
             ensure_ascii=False,
             indent=2,
         )

@@ -21,9 +21,9 @@ def lifecycle_response(_system, user, schema, **kwargs):
                 for a in schema.model_fields['decisions'].annotation.model_fields}}
     if stage == 'dream-truth-candidates':
         return unrelated_truth_candidates(schema)
-    if stage == 'dream-fact-synthesis':
-        claims = json.loads(user.split('CANONICAL STORED CLAIMS\n', 1)[1].split('\n\nEXISTING DISPLAY FACTS', 1)[0])
-        return {'facts': [{'member_claim_aliases': [a], 'text': None, 'memory_scope': 'An independent fixture statement.',
+    if stage == 'dream-fact-grouping':
+        claims = json.loads(user.split('CANONICAL STORED CLAIMS\n', 1)[1].split('\n\nALLOWED SECTIONS', 1)[0])
+        return {'groups': [{'member_claim_aliases': [a], 'memory_scope': 'An independent fixture statement.',
                            'state': 'current', 'section_key': 'preferences_working_style', 'prominence': 'briefing'} for a in claims]}
     raise AssertionError(f'Unexpected lifecycle model call: {stage}')
 

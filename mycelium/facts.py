@@ -1,4 +1,4 @@
-"""Owner-scoped resolution from canonical claims to derived presentation facts."""
+"""Global truth review followed by owner-scoped presentation of canonical claims."""
 
 from __future__ import annotations
 
@@ -22,9 +22,9 @@ from mycelium.budget import request_tokens
 from mycelium.ollama import OllamaClient
 from mycelium.ontology import default_section, entity_type_definition
 from mycelium.projection import display_claim_text
+from mycelium.truth_review import TruthReviewer
 from mycelium.structured_outputs import (
     fact_candidate_selection_output_model,
-    fact_truth_batch_model,
     fact_synthesis_output_model,
 )
 
@@ -71,39 +71,56 @@ class FactResolver:
         seed_entities: list[EntityRecord] | None = None,
     ) -> FactResolutionResult:
         result = FactResolutionResult()
-        if not affected_entity_ids:
-            return result
         placement_by_claim = {
             item.claim_id: item
             for item in [*self.artifacts.list_placements(), *placements]
         }
-        held_claim_ids = {
-            claim_id for proposal in self.artifacts.list_reconsolidation_proposals(status="pending")
-            for claim_id in proposal.incoming_claim_ids
-        }
-        active_claims = {
-            claim.claim_id: claim
-            for claim in self.artifacts.list_claims(status="active")
-            if claim.claim_id not in held_claim_ids
-        }
         existing_facts = self.artifacts.list_consolidated_facts()
         entities = {entity.entity_id: entity for entity in self.artifacts.list_entities()}
         entities.update({entity.entity_id: entity for entity in seed_entities or []})
+        truth = await TruthReviewer(self.llm, self.artifacts).review(
+            incoming_claim_ids, placement_by_claim, entities, dream_run_id=dream_run_id,
+        )
+        if truth.failure_claim_ids:
+            # A failed comparison never publishes unchecked additions. Prior
+            # facts remain intact and these exact inputs stay retryable.
+            result.facts = [f for f in existing_facts if f.owner_entity_id in affected_entity_ids]
+            result.failures.append(FactResolutionFailure(
+                owner_entity_id="", claim_ids=sorted(truth.failure_claim_ids),
+                raw_log_entry_ids=sorted({
+                    p.raw_log_entry_id for cid in truth.failure_claim_ids
+                    for p in self.artifacts.get_claim(cid).provenance if p.raw_log_entry_id
+                }), reason="; ".join(truth.errors), partial=True,
+            ))
+            return result
+        result.proposals.extend(truth.proposals)
+        pending = [*self.artifacts.list_reconsolidation_proposals(status="pending"), *truth.proposals]
+        affected_entity_ids = affected_entity_ids | {
+            eid for proposal in truth.proposals for eid in proposal.affected_entity_ids
+        }
+        held_claim_ids = {
+            cid for proposal in pending for cid in [*proposal.incoming_claim_ids, *proposal.target_claim_ids]
+        }
+        # Keep whole existing presentations intact while any member is under
+        # review; isolate newly arriving sides without inferring a truth change.
+        protected_facts = [f for f in existing_facts if set(f.member_claim_ids) & held_claim_ids]
+        held_claim_ids.update(cid for f in protected_facts for cid in f.member_claim_ids)
+        active_claims = {
+            c.claim_id: c for c in self.artifacts.list_claims(status="active")
+            if c.claim_id not in held_claim_ids
+        }
         for owner_id in sorted(affected_entity_ids):
-            # Pending truth interpretations remain published as independent,
-            # qualified statements. Review changes truth, not access to evidence.
-            for claim_id in sorted(held_claim_ids):
+            retained = [f for f in protected_facts if f.owner_entity_id == owner_id]
+            result.facts.extend(retained)
+            represented = {cid for f in retained for cid in f.member_claim_ids}
+            for claim_id in sorted(held_claim_ids - represented):
                 placement = placement_by_claim.get(claim_id)
                 if not self._owned_by(placement, owner_id):
                     continue
                 claim = self.artifacts.get_claim(claim_id)
-                if claim.status != "active":
-                    continue
-                prior = next((f for f in existing_facts
-                              if f.owner_entity_id == owner_id
-                              and f.member_claim_ids == [claim_id]), None)
-                direct, _ = self._direct_projection(entities[owner_id], claim, placement)
-                result.facts.append(prior or direct)
+                if claim.status == "active":
+                    direct, _ = self._direct_projection(entities[owner_id], claim, placement)
+                    result.facts.append(direct)
             owner_claims = sorted(
                 (
                     claim
@@ -353,142 +370,11 @@ class FactResolver:
             f"C{index:03d}": claim for index, claim in enumerate(claims, start=1)
         }
         alias_for_claim = {claim.claim_id: alias for alias, claim in aliases.items()}
-        linked_ids = sorted({
-            linked_id
-            for claim in claims
-            for linked_id in placements[claim.claim_id].linked_entity_ids
-        })
-        linked_aliases = {
-            f"E{index:03d}": entity_id
-            for index, entity_id in enumerate(linked_ids, start=1)
-        }
-        alias_for_entity = {
-            entity_id: alias for alias, entity_id in linked_aliases.items()
-        }
         owner_text = self._owner_text(owner)
-        incoming_aliases = sorted(
-            alias for alias, claim in aliases.items()
-            if claim.claim_id in incoming_claim_ids
-        )
-        adjudications: dict[str, dict] = {}
-        reserved_target_aliases: set[str] = set()
-        prior_decisions: list[dict] = []
-        facts_by_id = {fact.fact_id: fact for fact in existing}
-        targets_by_incoming = {}
-        for incoming_alias in incoming_aliases:
-            targets = sorted({
-                alias_for_claim[cid]
-                for fid in candidate_fact_ids_by_claim.get(aliases[incoming_alias].claim_id, set())
-                if fid in facts_by_id
-                for cid in facts_by_id[fid].member_claim_ids
-                if cid in alias_for_claim
-            })
-            if targets:
-                targets_by_incoming[incoming_alias] = targets
-
-        async def decide(incoming):
-            targets = {alias: [t for t in targets_by_incoming[alias] if t not in reserved_target_aliases]
-                       for alias in incoming}
-            targets = {alias: values for alias, values in targets.items() if values}
-            if not targets:
-                return
-            older = sorted({t for values in targets.values() for t in values})
-            decision_aliases = {a: aliases[a] for a in [*targets, *older]}
-            incoming_text = json.loads(self._claims_text(
-                {a: aliases[a] for a in targets}, placements, alias_for_entity, entities))
-            for alias, values in targets.items():
-                incoming_text["claims"][alias]["candidate_targets"] = values
-            candidate_ids = {fid for alias in targets
-                             for fid in candidate_fact_ids_by_claim.get(aliases[alias].claim_id, set())}
-            system, user = prompts.fact_truth_prompt(
-                owner_text,
-                self._claims_text({a: aliases[a] for a in older}, placements, alias_for_entity, entities),
-                self._existing_facts_text([f for f in existing if f.fact_id in candidate_ids], alias_for_claim),
-                self._relations_text(owner_id, {c.claim_id: a for a, c in decision_aliases.items()}),
-                json.dumps(incoming_text, ensure_ascii=False),
-                json.dumps(prior_decisions, ensure_ascii=False),
-            )
-            schema = fact_truth_batch_model(targets)
-            # Split complete decisions only when their evidence exceeds the budget.
-            tokens = request_tokens([{"role": "system", "content": system},
-                                     {"role": "user", "content": user}], schema=schema.model_json_schema())
-            output_budget = max(8192, self.llm.reasoning_output_tokens) if self.llm.reasoning_enabled is True else 8192
-            if tokens > structured_input_budget(self.llm.context_window_tokens, output_budget):
-                if len(targets) == 1:
-                    raise ValueError("A complete truth decision exceeds the input budget; evidence was not truncated")
-                keys = list(targets)
-                middle = len(keys) // 2
-                await decide(keys[:middle])
-                await decide(keys[middle:])
-                return
-            response = schema.model_validate(await self.llm.call_structured(
-                system, user, schema, num_predict=8192, debug_label="dream-fact-truth", think=True,
-            )).model_dump()["decisions"]
-            for alias, decision in response.items():
-                adjudications[alias] = decision
-                reserved_target_aliases.update(decision["changed_targets"])
-                prior_decisions.append({"incoming_claim_alias": alias, "relation": decision["relation"],
-                                        "target_claim_aliases": decision["changed_targets"]})
-
-        await decide(list(targets_by_incoming))
-        changes = [
-            {
-                "relation": decision["relation"],
-                "incoming_claim_aliases": [alias],
-                "target_claim_aliases": decision["changed_targets"],
-                "prior_state": "\n".join(display_claim_text(aliases[t]) for t in decision["changed_targets"]),
-                "incoming_state": display_claim_text(aliases[alias]),
-                "explanation": decision["reason"] + "\nComparisons: " + json.dumps(decision["comparisons"], ensure_ascii=False),
-                "confidence": aliases[alias].confidence,
-            }
-            for alias, decision in adjudications.items()
-            if decision["relation"] != "no_change"
-        ]
-        self._validate_truth_changes(changes, aliases, incoming_claim_ids)
-
         now = datetime.now().astimezone().isoformat()
         output = FactResolutionResult(facts=list(untouched_existing))
-        pending_incoming = {
-            aliases[alias].claim_id
-            for change in changes
-            for alias in change["incoming_claim_aliases"]
-        }
-        protected_targets = {
-            aliases[alias].claim_id
-            for change in changes
-            for alias in change["target_claim_aliases"]
-        }
-        for change in changes:
-            incoming_ids = [
-                aliases[alias].claim_id for alias in change["incoming_claim_aliases"]
-            ]
-            target_ids = [
-                aliases[alias].claim_id for alias in change["target_claim_aliases"]
-            ]
-            prior = self.artifacts.find_reconsolidation_proposal(
-                incoming_ids, target_ids, change["relation"]
-            )
-            if prior is None:
-                output.proposals.append(ReconsolidationProposal(
-                    proposal_id=f"recon-{uuid.uuid4().hex[:12]}",
-                    incoming_claim_ids=incoming_ids,
-                    target_claim_ids=target_ids,
-                    proposed_relation=change["relation"],
-                    explanation=change["explanation"],
-                    confidence=change["confidence"],
-                    dream_run_id=dream_run_id,
-                    created_at=now,
-                    affected_entity_ids=sorted({
-                        owner_id,
-                        *(
-                            linked_id
-                            for claim_id in (*incoming_ids, *target_ids)
-                            for linked_id in placements[claim_id].linked_entity_ids
-                        ),
-                    }),
-                    prior_state=change["prior_state"],
-                    incoming_state=change["incoming_state"],
-                ))
+        pending_incoming: set[str] = set()
+        protected_targets: set[str] = set()
         existing_pending = [
             proposal
             for proposal in [*self.artifacts.list_reconsolidation_proposals(status="pending"),
@@ -818,56 +704,3 @@ class FactResolver:
             ensure_ascii=False,
             indent=2,
         )
-
-    def _relations_text(
-        self, owner_id: str, alias_for_claim: dict[str, str]
-    ) -> str:
-        values = []
-        for proposal in self.artifacts.list_reconsolidation_proposals():
-            if owner_id not in proposal.affected_entity_ids:
-                continue
-            incoming = [
-                alias_for_claim[claim_id] for claim_id in proposal.incoming_claim_ids
-                if claim_id in alias_for_claim
-            ]
-            targets = [
-                alias_for_claim[claim_id] for claim_id in proposal.target_claim_ids
-                if claim_id in alias_for_claim
-            ]
-            if not incoming or not targets:
-                continue
-            values.append(
-                f"status={proposal.status}; relation={proposal.proposed_relation}; "
-                f"incoming={json.dumps(incoming)}; targets={json.dumps(targets)}; "
-                f"reviewer_note={proposal.reviewer_note or 'none'}"
-            )
-        return "\n".join(values) or "none"
-
-    @staticmethod
-    def _validate_truth_changes(
-        changes: list[dict],
-        aliases: dict[str, MemoryClaim],
-        incoming_claim_ids: set[str],
-    ) -> None:
-        changed_aliases: set[str] = set()
-        for change in changes:
-            incoming = set(change["incoming_claim_aliases"])
-            targets = set(change["target_claim_aliases"])
-            if incoming & targets or changed_aliases & (incoming | targets):
-                raise ValueError(
-                    "Truth-change claim sides must be distinct and non-overlapping"
-                )
-            if any(
-                aliases[alias].claim_id not in incoming_claim_ids
-                for alias in incoming
-            ):
-                raise ValueError(
-                    "Truth-change incoming claims must come from this Dream cohort"
-                )
-            if any(
-                aliases[alias].claim_id in incoming_claim_ids for alias in targets
-            ):
-                raise ValueError(
-                    "Truth-change targets must be previously accepted claims"
-                )
-            changed_aliases.update(incoming | targets)

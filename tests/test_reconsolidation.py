@@ -119,7 +119,7 @@ def test_truth_input_deduplicates_source_text_and_keeps_claim_citations(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_owner_plan_groups_independent_support(tmp_path):
+async def test_owner_plan_groups_independent_support(no_truth_changes, tmp_path):
     artifacts = setup_owner(tmp_path)
     first = claim("first", "The user prefers written updates.", "2026-08-01T12:00:00")
     second = claim("second", "Written updates are preferred.", "2026-08-02T12:00:00")
@@ -149,7 +149,7 @@ async def test_owner_plan_groups_independent_support(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_synthesis_uses_corrected_claim_not_original_source(tmp_path):
+async def test_synthesis_uses_corrected_claim_not_original_source(no_truth_changes, tmp_path):
     artifacts = setup_owner(tmp_path)
     corrected = claim("corrected", "The user prefers coffee.", "2026-08-01T12:00:00")
     related = claim("related", "The user drinks coffee each morning.", "2026-08-02T12:00:00")
@@ -212,7 +212,7 @@ async def test_synthesis_receives_only_manual_previous_presentations(tmp_path, m
 
 
 @pytest.mark.asyncio
-async def test_synthesis_keeps_distinct_claim_groups(tmp_path):
+async def test_synthesis_keeps_distinct_claim_groups(no_truth_changes, tmp_path):
     artifacts = setup_owner(tmp_path)
     first = claim("first", "The user joined a cooking class.", "2026-08-01T12:00:00")
     second = claim("second", "The user began exercising.", "2026-08-02T12:00:00")
@@ -252,7 +252,7 @@ async def test_synthesis_keeps_distinct_claim_groups(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_grouped_project_roles_preserve_each_claims_exact_project_link(tmp_path):
+async def test_grouped_project_roles_preserve_each_claims_exact_project_link(no_truth_changes, tmp_path):
     artifacts = setup_owner(tmp_path)
     person = artifacts.create_entity("person", "Rosa")
     first_project = artifacts.create_entity("project", "Kitchen")
@@ -312,19 +312,8 @@ async def test_truth_change_publishes_both_accounts_for_optional_review(tmp_path
     placements = [place(artifacts, old), place(artifacts, new)]
     old_fact = fact(old)
     artifacts.save_consolidated_fact(old_fact)
-    llm = AsyncMock(context_window_tokens=32768)
-    llm.call_structured.side_effect = [
-        {"decisions": {"C001": {
-            "candidate_fact_ids": ["X001"],
-            "reason": "The prior fact describes the preference being replaced.",
-        }}},
-        {"decisions": {"C002": {
-            "comparisons": [{"target": "C001", "scope": "same", "reason": "Same preference."}],
-            "relation": "supersedes",
-            "changed_targets": ["C001"],
-            "reason": "The newer statement explicitly replaces the old preference.",
-        }}},
-    ]
+    from tests.truth_support import truth_llm
+    llm = truth_llm({("new", "old"): "left_supersedes_right"})
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -343,7 +332,7 @@ async def test_truth_change_publishes_both_accounts_for_optional_review(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_repeated_evidence_joins_and_preserves_the_existing_fact(tmp_path):
+async def test_repeated_evidence_joins_and_preserves_the_existing_fact(no_truth_changes, tmp_path):
     artifacts = setup_owner(tmp_path)
     old = claim(
         "old", "The user prefers written updates.", "2026-08-01T12:00:00"
@@ -360,12 +349,7 @@ async def test_repeated_evidence_joins_and_preserves_the_existing_fact(tmp_path)
             "candidate_fact_ids": ["X001"],
             "reason": "The prior fact describes the same preference.",
         }}},
-        {"decisions": {"C002": {
-            "comparisons": [{"target": "C001", "scope": "same", "reason": "Same preference."}],
-            "relation": "no_change",
-            "changed_targets": [],
-            "reason": "The new claim independently supports the existing state.",
-        }}},
+
         {"facts": [{"prominence": "briefing",
             "member_claim_aliases": ["C001", "C002"],
             "memory_scope": "Preferred update format.",
@@ -389,7 +373,7 @@ async def test_repeated_evidence_joins_and_preserves_the_existing_fact(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_batched_truth_changes_have_one_review_per_target(tmp_path):
+async def test_batched_truth_changes_preserve_independent_support_for_review(tmp_path):
     artifacts = setup_owner(tmp_path)
     old = claim("old", "The user's bicycle is blue.", "2026-08-01T12:00:00")
     first = claim(
@@ -400,21 +384,9 @@ async def test_batched_truth_changes_have_one_review_per_target(tmp_path):
     )
     placements = [place(artifacts, item) for item in (old, first, support)]
     artifacts.save_consolidated_fact(fact(old))
-    llm = AsyncMock(context_window_tokens=32768)
-    llm.call_structured.side_effect = [
-        {"decisions": {"C001": {
-            "candidate_fact_ids": ["X001"],
-            "reason": "The fact may be the prior bicycle state.",
-        }, "C002": {
-            "candidate_fact_ids": ["X001"],
-            "reason": "The fact may be the prior bicycle state.",
-        }}},
-        {"decisions": {
-            "C002": {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'supersedes', 'changed_targets': ['C001'], 'reason': 'The new color replaces the old color.'},
-            "C003": {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The same state is already targeted by C002.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'Additional evidence for the same transition.'},
-        }},
-        {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C003'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
-    ]
+    from tests.truth_support import truth_llm
+    llm = truth_llm({("first", "old"): "left_supersedes_right",
+                     ("old", "support"): "right_supersedes_left"})
 
     result = await FactResolver(llm, artifacts).resolve(
         placements,
@@ -424,17 +396,18 @@ async def test_batched_truth_changes_have_one_review_per_target(tmp_path):
     )
 
     assert result.failures == []
-    assert len(result.proposals) == 1
-    assert result.proposals[0].incoming_claim_ids == ["first"]
-    truth_calls = [
-        call for call in llm.call_structured.await_args_list
-        if call.kwargs.get("debug_label") == "dream-fact-truth"
-    ]
+    assert len(result.proposals) == 2
+    assert {tuple(p.incoming_claim_ids) for p in result.proposals} == {("first",), ("support",)}
+    assert all(p.target_claim_ids == ["old"] for p in result.proposals)
+    assert {cid for f in result.facts for cid in f.member_claim_ids} == {"first", "support", "old"}
+    truth_calls = [call for call in llm.call_structured.await_args_list
+                   if call.kwargs.get("debug_label") == "dream-truth-comparison"]
     assert len(truth_calls) == 1
 
 
+
 @pytest.mark.asyncio
-async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path):
+async def test_incremental_resolution_preserves_unselected_fact_exactly(no_truth_changes, tmp_path):
     artifacts = setup_owner(tmp_path)
     old = claim("old", "The user prefers tea.", "2026-08-01T12:00:00")
     unrelated = claim(
@@ -452,7 +425,7 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path
             "candidate_fact_ids": ["X001"],
             "reason": "The prior preference may express the same durable state.",
         }}},
-        {"decisions": {"C002": {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'The evidence does not explicitly replace the prior preference.'}}},
+
         {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}, {"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
     ]
 
@@ -471,7 +444,7 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
+async def test_invalid_plan_fails_closed_and_preserves_prior_fact(no_truth_changes, tmp_path):
     artifacts = setup_owner(tmp_path)
     old = claim("old", "The user prefers tea.", "2026-08-01T12:00:00")
     new = claim("new", "The user now prefers coffee.", "2026-08-05T12:00:00")
@@ -484,7 +457,7 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
             "candidate_fact_ids": ["X001"],
             "reason": "The prior fact may express the same durable state.",
         }}},
-        {"decisions": {"C002": {'comparisons': [{'target': 'C001', 'scope': 'same', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'No change proposed by this test decision.'}}},
+
         {"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style', 'text': None}]},
     ]
 
@@ -503,7 +476,7 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
+async def test_pending_review_cannot_swallow_an_unrelated_new_claim(no_truth_changes, tmp_path):
     artifacts = setup_owner(tmp_path)
     old = claim("old", "The user's bicycle is blue.", "2026-08-01T12:00:00")
     pending = claim("pending", "The user's bicycle is now green.", "2026-08-02T12:00:00")
@@ -518,14 +491,6 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
         dream_run_id="earlier", created_at=old.recorded_at, affected_entity_ids=["you"],
     ))
     llm = AsyncMock(context_window_tokens=32768)
-    llm.call_structured.side_effect = [
-        {"decisions": {alias: {"candidate_fact_ids": ["X001"], "reason": "Candidate for review."}}}
-        for alias in ("C001",)
-    ] + [
-        {"decisions": {"C002": {'comparisons': [{'target': 'C001', 'scope': 'distinct', 'reason': 'The fixture evidence establishes this scope.'}], 'relation': 'no_change', 'changed_targets': [], 'reason': 'No new proposal.'}}}
-        for alias in ("C002",)
-    ] + [{"facts": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'text': None, 'state': 'current', 'section_key': 'preferences_working_style'}]}]
-
     result = await FactResolver(llm, artifacts).resolve(
         placements, affected_entity_ids={"you"}, incoming_claim_ids={"pending", "other"},
         dream_run_id="next",
@@ -535,11 +500,8 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(tmp_path):
     assert old_fact in result.facts
     assert {cid for item in result.facts for cid in item.member_claim_ids} == {"old", "other", "pending"}
     assert not result.proposals
-    synthesis = llm.call_structured.await_args_list[-1]
-    assert synthesis.kwargs["debug_label"] == "dream-fact-synthesis"
-    assert old.text not in synthesis.args[1]
-    assert pending.text not in synthesis.args[1]
-    assert other.text in synthesis.args[1]
+    llm.call_structured.assert_not_awaited()
+
 
 
 @pytest.mark.asyncio
@@ -578,7 +540,7 @@ async def test_pending_review_alone_does_not_trigger_more_model_work(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("has_history,change_placement", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("failed_batch", [0, 1])
-async def test_failed_addition_batch_preserves_other_batches(tmp_path, has_history, change_placement, failed_batch):
+async def test_failed_addition_batch_preserves_other_batches(no_truth_changes, tmp_path, has_history, change_placement, failed_batch):
     artifacts = setup_owner(tmp_path)
     old = claim("old", "The user grows herbs.", "2026-07-01T12:00:00")
     if has_history:
@@ -632,7 +594,7 @@ async def test_failed_addition_batch_preserves_other_batches(tmp_path, has_histo
 
 
 @pytest.mark.asyncio
-async def test_large_new_claim_sets_are_grouped_incrementally(tmp_path):
+async def test_large_new_claim_sets_are_grouped_incrementally(no_truth_changes, tmp_path):
     artifacts = setup_owner(tmp_path)
     claims = [
         claim(
@@ -652,18 +614,6 @@ async def test_large_new_claim_sets_are_grouped_incrementally(tmp_path):
             return {"decisions": {"C001": {
                 "candidate_fact_ids": [],
                 "reason": "The incoming memory is independent.",
-            }}}
-        if label == "dream-fact-truth":
-            call_counts["truth"] += 1
-            alias = (
-                f"C{call_counts['truth']:03d}"
-                if call_counts["truth"] <= 12
-                else "C001"
-            )
-            return {"decisions": {alias: {
-                "disposition": "no_change",
-                "reason": "No accepted truth is changed.",
-                "confidence": 0.9,
             }}}
         if label == "dream-fact-synthesis":
             call_counts["synthesis"] += 1

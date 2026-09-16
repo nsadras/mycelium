@@ -439,7 +439,8 @@ class ClaimLifecycleService:
             dream_run_id=operation_id,
         )
         self._persist_resolution(resolution)
-        return self.materializer.regenerate(entity_ids)
+        affected = entity_ids | {eid for proposal in resolution.proposals for eid in proposal.affected_entity_ids}
+        return self.materializer.regenerate(affected)
 
     def _persist_resolution(self, resolution: FactResolutionResult) -> None:
         if resolution.failures:

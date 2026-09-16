@@ -241,42 +241,7 @@ def fact_resolution_plan(
     incoming_aliases: list[str] | None = None,
     target_aliases: list[str] | None = None,
 ) -> list[dict]:
-    changes_by_incoming = {
-        alias: change
-        for change in truth_changes or []
-        for alias in change["incoming_claim_aliases"]
-    }
-    incoming_aliases = incoming_aliases or (
-        sorted(changes_by_incoming)
-        if changes_by_incoming
-        else sorted({alias for aliases, _, _ in facts.values() for alias in aliases})
-    )
-    targets = set(target_aliases or ()) | {
-        target
-        for change in truth_changes or []
-        for target in change["target_claim_aliases"]
-    }
     responses = []
-    if targets:
-        decisions = {}
-        for alias in incoming_aliases:
-            change = changes_by_incoming.get(alias)
-            decisions[alias] = {
-                "comparisons": [
-                    {
-                        "target": target,
-                        "scope": "same",
-                        "reason": "The fixture establishes shared scope.",
-                    }
-                    for target in sorted(targets)
-                ],
-                "relation": change["relation"] if change else "no_change",
-                "changed_targets": change["target_claim_aliases"] if change else [],
-                "reason": change["explanation"]
-                if change
-                else "Compatible information.",
-            }
-        responses.append({"decisions": decisions})
     responses.append(
         {
             "facts": [
@@ -836,7 +801,7 @@ async def test_dream_defers_claim_without_a_clear_owner_and_completes_episode(tm
 
 
 @pytest.mark.asyncio
-async def test_rerouting_placed_claim_to_deferred_removes_its_fact(tmp_path):
+async def test_rerouting_placed_claim_to_deferred_removes_its_fact(no_truth_changes, tmp_path):
     dream, _, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
     entry, source = add_source(logs, artifacts)
     claim = add_claim(
@@ -1030,7 +995,7 @@ async def test_model_declared_project_role_projects_to_both_endpoint_pages(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_path):
+async def test_new_entity_revises_prior_you_scope_without_string_matching(no_truth_changes, tmp_path):
     dream, _, wiki, logs, artifacts = build_dream(tmp_path, llm_response=you_scope())
     _, first_source = add_source(logs, artifacts, suffix="early")
     early = add_claim(
@@ -1098,7 +1063,7 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_later_dream_discovers_page_from_claims_across_episodes(tmp_path):
+async def test_later_dream_discovers_page_from_claims_across_episodes(no_truth_changes, tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
     _, first_source = add_source(logs, artifacts, suffix="first")
     first = add_claim(
@@ -1189,7 +1154,7 @@ async def test_dream_keeps_failed_routing_source_pending_until_retry(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_deferred_owner_does_not_block_placed_sibling(tmp_path):
+async def test_deferred_owner_does_not_block_placed_sibling(no_truth_changes, tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(tmp_path, llm_response={})
     first_entry, first_source = add_source(logs, artifacts, suffix="first")
     add_claim(
@@ -1512,7 +1477,7 @@ async def test_dream_dry_run_reports_but_does_not_write(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dream_regenerates_existing_page_without_rewrite_call(tmp_path):
+async def test_dream_regenerates_existing_page_without_rewrite_call(no_truth_changes, tmp_path):
     dream, llm, wiki, logs, artifacts = build_dream(
         tmp_path, llm_response=new_scope("C001", "Stable Page")
     )
@@ -1618,36 +1583,16 @@ async def test_dream_preserves_accepted_fact_while_contradiction_is_pending(tmp_
     add_claim(
         artifacts, second_source, claim_id="claim-new", text="The user dislikes tea."
     )
-    llm.call_structured.side_effect = [
-        *split_scope_plan(you_scope()),
-        {
-            "decisions": {
-                "C001": {
-                    "candidate_fact_ids": ["X001"],
-                    "reason": "The prior preference may express the same durable state.",
-                }
-            }
-        },
-        *fact_resolution_plan(
-            {
-                "new": (
-                    ["C001"],
-                    "The user dislikes tea.",
-                    "preferences_working_style",
-                ),
-                "old": (["C002"], "The user prefers tea.", "preferences_working_style"),
-            },
-            truth_changes=[
-                {
-                    "relation": "contradicts",
-                    "incoming_claim_aliases": ["C001"],
-                    "target_claim_aliases": ["C002"],
-                    "explanation": "The new preference conflicts with the existing preference.",
-                    "confidence": 0.94,
-                }
-            ],
-        ),
-    ]
+    from tests.truth_support import truth_response
+    routing = iter(split_scope_plan(you_scope()))
+
+    async def respond(system, user, schema, **kwargs):
+        if kwargs["debug_label"] in {"dream-truth-candidates", "dream-truth-comparison"}:
+            return truth_response(user, schema, {("claim-new", "claim-old"): "contradicts"}, **kwargs)
+        return next(routing)
+
+    llm.output_budget = lambda requested, **kwargs: requested
+    llm.call_structured.side_effect = respond
     report = await dream.run()
     assert report.completed_source_ids == [second_entry.entry_id]
     assert len(report.reconsolidation_proposal_ids) == 1
@@ -1669,7 +1614,7 @@ async def test_dream_preserves_accepted_fact_while_contradiction_is_pending(tmp_
 
 @pytest.mark.asyncio
 async def test_partial_fact_failure_commits_successes_and_retries_only_missing_claims(
-    tmp_path,
+    no_truth_changes, tmp_path,
 ):
     dream, llm, wiki, logs, artifacts = build_dream(
         tmp_path,

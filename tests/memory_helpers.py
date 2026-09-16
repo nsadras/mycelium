@@ -6,6 +6,8 @@ from mycelium.artifacts import (
     ClaimProvenance,
     ConsolidatedFact,
     MemoryClaim,
+    SourceDocument,
+    SourceSegment,
 )
 
 
@@ -34,6 +36,7 @@ def setup_owner(tmp_path):
 
 
 def place(artifacts: ArtifactStore, item: MemoryClaim) -> ClaimPlacement:
+    save_evidence(artifacts, item)
     artifacts.save_claim(item)
     placement = ClaimPlacement(
         item.claim_id, "you", "preferences_working_style", [], "placed", "test",
@@ -41,6 +44,19 @@ def place(artifacts: ArtifactStore, item: MemoryClaim) -> ClaimPlacement:
     )
     artifacts.save_placement(placement)
     return placement
+
+
+def save_evidence(artifacts: ArtifactStore, item: MemoryClaim) -> None:
+    for provenance in item.provenance:
+        try:
+            artifacts.get_source(provenance.source_id)
+        except FileNotFoundError:
+            artifacts.save_source(SourceDocument(
+                provenance.source_id, "agent_conversation", provenance.source_id,
+                item.recorded_at, None, ["user"],
+                [SourceSegment(sid, i, item.text, "user", "user")
+                 for i, sid in enumerate(provenance.segment_ids)],
+            ))
 
 
 def fact(item: MemoryClaim) -> ConsolidatedFact:

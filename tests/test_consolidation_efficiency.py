@@ -93,10 +93,13 @@ async def test_oversized_single_pair_is_not_silently_truncated(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_new_memories_do_not_require_empty_target_truth_calls(tmp_path):
+async def test_independent_same_batch_claims_skip_truth_adjudication(tmp_path):
     resolver, incoming, placements, _ = selection_fixture(tmp_path, 2, 0)
 
     async def respond(_system, _user, _schema, **kwargs):
+        if kwargs["debug_label"] == "dream-truth-candidates":
+            from tests.lifecycle_support import unrelated_truth_candidates
+            return unrelated_truth_candidates(_schema)
         assert kwargs["debug_label"] == "dream-fact-synthesis"
         return {
             "facts": [
@@ -116,7 +119,7 @@ async def test_new_memories_do_not_require_empty_target_truth_calls(tmp_path):
     assert {c for f in result.facts for c in f.member_claim_ids} == {
         c.claim_id for c in incoming
     }
-    assert resolver.llm.call_structured.await_count == 1
+    assert resolver.llm.call_structured.await_count == 2
 
 
 def test_truth_batch_requires_each_decision_and_rejects_competing_changes():

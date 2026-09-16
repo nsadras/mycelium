@@ -1,4 +1,4 @@
-"""Human review for owner-scoped truth-change proposals."""
+"""Human review for evidence-backed truth changes across canonical claims."""
 
 from __future__ import annotations
 
@@ -89,8 +89,8 @@ class ReconsolidationReviewService:
         proposal = self.artifacts.get_reconsolidation_proposal(proposal_id)
         if proposal.status == "applied":
             return ReviewResult(proposal, [], [])
-        if proposal.status == "rejected":
-            raise ReviewConflictError("A rejected proposal cannot be approved")
+        if proposal.status in {"rejected", "stale"}:
+            raise ReviewConflictError(f"A {proposal.status} proposal cannot be approved")
         incoming, targets = self._load_claims(proposal)
         already_mutated = self._approved_relation_is_present(
             proposal, incoming, targets
@@ -111,6 +111,7 @@ class ReconsolidationReviewService:
         try:
             if not already_mutated:
                 self._apply_relation(proposal, incoming, targets)
+            self._invalidate_overlapping_reviews(proposal, targets)
             pages = await self._rebuild(proposal)
             proposal.status = "applied"
             proposal.applied_at = datetime.now().astimezone().isoformat()
@@ -131,8 +132,8 @@ class ReconsolidationReviewService:
         proposal = self.artifacts.get_reconsolidation_proposal(proposal_id)
         if proposal.status == "rejected" and not proposal.application_error:
             return ReviewResult(proposal, [], [])
-        if proposal.status in {"approved", "applied"}:
-            raise ReviewConflictError("An approved proposal cannot be rejected")
+        if proposal.status in {"approved", "applied", "stale"}:
+            raise ReviewConflictError(f"A {proposal.status} proposal cannot be rejected")
         if proposal.status == "pending":
             proposal.status = "rejected"
             proposal.reviewer_note = reviewer_note
@@ -203,6 +204,18 @@ class ReconsolidationReviewService:
         for fact in resolution.facts:
             self.artifacts.save_consolidated_fact(fact)
         return self.materializer.regenerate(set(proposal.affected_entity_ids))
+
+    def _invalidate_overlapping_reviews(self, applied, targets):
+        """A pending review may not continue to cite a superseded claim."""
+        inactive = {claim.claim_id for claim in targets if claim.status != "active"}
+        if not inactive:
+            return
+        affected = set(applied.affected_entity_ids)
+        for proposal in self.artifacts.list_reconsolidation_proposals(status="pending"):
+            if inactive.intersection([*proposal.incoming_claim_ids, *proposal.target_claim_ids]):
+                self._mark_stale(proposal, "Referenced evidence changed through an approved truth review")
+                affected.update(proposal.affected_entity_ids)
+        applied.affected_entity_ids = sorted(affected)
 
     @staticmethod
     def _approved_relation_is_present(

@@ -106,6 +106,11 @@ class DreamPolicy:
         revision.encounters = list(encounters.values())
         initial_routes = {route.claim_id: route for route in initial.routes}
         revision_routes = {route.claim_id: route for route in revision.routes}
+        revision.entity_references = [
+            ref for ref in initial.entity_references if ref.claim_id not in revision_routes
+        ] + [
+            ref for ref in revision.entity_references if ref.claim_id in revision_routes
+        ]
         merged_routes = []
         for claim_id in dict.fromkeys([*revision_routes, *initial_routes]):
             current = revision_routes.get(claim_id)

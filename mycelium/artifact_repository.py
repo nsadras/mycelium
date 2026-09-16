@@ -302,24 +302,59 @@ class ArtifactStore:
         ]
 
     def save_entity_reference(self, reference: ClaimEntityReference) -> None:
+        """Save an exact reference ID; names are not identity keys."""
         self.get_claim(reference.claim_id)
         if reference.entity_id:
             entity = self.get_entity(reference.entity_id)
             if reference.status == "active" and entity.status != "active":
                 raise ValueError("Active references require an active entity")
-        if reference.status == "active":
-            for current in self.list_entity_references(
-                claim_id=reference.claim_id, status="active"
-            ):
-                if (
-                    current.role != reference.role
-                    or current.surface != reference.surface
-                ):
-                    continue
-                current.status = "superseded"
-                current.superseded_by_reference_id = reference.reference_id
-                self.db.put("entity-references", current.reference_id, asdict(current))
         self.db.put("entity-references", reference.reference_id, asdict(reference))
+
+    def replace_automatic_entity_references(
+        self,
+        claim_ids: Iterable[str],
+        references: Iterable[ClaimEntityReference],
+        *,
+        dream_run_id: str,
+    ) -> None:
+        """Atomically replace successful attribution, retaining manual decisions.
+
+        An empty replacement is meaningful: the completed decision found no
+        references. Failed or unprocessed claims must not appear in claim_ids.
+        """
+        claim_ids, references = set(claim_ids), list(references)
+        if not dream_run_id:
+            raise ValueError("Reference replacement requires a build ID")
+        incoming_ids = {r.reference_id for r in references}
+        if len(incoming_ids) != len(references):
+            raise ValueError("Replacement reference IDs must be unique")
+        if any(
+            r.claim_id not in claim_ids
+            or r.origin not in {"scope", "extraction"}
+            or r.status != "active"
+            or r.dream_run_id != dream_run_id
+            for r in references
+        ):
+            raise ValueError("Replacement references must be active automatic decisions in this build and claim scope")
+        with self.db.transaction():
+            for claim_id in sorted(claim_ids):
+                self.get_claim(claim_id)
+                for current in self.list_entity_references(claim_id=claim_id, status="active"):
+                    if current.origin == "manual" or current.reference_id in incoming_ids:
+                        continue
+                    current.status = "retired"
+                    current.retired_by_dream_run_id = dream_run_id
+                    self.save_entity_reference(current)
+            for reference in references:
+                try:
+                    prior = self.get_entity_reference(reference.reference_id)
+                except FileNotFoundError:
+                    prior = None
+                if prior is not None and (
+                    prior.claim_id != reference.claim_id or prior.origin == "manual"
+                ):
+                    raise ValueError("A replacement cannot overwrite another claim or a manual reference")
+                self.save_entity_reference(reference)
 
     def get_entity_reference(self, reference_id: str) -> ClaimEntityReference:
         return ClaimEntityReference(**self.db.get("entity-references", reference_id))

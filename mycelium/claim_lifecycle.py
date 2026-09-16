@@ -316,8 +316,11 @@ class ClaimLifecycleService:
             self.artifacts.save_entity(entity)
         for decision in routing.entity_decisions:
             self.artifacts.save_entity_resolution_decision(decision)
-        for reference in routing.entity_references:
-            self.artifacts.save_entity_reference(reference)
+        self.artifacts.replace_automatic_entity_references(
+            [route.claim_id for route in routing.routes],
+            routing.entity_references,
+            dream_run_id=f"correction-{short_id}",
+        )
         for route in routing.routes:
             self.artifacts.save_placement(placement_from_route(route))
             replacement.dream_disposition = "routed" if route.placed else "deferred"

@@ -110,8 +110,13 @@ class DreamCommitService:
                     self.artifacts.save_entity_resolution_decision(
                         EntityResolutionDecision(**raw)
                     )
-                for raw in payload["entity_references"]:
-                    self.artifacts.save_entity_reference(ClaimEntityReference(**raw))
+                attributed_claims = {raw["claim_id"] for raw in payload["scope_decisions"]}
+                self.artifacts.replace_automatic_entity_references(
+                    attributed_claims,
+                    [ClaimEntityReference(**raw) for raw in payload["entity_references"]
+                     if raw["claim_id"] in attributed_claims],
+                    dream_run_id=commit.run_id,
+                )
                 for raw in payload["encounters"]:
                     self.artifacts.save_encounter(EntityEncounter(**raw))
                 for raw in payload["scope_decisions"]:

@@ -173,15 +173,16 @@ The dream process converts source-grounded claims into semantic wiki pages:
 ```mermaid
 flowchart TD
     A[Unconsolidated source-grounded claims] --> B[Compile typed source retention]
-    B --> C[Resolve grounded identities]
-    C --> F[Select useful pages and sections for each statement]
+    B --> C[Discover source subjects and resolve grounded identities]
+    C --> D[Assess independent page usefulness]
+    D --> F[Select eligible pages and sections for each statement]
     F --> K{New entity materialized?}
     K -->|yes| L[Re-plan explicit persisted scope neighborhood]
     K -->|no| M[Use initial scope]
     L --> M
-    M --> N[Classify additive, support, contradiction, or supersession]
+    M --> N[Compare truth changes across active claims]
     N --> O[Create review proposals for unsafe changes]
-    O --> P[Deterministically materialize active facts]
+    O --> P[Group canonical claims and render bounded facts]
     P --> Q[Persist scope, identity, references, cohorts, and Dream audit]
     Q --> R[Mark completed logs consolidated]
 ```
@@ -195,22 +196,27 @@ Important behavior:
 - Assistant/system conversation claims and extraction-rejected segments remain source history under closed,
   provenance-linked retention reasons rather than masquerading as deferred or canonical memory.
 - `source_only` is not a model-authored scope outcome: every admitted claim is placed or explicitly deferred.
-- One bounded structured response resolves identities and chooses types, without page admission. Explicit
-  source user roles are authoritative bindings to You, expressed in both input and schema. Other subjects are
-  model decisions backed by exact claim/participant evidence, not lexical matching or confidence thresholds.
-  The response accounts for the bound user first, then explains each other source referent before selecting its
-  resolution. One uncertain actor carries its alternatives together; distinct actors remain distinct.
+- Subject discovery first inventories source referents and types without exposing the identity registry or
+  prior review metadata. A separate structured assignment binds reviewed identity occurrences to those subjects.
+  Explicit source user roles and accepted human reviews then constrain exact canonical identity IDs. Remaining
+  subjects receive typed registry candidates, at most 24 each, and a structured existing/new/review-required
+  decision. Candidate retrieval uses model embeddings with changed-document and query reuse; it never uses
+  lexical identity rules. These stages preserve cited claim/participant evidence for inspection. Candidate
+  limits bound individual matching requests, not the cost of reading the full identity history.
 - Page usefulness is independent of identity confidence. A known identity can exist without a page; the persisted
   state is still named `provisional`, but there is no maturity threshold or continuity verifier. Pages without
   selected statements are not manufactured from participant encounters. External speakers who only report facts about
   others may remain source participants without becoming memory identities.
+  A separate structured admission decision requires a type-specific positive basis and cited claims before a
+  provisional subject becomes eligible for placement. Previously materialized subjects remain eligible. Only
+  subjects resolved from the source enter the placement domain; You is not an implicit destination for every claim.
 - Uncertain identities remain reviewable proposals and defer affected routing. Existing registry IDs/types and
   explicit human identity decisions cannot be overridden by the planner. Historical audit record readers and
   manual organization APIs remain; retired maturity-assessment storage, contracts, and UI have been removed.
   Review proposals retain exact candidate identity IDs and source evidence across reloads; pending-review context
   includes those candidates and the explanation, not just a proposed title.
-- One subsequent placement response selects one or more useful page/section destinations for each claim, including
-  identities without pages. A page-ID-keyed object makes one explicit decision per eligible page: a type-valid
+- One subsequent placement response selects one or more useful page/section destinations for each claim among
+  admitted subjects. A page-ID-keyed object makes one explicit decision per eligible page: a type-valid
   section or `not_selected`, with a reason. One statement may appear on several pages but has only one chosen
   section on each page. Select destinations before the primary owner; the owner must be one of the selected pages.
   Routing records the decisions' reasons, but only selected destinations enter persisted placements. The primary owner
@@ -219,23 +225,22 @@ Important behavior:
   Claims without a suitable page remain searchable independently of the wiki. Completed identity plans are
   reconsidered against the current registry on later runs; failed routing reuses its saved plan and exact allocated
   IDs, avoiding duplicate identities after a partial commit. Old-cascade caches are not reused by the new contract.
-- Unusually large claim sets are split into bounded work units. Cumulative synthesis retains prior-fact candidate
-  selection and separate truth-change review, then makes one grounded grouping/presentation call per owner work
-  unit. Each output group declares exact member claim IDs, section, state, text, and rationale. Code validates
-  complete nonduplicated membership. Review-held incoming statements and whole protected prior facts are excluded
-  before presentation; accepted facts remain unchanged and independent claims cannot disappear through a discarded
-  mixed group. Singleton text copies
-  the canonical display statement exactly; multi-claim prose must preserve the members' meaning and uncertainty.
-  Presentation sees canonical statements and their temporal records, not raw transcripts that could resurrect
-  corrected claims. Grouping, group verification, per-fact rendering, prose verification, and repair are no longer
-  separate model stages. Existing fact-ID reuse, pending-review protection, selected-view projection, and commit
-  recovery remain. Scope-neighborhood revision is triggered only by actual identity creation or first materialization,
-  not routine updates to existing materialized identities.
-  Initial synthesis admits at most twelve new claims per work unit; additions against an existing history admit
-  at most four, plus model-selected prior facts. This bounds new work, not the size of a selected historical fact.
-  The smaller limit also applies once an initial long build has accumulated its first facts. Already pending-review
-  incoming claims are excluded from subsequent fact work until their review status changes; their canonical claims
-  remain stored and available to retrieval.
+- Unusually large claim sets are split into bounded work units. Global truth-change review precedes owner-scoped
+  presentation. Cumulative presentation selects relevant prior facts, then groups their canonical members and
+  at most twelve new claims. Each group declares one to twelve exact members, section, state, prominence, and
+  rationale. Code validates complete, nonduplicated membership. Singleton text copies the canonical display
+  statement; each multi-claim group receives a separate prose call constrained to its members and temporal records.
+  Stable local aliases allow unchanged group prose to be reused even when neighboring groups change. Successful
+  structured responses are durably keyed by the actual request, schema, settings, and model weight digest.
+  There is no separate model verification or repair stage for prose, so semantic coverage still requires evaluation.
+  Manually edited facts retain their exact text and evidence membership while those members remain active and
+  correctly owned. New claims cannot be silently added to unchanged manual prose.
+  Pending reviews protect whole existing facts from regrouping; newly arriving sides remain separately visible.
+  Both sides retain their canonical evidence. Presentation cannot resolve a truth-change review.
+  Existing fact-ID reuse, selected-view projection, and commit recovery remain. Scope-neighborhood revision is
+  triggered only by actual identity creation or first materialization, not routine updates to existing identities.
+  Bounded groups and request reuse do not bound the first-build scan of active claims or prior owner facts;
+  growing-store cost remains an acceptance concern.
   Additions preserve successful batches when another batch fails; only failed claim IDs remain retryable. Changes
   to existing placements retain owner-scoped atomicity. Pending proposals created by earlier batches protect
   accepted facts in later batches of the same build, before anything is persisted.
@@ -257,7 +262,12 @@ Important behavior:
 
 ### 5. Reconsolidation
 
-New source-grounded claims act as cues that reactivate a bounded set of older active claims. The classifier may mark the relationship additive, supporting, contradictory, or superseding. Additive claims route normally and supporting links apply automatically. Contradictions and supersessions become durable pairwise proposals.
+New source-grounded claims are compared with active canonical claims across page owners, including unplaced
+statements and other claims from the same batch. Candidate requests contain at most twelve incoming and twelve
+candidate records, with exact decisions for each eligible pair; total candidate work still grows with the store.
+Selected pairs receive a separate comparison grounded in cited source segments, temporal records, and identity
+bindings. No-change decisions preserve both claims; contradictions and directional supersessions become durable
+review proposals. Exact previously reviewed pairs are not proposed again.
 
 A pending proposal is the lability window: both claims remain active and generated pages display a pending marker. Approval updates canonical claim links or status and immediately invokes the same deterministic materializer used by Dream. Rejection preserves both claims as unrelated. Pages are never rewritten from a query or from model-authored correction prose.
 
@@ -347,6 +357,9 @@ mycelium_store/
 A shared process-local handle owns the SQLite connection and an OS-backed lock.
 Other writer processes fail before accessing the store. SQLite uses WAL, foreign
 keys, indexed record lookups, transactional revisions and a unique entity-slug index.
+Ordinary operations and explicit close remain bound to the creating thread. Resource
+collection can safely release a handle on another thread under the same lock that
+protects transactions; it does not permit concurrent cross-thread database use.
 Chat summaries are separate records from messages, so sidebar listing never loads
 transcripts. Old JSON stores are rejected; this release has no migration backend.
 
@@ -365,7 +378,13 @@ eventual Markdown publication, not a cross-filesystem/database atomic transactio
 Claim indexing uses database collection revisions and changed IDs, including claims
 whose owner changed. Incremental lookups/deletions use batches of at most500 IDs;
 unchanged search performs no artifact-directory scan. Index checkpoints advance only
-after successful synchronization. Retrieval decisions and prompts are unchanged.
+after successful synchronization. Embedding revisions include the configured model's
+actual weight digest; changed weights rebuild the derived index, including dimension
+changes. Invalid vectors or weights changing during generation fail explicitly.
+At 10,000 claims, an IVF_FLAT L2 index partitions storage into 100 groups and searches
+all partitions; smaller stores bypass the index. Unindexed appends remain searchable.
+This preserves exhaustive vector search while reducing measured local query overhead;
+it does not establish semantic retrieval recall or end-to-end QA quality.
 
 Snapshots use SQLite backup and reconstruct Markdown from the backed-up records;
 they exclude locks and rebuildable indexes. `python -m mycelium.snapshots` exports

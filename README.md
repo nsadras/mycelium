@@ -21,7 +21,7 @@ Most chat assistants either forget everything between sessions or require the en
 
 - Multi-session chat with a local Ollama model
 - Hybrid automatic retrieval plus assistant-directed follow-up memory search
-- Durable short-term memory that is retrievable before wiki consolidation
+- Durable source capture, with extracted statements searchable even when they have no wiki page
 - Plain-text episodic logs and an Obsidian-compatible Markdown wiki
 - Evidence-triggered, claim-level reconsolidation with human review
 - Deterministic, read-only wiki projections with exact source provenance

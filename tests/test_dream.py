@@ -160,7 +160,7 @@ def split_scope_plan(plan: dict) -> list[dict]:
         kind = node.get("entity_type") or node["entity_id"].split("-")[0]
         discovered.append({"entity_type": "person" if kind == "you" else kind,
             "title": node["title"] or node["entity_id"], "description": node["reason"],
-            "aliases": node["aliases"], "supporting_evidence": node["supporting_evidence"]})
+            "alternate_names": node["aliases"], "supporting_evidence": node["supporting_evidence"]})
         if node.get("entity_id") == "you" and any(a.startswith("P") for a in node["supporting_evidence"]):
             continue
         decision = {"resolution": node["resolution"], "reason": node["reason"]}
@@ -546,7 +546,7 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
         nonlocal routing_calls
         if "subjects" in output_type.model_fields:
             return {"subjects": [{"entity_type": "person", "title": "You", "description": "The user whose preferences are recorded",
-                "supporting_evidence": ["C001"], "aliases": []}]}
+                "supporting_evidence": ["C001"], "alternate_names": []}]}
         if "decision" in output_type.model_fields:
             return {"decision": {"resolution": "existing", "entity_id": "you", "title": None,
                 "aliases": [], "reason": "Explicit fixture user"}}

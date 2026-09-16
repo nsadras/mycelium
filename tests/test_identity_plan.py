@@ -199,7 +199,7 @@ def source_first_responses(plan):
         kind = node.get("entity_type") or node["entity_id"].split("-")[0]
         discovery.append({"entity_type": "person" if kind == "you" else kind,
             "title": node["title"] or node["entity_id"], "description": node["reason"],
-            "aliases": node["aliases"], "supporting_evidence": node["supporting_evidence"]})
+            "alternate_names": node["aliases"], "supporting_evidence": node["supporting_evidence"]})
         decision = {"resolution": node["resolution"], "reason": node["reason"]}
         if node["resolution"] == "existing":
             decision.update(entity_id=node["entity_id"], title=node["title"], aliases=node["aliases"])
@@ -381,8 +381,8 @@ async def test_review_assignment_binds_one_discovered_subject_without_hiding_the
         1., "Explicit review", "manual", "review", "active", "2026-09-04", identity_decision_id="d1"))
     llm.call_structured.side_effect = [
         {"subjects": [
-            {"entity_type": "person", "title": "The user", "description": "The person preparing the exhibit", "aliases": [], "supporting_evidence": ["C001"]},
-            {"entity_type": "project", "title": "Exhibit", "description": "The exhibit being prepared", "aliases": [], "supporting_evidence": ["C001"]}]},
+            {"entity_type": "person", "title": "The user", "description": "The person preparing the exhibit", "alternate_names": [], "supporting_evidence": ["C001"]},
+            {"entity_type": "project", "title": "Exhibit", "description": "The exhibit being prepared", "alternate_names": [], "supporting_evidence": ["C001"]}]},
         {"assignments": {"R001": {"subject_alias": "S001", "reason": "The reviewed person"}}},
         {"decision": {"resolution": "new", "reason": "Separate project"}}, admit("project-exhibit", "project"), route("project-exhibit")]
     result = await router.route(evidence)

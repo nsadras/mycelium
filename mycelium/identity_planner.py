@@ -199,7 +199,7 @@ class IdentityPlanner:
                 )
             node = {
                 "supporting_evidence": subject["supporting_evidence"],
-                "aliases": subject["aliases"],
+                "aliases": subject["alternate_names"],
                 **decision,
             }
             if decision["resolution"] != "existing":

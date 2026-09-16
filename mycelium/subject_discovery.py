@@ -15,7 +15,6 @@ def subject_discovery_model(claim_ids, participant_roles, reviewed_types):
     common = {
         "description": (str, Field(min_length=1, max_length=500)),
         "title": (str, Field(min_length=1, max_length=200)),
-        "aliases": (list[str], Field(max_length=12)),
     }
     variants = []
     for kind in ENTITY_TYPES:
@@ -36,12 +35,13 @@ def subject_discovery_model(claim_ids, participant_roles, reviewed_types):
             create_model(
                 "Discovered" + kind.title(),
                 __config__=ConfigDict(extra="forbid"),
-                **common,
-                entity_type=(Literal.__getitem__((kind,)), ...),
                 supporting_evidence=(
                     list[Literal.__getitem__(tuple(allowed))],
-                    Field(min_length=1, max_length=len(allowed)),
+                    Field(min_length=1, max_length=len(allowed), description="Exact supporting claim and participant IDs. Include each declared participant ID once on its person subject."),
                 ),
+                **common,
+                entity_type=(Literal.__getitem__((kind,)), ...),
+                alternate_names=(list[str], Field(max_length=12, description="Alternate human names explicitly stated for this subject; never operational evidence IDs.")),
             )
         )
     from typing import Union
@@ -82,4 +82,5 @@ def subject_discovery_prompt(evidence, reviewed):
             kind.key: kind.description for kind in ENTITY_ONTOLOGY if kind.key != "you"
         },
     )
+    system += "\n\n" + render_prompt("memory/subject_evidence_fields.system.jinja")
     return system, user

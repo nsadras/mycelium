@@ -9,7 +9,7 @@ def lifecycle_response(_system, user, schema, **kwargs):
                 'predicate': None, 'temporal_status': 'atemporal',
                 'facets': {'times': [], 'inference_basis': None}}
     if stage == 'dream-subject-discovery':
-        return {'subjects': [{'entity_type': 'person', 'title': 'You', 'description': 'The statement concerns the user.', 'supporting_evidence': ['C001'], 'aliases': []}]}
+        return {'subjects': [{'entity_type': 'person', 'title': 'You', 'description': 'The statement concerns the user.', 'supporting_evidence': ['C001'], 'alternate_names': []}]}
     if stage == 'dream-subject-identity':
         return {'decision': {'resolution': 'existing', 'entity_id': 'you', 'title': None, 'reason': 'The statement concerns the user.', 'aliases': []}}
     if stage == 'dream-claim-routing':

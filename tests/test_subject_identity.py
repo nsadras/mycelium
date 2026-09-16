@@ -11,7 +11,7 @@ def discovered(kind="person", evidence=None):
         "entity_type": kind,
         "title": "Subject",
         "description": "Grounded subject",
-        "aliases": [],
+        "alternate_names": [],
         "supporting_evidence": evidence or ["C001"],
     }
 

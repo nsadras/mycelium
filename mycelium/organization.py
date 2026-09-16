@@ -827,6 +827,10 @@ class IdentityReviewService:
             entity = self.artifacts.get_entity(entity_id)
             if entity.status != "active":
                 raise ValueError("Reviewed entity ID must be active")
+            if entity_id == "you" and entity_type == "person":
+                # An explicit review may identify a speaker as the user. The
+                # occurrence's tentative name must not rename the canonical You.
+                return entity
             if entity.entity_type != entity_type:
                 raise ValueError(
                     "Reviewed entity ID must match the selected entity type"

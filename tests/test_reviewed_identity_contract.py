@@ -91,6 +91,25 @@ def test_reviewing_one_identity_does_not_erase_another_review_in_the_same_claim(
     assert len(artifacts.list_entity_references(claim_id="claim", status="superseded")) == 1
 
 
+def test_user_can_confirm_a_person_occurrence_as_you_without_renaming_you(tmp_path):
+    from dataclasses import asdict
+    from mycelium.artifacts import ArtifactStore, EntityResolutionDecision
+    from mycelium.organization import IdentityReviewService
+    from tests.memory_helpers import claim, place
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    you = artifacts.create_entity("you", "You")
+    place(artifacts, claim("claim", "The speaker prefers concise updates.", "2031-01-01"))
+    decision = EntityResolutionDecision("review", "entity_creation", None, "person", "Unidentified speaker",
+        ["source-claim"], ["claim"], ["source-claim#seg-0001"], .8, "Unresolved speaker", "review_required",
+        "test", "2031-01-01", proposed_scope="independent", proposed_page_state="provisional", candidate_entity_ids=["you"])
+    artifacts.save_entity_resolution_decision(decision)
+    result = IdentityReviewService(artifacts).review("review", "approve", entity_id="you")
+    assert result.entity_id == "you"
+    assert asdict(artifacts.get_entity("you")) == asdict(you)
+    reference = artifacts.list_entity_references(claim_id="claim", status="active")[0]
+    assert reference.entity_id == "you" and reference.identity_decision_id == "review"
+
+
 @pytest.mark.parametrize("version", [1, 2])
 def test_old_schema_stores_are_rejected_without_migration(tmp_path, version):
     import sqlite3

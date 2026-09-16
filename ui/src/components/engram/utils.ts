@@ -23,11 +23,11 @@ export function statusTone(status: EngramMeeting['status']) {
 }
 
 export function isBusyStatus(status: EngramMeeting['status']) {
-  return status === 'transcribing' || status === 'processing';
+  return status === 'transcribing' || status === 'processing' || status === 'finalizing';
 }
 
 export function processingLabel(meeting: EngramMeeting, isFinalizing: boolean) {
-  if (isFinalizing) return 'Finalizing meeting';
+  if (isFinalizing || meeting.status === 'finalizing') return 'Finalizing meeting';
   if (meeting.status === 'transcribing') return 'Transcribing audio';
   if (meeting.status === 'processing') return meeting.segments?.length ? 'Diarizing speakers' : 'Processing audio';
   return 'Processing';

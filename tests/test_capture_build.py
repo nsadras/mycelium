@@ -203,17 +203,22 @@ async def test_meeting_admission_survives_summary_failure_and_freezes_review(tmp
     result = await service.finalize_meeting(meeting.id)
 
     assert result.status == "completed"
-    assert "summary failed" in result.error
+    assert result.error is None
+    assert result.warnings[0].stage == "summary"
+    assert "offline" in result.warnings[0].message
+    assert result.warnings[0].resolved_at is None
     assert len(memory.artifacts.list_sources()) == 1
     assert memory.artifacts.list_claims() == []
     memory.encoder.llm.call_structured.assert_not_awaited()
     with pytest.raises(ValueError, match="after source admission"):
         await service.update_speaker_names(meeting.id, {"Nora": "Someone else"})
-    with pytest.raises(ValueError, match="awaiting review"):
+    with pytest.raises(ValueError, match="after source admission"):
         await service.update_transcript(meeting.id, {})
     summarizer.summarize.side_effect = None
     summarizer.summarize.return_value = MeetingSummary("Review on Thursday.")
     retried = await service.finalize_meeting(meeting.id)
     assert retried.summary is not None
     assert retried.error is None
+    assert retried.warnings[0].id == result.warnings[0].id
+    assert retried.warnings[0].resolved_at is not None
     assert len(memory.artifacts.list_sources()) == 1

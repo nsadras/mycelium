@@ -3,11 +3,19 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from engram.models import Meeting, MeetingSummary, SegmentStatus, TranscriptSegment
+from engram.models import (
+    Meeting,
+    MeetingSummary,
+    MeetingWarning,
+    SegmentStatus,
+    TranscriptSegment,
+    WarningStage,
+)
 
 
 def _now() -> datetime:
@@ -26,10 +34,16 @@ class EngramStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        conn.execute("PRAGMA foreign_keys=ON")
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         with self._connect() as conn:
@@ -51,7 +65,10 @@ class EngramStore:
                 )
                 """
             )
-            columns = {row["name"] for row in conn.execute("PRAGMA table_info(meetings)").fetchall()}
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(meetings)").fetchall()
+            }
             if "speaker_names_json" not in columns:
                 conn.execute("ALTER TABLE meetings ADD COLUMN speaker_names_json TEXT")
             conn.execute(
@@ -73,6 +90,23 @@ class EngramStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_segments_meeting ON transcript_segments(meeting_id, segment_index)"
             )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS meeting_warnings (
+                    id TEXT PRIMARY KEY,
+                    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                    stage TEXT NOT NULL CHECK(stage IN ('diarization','summary')),
+                    message TEXT NOT NULL, created_at TEXT NOT NULL, resolved_at TEXT
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_warnings_meeting ON meeting_warnings(meeting_id, created_at)"
+            )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS meeting_admissions (
+                    meeting_id TEXT PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+                    started_at TEXT NOT NULL
+                )
+            """)
 
     def create_meeting(self, title: str | None = None) -> Meeting:
         meeting_id = str(uuid.uuid4())[:8]
@@ -90,7 +124,13 @@ class EngramStore:
                 INSERT INTO meetings (id, title, status, created_at, started_at)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                (meeting.id, meeting.title, meeting.status, now.isoformat(), now.isoformat()),
+                (
+                    meeting.id,
+                    meeting.title,
+                    meeting.status,
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
             )
         return meeting
 
@@ -98,30 +138,88 @@ class EngramStore:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT m.*, COUNT(s.id) AS segment_count
+                SELECT m.*, a.started_at AS admission_started_at, COUNT(s.id) AS segment_count
                 FROM meetings m
+                LEFT JOIN meeting_admissions a ON a.meeting_id = m.id
                 LEFT JOIN transcript_segments s ON s.meeting_id = m.id
                 GROUP BY m.id
                 ORDER BY COALESCE(m.started_at, m.created_at) DESC
                 """
             ).fetchall()
-        return [self._meeting_from_row(row) for row in rows]
+            warnings = {}
+            for warning in conn.execute(
+                "SELECT * FROM meeting_warnings ORDER BY created_at, id"
+            ):
+                warnings.setdefault(warning["meeting_id"], []).append(
+                    self._warning_from_row(warning)
+                )
+        return [
+            self._meeting_from_row(row, warnings.get(row["id"], [])) for row in rows
+        ]
 
     def get_meeting(self, meeting_id: str) -> Meeting:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT m.*, COUNT(s.id) AS segment_count
+                SELECT m.*, a.started_at AS admission_started_at, COUNT(s.id) AS segment_count
                 FROM meetings m
+                LEFT JOIN meeting_admissions a ON a.meeting_id = m.id
                 LEFT JOIN transcript_segments s ON s.meeting_id = m.id
                 WHERE m.id = ?
                 GROUP BY m.id
                 """,
                 (meeting_id,),
             ).fetchone()
+            warnings = [
+                self._warning_from_row(item)
+                for item in conn.execute(
+                    "SELECT * FROM meeting_warnings WHERE meeting_id=? ORDER BY created_at, id",
+                    (meeting_id,),
+                )
+            ]
         if row is None:
             raise FileNotFoundError(f"Meeting {meeting_id} not found.")
-        return self._meeting_from_row(row)
+        return self._meeting_from_row(row, warnings)
+
+    def freeze_for_admission(self, meeting_id: str) -> Meeting:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if (
+                conn.execute(
+                    "SELECT 1 FROM meetings WHERE id=?", (meeting_id,)
+                ).fetchone()
+                is None
+            ):
+                raise FileNotFoundError(f"Meeting {meeting_id} not found.")
+            conn.execute(
+                "INSERT OR IGNORE INTO meeting_admissions(meeting_id, started_at) VALUES (?, ?)",
+                (meeting_id, _now().isoformat()),
+            )
+        return self.get_meeting(meeting_id)
+
+    def add_warning(
+        self, meeting_id: str, stage: WarningStage, message: str
+    ) -> Meeting:
+        warning = MeetingWarning(uuid.uuid4().hex, stage, message, _now())
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO meeting_warnings(id, meeting_id, stage, message, created_at) VALUES (?,?,?,?,?)",
+                (
+                    warning.id,
+                    meeting_id,
+                    warning.stage,
+                    warning.message,
+                    warning.created_at.isoformat(),
+                ),
+            )
+        return self.get_meeting(meeting_id)
+
+    def resolve_warnings(self, meeting_id: str, stage: WarningStage) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE meeting_warnings SET resolved_at=? WHERE meeting_id=? AND stage=? AND resolved_at IS NULL",
+                (_now().isoformat(), meeting_id, stage),
+            )
 
     def update_meeting(self, meeting_id: str, **fields: Any) -> Meeting:
         if not fields:
@@ -145,18 +243,27 @@ class EngramStore:
             values.append(value.isoformat() if isinstance(value, datetime) else value)
         values.append(meeting_id)
         with self._connect() as conn:
-            cur = conn.execute(f"UPDATE meetings SET {', '.join(assignments)} WHERE id = ?", values)
+            if {"title", "started_at", "ended_at"} & fields.keys():
+                conn.execute("BEGIN IMMEDIATE")
+                self._require_unadmitted(conn, meeting_id)
+            cur = conn.execute(
+                f"UPDATE meetings SET {', '.join(assignments)} WHERE id = ?", values
+            )
             if cur.rowcount == 0:
                 raise FileNotFoundError(f"Meeting {meeting_id} not found.")
         return self.get_meeting(meeting_id)
 
-    def save_speaker_names(self, meeting_id: str, speaker_names: dict[str, str]) -> Meeting:
+    def save_speaker_names(
+        self, meeting_id: str, speaker_names: dict[str, str]
+    ) -> Meeting:
         normalized = {
             str(label).strip(): str(name).strip()
             for label, name in speaker_names.items()
             if str(label).strip() and str(name).strip()
         }
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_unadmitted(conn, meeting_id)
             cur = conn.execute(
                 "UPDATE meetings SET speaker_names_json = ? WHERE id = ?",
                 (json.dumps(normalized, sort_keys=True), meeting_id),
@@ -176,7 +283,10 @@ class EngramStore:
             indent=2,
         )
         with self._connect() as conn:
-            cur = conn.execute("UPDATE meetings SET summary_json = ? WHERE id = ?", (payload, meeting_id))
+            cur = conn.execute(
+                "UPDATE meetings SET summary_json = ? WHERE id = ?",
+                (payload, meeting_id),
+            )
             if cur.rowcount == 0:
                 raise FileNotFoundError(f"Meeting {meeting_id} not found.")
         return self.get_meeting(meeting_id)
@@ -192,10 +302,15 @@ class EngramStore:
         status: SegmentStatus = "final",
         segment_index: int | None = None,
     ) -> TranscriptSegment:
-        if segment_index is None:
-            segment_index = self.next_segment_index(meeting_id)
         created_at = _now()
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_unadmitted(conn, meeting_id)
+            if segment_index is None:
+                segment_index = conn.execute(
+                    "SELECT COALESCE(MAX(segment_index), -1) + 1 FROM transcript_segments WHERE meeting_id=?",
+                    (meeting_id,),
+                ).fetchone()[0]
             cur = conn.execute(
                 """
                 INSERT INTO transcript_segments (
@@ -227,9 +342,15 @@ class EngramStore:
             created_at=created_at,
         )
 
-    def replace_segments(self, meeting_id: str, segments: list[TranscriptSegment]) -> None:
+    def replace_segments(
+        self, meeting_id: str, segments: list[TranscriptSegment]
+    ) -> None:
         with self._connect() as conn:
-            conn.execute("DELETE FROM transcript_segments WHERE meeting_id = ?", (meeting_id,))
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_unadmitted(conn, meeting_id)
+            conn.execute(
+                "DELETE FROM transcript_segments WHERE meeting_id = ?", (meeting_id,)
+            )
             for idx, segment in enumerate(segments):
                 conn.execute(
                     """
@@ -280,6 +401,8 @@ class EngramStore:
             raise ValueError("Speaker label cannot be empty.")
 
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._require_unadmitted(conn, meeting_id)
             placeholders = ", ".join("?" for _ in normalized)
             rows = conn.execute(
                 f"SELECT id FROM transcript_segments WHERE meeting_id = ? AND id IN ({placeholders})",
@@ -287,25 +410,52 @@ class EngramStore:
             ).fetchall()
             found_ids = {int(row["id"]) for row in rows}
             if found_ids != set(normalized):
-                raise ValueError("One or more transcript segments do not belong to this meeting.")
+                raise ValueError(
+                    "One or more transcript segments do not belong to this meeting."
+                )
             conn.executemany(
                 "UPDATE transcript_segments SET text = ? WHERE meeting_id = ? AND id = ?",
-                [(text, meeting_id, segment_id) for segment_id, text in normalized.items()],
+                [
+                    (text, meeting_id, segment_id)
+                    for segment_id, text in normalized.items()
+                ],
             )
             if normalized_speaker is not None:
                 conn.executemany(
                     "UPDATE transcript_segments SET speaker = ?, status = 'diarized' WHERE meeting_id = ? AND id = ?",
-                    [(normalized_speaker, meeting_id, segment_id) for segment_id in normalized],
+                    [
+                        (normalized_speaker, meeting_id, segment_id)
+                        for segment_id in normalized
+                    ],
                 )
 
         return self.list_segments(meeting_id)
 
     def delete_meeting(self, meeting_id: str) -> None:
         with self._connect() as conn:
-            conn.execute("DELETE FROM transcript_segments WHERE meeting_id = ?", (meeting_id,))
+            conn.execute(
+                "DELETE FROM transcript_segments WHERE meeting_id = ?", (meeting_id,)
+            )
             cur = conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
             if cur.rowcount == 0:
                 raise FileNotFoundError(f"Meeting {meeting_id} not found.")
+
+    @staticmethod
+    def _require_unadmitted(conn, meeting_id):
+        row = conn.execute(
+            """
+            SELECT m.memory_log_entry_id, a.started_at
+            FROM meetings m LEFT JOIN meeting_admissions a ON a.meeting_id=m.id
+            WHERE m.id=?
+        """,
+            (meeting_id,),
+        ).fetchone()
+        if row is None:
+            raise FileNotFoundError(f"Meeting {meeting_id} not found.")
+        if row["memory_log_entry_id"] or row["started_at"]:
+            raise ValueError(
+                "Transcript and speakers cannot change after source admission starts"
+            )
 
     def next_segment_index(self, meeting_id: str) -> int:
         with self._connect() as conn:
@@ -315,9 +465,13 @@ class EngramStore:
             ).fetchone()
         return int(row["next_idx"])
 
-    def _meeting_from_row(self, row: sqlite3.Row) -> Meeting:
+    def _meeting_from_row(
+        self, row: sqlite3.Row, warnings: list[MeetingWarning]
+    ) -> Meeting:
         summary_json = row["summary_json"]
-        speaker_names_json = row["speaker_names_json"] if "speaker_names_json" in row.keys() else None
+        speaker_names_json = (
+            row["speaker_names_json"] if "speaker_names_json" in row.keys() else None
+        )
         summary = None
         if summary_json:
             data = json.loads(summary_json)
@@ -340,7 +494,21 @@ class EngramStore:
             memory_log_entry_id=row["memory_log_entry_id"],
             summary=summary,
             speaker_names=json.loads(speaker_names_json) if speaker_names_json else {},
-            segment_count=int(row["segment_count"]) if "segment_count" in row.keys() else 0,
+            segment_count=int(row["segment_count"])
+            if "segment_count" in row.keys()
+            else 0,
+            warnings=warnings,
+            admission_started_at=_parse_dt(row["admission_started_at"]),
+        )
+
+    @staticmethod
+    def _warning_from_row(row: sqlite3.Row) -> MeetingWarning:
+        return MeetingWarning(
+            row["id"],
+            row["stage"],
+            row["message"],
+            datetime.fromisoformat(row["created_at"]),
+            _parse_dt(row["resolved_at"]),
         )
 
     def _segment_from_row(self, row: sqlite3.Row) -> TranscriptSegment:

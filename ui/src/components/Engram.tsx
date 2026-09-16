@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { AlertTriangle, CheckCircle2, CircleHelp, Clock, FileAudio, Gavel, ListChecks, Loader2, RotateCw, Save, Trash2, Upload } from 'lucide-react';
 import api, { engramAudioUrl, type EngramMeeting } from '../lib/api';
 import type { AssistantStatus } from '../lib/assistantStatus';
+import { useMeetingRequests, type MeetingRequest } from './engram/useMeetingRequests';
 import {
   AudioTransport, List, ProcessingIndicator, TranscriptTurnRow,
 } from './engram/presentation';
@@ -17,7 +18,10 @@ interface EngramProps {
 export default function Engram({ setAssistantStatus }: EngramProps) {
   const [meetings, setMeetings] = useState<EngramMeeting[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [meeting, setMeeting] = useState<EngramMeeting | null>(null);
+  const [loadedMeeting, setMeeting] = useState<EngramMeeting | null>(null);
+  const meeting = loadedMeeting?.id === selectedId ? loadedMeeting : null;
+  const requests = useMeetingRequests();
+  const [requestError, setRequestError] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -46,10 +50,13 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   }, []);
 
   const selectMeeting = useCallback((id: string | null) => {
+    requests.select(id);
     setSelectedId(id);
     applyMeeting(null);
     setEditingTranscriptTurn(null);
     setSavingTranscriptTurn(null);
+    setIsProcessing(false); setIsSavingSpeakers(false); setIsFinalizing(false);
+    setRequestError(null);
     pendingSeekRef.current = null;
     playbackAttemptedRef.current = false;
     audioRef.current?.pause();
@@ -58,18 +65,30 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     setCurrentTime(0);
     setAudioDuration(0);
     setPlaybackError(null);
-  }, [applyMeeting]);
+  }, [applyMeeting, requests]);
+
+  const acceptMeeting = useCallback((ticket: MeetingRequest, next: EngramMeeting) => {
+    if (!requests.latest(ticket)) return false;
+    requests.invalidateList();
+    setMeetings(prev => prev.map(item => item.id === ticket.id ? next : item));
+    if (!requests.current(ticket)) return false;
+    applyMeeting(next);
+    return true;
+  }, [applyMeeting, requests]);
 
   const refreshMeetings = useCallback(async () => {
+    const ticket = requests.beginList();
     try {
       const res = await api.get('/engram/meetings');
+      if (!requests.currentList(ticket)) return;
       const next = res.data as EngramMeeting[];
       setMeetings(next);
-      setSelectedId(current => current ?? next[0]?.id ?? null);
+      if (!next.some(item => item.id === requests.selectedId())) selectMeeting(next[0]?.id ?? null);
     } catch (err) {
       console.error('Failed to fetch meetings', err);
+      if (requests.currentList(ticket)) setRequestError('Could not refresh meetings. Your current selection is preserved.');
     }
-  }, []);
+  }, [requests, selectMeeting]);
 
   const segments = useMemo(() => meeting?.segments ?? [], [meeting]);
   const turns = useMemo(() => transcriptTurns(segments, speakerNames), [segments, speakerNames]);
@@ -91,45 +110,47 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
   }, [segments]);
 
   useEffect(() => {
-    let cancelled = false;
-    api.get('/engram/meetings')
+    const controller = new AbortController();
+    const ticket = requests.beginList();
+    api.get('/engram/meetings', { signal: controller.signal })
       .then((res) => {
-        if (cancelled) return;
+        if (controller.signal.aborted || !requests.currentList(ticket)) return;
         const next = res.data as EngramMeeting[];
         setMeetings(next);
-        setSelectedId(current => current ?? next[0]?.id ?? null);
+        if (requests.selectedId() === null) selectMeeting(next[0]?.id ?? null);
         setAssistantStatus({ activity: 'engram', label: 'Engram', detail: 'Ready for meetings' });
       })
-      .catch((err) => console.error('Failed to fetch meetings', err));
-    return () => { cancelled = true; };
-  }, [setAssistantStatus]);
+      .catch(() => { if (!controller.signal.aborted && requests.currentList(ticket)) setRequestError('Could not load meetings.'); });
+    return () => { controller.abort(); };
+  }, [requests, selectMeeting, setAssistantStatus]);
 
   useEffect(() => {
     if (!selectedId) return;
-    let cancelled = false;
-    api.get(`/engram/meetings/${selectedId}`)
+    const controller = new AbortController();
+    const ticket = requests.begin(selectedId);
+    api.get(`/engram/meetings/${selectedId}`, { signal: controller.signal })
       .then((res) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         const next = res.data as EngramMeeting;
-        applyMeeting(next);
-        setMeetings(prev => prev.map(item => item.id === selectedId ? { ...item, ...next } : item));
+        acceptMeeting(ticket, next);
       })
-      .catch((err) => console.error('Failed to fetch meeting', err));
-    return () => { cancelled = true; };
-  }, [applyMeeting, selectedId]);
+      .catch(() => { if (!controller.signal.aborted && requests.current(ticket)) setRequestError('Could not load the selected meeting.'); });
+    return () => { controller.abort(); };
+  }, [acceptMeeting, requests, selectedId]);
 
   useEffect(() => {
     if (!selectedId || meeting?.id !== selectedId || !isBusyStatus(meeting.status)) return;
     let cancelled = false;
+    const controller = new AbortController();
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
     const pollMeeting = async () => {
+      const ticket = requests.begin(selectedId);
       try {
-        const res = await api.get(`/engram/meetings/${selectedId}`);
+        const res = await api.get(`/engram/meetings/${selectedId}`, { signal: controller.signal });
         if (cancelled) return;
         const next = res.data as EngramMeeting;
-        applyMeeting(next);
-        setMeetings(prev => prev.map(item => item.id === next.id ? { ...item, ...next } : item));
+        if (!acceptMeeting(ticket, next)) return;
         if (next.status === 'failed') {
           setAssistantStatus({ activity: 'error', label: 'Engram failed', detail: 'Check meeting detail' });
         } else if (next.status === 'reviewing') {
@@ -147,9 +168,10 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     pollTimer = setTimeout(pollMeeting, 1500);
     return () => {
       cancelled = true;
+      controller.abort();
       if (pollTimer) clearTimeout(pollTimer);
     };
-  }, [applyMeeting, selectedId, meeting?.id, meeting?.status, setAssistantStatus]);
+  }, [acceptMeeting, requests, selectedId, meeting?.id, meeting?.status, setAssistantStatus]);
 
   useEffect(() => {
     if (transcriptRef.current) {
@@ -159,23 +181,28 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
 
   const processMeeting = async (action: 'process' | 'retry-diarization' = 'process') => {
     if (!meeting || isProcessing) return;
+    const ticket = requests.begin(meeting.id);
     setIsProcessing(true);
+    setRequestError(null);
     setAssistantStatus({ activity: 'thinking', label: 'Processing meeting', detail: meeting.title });
     try {
       const res = await api.post(`/engram/meetings/${meeting.id}/${action}`);
-      applyMeeting(res.data);
-      setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
+      acceptMeeting(ticket, res.data);
     } catch (err) {
       console.error('Failed to process meeting', err);
-      setAssistantStatus({ activity: 'error', label: 'Processing failed', detail: 'Check backend logs' });
+      if (requests.current(ticket)) {
+        setRequestError('Processing could not complete. Retry the meeting.');
+        setAssistantStatus({ activity: 'error', label: 'Processing failed', detail: 'Retry the meeting' });
+      }
     } finally {
-      setIsProcessing(false);
+      if (requests.sameSelection(ticket.selection)) setIsProcessing(false);
     }
   };
 
   const togglePlayback = async () => {
     const audio = audioRef.current;
     if (!audio || !meeting?.audio_path) return;
+    const selection = requests.selection();
     if (!audio.paused) {
       audio.pause();
       return;
@@ -188,6 +215,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
       if (audioDuration > 0 && audio.currentTime >= audioDuration - 0.05) audio.currentTime = 0;
       await audio.play();
     } catch (err) {
+      if (!requests.sameSelection(selection)) return;
       console.error('Failed to play meeting audio', err);
       setIsPlaying(false);
       setIsBuffering(false);
@@ -227,18 +255,20 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
 
   const saveSpeakerNames = async () => {
     if (!meeting || isSavingSpeakers) return null;
+    const ticket = requests.begin(meeting.id);
     setIsSavingSpeakers(true);
     try {
       const res = await api.put(`/engram/meetings/${meeting.id}/speakers`, { speaker_names: speakerNames });
-      applyMeeting(res.data);
-      setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
-      return res.data as EngramMeeting;
+      return acceptMeeting(ticket, res.data) ? res.data as EngramMeeting : null;
     } catch (err) {
       console.error('Failed to save speaker names', err);
-      setAssistantStatus({ activity: 'error', label: 'Speaker save failed', detail: 'Check backend logs' });
+      if (requests.current(ticket)) {
+        setRequestError('Speaker names were not saved. Your edits are preserved.');
+        setAssistantStatus({ activity: 'error', label: 'Speaker save failed', detail: 'Retry saving the names' });
+      }
       return null;
     } finally {
-      setIsSavingSpeakers(false);
+      if (requests.sameSelection(ticket.selection)) setIsSavingSpeakers(false);
     }
   };
 
@@ -256,67 +286,80 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     ));
     if (updates.length !== turn.segments.length) return false;
 
+    const ticket = requests.begin(meeting.id);
     setSavingTranscriptTurn(turn.key);
     try {
       const res = await api.put(`/engram/meetings/${meeting.id}/transcript`, {
         segments: updates,
         speaker: speakerChanged ? speaker : undefined,
       });
-      applyMeeting(res.data);
-      setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
-      return true;
+      return acceptMeeting(ticket, res.data);
     } catch (err) {
       console.error('Failed to save transcript', err);
-      setAssistantStatus({ activity: 'error', label: 'Transcript save failed', detail: 'Review the edited text and try again' });
+      if (requests.current(ticket)) {
+        setRequestError('Transcript edits were not saved. Review the text and retry.');
+        setAssistantStatus({ activity: 'error', label: 'Transcript save failed', detail: 'Review the edited text and try again' });
+      }
       return false;
     } finally {
-      setSavingTranscriptTurn(null);
+      if (requests.sameSelection(ticket.selection)) setSavingTranscriptTurn(null);
     }
   };
 
   const finalizeMeeting = async () => {
     if (!meeting || isFinalizing) return;
+    const selection = requests.selection();
     setIsFinalizing(true);
     setAssistantStatus({ activity: 'thinking', label: 'Finalizing meeting', detail: meeting.title });
     try {
-      if (meeting.status === 'reviewing') {
+      if (meeting.status === 'reviewing' && !meeting.admission_started_at && !meeting.memory_log_entry_id) {
         const saved = await saveSpeakerNames();
-        if (!saved) return;
+        if (!saved || !requests.sameSelection(selection)) return;
       }
+      const ticket = requests.begin(meeting.id);
       const res = await api.post(`/engram/meetings/${meeting.id}/finalize`);
-      applyMeeting(res.data);
-      setMeetings(prev => prev.map(item => item.id === meeting.id ? { ...item, ...res.data } : item));
-      setAssistantStatus({ activity: 'engram', label: 'Meeting complete', detail: res.data.title });
+      if (acceptMeeting(ticket, res.data)) setAssistantStatus({ activity: 'engram', label: 'Meeting complete', detail: res.data.title });
     } catch (err) {
       console.error('Failed to finalize meeting', err);
-      setAssistantStatus({ activity: 'error', label: 'Finalize failed', detail: 'Check backend logs' });
+      if (requests.sameSelection(selection)) {
+        setRequestError('Finalization did not complete. Retry with the saved transcript.');
+        setAssistantStatus({ activity: 'error', label: 'Finalize failed', detail: 'Retry finalization' });
+      }
     } finally {
-      setIsFinalizing(false);
+      if (requests.sameSelection(selection)) setIsFinalizing(false);
     }
   };
 
   const deleteMeeting = async (target: EngramMeeting) => {
     if (deletingId) return;
-    const ok = window.confirm(`Delete "${target.title}" and its uploaded recording/transcript?`);
+    const ok = window.confirm(`Delete "${target.title}" and its uploaded recording/transcript?${target.admission_started_at || target.memory_log_entry_id ? ' Memory already admitted remains available in the memory inspector.' : ''}`);
     if (!ok) return;
+    const selection = requests.selection();
+    requests.begin(target.id);
     setDeletingId(target.id);
     setAssistantStatus({ activity: 'engram', label: 'Deleting recording', detail: target.title });
     try {
       await api.delete(`/engram/meetings/${target.id}`);
-      const next = meetings.filter(item => item.id !== target.id);
-      setMeetings(next);
-      if (selectedId === target.id) selectMeeting(next[0]?.id ?? null);
-      setAssistantStatus({ activity: 'engram', label: 'Recording deleted', detail: 'Ready' });
+      if (!requests.mounted()) return;
+      requests.begin(target.id);
+      requests.invalidateList();
+      setMeetings(current => current.filter(item => item.id !== target.id));
+      if (requests.sameSelection(selection)) setAssistantStatus({ activity: 'engram', label: 'Recording deleted', detail: 'Ready' });
+      if (requests.selectedId() === target.id) selectMeeting(null);
     } catch (err) {
       console.error('Failed to delete meeting', err);
-      setAssistantStatus({ activity: 'error', label: 'Delete failed', detail: 'Check backend logs' });
+      if (requests.sameSelection(selection)) {
+        setRequestError('The recording was not deleted. You can retry.');
+        setAssistantStatus({ activity: 'error', label: 'Delete failed', detail: 'Retry deletion' });
+      }
     } finally {
-      setDeletingId(null);
+      if (requests.mounted()) setDeletingId(null);
     }
   };
 
   const uploadRecording = async (file: File | null) => {
     if (!file || isUploading) return;
+    const selection = requests.selection();
     setIsUploading(true);
     setAssistantStatus({ activity: 'engram', label: 'Uploading recording', detail: file.name });
     const form = new FormData();
@@ -326,15 +369,22 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
       const res = await api.post('/engram/meetings/upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
+      if (!requests.mounted()) return;
+      requests.invalidateList();
       setMeetings(prev => [res.data, ...prev]);
-      selectMeeting(res.data.id);
+      if (requests.sameSelection(selection)) {
+        selectMeeting(res.data.id);
+        setAssistantStatus({ activity: 'engram', label: 'Raw recording ready', detail: res.data.title });
+      }
       setTitle('');
-      setAssistantStatus({ activity: 'engram', label: 'Raw recording ready', detail: res.data.title });
     } catch (err) {
       console.error('Failed to upload recording', err);
-      setAssistantStatus({ activity: 'error', label: 'Upload failed', detail: 'Check backend logs' });
+      if (requests.sameSelection(selection)) {
+        setRequestError('The upload failed. Your recording title is preserved.');
+        setAssistantStatus({ activity: 'error', label: 'Upload failed', detail: 'Retry the upload' });
+      }
     } finally {
-      setIsUploading(false);
+      if (requests.mounted()) setIsUploading(false);
       if (uploadRef.current) uploadRef.current.value = '';
     }
   };
@@ -343,6 +393,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
     <div className="flex flex-col md:flex-row flex-1 min-h-0 min-w-0">
       {meeting?.audio_path && (
         <audio
+          key={meeting.id}
           ref={audioRef}
           src={engramAudioUrl(meeting.id)}
           preload="metadata"
@@ -398,6 +449,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
           <div className="flex gap-2">
             <input
               value={title}
+              disabled={isUploading}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Recording title"
               className="min-w-0 flex-1 rounded-md px-2 py-1.5 text-sm"
@@ -461,6 +513,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
       </div>
 
       <div className="flex-1 min-h-0 bg-white flex flex-col">
+        {requestError && <p role="alert" className="m-5 text-rose-700">{requestError}</p>}
         {meeting ? (
           <>
             <div className="shrink-0 border-b border-slate-200 px-5 py-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -480,7 +533,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => deleteMeeting(meeting)}
-                  disabled={deletingId === meeting.id || isBusyStatus(meeting.status)}
+                  disabled={deletingId === meeting.id}
                   className="inline-flex items-center gap-2 rounded-md border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
                 >
                   {deletingId === meeting.id ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
@@ -515,7 +568,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                     {meeting.status === 'completed' ? 'Retry Summary' : 'Finalize'}
                   </button>
                 )}
-                {meeting.status === 'reviewing' && !meeting.memory_log_entry_id && (
+                {meeting.status === 'reviewing' && !meeting.memory_log_entry_id && !meeting.admission_started_at && (
                   <button
                     onClick={() => void processMeeting('retry-diarization')}
                     disabled={isProcessing || isFinalizing || isSavingSpeakers || Boolean(editingTranscriptTurn) || Boolean(savingTranscriptTurn)}
@@ -533,6 +586,19 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                 <span>{meeting.error}</span>
               </div>
             )}
+            {meeting.admission_started_at && <p className="mx-5 mt-3 text-xs text-slate-500">
+              The transcript and speaker names are locked because saving to memory has started.
+            </p>}
+            {meeting.warnings.length > 0 && <section className="mx-5 mt-3 space-y-2" aria-label="Processing warnings">
+              {meeting.warnings.filter(warning => !warning.resolved_at).map(warning => <p key={warning.id} className="text-sm text-amber-700">
+                {warning.stage}: {warning.message}
+              </p>)}
+              <details><summary className="text-xs text-slate-500">Warning history</summary>
+                {meeting.warnings.map(warning => <p key={warning.id} className="text-xs text-slate-500">
+                  {warning.stage} · {warning.created_at} · {warning.resolved_at ? `Resolved ${warning.resolved_at}` : 'Unresolved'}: {warning.message}
+                </p>)}
+              </details>
+            </section>}
 
             <div className="grid flex-1 min-h-0 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px]">
               <div className="flex min-h-0 flex-col">
@@ -543,7 +609,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                   {segments.length === 0 ? (
                     <div className="h-full flex items-center justify-center text-slate-500">
                       {meeting.status === 'ready'
-                        ? 'Raw audio is ready. Click Process to transcribe, diarize, summarize, and ingest it.'
+                        ? 'Raw audio is ready. Click Process to transcribe and detect speakers, then review before saving to memory.'
                         : meeting.status === 'processing' || meeting.status === 'transcribing'
                           ? <ProcessingIndicator label={processingLabel(meeting, isFinalizing)} compact />
                           : 'No transcript segments.'}
@@ -555,7 +621,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                         turn={turn}
                         canPlay={Boolean(meeting.audio_path)}
                         isActive={activeTurnKey === turn.key}
-                        canEdit={meeting.status === 'reviewing' && (!editingTranscriptTurn || editingTranscriptTurn === turn.key) && !savingTranscriptTurn}
+                        canEdit={meeting.status === 'reviewing' && !meeting.admission_started_at && !meeting.memory_log_entry_id && !isFinalizing && !isProcessing && !isSavingSpeakers && (!editingTranscriptTurn || editingTranscriptTurn === turn.key) && !savingTranscriptTurn}
                         isEditing={editingTranscriptTurn === turn.key}
                         isSaving={savingTranscriptTurn === turn.key}
                         speakerOptions={speakerStats.map(speaker => ({
@@ -595,7 +661,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                       <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">Speakers</h2>
                       <button
                         onClick={saveSpeakerNames}
-                        disabled={meeting.status !== 'reviewing' || isSavingSpeakers || isFinalizing}
+                        disabled={meeting.status !== 'reviewing' || Boolean(meeting.admission_started_at) || Boolean(meeting.memory_log_entry_id) || isSavingSpeakers || isFinalizing || isProcessing || Boolean(savingTranscriptTurn)}
                         title="Save speaker names"
                         className="inline-flex items-center justify-center rounded-md border border-slate-200 p-1.5 text-indigo-600 hover:bg-slate-50 disabled:opacity-50"
                       >
@@ -613,7 +679,7 @@ export default function Engram({ setAssistantStatus }: EngramProps) {
                             <span>{speaker.count} lines · {formatTime(speaker.seconds)}</span>
                           </div>
                           <input
-                            disabled={meeting.status !== 'reviewing'}
+                            disabled={meeting.status !== 'reviewing' || Boolean(meeting.admission_started_at) || Boolean(meeting.memory_log_entry_id) || isSavingSpeakers || isFinalizing || isProcessing || Boolean(savingTranscriptTurn)}
                             value={speakerNames[speaker.label] ?? ''}
                             onChange={(event) => setSpeakerNames(prev => ({ ...prev, [speaker.label]: event.target.value }))}
                             placeholder={speaker.label}

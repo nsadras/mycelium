@@ -7,7 +7,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from starlette.responses import FileResponse
 
-from engram.models import MeetingStatus, SegmentStatus
+from engram.models import MeetingStatus, SegmentStatus, WarningStage
 from engram.pipeline import meeting_response
 from server.runtime import get_engram
 
@@ -37,6 +37,14 @@ class EngramSegmentResponse(BaseModel):
     created_at: str | None
 
 
+class EngramWarningResponse(BaseModel):
+    id: str
+    stage: WarningStage
+    message: str
+    created_at: str
+    resolved_at: str | None
+
+
 class EngramMeetingResponse(BaseModel):
     id: str
     title: str
@@ -47,6 +55,8 @@ class EngramMeetingResponse(BaseModel):
     duration_seconds: float | None
     audio_path: str | None
     error: str | None
+    warnings: list[EngramWarningResponse]
+    admission_started_at: str | None
     memory_log_entry_id: str | None
     summary: dict[str, Any] | None
     speaker_names: dict[str, str]
@@ -76,13 +86,12 @@ class DeleteMeetingResponse(BaseModel):
 @router.get("/meetings", response_model=list[EngramMeetingResponse])
 async def list_meetings():
     service = get_engram()
-    return [
-        meeting_response(meeting, [])
-        for meeting in service.store.list_meetings()
-    ]
+    return [meeting_response(meeting, []) for meeting in service.store.list_meetings()]
 
 
-@router.post("/meetings/{meeting_id}/retry-diarization", response_model=EngramMeetingResponse)
+@router.post(
+    "/meetings/{meeting_id}/retry-diarization", response_model=EngramMeetingResponse
+)
 async def retry_diarization(meeting_id: str):
     service = get_engram()
     try:
@@ -101,7 +110,9 @@ async def upload_meeting_audio(
 ):
     service = get_engram()
     if file.size is not None and file.size > service.config.max_upload_bytes:
-        raise HTTPException(status_code=413, detail="Audio upload exceeds the configured size limit")
+        raise HTTPException(
+            status_code=413, detail="Audio upload exceeds the configured size limit"
+        )
     try:
         meeting = await service.create_uploaded_meeting(
             title=title or file.filename or "Uploaded recording",
@@ -141,7 +152,9 @@ async def get_meeting_audio(meeting_id: str):
 
     return FileResponse(
         audio_path,
-        media_type=AUDIO_MEDIA_TYPES.get(audio_path.suffix.lower(), "application/octet-stream"),
+        media_type=AUDIO_MEDIA_TYPES.get(
+            audio_path.suffix.lower(), "application/octet-stream"
+        ),
         content_disposition_type="inline",
     )
 
@@ -161,9 +174,16 @@ async def process_meeting(meeting_id: str):
         segments = service.store.list_segments(meeting_id)
         return meeting_response(meeting, segments)
     if meeting.status not in {"ready", "failed"}:
-        raise HTTPException(status_code=409, detail="Meeting is not available for processing")
-    meeting = service.store.update_meeting(meeting_id, status="processing", error=None)
-    service.start_processing(meeting_id)
+        raise HTTPException(
+            status_code=409, detail="Meeting is not available for processing"
+        )
+    try:
+        service.start_processing(meeting_id)
+        meeting = service.store.update_meeting(
+            meeting_id, status="processing", error=None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     segments = service.store.list_segments(meeting_id)
     return meeting_response(meeting, segments)
 
@@ -175,6 +195,8 @@ async def delete_meeting(meeting_id: str):
         await service.delete_meeting(meeting_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Meeting not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"deleted": True, "meeting_id": meeting_id}
 
 
@@ -188,6 +210,8 @@ async def update_meeting_speakers(meeting_id: str, payload: SpeakerNamesUpdate):
         )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Meeting not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     segments = service.store.list_segments(meeting_id)
     return meeting_response(meeting, segments)
 
@@ -197,7 +221,9 @@ async def update_meeting_transcript(meeting_id: str, payload: TranscriptUpdate):
     service = get_engram()
     updates = {segment.id: segment.text for segment in payload.segments}
     if len(updates) != len(payload.segments):
-        raise HTTPException(status_code=400, detail="Transcript segment IDs must be unique")
+        raise HTTPException(
+            status_code=400, detail="Transcript segment IDs must be unique"
+        )
     try:
         meeting = await service.update_transcript(meeting_id, updates, payload.speaker)
     except FileNotFoundError:

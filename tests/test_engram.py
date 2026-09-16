@@ -466,11 +466,16 @@ async def test_diarization_retry_preserves_transcript_and_exposes_failures(tmp_p
                             diarizer_factory=lambda: diarizer)
     failed = await service.retry_diarization(meeting.id)
     assert failed.status == 'reviewing'
-    assert 'device unavailable' in failed.error
+    assert failed.error is None
+    assert failed.warnings[0].stage == 'diarization'
+    assert 'device unavailable' in failed.warnings[0].message
+    assert failed.warnings[0].resolved_at is None
     assert store.list_segments(meeting.id)[0].text == 'Reviewed words.'
     diarizer.fails = False
     recovered = await service.retry_diarization(meeting.id)
     assert recovered.error is None
+    assert recovered.warnings[0].id == failed.warnings[0].id
+    assert recovered.warnings[0].resolved_at is not None
     assert store.list_segments(meeting.id)[0].speaker == 'SPEAKER_00'
     store.update_meeting(meeting.id, memory_log_entry_id='captured')
     with pytest.raises(ValueError, match='before source admission'):

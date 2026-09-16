@@ -78,9 +78,10 @@ and current message. A local LanceDB projection performs hybrid vector and full-
 and short-term claims. EmbeddingGemma supplies normalized semantic embeddings through Ollama. The index is derived
 state: it is synchronized from canonical SQLite claim records and can be deleted and rebuilt without losing memory.
 
-Hybrid similarity only proposes candidates. A structured model decision explicitly includes or excludes every
-candidate claim using its claim text, normalized timing, and any consolidated representation it contributes to.
-The highest-ranked admitted claims form a small initial evidence result. The stable system prompt contains only the
+Hybrid similarity only proposes candidates. A structured model decision orders complementary claim IDs and reports
+supported aspects and remaining gaps using canonical text, timing, and consolidated representations.
+Admission reads a canonical snapshot and reselects once if consulted state changes during inference; a repeated
+conflict or broken citation produces a typed error. Admitted order forms a small initial evidence result. The stable system prompt contains only the
 assistant's behavior contract; the current request carries runtime-supplied evidence as a separate structured
 Markdown/pseudo-XML workspace. The assistant can then call `memory_search` with focused follow-up queries when a
 requested person, event,
@@ -89,7 +90,10 @@ shown during that response. Search count, result count, and cumulative evidence 
 subsequent searches omit claims already returned.
 
 The workspace is transient state owned by the runtime, not a model-managed notebook. Each successful memory operation
-merges complete typed records or sources into it by ID and appends an inspectable operation entry. The newest memory
+merges complete typed records or sources by ID and revision and appends an inspectable operation entry. Source text,
+citations and interpretation status refresh after successful and failed tools. Newer revisions replace obsolete
+evidence; equal revisions merge exact citations. Eight recent operations are retained, and model-facing diagnostics
+fit the whole workspace budget. The newest memory
 tool message contains the one complete current workspace; the initial workspace is removed from the request and older
 full workspace messages become compact supersession receipts. Assistant reasoning and tool calls remain in the
 chronological message history. This prevents duplicate evidence from accumulating while preserving the evidence found
@@ -266,9 +270,16 @@ The backend does not schedule memory builds. POST /api/memory/build captures any
 the library's explicit consolidate operation. GET /api/memory/build/status exposes pending-source and statement
 counts, not age or size readiness thresholds. Flush and run-if-ready endpoints have been removed.
 
-The UI exposes Build Memory, proposal review, and development resets. Relative dates remain anchored to their
-supporting segment timestamps (or declared source occurrence time where per-segment wall-clock time is absent).
-Corrections remain immediately applicable independently of a build. Internal Dream artifact names still describe
+The UI exposes Build Memory, proposal review, and development resets. The model declares separate time entries with
+verbatim wording, action/state targets, event/deadline/condition roles and exact citation IDs. Calendar arithmetic
+resolves declared offsets/periods; it never interprets prose. Vague or unsupported dates stay unresolved. Relative
+dates use supporting segment timestamps; source occurrence time is eligible only when no segment in that source has
+a timestamp. Schema 2 requires fresh stores.
+
+Relative-date corrections create durable previews and require explicit reference choices before application. The
+reviewed metadata, submission time and cited reference provenance persist across retries, with claim/source
+fingerprints rejecting stale drafts. Absolute/no-relative-time corrections apply directly. Corrections rebuild
+affected memory independently of a build. Internal Dream artifact names still describe
 the retained organizer and audit records; this increment does not redesign those semantic stages.
 
 ## Architecture authority and validation
@@ -386,8 +397,22 @@ Engram stores uploaded meeting audio before processing it. The UI then starts an
 1. `faster-whisper` produces a timestamped transcript.
 2. WhisperX aligns the transcript and pyannote assigns speaker labels.
 3. The user reviews and can edit the transcript and speaker names.
-4. Ollama generates a structured meeting summary.
-5. The finalized meeting is ingested into the normal raw log store as a durable, unconsolidated entry.
+4. Finalization freezes the transcript, speaker names and meeting metadata, then
+   captures it as a durable source/log/episode through the normal memory API.
+5. Ollama generates an optional structured summary, retained with the meeting.
+   Summary failure does not undo source admission; retries reuse the saved source.
+
+One operation owns a meeting at a time. Speech work also holds a device lock.
+Cancellation waits for a native worker to finish before releasing that lock or
+removing its audio file; queued jobs cancel immediately. Deletion waits for
+in-flight source admission to finish its bookkeeping and skips subsequent summary
+generation. Removing an Engram meeting does not retract memory already admitted.
+
+Typed warning records distinguish diarization and summary failures from fatal
+processing/admission errors. Successful retries resolve warnings while retaining
+history. Interrupted diarization returns the existing transcript to review;
+interrupted finalization keeps its durable edit lock and can retry unchanged.
+SQLite foreign keys prevent late segment writes from orphaning deleted meetings.
 
 Install the optional dependencies with:
 

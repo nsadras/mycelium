@@ -181,7 +181,20 @@ For speaker diarization, accept the terms for `pyannote/speaker-diarization-comm
 export HF_TOKEN=your_hugging_face_token
 ```
 
-Upload a recording from the **Engram** tab, click **Process**, review the generated transcript and speaker labels, then finalize it. Mycelium saves the transcript and structured meeting summary into the same memory system used by chat.
+Upload a recording from the **Engram** tab, click **Process**, review the generated
+transcript and speaker labels, then finalize it. Finalization saves the transcript
+as a memory source before generating the optional meeting summary. Transcript,
+speaker and meeting-time edits lock when saving begins; a failed finalization
+retries those same inputs.
+
+Diarization and summary warnings have separate, persistent histories. Successful
+retries mark warnings resolved. Speaker detection can retry without transcribing
+again. Restart recovery preserves an already transcribed meeting for review.
+
+Deleting a recording cancels queued work and waits for an active audio operation
+to release the file before removal. Source saving that has already started
+finishes its durable bookkeeping first. Deletion removes the Engram recording
+and transcript; already admitted memory remains available in the memory inspector.
 
 GPU acceleration is detected automatically when available. See [DESIGN.md](DESIGN.md#engram-meeting-pipeline) for model, device, and testing options.
 

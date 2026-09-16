@@ -657,13 +657,15 @@ export interface EngramSegment {
 export interface EngramMeeting {
   id: string;
   title: string;
-  status: 'ready' | 'transcribing' | 'processing' | 'reviewing' | 'completed' | 'failed';
+  status: 'ready' | 'transcribing' | 'processing' | 'reviewing' | 'finalizing' | 'completed' | 'failed';
   created_at: string | null;
   started_at: string | null;
   ended_at: string | null;
   duration_seconds?: number | null;
   audio_path?: string | null;
   error?: string | null;
+  warnings: Array<{ id: string; stage: 'diarization' | 'summary'; message: string; created_at: string; resolved_at: string | null }>;
+  admission_started_at: string | null;
   memory_log_entry_id?: string | null;
   summary?: EngramSummary | null;
   speaker_names: Record<string, string>;

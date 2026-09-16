@@ -52,76 +52,10 @@ class EntityTypeDefinition:
         return dict(self.default_sections)
 
 
-@dataclass(frozen=True)
-class SubjectScopeDefinition:
-    """One representation scope available after identity and type are fixed."""
-
-    key: str
-    description: str
-    persisted_scope: str
-    page_state: str
-
-
-SUBJECT_SCOPE_ONTOLOGY: tuple[SubjectScopeDefinition, ...] = (
-    SubjectScopeDefinition(
-        "materialized",
-        """is an independent subject with useful memory continuity. It has no parent. Use it only when the
-  supplied evidence spans multiple source episodes or explicitly describes prior history plus present or future
-  continuation, or when the schema permits `direct_encounter` for a Person structurally identified as a named source
-  participant. State the allowed continuity_basis. The age, era, or background history of an object is not history of
-  an effort concerning it. Multiple details, requirements, decisions, or work items inside one episode do not
-  establish memory continuity.""",
-        "independent",
-        "materialized",
-    ),
-    SubjectScopeDefinition(
-        "provisional",
-        "is a plausible independent subject whose continuity is not established yet. It has no parent.",
-        "independent",
-        "provisional",
-    ),
-    SubjectScopeDefinition(
-        "component",
-        """is a dependent non-Event part of exactly one Project or Series. It has an exact parent and always uses
-  no page.""",
-        "component",
-        "no_page",
-    ),
-    SubjectScopeDefinition(
-        "occurrence",
-        """is one bounded Event within exactly one Project or Series. It has an exact parent and always uses
-  no page.""",
-        "occurrence",
-        "no_page",
-    ),
-    SubjectScopeDefinition(
-        "standalone_event",
-        "is a bounded Event with no supported Project or Series parent. It has no page and no parent.",
-        "standalone_event",
-        "no_page",
-    ),
-    SubjectScopeDefinition(
-        "context",
-        "is an incidental non-event subject, attribute, or object with no independent page and no parent.",
-        "context",
-        "no_page",
-    ),
-)
-SUBJECT_SCOPES = tuple(definition.key for definition in SUBJECT_SCOPE_ONTOLOGY)
-SUBJECT_SCOPES_BY_KEY = {
-    definition.key: definition for definition in SUBJECT_SCOPE_ONTOLOGY
-}
-SUBJECT_PERSISTED_SCOPES = tuple(dict.fromkeys(
-    definition.persisted_scope for definition in SUBJECT_SCOPE_ONTOLOGY
-))
-SUBJECT_PAGE_STATES = tuple(dict.fromkeys(
-    definition.page_state for definition in SUBJECT_SCOPE_ONTOLOGY
-))
-INDEPENDENT_SUBJECT_SCOPES = tuple(
-    definition.key
-    for definition in SUBJECT_SCOPE_ONTOLOGY
-    if definition.persisted_scope == "independent"
-)
+# Persisted human-review choices. Model admission uses page_admission.py; the
+# retired continuity/maturity ontology no longer defines that decision.
+SUBJECT_PERSISTED_SCOPES = ("independent", "component", "occurrence", "standalone_event", "context")
+SUBJECT_PAGE_STATES = ("materialized", "provisional", "no_page")
 
 
 def _section(key: str, title: str, description: str) -> SectionDefinition:

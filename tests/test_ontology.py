@@ -7,9 +7,6 @@ from mycelium.ontology import (
     DISCOVERABLE_ENTITY_TYPES,
     ENTITY_ONTOLOGY,
     ENTITY_TYPES,
-    INDEPENDENT_SUBJECT_SCOPES,
-    SUBJECT_SCOPES,
-    SUBJECT_SCOPE_ONTOLOGY,
     ClaimType,
     DiscoverableEntityType,
     default_section,
@@ -18,7 +15,7 @@ from mycelium.ontology import (
 from mycelium.structured_outputs import (
     ExtractedClaimOutput,
 )
-from mycelium.identity_plan import identity_plan_model
+from mycelium.subject_discovery import subject_discovery_model
 from server.api.memory_artifacts import get_ontology
 
 
@@ -39,33 +36,15 @@ def test_ontology_registry_is_internally_complete() -> None:
 
 def test_structured_model_contracts_derive_from_the_ontology() -> None:
     claim_schema = ExtractedClaimOutput.model_json_schema()
-    identity_definitions = identity_plan_model(["C001"], {}, {}).model_json_schema()["$defs"]
+    identity_definitions = subject_discovery_model(["C001"], {}, {}).model_json_schema()["$defs"]
     identity_types = set()
-    for name in ("NewIdentity", "NewPersonIdentity"):
-        field = identity_definitions[name]["properties"]["entity_type"]
+    for definition in identity_definitions.values():
+        field = definition["properties"]["entity_type"]
         identity_types.update(field.get("enum", [field["const"]] if "const" in field else []))
 
     assert set(claim_schema["properties"]["claim_type"]["enum"]) == set(CLAIM_TYPES)
     assert identity_types == set(ENTITY_TYPES) - {"you"}
 
-
-def test_subject_representation_registry_is_internally_complete() -> None:
-    assert tuple(
-        definition.key for definition in SUBJECT_SCOPE_ONTOLOGY
-    ) == SUBJECT_SCOPES
-    assert len(SUBJECT_SCOPES) == len(set(SUBJECT_SCOPES))
-    assert set(INDEPENDENT_SUBJECT_SCOPES) == {"materialized", "provisional"}
-    assert {
-        (definition.key, definition.persisted_scope, definition.page_state)
-        for definition in SUBJECT_SCOPE_ONTOLOGY
-    } == {
-        ("materialized", "independent", "materialized"),
-        ("provisional", "independent", "provisional"),
-        ("component", "component", "no_page"),
-        ("occurrence", "occurrence", "no_page"),
-        ("standalone_event", "standalone_event", "no_page"),
-        ("context", "context", "no_page"),
-    }
 
 def test_declared_default_section_rules_are_centralized() -> None:
     assert default_section("artifact", "state", None) == "current_state"

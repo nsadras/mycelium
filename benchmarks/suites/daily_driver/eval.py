@@ -890,7 +890,12 @@ def evaluate_run(
         for row in wiki_fact_rows
         if len(row["rendered_at"]) > expected_render_count[row["gold_fact_id"]]
     ]
-    fixture_probes = fixture["probes"].get("probes") or []
+    fixture_probes = [probe for probe in fixture["probes"].get("probes") or []
+                      if probe.get("evaluation_mode") != "artifact"]
+    expected_probe_ids = {probe["id"] for probe in fixture_probes}
+    retrieved = [row for row in probe_results if row.get("retrieval_status") == "complete"
+                 and row["probe_id"] in expected_probe_ids]
+    retrieval_complete = {row["probe_id"] for row in retrieved} == expected_probe_ids
     retracted_fact_ids = {
         str(row.get("fact_id"))
         for row in fixture["gold_claims"].get("claims") or []
@@ -916,7 +921,7 @@ def evaluate_run(
         len(row.get("required_facts") or []) for row in fixture_probes
     )
     retrieval_required_present = sum(
-        len(row.get("present_required_facts") or []) for row in probe_results
+        len(row.get("present_required_facts") or []) for row in retrieved
     )
     retrieval_forbidden_total = sum(
         len(row.get("forbidden_facts") or []) + len(row.get("forbidden_evidence") or [])
@@ -925,9 +930,9 @@ def evaluate_run(
     retrieval_forbidden_present = sum(
         len(row.get("present_forbidden_facts") or [])
         + len(row.get("present_forbidden_evidence") or [])
-        for row in probe_results
+        for row in retrieved
     )
-    answered = [row for row in probe_results if row.get("judgment")]
+    answered = [row for row in probe_results if row.get("judgment") and row["probe_id"] in expected_probe_ids]
 
     raw_metrics: dict[str, dict[str, Any]] = {
         "claim_recall": _ratio_metric(
@@ -1034,7 +1039,7 @@ def evaluate_run(
             + sum(
                 not row.get("present_forbidden_facts")
                 and not row.get("present_forbidden_evidence")
-                for row in probe_results
+                for row in retrieved
                 if row["probe_id"] in retraction_probe_ids
             ),
             denominator=len(retracted_claim_checks) + len(retraction_probe_ids),
@@ -1043,21 +1048,21 @@ def evaluate_run(
             and (
                 not retraction_probe_ids
                 or retraction_probe_ids
-                <= {str(row["probe_id"]) for row in probe_results}
+                <= {str(row["probe_id"]) for row in retrieved}
             ),
         ),
         "retrieval_fact_recall": _ratio_metric(
             numerator=retrieval_required_present,
             denominator=retrieval_required_total,
             target=1.0,
-            evaluated=len(probe_results) == len(fixture_probes),
+            evaluated=retrieval_complete,
         ),
         "retrieval_tangent_rate": _ratio_metric(
             numerator=retrieval_forbidden_present,
             denominator=max(1, retrieval_forbidden_total),
             target=0.0,
             direction="at_most",
-            evaluated=len(probe_results) == len(fixture_probes),
+            evaluated=retrieval_complete,
         ),
         "semantic_answer_quality": _ratio_metric(
             numerator=sum(bool(row["judgment"].get("passed")) for row in answered),

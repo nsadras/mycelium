@@ -52,11 +52,13 @@ def _jsonable(value: Any) -> Any:
 
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
         json.dumps(_jsonable(value), indent=2, ensure_ascii=False, sort_keys=True)
         + "\n",
         encoding="utf-8",
     )
+    temporary.replace(path)
 
 
 def _normalized(value: str | None) -> str:
@@ -581,109 +583,136 @@ def compare_final(fixture: dict[str, Any], memory: Mycelium) -> dict[str, Any]:
 
 
 async def _run_checkpoint_probes(
-    fixture: dict[str, Any],
-    memory: Mycelium,
-    checkpoint_id: str,
-    snapshot: dict[str, Any],
-    *,
-    run_answers: bool,
+    fixture: dict[str, Any], memory: Mycelium, checkpoint_id: str,
+    snapshot: dict[str, Any], *, run_answers: bool, result_path: Path,
 ) -> list[dict[str, Any]]:
-    probes = [
-        row
-        for row in fixture["probes"].get("probes") or []
-        if row.get("checkpoint") == checkpoint_id
-    ]
+    probes = [row for row in fixture["probes"].get("probes") or []
+              if row.get("checkpoint") == checkpoint_id]
+    rows: list[dict[str, Any]] = []
+
+    def persist():
+        _write_json(result_path, rows)
+
+    persist()
     if not probes:
-        return []
+        return rows
     snapshot_match = match_snapshot(fixture, snapshot)
     gold_facts = gold_fact_definitions(fixture)
-    qa = OllamaQaClient(
-        model=memory.config.llm.model,
-        url=memory.config.llm.url,
-        llm_config=memory.config.llm,
-    )
+    qa = OllamaQaClient(model=memory.config.llm.model, url=memory.config.llm.url, llm_config=memory.config.llm)
     qa.llm.trace_path = memory.store_path / "diagnostics" / "qa-calls.jsonl"
     qa.llm.client = RecordingClient(qa.llm.client, memory.store_path / "diagnostics" / "qa-requests")
-    rows: list[dict[str, Any]] = []
     for probe in probes:
-        retrieval_started = time.perf_counter()
-        retrieval = await memory.retrieve_context(
-            RetrievalRequest(
-                query=str(probe["question"]),
-            )
-        )
-        retrieval_seconds = time.perf_counter() - retrieval_started
-        loaded_pages = list(retrieval.page_references)
-        retrieved_gold_facts, retrieved_claim_ids = retrieved_generated_ids(
-            retrieval.evidence, snapshot_match
-        )
-        retrieved_evidence = {
-            str(value)
-            for claim in snapshot.get("claims") or []
-            if str(claim.get("claim_id")) in retrieved_claim_ids
-            for value in claim.get("fixture_evidence") or []
-        }
-        required = set(map(str, probe.get("required_facts") or []))
-        forbidden = set(map(str, probe.get("forbidden_facts") or []))
-        forbidden_evidence = set(map(str, probe.get("forbidden_evidence") or []))
-        present_required = sorted(required & retrieved_gold_facts)
-        present_forbidden = sorted(forbidden & retrieved_gold_facts)
-        session = Session(
-            mycelium=memory,
-            session_id=f"daily-driver-{checkpoint_id}-{probe['id']}",
-            query=str(probe["question"]),
-        )
-        session.page_references = retrieval.page_references
-        session.memory_evidence = retrieval.evidence
-        context = session.memory_context
-        result: dict[str, Any] = {
-            "probe_id": probe["id"],
-            "checkpoint": checkpoint_id,
-            "question": probe["question"],
-            "answerable": probe.get("answerable", True),
-            "required_facts": sorted(required),
-            "present_required_facts": present_required,
-            "missing_required_facts": sorted(required - retrieved_gold_facts),
-            "forbidden_facts": sorted(forbidden),
-            "present_forbidden_facts": present_forbidden,
-            "forbidden_evidence": sorted(forbidden_evidence),
-            "present_forbidden_evidence": sorted(
-                forbidden_evidence & retrieved_evidence
-            ),
-            "retrieved_evidence": sorted(retrieved_evidence),
-            "retrieval_passed": required <= retrieved_gold_facts
-            and not present_forbidden
-            and not (forbidden_evidence & retrieved_evidence),
-            "retrieved_generated_claim_ids": sorted(retrieved_claim_ids),
-            "loaded_pages": [
-                {"entity_id": page.entity_id, "slug": page.slug, "title": page.title}
-                for page in loaded_pages
-            ],
-            "context": context,
-            "retrieval_seconds": retrieval_seconds,
-            "retrieval_trace": retrieval.trace,
-            "evidence": _jsonable(retrieval.evidence),
-            "answer": None,
-            "judgment": None,
-        }
-        if run_answers:
-            if probe.get("evaluation_mode") == "artifact":
-                answer = str(probe.get("expected_answer") or "")
-                result["answer_origin"] = "artifact observation"
-            else:
-                with trace_operation("daily_driver_qa", checkpoint_id=checkpoint_id, probe_id=str(probe["id"])):
-                    answer_result = await qa.answer(str(probe["question"]), context)
-                answer = answer_result.output
-                result["answer_origin"] = "production retrieval context"
-                result["answer_metadata"] = answer_result.metadata
-                result["answer_seconds"] = answer_result.query_time_len
-            result["answer"] = answer
-            with trace_operation("daily_driver_judgment", checkpoint_id=checkpoint_id, probe_id=str(probe["id"])):
-                result["judgment"] = await judge_probe_answer(
-                    llm=memory.llm, probe=probe, answer=answer, gold_facts=gold_facts,
-                )
+        started = time.perf_counter()
+        result = {"probe_id": probe["id"], "checkpoint": checkpoint_id, "question": probe["question"],
+                  "evaluation_mode": probe.get("evaluation_mode", "qa"), "status": "running", "stage": "retrieval",
+                  "retrieval_status": "not_started", "answer": None, "judgment": None, "started_at": time.time()}
         rows.append(result)
+        persist()
+        try:
+            if result["evaluation_mode"] == "artifact":
+                result["artifact_observation"] = {
+                    "counts": snapshot["counts"],
+                    "pages": [{key: page.get(key) for key in ["entity_id", "title", "page_type"]}
+                              for page in snapshot.get("pages", [])],
+                }
+            else:
+                await _run_checkpoint_probe(memory, checkpoint_id, snapshot, probe, snapshot_match,
+                                            gold_facts, qa, run_answers, result, persist)
+            result.update(status="complete", stage="complete")
+        except BaseException as exc:
+            result.update(status="failed", failure_stage=result["stage"], error=f"{type(exc).__name__}: {exc}")
+            if result["stage"] == "retrieval":
+                result["retrieval_status"] = "failed"
+            if not isinstance(exc, Exception):
+                raise
+        finally:
+            result["seconds"] = time.perf_counter() - started
+            persist()
     return rows
+
+
+async def _run_checkpoint_probe(memory, checkpoint_id, snapshot, probe, snapshot_match,
+                                gold_facts, qa, run_answers, result, persist):
+    retrieval_started = time.perf_counter()
+    try:
+        retrieval = await memory.retrieve_context(
+            RetrievalRequest(query=str(probe["question"])),
+        )
+    finally:
+        result["retrieval_seconds"] = time.perf_counter() - retrieval_started
+    loaded_pages = list(retrieval.page_references)
+    retrieved_gold_facts, retrieved_claim_ids = retrieved_generated_ids(
+        retrieval.evidence, snapshot_match
+    )
+    retrieved_evidence = {
+        str(value)
+        for claim in snapshot.get("claims") or []
+        if str(claim.get("claim_id")) in retrieved_claim_ids
+        for value in claim.get("fixture_evidence") or []
+    }
+    required = set(map(str, probe.get("required_facts") or []))
+    forbidden = set(map(str, probe.get("forbidden_facts") or []))
+    forbidden_evidence = set(map(str, probe.get("forbidden_evidence") or []))
+    present_required = sorted(required & retrieved_gold_facts)
+    present_forbidden = sorted(forbidden & retrieved_gold_facts)
+    session = Session(
+        mycelium=memory,
+        session_id=f"daily-driver-{checkpoint_id}-{probe['id']}",
+        query=str(probe["question"]),
+    )
+    session.page_references = retrieval.page_references
+    session.memory_evidence = retrieval.evidence
+    context = session.memory_context
+    result.update({
+        "probe_id": probe["id"],
+        "checkpoint": checkpoint_id,
+        "question": probe["question"],
+        "answerable": probe.get("answerable", True),
+        "required_facts": sorted(required),
+        "present_required_facts": present_required,
+        "missing_required_facts": sorted(required - retrieved_gold_facts),
+        "forbidden_facts": sorted(forbidden),
+        "present_forbidden_facts": present_forbidden,
+        "forbidden_evidence": sorted(forbidden_evidence),
+        "present_forbidden_evidence": sorted(
+            forbidden_evidence & retrieved_evidence
+        ),
+        "retrieved_evidence": sorted(retrieved_evidence),
+        "retrieval_passed": required <= retrieved_gold_facts
+        and not present_forbidden
+        and not (forbidden_evidence & retrieved_evidence),
+        "retrieved_generated_claim_ids": sorted(retrieved_claim_ids),
+        "loaded_pages": [
+            {"entity_id": page.entity_id, "slug": page.slug, "title": page.title}
+            for page in loaded_pages
+        ],
+        "context": context,
+        "retrieval_trace": retrieval.trace,
+        "evidence": _jsonable(retrieval.evidence),
+        "answer": None,
+        "judgment": None,
+        "retrieval_status": "complete",
+    })
+    persist()
+    if run_answers:
+        result["stage"] = "answer"
+        persist()
+        answer_started = time.perf_counter()
+        try:
+            with trace_operation("daily_driver_qa", checkpoint_id=checkpoint_id, probe_id=str(probe["id"])):
+                answer_result = await qa.answer(str(probe["question"]), context)
+        finally:
+            result["answer_seconds"] = time.perf_counter() - answer_started
+        answer = answer_result.output
+        result["answer_origin"] = "production retrieval context"
+        result["answer_metadata"] = answer_result.metadata
+        result["answer"] = answer
+        result["stage"] = "judgment"
+        persist()
+        with trace_operation("daily_driver_judgment", checkpoint_id=checkpoint_id, probe_id=str(probe["id"])):
+            result["judgment"] = await judge_probe_answer(
+                llm=memory.llm, probe=probe, answer=answer, gold_facts=gold_facts,
+            )
 
 
 def _report_markdown(
@@ -910,11 +939,16 @@ async def run_daily_driver(
                             value,
                             snapshot,
                             run_answers=run_probe_answers,
+                            result_path=checkpoint_dir / "probes.json",
                         )
                         _write_json(checkpoint_dir / "probes.json", checkpoint_probes)
                         probe_results.extend(checkpoint_probes)
                         checkpoint_ids.append(value)
                         event["result"] = snapshot["counts"]
+                        probe_errors = [{key: row[key] for key in ["probe_id", "failure_stage", "error"]}
+                                        for row in checkpoint_probes if row["status"] == "failed"]
+                        if probe_errors:
+                            event.update(status="error", error="Checkpoint probes failed", probe_errors=probe_errors)
                     elif kind == "approve":
                         event["result"] = await _approve_proposal(memory, fixture, value)
                     elif kind == "retract":
@@ -950,13 +984,17 @@ async def run_daily_driver(
         backlog = bool(memory.log_store.get_unconsolidated(days=None) or coverage.get("pending_extraction_segments", 0)
                        or memory.db.publication_status())
         execution_errors = [event for event in actions if event.get("status") in {"error", "unsupported"}]
-        qa_status = (("complete" if len(probe_results) == len(fixture["probes"].get("probes", [])) else "incomplete")
+        expected_qa = {probe["id"] for probe in fixture["probes"].get("probes", [])
+                       if probe.get("evaluation_mode") != "artifact"}
+        completed_qa = {row["probe_id"] for row in probe_results
+                        if row["evaluation_mode"] != "artifact" and row["status"] == "complete" and row["judgment"]}
+        qa_status = (("complete" if completed_qa == expected_qa else "incomplete")
                      if run_probe_answers else "disabled")
         manifest.update(
             status="incomplete" if backlog or execution_errors or qa_status == "incomplete" else "complete",
             execution_status="complete_with_errors" if execution_errors else "complete",
             encoding_status="incomplete" if backlog else "complete",
-            qa_status=qa_status,
+            qa_status=qa_status, qa_expected_probes=len(expected_qa), qa_completed_probes=len(completed_qa),
             artifact_coverage=coverage, action_errors=execution_errors,
         )
         _write_json(output_dir / "run_manifest.json", manifest)

@@ -30,18 +30,24 @@ class TruthReviewer:
     def _record(self, claim, placements, entities, sources, reference_replacements):
         placement = placements.get(claim.claim_id)
         owner = entities.get(placement.owner_entity_id) if placement else None
-        citations = []
+        citations, withdrawn = [], []
         for _, source, segments in cited_source_segments(
             self.artifacts, claim, source_cache=sources
         ):
             if source.status != "active":
-                raise ValueError(f"Claim {claim.claim_id} cites an inactive source")
+                withdrawn.extend({
+                    "source_id": source.source_id, "segment_id": segment.segment_id,
+                    "status": source.status,
+                } for segment in segments)
+                continue
             for segment in segments:
                 citations.append({
                     "source_id": source.source_id, "segment_id": segment.segment_id,
                     "source_time": source.occurred_at, "message_time": segment.timestamp,
                     "speaker": segment.speaker, "text": segment.content,
                 })
+        if not citations:
+            raise ValueError(f"Claim {claim.claim_id} cites no active source support")
         bindings = self.artifacts.list_entity_references(
             claim_id=claim.claim_id, status="active"
         )
@@ -54,11 +60,18 @@ class TruthReviewer:
         if len({ref.reference_id for ref in bindings}) != len(bindings):
             raise ValueError("Truth identity context contains duplicate reference IDs")
         return {
-            "claim_id": claim.claim_id, "text": claim.text, "about": claim.about,
-            "temporal_status": claim.temporal_status, "temporal": temporal_records(claim.facets),
+            # A partially withdrawn synthesis may contain unsupported details.
+            # Compare the remaining source assertions directly. Canonical text,
+            # bindings and all historical citations remain intact in the store.
+            "claim_id": claim.claim_id, "text": None if withdrawn else claim.text,
+            "about": [] if withdrawn else claim.about,
+            "temporal_status": "uncertain" if withdrawn else claim.temporal_status,
+            "temporal": [] if withdrawn else temporal_records(claim.facets),
             "page_owner": {"entity_id": owner.entity_id, "title": owner.title} if owner else None,
-            "identity_bindings": [asdict(ref) for ref in bindings],
+            "identity_bindings": [asdict(ref) for ref in bindings
+                                  if not withdrawn or ref.origin == "manual"],
             "citations": citations,
+            "withdrawn_citations": withdrawn,
         }
 
     def _records(self, claims, placements, entities, reference_replacements=None):
@@ -96,14 +109,12 @@ class TruthReviewer:
             if any(ref.dream_run_id != dream_run_id
                    for refs in (reference_replacements or {}).values() for ref in refs):
                 raise ValueError("Staged truth bindings must belong to the current build")
+            records = self._records(claims, placements, entities, reference_replacements)
             if len(claims) < 2:
                 # There is no truth comparison to make, but direct projection
                 # still requires complete citations. A retained claim can cite
                 # both active and retracted sources; its view marks uncertainty.
-                for claim in claims.values():
-                    cited_source_segments(self.artifacts, claim)
                 return result
-            records = self._records(claims, placements, entities, reference_replacements)
             reviewed_pairs = {
                 tuple(sorted((left, right)))
                 for proposal in self.artifacts.list_reconsolidation_proposals()

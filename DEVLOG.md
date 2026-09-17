@@ -5683,3 +5683,45 @@ remain separate gates.
   `compact-shared-evidence-20260917T232020Z-13fc977d` saves the revised code and
   allowance calculation. The repeated independent source is not a fresh holdout.
   No further prompt variants or budget extensions are authorized by this run.
+
+### 2026-09-17 — Close the compact comparison and record integration gates
+
+- Revised comparison is terminal. Successful native Builds: 114.487s (one
+  retention retry), 63.572s and independent 47.524s (one retain + one present
+  each). Third sequence Build fails after three retention attempts / 119.551s.
+  Every completed presentation passes on its first attempt. Final totals:
+  sequence 343.898s / 14 requests; independent 59.109s / 4 requests, including
+  their respective three and one agent answers. No recorded transport failure.
+- All native work, including the original attempts, stays within the original
+  limits: candidate 858.134s / 34 requests; control 597.301s / 60; independent
+  172.901s / 10. Total 1,628.336s / 104 actual requests. Both finite processes
+  exited normally; the control's budget stop is recorded as incomplete. No
+  additional variants, expanded budget or service actions followed.
+- The third source's rejected IDs are malformed, e.g. `#seg-00041` instead of a
+  supplied segment ID. They are neither legal current citations nor references
+  present in retrieved prior memory. No lexical repair is applied. Source capture
+  survives, but all new claims for that source are absent; final answers about
+  opening status and the next event therefore use outdated memory. The exact-ID
+  selection contract is the next mechanism to address, not another ontology.
+- Review covers the full three source conversations and independent conversation,
+  their retained statements, successive new views, and all revised answers.
+  The original candidate's newer searchable claims explain its useful answers
+  despite lagging views. In the revision, the handover claim correctly names Theo
+  but a view incorrectly names Ruth; the shelf price becomes weight in the view.
+  Independent memory preserves tentative booking and budget constraints, with a
+  fabricated helper title and other omissions. Its answer omits the guesthouse
+  and vet checks even though retrieval supplied them. These distinctions prevent
+  blaming every issue on extraction or using QA alone to accept page quality.
+- Read-only snapshot checks find no invalid canonical citations, missing fact
+  members/endpoints or changes to seed claims. Exact configuration and seed claim
+  digests match across all five arms. The control extracts 64 new statements and
+  can reconsider the seed's one deferred claim; incomplete, differently granular
+  work cannot establish a completed speedup or quality parity.
+- Record full result and three prioritized next steps, with acceptance criteria,
+  in `planning/compact_encoding_result_2026_09_17.md`. The experiment is complete;
+  application adoption remains pending exact citation selection and lifecycle
+  integration. Production correction/retraction, manual move/split and identity
+  review still use exclusive placement assumptions. Do not wire in the prototype
+  and claim these guarantees are preserved. The latest applicable mechanical
+  result remains four focused tests passed, Ruff clean, and whitespace checks
+  clean; no production code or UI changed in this tranche.

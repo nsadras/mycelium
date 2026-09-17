@@ -28,6 +28,15 @@ durability, inspectable references and user control over corrections.
    Fix practical blockers; leave lesser quality limitations visible for use-driven
    prioritization. Another full benchmark is not a prerequisite to move forward.
 
+**Bounded experiment checkpoint:** `ac8a6bd` adds native experimental retention and
+views; `2ddb536` separates item ownership from shared evidence per user direction.
+The revised successful Builds take 114.49s, 63.57s and 47.52s. The third sequence
+source fails citation validation; the control exhausts 60 calls without finishing
+its first Build. The experiment is terminal and remains outside application wiring.
+Next: constrain exact citation selection, then integrate corrections/reviews/manual
+edits through the new evidence/view boundary and remove displaced stages. Do not
+add per-error semantic stages. See the [source review and acceptance criteria](compact_encoding_result_2026_09_17.md).
+
 The frozen full sample-3 stress run was intentionally stopped during session 16
 after 15 snapshots and 13.64 hours, with no QA. Its organization backlog and high
 truth-processing cost already answer the diagnostic question. Detailed review

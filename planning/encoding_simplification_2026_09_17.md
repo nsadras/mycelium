@@ -1,6 +1,8 @@
 # Encoding simplification: bounded comparison
 
-**Status: experimental; not adopted.** User direction on 2026-09-17: prioritize
+**Status: experiment complete; application adoption pending.** See the
+[result, source review and next steps](compact_encoding_result_2026_09_17.md).
+User direction on 2026-09-17: prioritize
 simplifying encoding, use Mem0/Graphiti/Hindsight as a practical cost reference,
 and keep the configured Gemma model. Benchmarks remain diagnostic inputs.
 
@@ -19,9 +21,11 @@ arm and five minutes / 12 attempts for a reserved source. The first comparison
 is terminal: the candidate retained all three conversations but views lagged one
 Build; the control exhausted 60 calls before its first completed Build. The user
 resolved the architectural question: **distinct view items may cite the same
-retained statement**. The experiment now assigns ownership to view items and
-uses only the original unspent allowances for that revision. Application adoption
-remains open. See `DEVLOG.md` for exact paths, accounting and limitations.
+retained statement**. The revised experiment completes two sequence Builds and
+the independent Build; the third source fails exact citation validation. All
+work stays within the original allowances. Application adoption remains open
+for reference selection and lifecycle integration. See the linked result and
+`DEVLOG.md` for exact paths, accounting and limitations.
 
 ## What the external implementations establish
 

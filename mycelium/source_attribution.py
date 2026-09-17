@@ -21,7 +21,6 @@ def source_attribution_model(claim_ids, entity_ids, source_participants):
                         description="What the statement asserts about this entity; empty if none",
                     ),
                 ),
-                reason=(str, Field(min_length=1, max_length=500)),
                 relation_to_claim=(
                     Literal.__getitem__(
                         (

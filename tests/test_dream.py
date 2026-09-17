@@ -267,7 +267,6 @@ def split_scope_plan(plan: dict, *, registry=(), existing_titles=None) -> list[d
                     else "reporting_only"
                     if eid in participant_ids
                     else "unrelated",
-                    "reason": "Explicit fixture attribution",
                 }
                 for eid in sorted(resolved_ids)
             }
@@ -456,14 +455,17 @@ def test_route_keeps_relationship_endpoints_separate_from_context(tmp_path):
     route = dream.router._route_decision(
         item,
         {
-            owner.entity_id: {"relation_to_claim": "described", "reason": "Actor"},
+            owner.entity_id: {
+                "relation_to_claim": "described",
+                "assertions": ["Ava agreed to meet Ben."],
+            },
             endpoint.entity_id: {
                 "relation_to_claim": "described",
-                "reason": "Recipient",
+                "assertions": ["Ava agreed to meet Ben."],
             },
             context.entity_id: {
                 "relation_to_claim": "reporting_only",
-                "reason": "Reporter",
+                "assertions": [],
             },
         },
         {
@@ -665,7 +667,6 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
                         "you": {
                             "assertions": ["Explicit fixture assertion"],
                             "relation_to_claim": "described",
-                            "reason": "Fixture user preference",
                         }
                     }
                     for alias in output_type.model_fields[

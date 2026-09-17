@@ -12,7 +12,7 @@ order in this file. The historical implementation record remains below;
 comparison arms and source review, reopening date/name/current-state gaps; S1/S2
 and the smallest measured contract fixes are next. Items remain open until their acceptance evidence is recorded below. Existing
 storage, review, configuration, retrieval-consistency, and UI fixes remain the
-foundation. The latest recorded structural suite is 799 passed, one skipped,
+foundation. The latest recorded structural suite is 807 passed, one skipped,
 75 integration tests deselected; that is not full semantic acceptance.
 
 ### Implementation progress after resuming
@@ -50,6 +50,10 @@ foundation. The latest recorded structural suite is 799 passed, one skipped,
   comparison reduced15to12calls while retaining old claims/facts; a promotion
   counterexample retained earlier page evidence. Structural67passed. Broad
   longitudinal, scale and cache acceptance remain open.
+- **W1 attribution cost reduced:** removed the repeated explanation field from
+  each attribution cell. Both direct arms14/14; output tokens fell33.5% and
+  measured time21.6%. Integrated13/13 and native page-review3/3 passed. This
+  simplifies existing work; cumulative page usefulness remains a replay gate.
 - **E2 diagnostic complete:** nine production checkpoints and 19/19 probes in
   both arms. The ranked control recovers three answers but uses 8.23× the context
   characters. Final extraction is complete; a missing truth proposal blocks the

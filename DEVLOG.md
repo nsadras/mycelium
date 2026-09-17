@@ -4882,3 +4882,32 @@ request deferred evidence or provide the explicit subject reference. The new
 regressions failed on the old policy (4failed/1passed) and now pass. Ruff and
 whitespace checks pass. Integrated/native and full longitudinal follow-through
 continue with attribution simplification; scale/cache measurements remain S1.
+
+
+## 2026-09-16 — Remove redundant attribution explanations (W1/S2 cost)
+
+A source assertion already explains why a claim describes an entity. Removed the
+separate reason string from every claim/entity attribution cell; retained asserted
+content, the described/reporting-only/unrelated decision, exact pair accounting
+and consistency checks. Routing audit text now uses those supplied assertions
+and the declared relation. The next presentation call receives less repeated
+text. No new call, schema branch, fallback, or production artifact; one field
+removed per cell. Migrated maintained mocks/page probes; native assertion runner
+now defaults to one trial instead of three familiar repeats.
+
+Paired direct `compact-attribution-contract-20260917T054640Z-940494a4`:14/14both
+arms, including a named-user compound statement and other-person counterexample.
+Current37.275s/14,197input/2,475output; compact29.213s/13,254input/1,645output;
+14calls each,0failed attempts. This establishes a narrow output/cost improvement,
+not a full-workload speedup.
+
+Integrated direct `asserted-attribution-contract-20260917T060115Z-2f48fb82`:13/13,
+24.663s,0failures. Native `page-review-pipeline-20260917T060241Z-a8affa21`:3/3
+evidence-scoped no-page/reusable-page cases,23calls/70.702s/0failures. Existing
+reviewed evidence remains excluded while independent support keeps useful pages.
+
+Full structural807passed,1AMI skip,75integration deselected,27.39s; Ruff and
+whitespace clean. A sandboxed suite stalled at the private-network TestClient
+check; cancelled that finite test process under standing authorization and ran
+the full suite with host access. The stalled invocation is not validation.
+Logs: `test_outputs/audit-followthrough/compact-attribution-full-tests-host.log`.

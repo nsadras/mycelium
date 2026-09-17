@@ -548,9 +548,10 @@ class ClaimRouter:
         pages = dict(presentation["pages"]) if presentation is not None else {}
         owner = presentation["primary_subject"] if presentation is not None else None
         reasons = [
-            f"{eid} ({row['relation_to_claim']}): {row['reason']}"
+            f"{eid} ({row['relation_to_claim']})"
+            + (": " + "; ".join(row["assertions"]) if row["assertions"] else "")
             for eid, row in attribution.items()
-            if row["reason"] is not None
+            if row["relation_to_claim"] != "unrelated"
         ]
         if presentation is not None:
             reasons.append(presentation["primary_reason"])

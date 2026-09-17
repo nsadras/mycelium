@@ -24,6 +24,7 @@ async def main():
         type=Path,
         help="Retained two-claim teacher/architect attribution request",
     )
+    parser.add_argument("--trials", type=int, default=1)
     args = parser.parse_args()
     inputs = []
     for name, subjects, raw, statement, _, _, described, _, _ in cases():
@@ -76,7 +77,7 @@ async def main():
     llm.client = RecordingClient(llm.client, root / "requests")
     print("OUTPUT", root, flush=True)
     rows = []
-    for trial in range(3):
+    for trial in range(args.trials):
         for name, subjects, evidence, expected in inputs:
             schema = source_attribution_model(
                 evidence["claims"],

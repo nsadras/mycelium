@@ -125,7 +125,9 @@ def test_shared_source_text_is_included_once_with_each_claim_reference(tmp_path)
     )
 
 
-def test_routing_evidence_retains_cross_source_context_and_rejects_missing_citations(tmp_path):
+def test_routing_evidence_retains_cross_source_context_and_rejects_missing_citations(
+    tmp_path,
+):
     memory, _, _, evidence = setup_router(tmp_path)
     item = evidence[0]
     context = SourceDocument(
@@ -190,7 +192,6 @@ def route(owner="you", *, entities=None, section="overview", uncertainty=None):
                         "relation_to_claim": "described"
                         if eid == owner
                         else "unrelated",
-                        "reason": "Explicit fixture attribution",
                     }
                     for eid in entities
                 }

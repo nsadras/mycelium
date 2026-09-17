@@ -27,9 +27,6 @@ def attribution(relation):
     return {
         "assertions": ["Cited source assertion"] if relation == "described" else [],
         "relation_to_claim": relation,
-        "reason": "Cited source relationship"
-        if relation != "unrelated"
-        else "No assertion about this entity",
     }
 
 

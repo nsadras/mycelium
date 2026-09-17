@@ -113,7 +113,7 @@ async def main():
                     "C1": {
                         eid: {
                             "relation_to_claim": "described",
-                            "reason": "This source describes the supplied subject.",
+                            "assertions": [statement],
                         }
                     }
                 },

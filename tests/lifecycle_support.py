@@ -46,7 +46,6 @@ def lifecycle_response(_system, user, schema, **kwargs):
                     "you": {
                         "assertions": ["Explicit fixture assertion"],
                         "relation_to_claim": "described",
-                        "reason": "Fixture user preference.",
                     }
                 }
                 for a in schema.model_fields["attributions"].annotation.model_fields

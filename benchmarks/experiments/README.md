@@ -100,3 +100,27 @@ real indexing, selection and paired QA in fresh stores with deliberately seeded
 claims. All use `mycelium.toml`, retain native requests and report execution
 separately from source-reviewed answer quality. They do not measure extraction
 quality or retrieval recall in a large corpus.
+
+## Frozen daily-run ranked-claims control
+
+After a terminal daily-driver run with frozen fixture/evaluator inputs:
+
+```bash
+.venv/bin/python -m benchmarks.experiments.ranked_claims_baseline \
+  benchmark_runs/<production-run> --output benchmark_runs/<ranked-control> \
+  --config-path mycelium.toml
+```
+
+The control clones each checkpoint and preserves admitted claims, source policy,
+canonical reviews and identity metadata. It uses the same hybrid candidate ranker,
+result/context budgets, source-backed renderer, QA model and judge, with direct
+ranked claims instead of generative admission and generated fact prose. It makes
+no changes to the production store. Effective settings, model weights and judge
+identity must match. Raw requests, per-call timing, exact input database hashes
+and terminal status are recorded.
+
+This is a conditional retrieval/presentation comparison, **not a standalone Mem0
+implementation or an independent ingestion benchmark**. Shared extraction and
+organization/review work must be accounted separately. Indexes are rebuilt for
+frozen snapshots; compare their document/query embedding traces before drawing
+latency conclusions. Any source run with incomplete encoding remains diagnostic.

@@ -42,7 +42,7 @@ class BenchmarkAnswer:
     output: str
     input_len: int
     output_len: int
-    memory_construction_time: float
+    retrieval_seconds: float
     query_time_len: float
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -125,7 +125,7 @@ class OllamaQaClient:
             output=output,
             input_len=count_tokens(user),
             output_len=count_tokens(output),
-            memory_construction_time=0.0,
+            retrieval_seconds=0.0,
             query_time_len=elapsed,
             metadata={"grounding": response},
         )
@@ -173,7 +173,7 @@ class OllamaQaClient:
             output=output,
             input_len=count_tokens(system + "\n" + user),
             output_len=count_tokens(output),
-            memory_construction_time=0.0,
+            retrieval_seconds=0.0,
             query_time_len=elapsed,
             metadata={
                 "memory_tool_events": [asdict(event) for event in response.tool_events],
@@ -484,7 +484,7 @@ class MyceliumMemorySystem:
                 }
             )
             loaded_pages = []
-        memory_construction_time = time.perf_counter() - start
+        retrieval_seconds = time.perf_counter() - start
         memory_tools = MemoryToolset(
             mem.retriever,
             result_limit=mem.config.retrieval.tool_result_limit,
@@ -494,7 +494,7 @@ class MyceliumMemorySystem:
             initial_evidence=initial_evidence,
         )
         answer = await self.qa_client.answer_with_memory_tools(question, memory_tools)
-        answer.memory_construction_time = memory_construction_time
+        answer.retrieval_seconds = retrieval_seconds
         full_evidence_context = render_memory_workspace(memory_tools.workspace.snapshot)
         answer.metadata.update(
             {
@@ -751,7 +751,7 @@ class FullWikiMemorySystem(MyceliumMemorySystem):
         answer = await self.qa_client.answer(question, context)
         query_time = time.perf_counter() - start
 
-        answer.memory_construction_time = 0.0
+        answer.retrieval_seconds = 0.0
         answer.query_time_len = query_time
         answer.metadata.update(
             {

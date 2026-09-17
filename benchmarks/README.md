@@ -15,6 +15,14 @@ Run all commands from the repository root. The maintained entrypoint is
 Code lives in `suites/`, shared adapters/scoring in `shared/`, and custom scenarios
 in `suites/daily_driver/fixtures/`. Focused unit-test inputs remain in `tests/fixtures/`.
 
+Current QA rows report `retrieval_seconds`: the initial memory retrieval before
+answer generation. `query_time_len` measures answering, including any subsequent
+tool searches. Offline ingestion/build time is recorded separately by the run
+and operation traces. LoCoMo protocol 6 rejects earlier checkpoints; use a fresh
+run directory. Historical `memory_construction_time` values in Mycelium QA rows
+measured initial retrieval, despite their name. Do not compare those values with
+offline construction costs. Saved results are not rewritten.
+
 ## Setup and configuration
 
 Install the environment with `uv sync --group dev --group benchmark`. External

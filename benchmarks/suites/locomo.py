@@ -59,7 +59,7 @@ async def run_locomo(
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / "run_manifest.json"
     settings = {
-        "protocol_version": 5,
+        "protocol_version": 6,
         "semantic_scorer": semantic_scorer.specification if semantic_scorer else None,
         "allow_incomplete_encoding": allow_incomplete_encoding,
         "dataset_sha256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
@@ -247,7 +247,7 @@ async def run_locomo(
                     "score": score,
                     "input_len": answer.input_len,
                     "output_len": answer.output_len,
-                    "memory_construction_time": answer.memory_construction_time,
+                    "retrieval_seconds": answer.retrieval_seconds,
                     "query_time_len": answer.query_time_len,
                     "metadata": answer.metadata,
                 }
@@ -507,8 +507,8 @@ def summarize_locomo_run(
             "elapsed_seconds": time.perf_counter() - started,
             "mean_input_len": mean(row["input_len"] for row in rows),
             "mean_output_len": mean(row["output_len"] for row in rows),
-            "mean_memory_construction_time": mean(
-                row["memory_construction_time"] for row in rows
+            "mean_retrieval_seconds": mean(
+                row["retrieval_seconds"] for row in rows
             ),
             "mean_query_time": mean(row["query_time_len"] for row in rows),
         }

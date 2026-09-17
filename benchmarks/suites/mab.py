@@ -37,7 +37,7 @@ class MyceliumMABAgent:
             "output": answer.output,
             "input_len": answer.input_len,
             "output_len": answer.output_len,
-            "memory_construction_time": answer.memory_construction_time,
+            "retrieval_seconds": answer.retrieval_seconds,
             "query_time_len": answer.query_time_len,
             "mycelium_metadata": answer.metadata,
         }
@@ -112,6 +112,11 @@ async def run_memoryagentbench(
                 query_index,
                 qa_pair_id,
             )
+            # The upstream scorer injects a zero for its optional construction
+            # field. This adapter measures retrieval; don't publish that zero
+            # as an observation of offline memory construction.
+            metrics.pop("memory_construction_time", None)
+            metrics["retrieval_seconds"].append(output["retrieval_seconds"])
             query_index += 1
             write_mab_results(output_path, dataset_config, metrics, results, started)
         if max_queries is not None and query_index >= max_queries:
@@ -139,7 +144,9 @@ def write_mab_results(
     started: float,
 ) -> dict[str, Any]:
     averaged_metrics = {
-        key: mean(values) * (1 if ("_len" in key or "_time" in key) else 100)
+        key: mean(values) * (
+            1 if ("_len" in key or "_time" in key or key.endswith("_seconds")) else 100
+        )
         for key, values in metrics.items()
     }
     data = {

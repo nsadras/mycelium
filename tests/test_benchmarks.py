@@ -64,7 +64,7 @@ class FakeMemorySystem:
             output="Pixel",
             input_len=3,
             output_len=1,
-            memory_construction_time=0.01,
+            retrieval_seconds=0.01,
             query_time_len=0.02,
             metadata={"loaded_pages": []},
         )
@@ -366,7 +366,7 @@ def test_evidence_survival_records_exact_and_partial_segment_coverage():
         output="Pixel",
         input_len=1,
         output_len=1,
-        memory_construction_time=0.0,
+        retrieval_seconds=0.0,
         query_time_len=0.0,
         metadata={
             "_evidence_stage_segments": {
@@ -488,7 +488,7 @@ def test_retrieval_evidence_uses_exact_context_survival_when_available():
         output="Pixel",
         input_len=1,
         output_len=1,
-        memory_construction_time=0.0,
+        retrieval_seconds=0.0,
         query_time_len=0.0,
         metadata={
             "retrieval_context": "A printed D1:1 label is not exact coverage.",
@@ -672,7 +672,7 @@ async def test_gold_evidence_system_uses_only_requested_labeled_turns():
                     output="19 January, 2023",
                     input_len=10,
                     output_len=3,
-                    memory_construction_time=0.0,
+                    retrieval_seconds=0.0,
                     query_time_len=0.1,
                 )
             )
@@ -1024,6 +1024,8 @@ async def test_locomo_resumes_each_durable_question_and_rejects_changed_settings
         data_path=data, output_dir=output, system=system, prediction_key="answer"
     )
     assert result["count"] == 3
+    assert result["mean_retrieval_seconds"] == pytest.approx(0.01)
+    assert "mean_memory_construction_time" not in result
     assert system.answer.await_count == 2
     assert (
         json.loads((output / "run_manifest.json").read_text())["status"] == "complete"
@@ -1035,6 +1037,14 @@ async def test_locomo_resumes_each_durable_question_and_rejects_changed_settings
             system=system,
             prediction_key="answer",
             max_questions=1,
+        )
+    manifest_path = output / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["settings"]["protocol_version"] = 5
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="settings differ"):
+        await run_locomo(
+            data_path=data, output_dir=output, system=system, prediction_key="answer"
         )
 
 
@@ -1127,7 +1137,7 @@ async def test_session_snapshots_preserve_history_and_resume_qa(
             output="First",
             input_len=1,
             output_len=1,
-            memory_construction_time=0,
+            retrieval_seconds=0,
             query_time_len=0,
         )
     )

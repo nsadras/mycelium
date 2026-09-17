@@ -44,6 +44,11 @@ def _record_execution_error(root: Path, error: str) -> None:
     manifest['status'] = 'failed'
     if manifest.get('execution_status') != 'blocked':
         manifest['execution_status'] = 'failed'
+    # A terminal invocation cannot leave a stage advertised as still running.
+    # Preserve completed/disabled/blocked stages and their progress counters.
+    for stage in ('encoding_status', 'qa_status', 'scoring_status', 'assessment_status'):
+        if manifest.get(stage) == 'running':
+            manifest[stage] = 'incomplete'
     manifest['execution_error'] = error
     with tempfile.NamedTemporaryFile(mode='w', dir=root, delete=False) as stream:
         temporary = Path(stream.name)

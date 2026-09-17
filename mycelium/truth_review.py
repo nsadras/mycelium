@@ -26,15 +26,19 @@ class TruthReviewer:
     def __init__(self, llm, artifacts: ArtifactStore):
         self.llm, self.artifacts = llm, artifacts
 
-    def _record(self, claim, placements, entities):
+    def _record(self, claim, placements, entities, sources):
         placement = placements.get(claim.claim_id)
         owner = entities.get(placement.owner_entity_id) if placement else None
         citations = []
         for provenance in claim.provenance:
-            source = self.artifacts.get_source(provenance.source_id)
+            if provenance.source_id not in sources:
+                source = self.artifacts.get_source(provenance.source_id)
+                sources[provenance.source_id] = (
+                    source, {s.segment_id: s for s in source.segments}
+                )
+            source, segments = sources[provenance.source_id]
             if source.status != "active":
                 raise ValueError(f"Claim {claim.claim_id} cites an inactive source")
-            segments = {s.segment_id: s for s in source.segments}
             for segment_id in provenance.segment_ids:
                 segment = segments[segment_id]
                 citations.append({
@@ -53,6 +57,15 @@ class TruthReviewer:
             "citations": citations,
         }
 
+    def _records(self, claims, placements, entities):
+        # Exact source reads and segment indexes are shared only within this
+        # synchronous preparation. The next review observes all source changes.
+        sources = {}
+        return {
+            cid: self._record(claim, placements, entities, sources)
+            for cid, claim in claims.items()
+        }
+
     async def review(self, incoming_claim_ids, placements, entities, *, dream_run_id,
                      excluded_claim_ids=frozenset()):
         result = TruthReviewResult()
@@ -64,7 +77,7 @@ class TruthReviewer:
         if not incoming or len(claims) < 2:
             return result
         try:
-            records = {cid: self._record(c, placements, entities) for cid, c in claims.items()}
+            records = self._records(claims, placements, entities)
             reviewed_pairs = {
                 tuple(sorted((left, right)))
                 for proposal in self.artifacts.list_reconsolidation_proposals()

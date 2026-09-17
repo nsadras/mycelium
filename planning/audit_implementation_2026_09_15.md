@@ -8,12 +8,40 @@ identified in Mem0, Graphiti, and Hindsight. It replaces the earlier rollout
 order in this file. The historical implementation record remains below;
 `DEVLOG.md` and saved runs retain the detailed evidence.
 
+## Reoriented next work (user direction, 2026-09-17)
+
+The success criterion is **largely coherent, useful memory for humans and agents
+at practical local cost**, not exhaustive coverage or perfect benchmark results.
+Reasonable omissions, identity mistakes and imperfect organization do not each
+justify another model stage or keep the whole project blocked. Preserve source
+durability, inspectable references and user control over corrections.
+
+1. **Simplify the source-to-memory/view path.** Use a small number of model passes
+   and source-derived organization. Prove one bounded comparison with configured
+   Gemma; assess the whole artifact and total cost. See the
+   [experiment and upstream cost references](encoding_simplification_2026_09_17.md).
+2. **Integrate the smallest useful result.** Preserve capture/Build, retrieval,
+   review, retraction and manual edits. Remove displaced stages and contracts;
+   do not accumulate a second production mode or a repair layer for every miss.
+3. **Try the resulting product end to end.** Inspect successive memory views and
+   a few useful agent answers, then complete the user-owned device checks.
+   Fix practical blockers; leave lesser quality limitations visible for use-driven
+   prioritization. Another full benchmark is not a prerequisite to move forward.
+
+The frozen full sample-3 stress run was intentionally stopped during session 16
+after 15 snapshots and 13.64 hours, with no QA. Its organization backlog and high
+truth-processing cost already answer the diagnostic question. Detailed review
+covers sessions 1–8; later counts do not establish later semantic quality. Earlier
+per-feature gates and failure labels below remain historical evidence, not a new
+requirement for 100% semantic accuracy before proceeding.
+
 **Current state:** E1 and focused C1–C3 fixes are implemented. E2 completed both
 comparison arms and source review. S1 bounded truth discovery, S2 dependency
 maintenance, and measured date/name/attribution fixes are implemented. Longitudinal
 replay completed with residual quality failures. The frozen four-session held-out
 run and source review are complete: encoding is incomplete and broad semantic
-acceptance fails. Full sample-3 validation is running at frozen `0f9f7ee`. Existing
+acceptance fails under the earlier criteria. Full sample-3 validation stopped
+incomplete at frozen `0f9f7ee` as described above. Existing
 storage, review, configuration, retrieval-consistency, and UI fixes remain the
 foundation. The latest structural suite on the retained production code is
 840 passed, 75 integration tests deselected (34.57s); that is not full semantic

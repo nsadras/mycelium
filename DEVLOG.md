@@ -5541,3 +5541,45 @@ remain separate gates.
   compute, full-workload and user-owned device gates. Asked for direction on
   simplification versus additional targeted semantic work after the cumulative
   cost/quality evidence; this does not block already authorized validation.
+
+### 2026-09-17 — Reorient toward practical memory and bounded simplification
+
+- User selected simpler encoding and asked to use Mem0, Graphiti and Hindsight
+  as cost references while keeping configured Gemma. Further clarification:
+  coherent, useful memory for humans and agents at practical local cost matters
+  more than exhaustive fact coverage, perfect identities or benchmark scores.
+  Isolated misses must not trigger repeated tuning or extra semantic stages.
+- Read pinned upstream source: Mem0 `f135cb9` ordinary inferred addition has one
+  generative extraction call; Hindsight `bcca388` extracts facts per chunk, with
+  separate consolidation/view work; Graphiti `de8eb5b` extracts nodes/edges and
+  conditionally adds resolution, timestamps and summaries. These are static
+  path estimates, not matched performance/quality measurements. Do not copy
+  their lexical identity heuristics. Links and differences are recorded in
+  `planning/encoding_simplification_2026_09_17.md`.
+- Intentionally stopped frozen `audit-sample3-0f9f7ee-20260917` during session 16
+  after preserving 15 snapshots, using the existing permission to cancel tests.
+  Verified the process command and worktree before SIGINT; no service changed.
+  Terminal invocation: 49,118.062 monotonic seconds, failed / CancelledError;
+  encoding incomplete, QA/scoring never started. The manifest's still-pending
+  stage fields are retained as recorded, with their limitation explained.
+- Terminal completed memory traces: 3,865 attempts, 63 failures, 47 retries,
+  29 separate cache returns, 40,428,031 input / 2,836,950 output tokens and
+  48,760.912 server seconds. Embeddings: 993 calls / 100.934 server seconds.
+  In-flight cancelled work may not have a completed trace. Session 15 has 153
+  routing-failed claims of 462; recent sessions exceed two hours. Truth work is
+  about 74% of pre-stop model time. This justifies examining the whole encoding
+  boundary rather than another isolated prompt variant.
+- The forward plan now prioritizes a small number of source-led retention/view
+  passes, a fixed comparison, and end-to-end product use. The proposed direct
+  and paired experiments have not run; no new production semantic mechanism is
+  integrated or validated. The configured host `/api/tags` confirms Gemma's
+  recorded digest, with no model/configuration change.
+- At the user's request, draft concrete policy edits in
+  `planning/agent_guardrails_proposal_2026_09_17.md`: practical acceptance,
+  separation of mechanical guarantees from model quality, explicit cost/value
+  for added complexity, bounded experiments, and no more than three immediate
+  audit priorities with explicit removal/deferral. Revise the direct-model
+  workflow's proof language without removing configured-model validation.
+  This is a proposal, not an applied policy. `AGENTS.md` and the user's local
+  `AGENT_PROMPTS/AUDIT.md` edits are untouched. Documentation-only validation;
+  the latest retained-code structural result remains 840 passed / 75 deselected.

@@ -1,8 +1,56 @@
 # Full sample-3 comparison
 
-**Status: current full run in progress; no terminal comparison yet.** This is development/stress data,
+**Status: deliberately stopped incomplete after 15 snapshots; no current QA.** This is development/stress data,
 not an unused holdout. The separate sample-10 frozen attempt preserves the
 held-out evidence.
+
+## Terminal status and decision
+
+The current run was interrupted during session 16, after preserving sessions
+1–15, to free the configured model for the user-selected bounded simplification
+work. The invocation records **49,118.062 monotonic seconds (13.64 hours)**.
+Only the identified benchmark process was signalled, under the user's existing
+permission to cancel tests. Original snapshots and traces remain unchanged.
+
+The manifest records execution `failed` / `CancelledError`; its stage fields
+still say `pending`. Those fields do not describe actual encoding progress:
+encoding is **incomplete**, with 15 finished session snapshots and partial work
+on session 16; QA and scoring never started. There is no new 193-question result
+or completed 32-session comparison. Detailed source/view review covers sessions
+1–8; integrity/count checks of later snapshots are not semantic review.
+
+Recorded terminal totals, including partial session 16:
+
+| Work | Attempts | Input tokens | Output tokens | Server seconds |
+|---|---:|---:|---:|---:|
+| Memory generation | 3,865 | 40,428,031 | 2,836,950 | 48,760.912 |
+| Embeddings | 993 | 608,353 | 0 | 100.934 |
+| QA / scoring | 0 | 0 | 0 | 0 |
+
+Memory generation has 3,818 distinct traced requests, 63 failed attempts, 47 retry
+attempts and 29 separate cached returns. Per-call server median/p95/max are
+11.967/20.782/128.648 seconds. The frozen client trace has six negative wall-clock
+durations; use recorded server duration and monotonic invocation elapsed within
+their respective limits. An unfinished request may lack a completed trace, so
+these totals cannot account for all cancelled in-flight computation.
+
+Session 15 retains 462 claims (306 routed, 153 routing-failed, three deferred),
+151 facts, 93 identities, 55 pages and 46 pending identity decisions, with no
+extraction backlog. Sessions 14 and 15 each took over two hours. Truth screening
+and comparison account for approximately 74% of the pre-stop recorded model
+time. The session-15 decision cache contains 40,258 screening cells and 15,359
+final comparison results, all `no_change`; these are response counts, not proof
+of distinct pairs or absence of meaningful changes.
+
+This run supplies enough evidence of growing organization work and cost to
+motivate simplification; completing every benchmark question is unnecessary for
+that decision. The user clarified that largely coherent, useful artifacts at
+practical local cost are the goal, with reasonable semantic mistakes accepted.
+No retrospective perfect-coverage gate is imposed on these snapshots. Follow
+the [bounded simplification plan](encoding_simplification_2026_09_17.md).
+Terminal inspection is retained in the run's
+`source-review/terminal-inspection.txt`; the session observations below remain
+historical checkpoints and may describe the run as still active at that time.
 
 ## Prior run
 

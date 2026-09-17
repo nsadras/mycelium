@@ -12,6 +12,15 @@ the whole result, not automatic reasons to add stages or block the next task.
 Keep durable sources, inspectable references and explicit user control; do not
 confuse these structural guarantees with perfect model interpretation.
 
+**Implementation checkpoint:** the approved execution plan uses a directional
+five-minute Build target per roughly 1,000-word conversation, at most ten minutes
+for feasibility including one revision, then 15 minutes / 60 attempts per native
+arm and five minutes / 12 attempts for a reserved source. These supersede the
+provisional budgets below. The first direct check completed six calls; the one
+revision fixed redundant identity selection but exposed a view-membership
+restriction. A fixed native comparison is running; application adoption remains
+open. See `DEVLOG.md` for paths, failures and the pending product clarification.
+
 ## What the external implementations establish
 
 Pinned upstream source was read, not installed or run. These are static call-path

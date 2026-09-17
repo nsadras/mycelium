@@ -5583,3 +5583,58 @@ remain separate gates.
   This is a proposal, not an applied policy. `AGENTS.md` and the user's local
   `AGENT_PROMPTS/AUDIT.md` edits are untouched. Documentation-only validation;
   the latest retained-code structural result remains 840 passed / 75 deselected.
+
+### 2026-09-17 — Implement the bounded source-led experiment
+
+- User approved an end-to-end simplification plan and selected **up to five
+  minutes** as a directional Build target for a roughly 1,000-word conversation
+  added to a modest store. Mechanical durability/review guarantees stay strict;
+  semantic omissions and imperfect organization are assessed in the whole result.
+- Implement two flat experimental contracts: retain useful statements, subjects
+  and pending changes; then produce cited view items with source-derived headings.
+  No exhaustive source partition, attribution matrix, pair-screening stage, model
+  judge, alternative model or lexical identity resolution. Existing entity types
+  remain lightweight metadata for current consumers, not page-admission rules.
+- First direct configured-model check:
+  `benchmark_runs/compact-contract-20260917T224324Z-351af0c5`.
+  Three source steps complete in six requests, 6,914 input / 1,689 output tokens,
+  34.427 server seconds, no retries. Outputs preserve useful conditions and avoid
+  adopting the assistant suggestion, but omit the initial inspection date and
+  other context. A proposed reschedule incorrectly targets a broader delivery
+  statement. Separate local/existing ID fields disagree and fragment identities;
+  the input also repeats obsolete local-selection fields on existing subjects.
+  This is usable preliminary output with material limitations, not a perfect pass.
+- Use the one planned feasibility revision to remove redundant identity selection:
+  each subject chooses one exact existing or allocated new ID. No name matching.
+  `compact-contract-20260917T224500Z-f8d3d605`: nine attempts, 13,547 input / 3,696
+  output tokens, 53.130 server seconds. Recurring identities now reuse IDs and
+  the namesake stays distinct. Three retention calls and two view calls succeed;
+  one retention attempt and all three final-case view attempts fail validation.
+  The final view repeatedly cites a broad memory in two separate items. Preserve
+  this incomplete result; do not tune the missed facts or add more prompt variants.
+- Implement an opt-in native candidate using existing capture, canonical artifact
+  records, SQLite transactions, publication, search and QA on copied stores.
+  Open headings and its two-call Build orchestrator remain benchmark-local;
+  the application pipeline is unchanged pending comparison and lifecycle proof.
+  Model output is validated against exact citations, IDs and human exclusions.
+- Mechanical failure injection covers first publication and a later update:
+  prior views and a manually edited fact survive rollback; retained claims stay
+  available; retry does not re-extract or duplicate them. Separate contract checks
+  enforce protected evidence, no-page exclusions, legal citations and declared
+  identity IDs. **3 tests pass in 0.13s**; Ruff and whitespace checks pass. These
+  tests do not establish semantic quality or full correction/retraction support.
+- Freeze `compact-comparison-20260917T225514Z-6b46ab03`: identical 143-claim seed
+  copied read-only from sample3 session 5; three new conversations of 1,008,
+  1,002 and 993 words; three practical agent questions; no review actions in
+  either comparison arm; independent 931-word conversation reserved before
+  native results. Each arm is capped at 900 seconds / 60 actual generation
+  attempts; the independent check at 300 seconds / 12 attempts. Exact requests,
+  source/code/configuration/model identities and session snapshots are retained.
+  This replaces the earlier provisional budgets in the planning note.
+- Early native source review exposes a representation mismatch: one retained
+  statement contains information about two people; distinct view items cite the
+  relevant parts, but exclusive claim-to-fact membership rejects them. This is
+  a product/data-contract question, not a reason for more wording variants.
+  Asked whether one retained statement may support multiple distinct view items.
+  The current fixed comparison continues unchanged while that clarification is
+  pending; no broader quality or adoption result is claimed yet.

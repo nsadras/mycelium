@@ -79,7 +79,9 @@ and short-term claims. EmbeddingGemma supplies normalized semantic embeddings th
 state: it is synchronized from canonical SQLite claim records and can be deleted and rebuilt without losing memory.
 
 Hybrid similarity only proposes candidates. A structured model decision orders complementary claim IDs and reports
-supported aspects and remaining gaps using canonical text, timing, and consolidated representations.
+supported aspects and remaining gaps using canonical text, timing, consolidated representations, and exact cited
+source excerpts. Selection and answering use the same evidence representation and budget rules, so a detail
+preserved only in the source can make its claim useful to the request.
 When complete candidates exceed the input budget, selection runs in bounded
 chunks and then compares the surviving complete records together. That final
 decision supplies the global order and gap report. If the survivors cannot fit
@@ -107,9 +109,9 @@ the chat UI.
 
 Included canonical claims are represented through their consolidated facts; claims without a fact are represented
 directly. Initial evidence and tool results share one schema containing explicit subjects, statements, claim IDs,
-normalized timing, and source citations. Initial retrieval and follow-up search return compact records. When an
-existing record is relevant or potentially related, the assistant uses `memory_sources` with its supporting claim IDs
-to retrieve exact cited lines and a bounded structural conversation neighborhood. The transcript remains
+normalized timing, and source citations. Initial retrieval and follow-up search include the exact cited lines that
+fit after their complete interpretation records. The assistant can use `memory_sources` with supporting claim IDs
+to expand the bounded structural conversation neighborhood. The transcript remains
 chronological, with cited lines marked in place. Retrieval traces preserve candidate rank, hybrid score, admission
 decision, selected claim IDs, and the claims that fit in the final budget.
 
@@ -117,7 +119,9 @@ Retrieval is read-only. It never reinforces, destabilizes, or rewrites a page.
 
 Typed evidence is also the budgeted retrieval unit: complete records are fitted against their actual rendered
 envelope, and chat fits those same records against the complete prompt using the shared token estimator.
-Source excerpts are expanded separately on demand. Synthetic `WikiPage` objects no longer participate in retrieval
+Source excerpts retain whole segments, source status and exact claim links; omitted evidence sets `more_available`.
+Uncited neighboring dialogue requires a retained cited anchor and is expanded only on request.
+Synthetic `WikiPage` objects no longer participate in retrieval
 or chat admission. `RetrievalResult.page_references` and `Session.page_references` contain only navigation metadata
 for real wiki pages associated with admitted evidence. Chat's `loaded_pages` metadata describes those references
 after prompt fitting, not page bodies supplied to the model. Unowned claims do not require a page to be admitted.
@@ -199,8 +203,9 @@ Important behavior:
 - Subject discovery first inventories source referents and types without exposing the identity registry or
   prior review metadata. A separate structured assignment binds reviewed identity occurrences to those subjects.
   Explicit source user roles and accepted human reviews then constrain exact canonical identity IDs. Remaining
-  subjects receive typed registry candidates, at most 24 each, and a structured existing/new/review-required
-  decision. Candidate retrieval uses model embeddings with changed-document and query reuse; it never uses
+  subjects receive registry candidates across inferred types, at most 24 each, and a structured existing/new/review-required
+  decision. Declared speakers remain restricted to people. Matching retains canonical types and establishes the
+  preferred source-backed title; discovery labels cannot overwrite that decision. Candidate retrieval uses model embeddings with changed-document and query reuse; it never uses
   lexical identity rules. These stages preserve cited claim/participant evidence for inspection. Candidate
   limits bound individual matching requests, not the cost of reading the full identity history.
 - Page usefulness is independent of identity confidence. A known identity can exist without a page; the persisted

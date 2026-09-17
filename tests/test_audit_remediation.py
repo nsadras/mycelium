@@ -51,7 +51,7 @@ def test_renderer_drops_retracted_hit_without_scanning_facts(tmp_path, monkeypat
     artifacts,claim,hit = seed(tmp_path)
     monkeypatch.setattr(artifacts,'list_consolidated_facts',lambda: pytest.fail('whole fact scan'))
     builder = RetrievedContextBuilder(WikiStore(tmp_path/'wiki'),artifacts)
-    builder.admission_content(hit)
+    builder.build([hit], budget_tokens=1000)
     artifacts.save_claim(replace(claim,status='retracted'))
     assert builder.build([hit],budget_tokens=1000).records == ()
 

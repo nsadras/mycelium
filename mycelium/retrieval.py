@@ -90,7 +90,9 @@ class MemoryRetriever:
                         candidate_id=f"claim:{hit.claim_id}",
                         kind=f"{hit.memory_tier}_claim",
                         title=hit.owner_title or "Unassigned memory",
-                        content=builder.admission_content(hit),
+                        content=render_memory_evidence(
+                            builder.build([hit], budget_tokens=budget_tokens)
+                        ),
                     )
                     for hit in hits
                 ]
@@ -211,7 +213,7 @@ class MemoryRetriever:
         self, evidence: MemoryEvidence, *, budget_tokens: int
     ) -> MemoryEvidence:
         """Rebase a workspace on current canonical state before a tool result."""
-        from dataclasses import replace
+        from mycelium.memory_workspace import merge_memory_evidence
 
         builder = RetrievedContextBuilder(self.context_builder.wiki, self.artifacts)
         hits = []
@@ -243,10 +245,12 @@ class MemoryRetriever:
         from mycelium.retrieval_context import fit_memory_evidence
 
         return fit_memory_evidence(
-            replace(
+            merge_memory_evidence(
                 records,
-                sources=builder.refresh_sources(evidence.sources),
-                more_available=evidence.more_available or records.more_available,
+                MemoryEvidence(
+                    sources=builder.refresh_sources(evidence.sources),
+                    more_available=evidence.more_available,
+                ),
             ),
             lambda trial: count_tokens(render_memory_evidence(trial)) <= budget_tokens,
         )

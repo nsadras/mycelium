@@ -79,3 +79,13 @@ including both endpoints of an explicit relationship. The page-review pipeline
 checks evidence-scoped exclusions, other supporting evidence and combined-fact
 projection across rebuilds. These tests do not establish overall page usefulness,
 longitudinal wiki coherence or a whole-benchmark compute improvement.
+
+## Source-grounded retrieval controls
+
+`source_grounding_controls` compares claim-only, cited-source and oracle inputs
+with controlled tools. `source_selection_probes` tests the production selection
+contract with bounded source-backed candidates. `source_grounding_pipeline` uses
+real indexing, selection and paired QA in fresh stores with deliberately seeded
+claims. All use `mycelium.toml`, retain native requests and report execution
+separately from source-reviewed answer quality. They do not measure extraction
+quality or retrieval recall in a large corpus.

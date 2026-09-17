@@ -85,8 +85,16 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
         provenance=[ClaimProvenance("source-1", ["segment-1"])],
         recorded_at="2026-01-01T00:00:00+00:00",
         dream_disposition="routed",
-        facets=stored_time('segment-1', 'every Saturday', {'kind':'unresolved', 'reason':'A recurrence has no single bounded interval'}, None,
-                           target='Mira practices cello'),
+        facets=stored_time(
+            "segment-1",
+            "every Saturday",
+            {
+                "kind": "unresolved",
+                "reason": "A recurrence has no single bounded interval",
+            },
+            None,
+            target="Mira practices cello",
+        ),
     )
     artifacts.save_claim(claim)
     entity = artifacts.create_entity("person", "Mira")
@@ -135,7 +143,11 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
     ]
     llm = AsyncMock()
     llm.context_window_tokens = 32768
-    llm.call_structured.return_value = {"selected_ids": ["M001"], "supported_aspects": ["practice time"], "remaining_gaps": []}
+    llm.call_structured.return_value = {
+        "selected_ids": ["M001"],
+        "supported_aspects": ["practice time"],
+        "remaining_gaps": [],
+    }
     retriever = MemoryRetriever(
         llm, wiki, artifacts, default_budget_tokens=2000, claim_index=index
     )
@@ -153,8 +165,10 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
     assert record.temporal[0].status == "unresolved"
     assert record.citations[0].segment_ids == ("segment-1",)
     assert record.citations[0].source_time == "2026-01-01T00:00:00+00:00"
-    assert result.evidence.sources == ()
-    assert "source_evidence" not in result.rendered_context
+    assert len(result.evidence.sources) == 1
+    assert [s.segment_id for s in result.evidence.sources[0].segments] == ["segment-1"]
+    assert result.evidence.sources[0].segments[0].relationship == "cited"
+    assert "I practice cello every Saturday." in result.rendered_context
     assert count_tokens(result.rendered_context) <= 2000
 
     expanded = retriever.source_evidence(["claim-1"], budget_tokens=2000)
@@ -241,7 +255,9 @@ def compact_claim(tmp_path):
     return RetrievedContextBuilder(wiki, artifacts), hit, entity
 
 
-def test_compact_record_fits_exact_budget_without_expanding_transcript(compact_claim):
+def test_exact_budget_retains_sources_and_smaller_budget_retains_interpretation(
+    compact_claim,
+):
     builder, hit, _ = compact_claim
     full = builder.build([hit], budget_tokens=2000)
     budget = count_tokens(render_memory_evidence(full))
@@ -250,19 +266,28 @@ def test_compact_record_fits_exact_budget_without_expanding_transcript(compact_c
 
     assert fitted == full
     assert fitted.records[0].citations[0].segment_ids == ("segment-note",)
-    assert fitted.sources == ()
+    assert fitted.sources
     omitted = builder.build([hit], budget_tokens=budget - 1)
-    assert omitted.records == ()
+    assert omitted.records == full.records
+    assert omitted.sources == ()
     assert omitted.more_available
     assert count_tokens(render_memory_evidence(omitted)) <= budget - 1
 
 
 def test_retrieval_page_references_only_describe_real_pages(compact_claim):
     builder, hit, entity = compact_claim
-    builder.artifacts.save_placement(ClaimPlacement(
-        hit.claim_id, entity.entity_id, "interests_views", [], "placed",
-        "Reviewed ownership", "2026-09-01", "2026-09-01",
-    ))
+    builder.artifacts.save_placement(
+        ClaimPlacement(
+            hit.claim_id,
+            entity.entity_id,
+            "interests_views",
+            [],
+            "placed",
+            "Reviewed ownership",
+            "2026-09-01",
+            "2026-09-01",
+        )
+    )
     evidence = builder.build([hit, hit], budget_tokens=2000)
     assert len(evidence.records) == 1
     assert builder.page_references(evidence) == ()
@@ -296,26 +321,62 @@ def test_retrieval_rejects_budget_smaller_than_evidence_envelope(compact_claim):
 
 def test_review_relationship_and_matched_claims_survive_fact_rendering(tmp_path):
     from mycelium.artifacts import ReconsolidationProposal
+
     artifacts = ArtifactStore(tmp_path / "artifacts")
     wiki = WikiStore(tmp_path / "wiki")
     entity = artifacts.create_entity("person", "Mira")
     stamp = "2026-01-01T00:00:00+00:00"
-    claims = [MemoryClaim(cid, text, [], [], stamp, dream_disposition="routed") for cid, text in (
-        ("old", "Mira lives in Oslo."),
-        ("detail", "Mira practices cello on Saturday mornings."),
-        ("new", "Mira moved to Lisbon."),
-    )]
+    claims = [
+        MemoryClaim(cid, text, [], [], stamp, dream_disposition="routed")
+        for cid, text in (
+            ("old", "Mira lives in Oslo."),
+            ("detail", "Mira practices cello on Saturday mornings."),
+            ("new", "Mira moved to Lisbon."),
+        )
+    ]
     for claim in claims:
         artifacts.save_claim(claim)
-    artifacts.save_consolidated_fact(ConsolidatedFact(
-        "summary", "Mira lives in Oslo and plays cello.", ["old", "detail"], entity.entity_id,
-        "profile", "current", [], "claim", 0.9, "summary", stamp, stamp,
-    ))
-    artifacts.save_reconsolidation_proposal(ReconsolidationProposal(
-        "review", ["new"], ["old"], "supersedes", "Unresolved move", 0.7, "run", stamp,
-    ))
-    hits = [ClaimSearchHit(c.claim_id, c.text, "canonical", entity.entity_id, entity.title,
-                           entity.slug, "profile", 1.0) for c in claims]
+    artifacts.save_consolidated_fact(
+        ConsolidatedFact(
+            "summary",
+            "Mira lives in Oslo and plays cello.",
+            ["old", "detail"],
+            entity.entity_id,
+            "profile",
+            "current",
+            [],
+            "claim",
+            0.9,
+            "summary",
+            stamp,
+            stamp,
+        )
+    )
+    artifacts.save_reconsolidation_proposal(
+        ReconsolidationProposal(
+            "review",
+            ["new"],
+            ["old"],
+            "supersedes",
+            "Unresolved move",
+            0.7,
+            "run",
+            stamp,
+        )
+    )
+    hits = [
+        ClaimSearchHit(
+            c.claim_id,
+            c.text,
+            "canonical",
+            entity.entity_id,
+            entity.title,
+            entity.slug,
+            "profile",
+            1.0,
+        )
+        for c in claims
+    ]
     builder = RetrievedContextBuilder(wiki, artifacts)
     evidence = builder._memory_evidence(builder.distinct_hits(hits, limit=2))
     assert len(evidence.records) == 2

@@ -286,7 +286,8 @@ timestamp, allowing one conversation to span multiple days without losing tempor
 `session.context_budget_tokens` is the total input budget shared by the assistant system prompt, recent transcript,
 initial memory, and follow-up memory evidence; it is capped by `llm.context_window_tokens`. Retrieval tool limits are
 per assistant response. During a response, the runtime accumulates initial retrieval and follow-up tool discoveries in
-one read-only evidence workspace. The model only chooses whether to search records or inspect a record's sources; the
+one read-only evidence workspace. Initial retrieval includes exact cited source lines within the budget; the model
+can search further or inspect the surrounding conversation. The
 runtime handles merging, deduplication, and replacement of older workspace snapshots. The final workspace is persisted
 with the assistant message and is available from the chat's collapsed **Evidence workspace** inspector.
 

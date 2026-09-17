@@ -417,9 +417,28 @@ class RetrievedContextBuilder:
         more_available: bool = False,
     ) -> MemoryEvidence:
         evidence = replace(self._memory_evidence(hits), more_available=more_available)
+        return self._with_sources(
+            evidence, budget_tokens=budget_tokens, include_context=False
+        )
+
+    def _with_sources(
+        self, evidence: MemoryEvidence, *, budget_tokens: int, include_context: bool
+    ) -> MemoryEvidence:
+        def fits(trial):
+            return count_tokens(render_memory_evidence(trial)) <= budget_tokens
+
+        # Retain canonical interpretation state before adding original wording.
+        # Only exact citations of records that fit may contribute excerpts.
+        evidence = fit_memory_evidence(evidence, fits)
+        claims = [self.artifacts.get_claim(cid) for cid in evidence.claim_ids]
         return fit_memory_evidence(
-            evidence,
-            lambda trial: count_tokens(render_memory_evidence(trial)) <= budget_tokens,
+            self._structured_source_evidence(
+                claims,
+                budget_tokens=budget_tokens,
+                base=evidence,
+                include_context=include_context,
+            ),
+            fits,
         )
 
     def page_references(
@@ -448,38 +467,6 @@ class RetrievedContextBuilder:
                 )
         return tuple(references)
 
-    def admission_content(self, hit: ClaimSearchHit) -> str:
-        """Describe the evidence a hit can contribute before admission."""
-        claim = self.artifacts.get_claim(hit.claim_id)
-
-        lines = [f"Claim ({claim.status}): {claim.text}", *self._timing_lines([claim])]
-        lines.extend(self._source_uncertainty([claim]))
-        for revision in self._revisions([claim]):
-            lines.append(f"Revision: {revision}")
-        facts = []
-        for fact in self._facts_for_claim(hit.claim_id):
-            members = []
-            for claim_id in fact.member_claim_ids:
-                try:
-                    member = self.artifacts.get_claim(claim_id)
-                except FileNotFoundError:
-                    break
-                if member.status != "active":
-                    break
-                members.append(member)
-            else:
-                lines.extend(self._source_uncertainty(members))
-                facts.append(fact)
-        for review in self.reviews_by_claim.get(hit.claim_id, []):
-            lines.append(f"Unresolved review: {review}")
-        if facts:
-            lines.append("Consolidated representations:")
-            lines.extend(
-                f"- [{fact.state}] {fact.text}"
-                for fact in sorted(facts, key=lambda item: item.fact_id)
-            )
-        return "\n".join(lines)
-
     def source_evidence(
         self, claim_ids: list[str], *, budget_tokens: int
     ) -> MemoryEvidence:
@@ -492,14 +479,6 @@ class RetrievedContextBuilder:
                 continue
             if claim.status in {"active", "superseded"}:
                 claims[claim_id] = claim
-        sources = self._structured_source_evidence(
-            [
-                claims[claim_id]
-                for claim_id in dict.fromkeys(claim_ids)
-                if claim_id in claims
-            ],
-            budget_tokens=budget_tokens,
-        )
         records = self._memory_evidence(
             [
                 ClaimSearchHit(
@@ -507,12 +486,13 @@ class RetrievedContextBuilder:
                 )
                 for c in claims.values()
             ]
-        ).records
+        )
         # Carry interpretation status with transcript excerpts, so inspecting an
         # older source cannot silently revive a superseded interpretation.
-        return fit_memory_evidence(
-            replace(sources, records=records),
-            lambda trial: count_tokens(render_memory_evidence(trial)) <= budget_tokens,
+        return self._with_sources(
+            records,
+            budget_tokens=budget_tokens,
+            include_context=True,
         )
 
     def _memory_evidence(self, hits: list[ClaimSearchHit]) -> MemoryEvidence:
@@ -730,7 +710,12 @@ class RetrievedContextBuilder:
         return source.occurred_at or source.recorded_at
 
     def _structured_source_evidence(
-        self, claims: list[MemoryClaim], *, budget_tokens: int
+        self,
+        claims: list[MemoryClaim],
+        *,
+        budget_tokens: int,
+        base: MemoryEvidence,
+        include_context: bool,
     ) -> MemoryEvidence:
         cited_by_source: dict[str, dict[str, set[str]]] = defaultdict(
             lambda: defaultdict(set)
@@ -741,8 +726,7 @@ class RetrievedContextBuilder:
                     provenance.segment_ids
                 )
 
-        sources: list[EvidenceSource] = []
-        more_available = False
+        available: list[EvidenceSource] = []
         for source_id, cited_by_claim in cited_by_source.items():
             try:
                 source = self.artifacts.get_source(source_id)
@@ -753,57 +737,64 @@ class RetrievedContextBuilder:
                 for segment_ids in cited_by_claim.values()
                 for segment_id in segment_ids
             }
-            selected_ids = self._neighbor_segment_ids(source.segments, cited_ids)
-            cited_segments = [
-                segment
-                for segment in source.segments
-                if segment.segment_id in cited_ids
-            ]
-            context_segments = [
-                segment
-                for segment in source.segments
-                if segment.segment_id in selected_ids
-                and segment.segment_id not in cited_ids
-            ]
-            accepted_ids: set[str] = set()
-            for segment in [*cited_segments, *context_segments]:
-                trial_ids = {*accepted_ids, segment.segment_id}
-                trial_segments = tuple(
-                    self._evidence_segment(value, cited_ids)
-                    for value in source.segments
-                    if value.segment_id in trial_ids
-                )
-                trial_source = EvidenceSource(
+            selected_ids = (
+                self._neighbor_segment_ids(source.segments, cited_ids)
+                if include_context
+                else cited_ids
+            )
+            available.append(
+                EvidenceSource(
                     revision=self.artifacts.db.evidence_revision(),
                     source_id=source.source_id,
                     conversation_time=source.occurred_at or source.recorded_at,
-                    citations=self._source_citations(cited_by_claim, trial_ids),
-                    segments=trial_segments,
+                    citations=self._source_citations(cited_by_claim, selected_ids),
+                    segments=tuple(
+                        self._evidence_segment(segment, cited_ids)
+                        for segment in source.segments
+                        if segment.segment_id in selected_ids
+                    ),
                     status=source.status,
                     retraction_reason=source.retraction_reason,
                 )
-                trial = MemoryEvidence(sources=tuple([*sources, trial_source]))
+            )
+        complete = replace(base, sources=tuple(available))
+        if count_tokens(render_memory_evidence(complete)) <= budget_tokens:
+            return complete
+
+        sources: list[EvidenceSource] = []
+        for source in available:
+            cited_by_claim = {
+                citation.claim_id: set(citation.segment_ids)
+                for citation in source.citations
+            }
+            cited_segments = [s for s in source.segments if s.relationship == "cited"]
+            context_segments = [
+                s for s in source.segments if s.relationship == "context"
+            ]
+            accepted_ids: set[str] = set()
+            accepted_source = None
+            for segment in [*cited_segments, *context_segments]:
+                if segment.relationship == "context" and not accepted_ids:
+                    continue
+                trial_ids = {*accepted_ids, segment.segment_id}
+                trial_source = replace(
+                    source,
+                    citations=self._source_citations(cited_by_claim, trial_ids),
+                    segments=tuple(
+                        s for s in source.segments if s.segment_id in trial_ids
+                    ),
+                )
+                # Reserve the omission notice while admitting complete segments.
+                trial = replace(
+                    base, sources=tuple([*sources, trial_source]), more_available=True
+                )
                 if count_tokens(render_memory_evidence(trial)) > budget_tokens:
-                    more_available = True
                     continue
                 accepted_ids.add(segment.segment_id)
-            if accepted_ids:
-                sources.append(
-                    EvidenceSource(
-                        revision=self.artifacts.db.evidence_revision(),
-                        source_id=source.source_id,
-                        conversation_time=source.occurred_at or source.recorded_at,
-                        citations=self._source_citations(cited_by_claim, accepted_ids),
-                        status=source.status,
-                        retraction_reason=source.retraction_reason,
-                        segments=tuple(
-                            self._evidence_segment(value, cited_ids)
-                            for value in source.segments
-                            if value.segment_id in accepted_ids
-                        ),
-                    )
-                )
-        return MemoryEvidence(sources=tuple(sources), more_available=more_available)
+                accepted_source = trial_source
+            if accepted_source is not None:
+                sources.append(accepted_source)
+        return replace(base, sources=tuple(sources), more_available=True)
 
     def refresh_sources(
         self, sources: tuple[EvidenceSource, ...]
@@ -887,42 +878,6 @@ class RetrievedContextBuilder:
             for claim_id, segment_ids in cited_by_claim.items()
             if any(segment_id in accepted_ids for segment_id in segment_ids)
         )
-
-    @staticmethod
-    def _timing_lines(claims: list[MemoryClaim]) -> list[str]:
-        lines: list[str] = []
-        seen = set()
-        for claim in claims:
-            for temporal in temporal_records(claim.facets):
-                role, target = temporal["role"], temporal["target"]
-                start, end = temporal["start"], temporal["end"]
-                expression = temporal["expression"]
-                key = (
-                    role,
-                    target,
-                    start,
-                    end,
-                    expression,
-                    temporal["evidence_segment_id"],
-                    temporal["anchor_segment_id"],
-                )
-                if key in seen:
-                    continue
-                seen.add(key)
-                interval = start or "unresolved"
-                if end and end != start:
-                    interval += f" through {end}"
-                lines.append(
-                    f"  - Structured timing: {role} for {target}: {interval}; source expression: {expression}; time evidence: {temporal['evidence_segment_id']}"
-                )
-                if (
-                    temporal["anchor_segment_id"]
-                    and temporal["anchor_segment_id"] != temporal["evidence_segment_id"]
-                ):
-                    lines.append(
-                        f"    Reference date from: {temporal['anchor_segment_id']}"
-                    )
-        return lines
 
     @staticmethod
     def _neighbor_segment_ids(

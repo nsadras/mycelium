@@ -4911,3 +4911,35 @@ whitespace clean. A sandboxed suite stalled at the private-network TestClient
 check; cancelled that finite test process under standing authorization and ran
 the full suite with host access. The stalled invocation is not validation.
 Logs: `test_outputs/audit-followthrough/compact-attribution-full-tests-host.log`.
+
+
+## 2026-09-16 — Ground newly adopted identity titles (C2 follow-up)
+
+The existing name-update guard did not cover new/provisional identity titles.
+Added one flat title_basis declaration (source_name or description) before title
+in those existing variants. The model decides whether the source supplies a
+name; a declared name must copy cited spelling exactly. Unnamed descriptive
+labels may vary. No lexical identity rule, new call, nested output, or production
+artifact. Aliases remain structured model decisions; this exact guard applies
+to the adopted title. Raw decisions and cited evidence remain inspectable.
+
+First proposal with the basis after title: `name-origin-contract-20260917T054159Z-b0732a16`,
+12/13 vs13/13control; rejected after an existing-name case failed three attempts.
+Field-order proposal `name-origin-order-contract-20260917T055833Z-b6b90c14`:
+13/13 vs12/13control (the preserved long-context service typo recurs in control).
+No failed attempts in either arm;26.213s/20,783input/1,350output vs
+24.204s/18,298input/1,202output. The flat declaration has a small measured cost
+for an enforceable spelling boundary. No critic/repair stage was added.
+
+Integrated direct `identity-boundary-contract-20260917T060852Z-6ba5b62b`:12/12,
+33.605s,0failures. Native `identity-boundary-pipeline-20260917T061228Z-df8e368b`:
+8/8,37calls/91.082s/0failures, retaining namesake separation, first naming,
+correction, rename and unnamed follow-up identity IDs. Some free-text rationale
+still confuses proposed/source spelling; correct IDs and guarded titles are the
+authoritative result, not the explanation prose.
+
+Structural69passed/4.02s; exact source-copy tests include uncited spelling,
+case changes, new/review variants and legitimate descriptions. Mechanical mocks
+now explicitly declare arbitrary descriptive labels; source-name tests supply
+the real cited name. Longitudinal replay and tool-observation identity continuity
+remain separate gates.

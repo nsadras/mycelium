@@ -232,7 +232,11 @@ def source_first_responses(plan):
                 aliases=node["aliases"],
             )
         else:
-            decision.update(title=node["title"], aliases=node["aliases"])
+            # These mechanics fixtures use arbitrary descriptive labels. Native
+            # probes separately establish which labels are actual source names.
+            decision.update(
+                title_basis="description", title=node["title"], aliases=node["aliases"]
+            )
             if node["resolution"] == "review_required":
                 decision["candidate_entity_ids"] = node["candidate_entity_ids"]
         matches.append({"decision": decision})
@@ -558,6 +562,7 @@ async def test_review_assignment_binds_one_discovered_subject_without_hiding_the
             "decision": {
                 "resolution": "new",
                 "reason": "Separate project",
+                "title_basis": "description",
                 "title": "Exhibit",
                 "aliases": [],
             }

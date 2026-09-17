@@ -112,6 +112,7 @@ def test_identity_result_cannot_change_subject_type_or_select_outside_candidate_
                         "resolution": "review_required",
                         "candidate_entity_ids": ids,
                         "reason": "Unresolved",
+                        "title_basis": "description",
                         "title": "Unknown person",
                         "aliases": [],
                     }
@@ -125,6 +126,7 @@ def test_empty_registry_allows_new_or_unnamed_review_without_invented_candidates
         {
             "resolution": "new",
             "reason": "Distinct subject",
+            "title_basis": "description",
             "title": "Subject",
             "aliases": [],
         },
@@ -132,6 +134,7 @@ def test_empty_registry_allows_new_or_unnamed_review_without_invented_candidates
             "resolution": "review_required",
             "reason": "Unknown person",
             "candidate_entity_ids": [],
+            "title_basis": "description",
             "title": "Unidentified person",
             "aliases": [],
         },
@@ -184,6 +187,48 @@ def test_preferred_name_updates_require_exact_cited_spelling():
             )
     assert schema.model_validate(
         {"decision": {**decision, "preferred_name_update": None}}
+    )
+
+
+@pytest.mark.parametrize("resolution", ["new", "review_required"])
+def test_declared_source_titles_require_cited_spelling_but_descriptions_can_vary(
+    resolution,
+):
+    import json
+
+    evidence = {
+        "claims": {"c": {"citations": [{"source_id": "s", "segment_id": "one"}]}},
+        "sources": {
+            "s": {
+                "segments": {
+                    "one": {"text": "The new project is named Larch."},
+                    "uncited": {"text": "Spruce is another project."},
+                }
+            }
+        },
+    }
+    schema = subject_identity_model([], json.dumps(evidence))
+    decision = dict(
+        resolution=resolution,
+        reason="Cited name",
+        aliases=[],
+        title_basis="source_name",
+        title="Larch",
+    )
+    if resolution == "review_required":
+        decision["candidate_entity_ids"] = []
+    assert schema.model_validate({"decision": decision}).decision.title == "Larch"
+    for title in ("Lorch", "Spruce", "larch"):
+        with pytest.raises(ValidationError, match="copied exactly"):
+            schema.model_validate({"decision": {**decision, "title": title}})
+    assert schema.model_validate(
+        {
+            "decision": {
+                **decision,
+                "title_basis": "description",
+                "title": "An unnamed effort",
+            }
+        }
     )
 
 

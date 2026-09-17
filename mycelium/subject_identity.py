@@ -22,6 +22,12 @@ def subject_identity_model(candidate_ids, evidence):
     ]
     common = {"reason": (str, Field(min_length=1, max_length=500))}
     names = {
+        "title_basis": (
+            Literal["source_name", "description"],
+            Field(
+                description="source_name for a name explicitly supplied in the source, copied with its exact spelling; description only for a subject whose name is not supplied."
+            ),
+        ),
         "title": (
             str,
             Field(
@@ -31,10 +37,24 @@ def subject_identity_model(candidate_ids, evidence):
         ),
         "aliases": (list[str], Field(max_length=12)),
     }
+
+    @model_validator(mode="after")
+    def exact_source_name(self):
+        # The model declares whether this is a name or an unnamed description.
+        # Validate a declared name's spelling, never infer identity from text.
+        if self.title_basis == "source_name" and not any(
+            self.title in text for text in name_evidence
+        ):
+            raise ValueError(
+                "A declared source name must be copied exactly from cited source text."
+            )
+        return self
+
     variants = [
         create_model(
             "NewSubjectIdentity",
             __config__=ConfigDict(extra="forbid"),
+            __validators__={"exact_source_name": exact_source_name},
             **common,
             resolution=(Literal["new"], ...),
             **names,
@@ -75,6 +95,7 @@ def subject_identity_model(candidate_ids, evidence):
     unresolved = create_model(
         "UnresolvedSubjectIdentityFields",
         __config__=ConfigDict(extra="forbid"),
+        __validators__={"exact_source_name": exact_source_name},
         **common,
         resolution=(Literal["review_required"], ...),
         candidate_entity_ids=(

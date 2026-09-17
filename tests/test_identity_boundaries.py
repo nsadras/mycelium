@@ -119,9 +119,16 @@ async def test_final_identity_name_and_aliases_replace_discovery_proposals(
     memory, llm, _, evidence = setup_router(tmp_path)
     with memory:
         monkeypatch.setattr(SemanticCandidates, "select", AsyncMock(return_value=[]))
+        evidence[0].source.segments[
+            0
+        ].content = (
+            "The project is called Source label, also known as Source alternative."
+        )
+        memory.artifacts.save_source(evidence[0].source)
         final = {
             "resolution": resolution,
             "reason": "Original source establishes the spelling",
+            "title_basis": "source_name",
             "title": "Source label",
             "aliases": ["Source alternative"],
         }

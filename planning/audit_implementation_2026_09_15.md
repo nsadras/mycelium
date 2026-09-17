@@ -36,8 +36,11 @@ foundation. The latest recorded structural suite is 807 passed, one skipped,
   with no extra call or field. Longitudinal replay/V1 remain gates.
 - **C2 implemented:** `57c0a86` separates identity matching from a source-backed
   preferred-name update in the existing call. Direct proposal 14/14, maintained
-  production controls 12/12, native routing 8/8; zero failed requests. Broader
-  transitions, pending truth review and cumulative quality remain E2/V1 gates.
+  production controls 12/12, native routing 8/8; zero failed requests. E2 exposed
+  an unguarded new-title typo; a flat source-name/description declaration now
+  validates new adopted spelling. Accepted13/13direct, integrated12/12 and
+  native8/8,0failures. Broader transitions, external-user identity, pending truth
+  review and cumulative quality remain replay/V1 gates.
 - **C3 implemented:** `742196c` rejects incomplete exact citations before
   routing/fact projection. Projection now resolves links against the complete
   planned page set, refreshes references on destination changes, and coverage

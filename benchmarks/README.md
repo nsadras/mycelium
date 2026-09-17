@@ -23,6 +23,14 @@ run directory. Historical `memory_construction_time` values in Mycelium QA rows
 measured initial retrieval, despite their name. Do not compare those values with
 offline construction costs. Saved results are not rewritten.
 
+Daily-driver runs save the loaded `fixture.json` and its digest, including source
+timestamps and ordered review actions, plus the answer judge's version and prompt/
+schema digests. Judge version 2 separately checks answering the question and
+unsupported assertions within the same flat response. It accepts concise answers;
+source review is still required to interpret model-judged results. The first-build
+application-form probe requires the requested form; privacy/purpose have separate
+questions. Prior scores with broader requirements are not matched comparisons.
+
 ## Setup and configuration
 
 Install the environment with `uv sync --group dev --group benchmark`. External

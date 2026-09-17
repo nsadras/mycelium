@@ -124,6 +124,9 @@ async def test_failed_probe_makes_run_incomplete_without_counting_artifact_as_qa
     output = tmp_path / "run"
     await daily.run_daily_driver(tmp_path, output)
     manifest = json.loads((output / "run_manifest.json").read_text())
+    frozen = json.loads((output / "fixture.json").read_text())
+    assert manifest["fixture_sha256"] == daily.digest(frozen) == daily.digest(data)
+    assert manifest["probe_judgment"] == daily.probe_judgment_specification()
     assert manifest["qa_status"] == "incomplete"
     assert manifest["execution_status"] == "complete_with_errors"
     assert manifest["encoding_status"] == "complete"

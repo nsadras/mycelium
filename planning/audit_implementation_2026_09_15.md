@@ -14,6 +14,21 @@ storage, review, configuration, retrieval-consistency, and UI fixes remain the
 foundation. The latest recorded structural suite is 799 passed, one skipped,
 75 integration tests deselected; that is not full semantic acceptance.
 
+### Implementation progress after resuming
+
+- **E1 implemented:** accurate retrieval timing with versioned checkpoints
+  (`3a48d39`); removed obsolete production contracts and migrated probes
+  (`bbb4320`); question-scoped answer judgment, flat support flag, frozen fixture
+  and evaluator identity. The [comparison protocol](audit_comparison_protocol_2026_09_16.md)
+  records current call/contract complexity and reserves LoCoMo sample 10 for V1.
+- Validation: 782 structural tests passed after retiring redundant old-contract
+  tests; 27/28 migrated native cases passed. The failing relative-date event
+  distinction remains visible under C1. The evaluator's proposed support contract
+  passed 45/45 direct cases, then 15/15 through the maintained native runner.
+- C1–C3 and the longitudinal quality/cost gates remain open. No new product LLM
+  calls or nested production response structures were added in E1. Evaluation
+  improved; this is not evidence of improved memory encoding or retrieval yet.
+
 ## Objective and fixed product decisions
 
 Build a useful local memory system that preserves evidence, retrieves relevant

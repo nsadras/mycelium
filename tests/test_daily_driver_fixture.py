@@ -56,7 +56,8 @@ def test_probe_judgment_rejects_unknown_and_cross_category_ids():
 
     schema = probe_judgment_model(["required"], ["forbidden"])
     valid = {"present_required_fact_ids": ["required"], "present_forbidden_fact_ids": [],
-             "answerable_decision_correct": True, "rationale": "The answer states the required fact."}
+             "answer_correct": True, "unsupported_assertions_present": False,
+             "rationale": "The answer states the required fact."}
     schema.model_validate(valid)
     for wrong in ["unknown", "forbidden"]:
         with pytest.raises(ValidationError):
@@ -65,6 +66,33 @@ def test_probe_judgment_rejects_unknown_and_cross_category_ids():
     with pytest.raises(ValidationError):
         empty.model_validate(valid)
     empty.model_validate({**valid, "present_required_fact_ids": []})
+    for field in valid:
+        with pytest.raises(ValidationError):
+            schema.model_validate({key: value for key, value in valid.items() if key != field})
+    with pytest.raises(ValidationError):
+        schema.model_validate({**valid, "rationale": ""})
+
+
+@pytest.mark.asyncio
+async def test_unsupported_answer_assertions_prevent_a_pass():
+    from unittest.mock import AsyncMock
+    from benchmarks.suites.daily_driver.eval import judge_probe_answer
+
+    llm = AsyncMock()
+    llm.call_structured.return_value = {
+        "present_required_fact_ids": ["time"], "present_forbidden_fact_ids": [],
+        "answer_correct": True, "unsupported_assertions_present": True,
+        "rationale": "The time is correct but the fee is unsupported.",
+    }
+    result = await judge_probe_answer(
+        llm=llm,
+        probe={"question": "When does the call start?", "expected_answer": "14:00 UTC.",
+               "required_facts": ["time"], "forbidden_facts": []},
+        answer="14:00 UTC; attendance costs 50 dollars.",
+        gold_facts={"time": {"text": "The call starts at 14:00 UTC."}},
+    )
+    assert not result["passed"]
+    assert llm.call_structured.await_count == 1
 
 
 def test_retrieved_ids_use_typed_evidence_without_parsing_page_prose():

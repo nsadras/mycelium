@@ -20,13 +20,11 @@ probes:
 - id: q-first-build
   checkpoint: cp2_first_dream
   question: What kind of application does Maya want for the meeting-memory idea?
-  expected_answer: A private local desktop application, not a browser extension.
+  expected_answer: A desktop application rather than a browser extension.
   required_facts:
-  - f-lantern-purpose
   - f-lantern-form
   forbidden_facts: []
   required_evidence:
-  - chat-01-s01
   - chat-01-s03
   answerable: true
   purpose: The first Build makes the captured information searchable, whether or not it receives an independent

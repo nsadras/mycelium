@@ -17,6 +17,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from benchmarks.shared.scoring import token_f1
+from benchmarks.suites.daily_driver.assessment_inputs import digest
 from mycelium.operations import MemoryEvidence
 from mycelium.ollama import OllamaClient
 from mycelium.prompting import render_prompt
@@ -29,8 +30,21 @@ class ProbeJudgment(BaseModel):
 
     present_required_fact_ids: list[str] = Field(default_factory=list)
     present_forbidden_fact_ids: list[str] = Field(default_factory=list)
-    answerable_decision_correct: bool
-    rationale: str
+    answer_correct: bool
+    unsupported_assertions_present: bool = Field(
+        description="True if any material assertion in the answer is unsupported, even when the requested fact is correct."
+    )
+    rationale: str = Field(min_length=1)
+
+
+def probe_judgment_specification():
+    """Record evaluator identity; exact allowed IDs come from the saved fixture."""
+    return {
+        "version": 2,
+        "system_prompt_sha256": digest(render_prompt("benchmarks/probe_judgment.system.jinja")),
+        "user_template_sha256": digest(render_prompt("benchmarks/probe_judgment.user.jinja", payload="PAYLOAD")),
+        "response_schema_sha256": digest(ProbeJudgment.model_json_schema()),
+    }
 
 
 def probe_judgment_model(required, forbidden):
@@ -485,7 +499,7 @@ async def judge_probe_answer(
         {
             "question": probe["question"],
             "answer": answer,
-            "expected_answer_is_non_normative": probe.get("expected_answer"),
+            "reference_answer": probe.get("expected_answer"),
             "answerable": probe.get("answerable", True),
             "required_facts": required,
             "forbidden_facts": forbidden,
@@ -512,7 +526,8 @@ async def judge_probe_answer(
     judgment["passed"] = (
         set(judgment["present_required_fact_ids"]) == allowed_required
         and not judgment["present_forbidden_fact_ids"]
-        and judgment["answerable_decision_correct"]
+        and judgment["answer_correct"]
+        and not judgment["unsupported_assertions_present"]
     )
     return judgment
 

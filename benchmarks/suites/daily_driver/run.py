@@ -15,10 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.suites.daily_driver.fixture import load_fixture, validate_fixture
+from benchmarks.suites.daily_driver.assessment_inputs import digest
 from benchmarks.suites.daily_driver.eval import (
     evaluate_run,
     gold_fact_definitions,
     judge_probe_answer,
+    probe_judgment_specification,
     load_snapshots,
     match_snapshot,
     retrieved_generated_ids,
@@ -879,8 +881,11 @@ async def run_daily_driver(
         raise FileExistsError(f"Output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_json(output_dir / "configuration.json", asdict(settings))
+    _write_json(output_dir / "fixture.json", fixture)
     manifest = {"status": "running", "execution_status": "running", "encoding_status": "running",
-                "qa_status": "running" if run_probe_answers else "disabled", "effective_config": asdict(settings)}
+                "qa_status": "running" if run_probe_answers else "disabled", "effective_config": asdict(settings),
+                "fixture_sha256": digest(fixture),
+                "probe_judgment": probe_judgment_specification()}
     _write_json(output_dir / "run_manifest.json", manifest)
     begin_invocation(output_dir)
     with Mycelium(

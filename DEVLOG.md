@@ -4943,3 +4943,33 @@ case changes, new/review variants and legitimate descriptions. Mechanical mocks
 now explicitly declare arbitrary descriptive labels; source-name tests supply
 the real cited name. Longitudinal replay and tool-observation identity continuity
 remain separate gates.
+
+### 2026-09-16 — Declared speaker names are exact source evidence
+
+- The full structural run after the bounded-truth integration exposed a missed
+  `title_basis` mock in the no-profile participant test. Reviewing that path also
+  found a product defect: a source speaker need not say their own name aloud,
+  but the new-name validator accepted only transcript body text. Product
+  invariant: declared, source-scoped speaker metadata is also valid evidence
+  for copying a model-declared name; it does not prove an identity match.
+- The existing contract now accepts names from cited segment speakers and
+  declared participants from a supplied source. A participant's own turn need
+  not be among the selected claim excerpts; the original source establishes the
+  declaration. Uncited/undeclared speakers, unknown source IDs and misspelled copies remain
+  invalid. No prompt change, new output field, nesting, or model stage.
+- Direct configured-model proof: `speaker-name-contract-20260917T064134Z-20766777`,
+  3/3: participant-only evidence, a cited speaker, and a mentioned-person
+  counterexample. Native discovery → identity → routing with no canonical-user
+  profile: `speaker-name-pipeline-20260917T064506Z-2283a08b`, passed without
+  failures. A descriptive museum identity also appeared; this is not evidence
+  of perfect page admission or editorial quality.
+- Focused structural validation: 85 passed in 4.02s, including Dream and source-role context regressions. The declared-speaker domain
+  mock was corrected to actually supply its claimed speaker in source metadata.
+  An initial command named a nonexistent test module; no tests ran in that
+  attempt and it is not counted as validation.
+- Broader validation exposed that a valid participant can have no cited claim:
+  requiring their turn in the selected excerpts incorrectly rejected that case.
+  Validation now uses the supplied source's participant declaration; the existing
+  no-empty-page and same-source role-context regressions cover this boundary.
+- User explicitly assigned real browser/microphone/Wi-Fi/Tailscale checks to
+  themselves after implementation is ready; no app services were started.

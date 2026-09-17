@@ -259,6 +259,29 @@ def test_review_assignments_preserve_exact_distinct_identities():
         schema.model_validate({"assignments": {"R001": assignments["R001"]}})
 
 
+def test_declared_speaker_name_is_exact_source_evidence_without_a_self_introduction():
+    import json
+
+    evidence = {
+        "claims": {},
+        "participants": {"p": {"name": "Rae Moreno", "source_id": "s"}},
+        "sources": {"s": {"segments": {
+            "one": {"speaker": "Rae Moreno", "text": "I restore violins."},
+            "two": {"speaker": "Suri", "text": "An unrelated comment."},
+        }}},
+    }
+    schema = subject_identity_model([], json.dumps(evidence))
+    decision = dict(resolution="new", title_basis="source_name", title="Rae Moreno",
+                    aliases=[], reason="Declared participant")
+    assert schema.model_validate({"decision": decision})
+    for name in ("Rae Morino", "Suri"):
+        with pytest.raises(ValidationError, match="copied exactly"):
+            schema.model_validate({"decision": {**decision, "title": name}})
+    evidence["participants"]["p"]["source_id"] = "absent"
+    with pytest.raises(ValueError, match="supplied source"):
+        subject_identity_model([], json.dumps(evidence))
+
+
 def test_missing_subject_does_not_require_guessing_a_review_binding():
     schema = subject_review_model({}, {"R001": {"entity_id": "entity-1"}})
     schema.model_validate(

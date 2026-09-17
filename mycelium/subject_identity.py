@@ -20,6 +20,23 @@ def subject_identity_model(candidate_ids, evidence):
         evidence["sources"][sid]["segments"][segment_id]["text"]
         for sid, segment_id in sorted(cited)
     ]
+    # A declared speaker name is source evidence even when the speaker never
+    # repeats their own name in the transcript body. This validates copying;
+    # it does not bind that name to an existing identity.
+    name_evidence.extend(
+        segment["speaker"]
+        for sid, segment_id in sorted(cited)
+        for segment in [evidence["sources"][sid]["segments"][segment_id]]
+        if segment.get("speaker")
+    )
+    for participant in evidence.get("participants", {}).values():
+        if participant["source_id"] not in evidence["sources"]:
+            raise ValueError(
+                "A declared participant must cite a supplied source"
+            )
+        # Participants are declared from the original source, including speakers
+        # whose turns are absent from the selected claim excerpts.
+        name_evidence.append(participant["name"])
     common = {"reason": (str, Field(min_length=1, max_length=500))}
     names = {
         "title_basis": (
@@ -46,7 +63,7 @@ def subject_identity_model(candidate_ids, evidence):
             self.title in text for text in name_evidence
         ):
             raise ValueError(
-                "A declared source name must be copied exactly from cited source text."
+                "A declared source name must be copied exactly from cited source text or declared speaker metadata."
             )
         return self
 

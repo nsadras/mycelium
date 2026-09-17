@@ -132,6 +132,7 @@ async def test_declared_user_identity_respects_configured_profile(
                 "decision": {
                     "resolution": "new",
                     "reason": "A distinct source speaker",
+                    "title_basis": "source_name",
                     "title": "Rae",
                     "aliases": [],
                 }

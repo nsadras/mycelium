@@ -65,6 +65,9 @@ async def test_inferred_type_does_not_remove_existing_identity_candidates(
 async def test_declared_speaker_candidates_remain_people(tmp_path, monkeypatch):
     memory, llm, _, evidence = setup_router(tmp_path)
     with memory:
+        evidence[0].source.segments[0].speaker = "Namesake"
+        evidence[0].source.segments[0].role = "participant"
+        memory.artifacts.save_source(evidence[0].source)
         project = memory.artifacts.create_entity("project", "Namesake")
         person = memory.artifacts.create_entity("person", "Namesake")
         captured = []

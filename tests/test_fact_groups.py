@@ -1,6 +1,8 @@
 
 from mycelium.config import Config
 from dataclasses import replace
+import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -8,6 +10,7 @@ from pydantic import ValidationError
 
 from mycelium.fact_groups import MAX_GROUP_MEMBERS, fact_groups_model
 from mycelium.facts import FactResolver
+from mycelium.ollama import OllamaClient
 from tests.memory_helpers import claim, fact, place, setup_owner
 
 
@@ -27,6 +30,28 @@ def test_group_contract_requires_exact_complete_partition(members):
     with pytest.raises(ValidationError):
         schema.model_validate({"groups": [group(*members)]})
     schema.model_validate({"groups": [group("C1"), group("C2")]})
+
+
+@pytest.mark.asyncio
+async def test_group_retry_identifies_missing_and_repeated_claims():
+    schema = fact_groups_model(["C1", "C2", "C3"], ["current_context"])
+    malformed = {"groups": [group("C1", "C1")]}
+    complete = {"groups": [group("C1"), group("C2"), group("C3")]}
+    client = OllamaClient("http://localhost:11434", "test")
+    client.client = SimpleNamespace(chat=AsyncMock(side_effect=[
+        SimpleNamespace(message=SimpleNamespace(content=json.dumps(value)))
+        for value in (malformed, complete)
+    ]))
+
+    result = await client.call_structured("Group the supplied claims.", "C1, C2, C3", schema)
+
+    assert result == complete
+    requests = client.client.chat.await_args_list
+    assert len(requests) == 2
+    repair = requests[1].kwargs["messages"][-1]["content"]
+    assert "missing IDs: ['C2', 'C3']" in repair
+    assert "repeated IDs: ['C1']" in repair
+    assert requests[0].kwargs["format"] == requests[1].kwargs["format"]
 
 
 def test_group_contract_bounds_members_and_scopes_section_ids():

@@ -1,5 +1,6 @@
 """Bounded evidence grouping and independently reusable group rendering."""
 
+from collections import Counter
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
@@ -37,9 +38,13 @@ def fact_groups_model(claim_ids, sections):
             found = [
                 alias for group in self.groups for alias in group.member_claim_aliases
             ]
-            if len(found) != len(set(found)) or set(found) != set(ids):
+            counts = Counter(found)
+            missing = sorted(set(ids) - counts.keys())
+            repeated = sorted(alias for alias, count in counts.items() if count > 1)
+            if missing or repeated:
                 raise ValueError(
-                    "Every canonical claim must belong to exactly one bounded group"
+                    "Every canonical claim must belong to exactly one bounded group; "
+                    f"missing IDs: {missing}; repeated IDs: {repeated}"
                 )
             return self
 

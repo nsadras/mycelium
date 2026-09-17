@@ -5360,3 +5360,44 @@ remain separate gates.
   measurements remain visible with their clock-skew limitation. No historical
   traces were rewritten. The report and read-only inspection artifacts retain
   measurement coverage and distinguish server work from elapsed runtime.
+
+### 2026-09-17 — Give fact-group retries exact partition feedback
+
+- Product invariant: each supplied canonical claim ID must appear in exactly one
+  bounded group. A validation failure should identify missing/repeated IDs;
+  neither validation nor retry feedback chooses a semantic group for them.
+  The running workload exposed three replies omitting the same ID from a
+  44-claim request, followed by 12 retryable additions. The generic error did
+  not identify the omission.
+- Direct configured-model proof before integration:
+  `fact-partition-feedback-20260917T101523Z-19ba5273`. Three neutral invalid-prefix
+  controls cover omission, repetition and both; a fourth uses the retained real
+  malformed response. Both arms use identical original production prompts,
+  native schemas and settings; only the existing retry error differs. Eight
+  actual model requests, no extra retries or wording variants. Control passes
+  3/4 (retained case fails), proposal 4/4. All neutral repairs keep distinct
+  museum/garden events separate and related class/bicycle details together.
+  The retained proposal accounts for all 44 IDs with no group over 12 members.
+- Integrate only exact missing/repeated-ID reporting in the existing validator.
+  Initial prompts, schemas, model stages and retry limit are unchanged; valid
+  cached decisions remain usable. No fallback grouping or semantic repair.
+  Structural test first fails because the actual retry prompt lacks the IDs,
+  then passes; fact-group, client and promotion-maintenance suites: **70 passed
+  in 0.86s**. Ruff and diff check pass. The previous full structural suite remains
+  833 passed; no unrelated suite or UI rerun for this localized change.
+- Integrated production caller proof:
+  `fact-partition-feedback-integrated-20260917T102057Z-b0114fb7`. Supplies the
+  retained malformed response as an explicitly labelled synthetic first prefix,
+  then performs **one actual configured-model request** through the unchanged
+  structured-call retry path. It returns all 44 IDs correctly. This validates
+  the caller/validator boundary, not a fresh complete Build. Actual request:
+  10,358 input / 803 output tokens, 17.320 monotonic client seconds. Original
+  request/schema/options equality is asserted. Existing awkward page sections
+  and source/identity defects remain outside this fix.
+- These nine real calls share the host model with frozen sample3. Direct window
+  10:15:23–10:18:22 UTC; integrated window 10:20:57–10:21:14 UTC, during session 5.
+  Record contention as a timing limitation. Direct control/proposal use
+  14,557/14,618 input and 1,491/1,497 output tokens; client times 101.179/86.381s
+  are observations, not an isolated speed comparison. No code/configuration
+  changed in the running benchmark checkout, and its results do not validate
+  this later fix. Full benchmark/source review continues separately.

@@ -4,37 +4,35 @@ The maintained benchmark CLI is `python -m benchmarks`; see the [benchmark guide
 
 | Script | Purpose |
 | --- | --- |
-| `contract_simplification_probes.py` | Probe compact production contracts with Gemma. Select extraction or context cases with the existing flags; the default covers truth and synthesis. |
-| `model_contract_comparison.py` | Compare Gemma and Qwen on direct contracts and a small cumulative workload. `--natural-only` requires the historical source artifact named in the script. |
-| `reasoning_contract_probes.py` | Compare native constraints and schema-prompted reasoning on small cases. Its explicit SDK settings are experimental; they do not configure production. |
+| `truth_scope_probes.py` | Exercise current owner-independent truth candidate and pair comparison contracts. |
+| `fact_group_probes.py` | Exercise current bounded grouping and per-group rendering contracts. |
+| `fact_group_pipeline.py` | Check those contracts in successive native builds, including cached reuse. |
 | `selection_merge_probes.py` | Use configured production prompts/model settings to compare selections across neutral batches. `--pipeline` constrains only the selector's planning envelope to exercise production budget splitting; actual model context remains configured. |
 | `reference_judgment_probes.py` | Probe the optional reference scorer with paraphrases, negation, partial answers, refusal/guess counterexamples and absent references, using the configured host model. |
 | `historical/reasoning_comparison.py` | Historical September 9 reasoning investigation. It relies on dated input/output paths and reuses saved results. Retained for interpreting the original experiment, not as a current-contract validation runner. |
 
-The first three scripts now allocate a fresh timestamped output directory under `benchmark_runs` and print its path. Existing results are never silently substituted for a new evaluation. `CONTRACT_PROBE_REVISION` is no longer used. Keep earlier results for comparisons rather than overwriting them.
+Current scripts allocate fresh output directories under `benchmark_runs`; never
+substitute earlier results for current validation. `probe_support.py` provides
+request recording, JSON writing, and fresh paths. Use the configured host Ollama
+access described in `AGENTS.md`.
 
-`probe_support.py` contains the shared request recorder, JSON writer, and fresh output-path helper. The model comparison collects the reasoning probe cases through an explicit callback instead of temporarily replacing a module function.
-
-Validation results for the September 10 cleanup are recorded in `planning/unused_cleanup_2026_09_10.md` and `DEVLOG.md`. Run host-dependent checks with the host Ollama access described in the repository's `AGENTS.md`.
+The retired `contract_simplification_probes.py`, `reasoning_contract_probes.py`,
+and `model_contract_comparison.py` tested an obsolete truth/synthesis pipeline.
+Their source remains in Git at `3a48d39`; their saved outputs remain historical
+evidence. Use an isolated checkout of that revision to inspect or reproduce them.
+They are deliberately absent from current-contract runners and do not justify
+keeping unused production prompts or schemas. September 10 results are described
+in `DEVLOG.md` and `planning/unused_cleanup_2026_09_10.md`.
 
 ## Commands
 
-Run from the repository root with an already running host Ollama server. These
-scripts use explicit experimental models/settings, not the benchmark CLI config.
-They are opt-in and may take substantial model time.
+Run from the repository root with the host Ollama server already running:
 
 ```bash
-.venv/bin/python -m benchmarks.experiments.contract_simplification_probes
-.venv/bin/python -m benchmarks.experiments.contract_simplification_probes --context
-.venv/bin/python -m benchmarks.experiments.reasoning_contract_probes
-.venv/bin/python -m benchmarks.experiments.model_contract_comparison
+.venv/bin/python -m benchmarks.experiments.truth_scope_probes
+.venv/bin/python -m benchmarks.experiments.fact_group_probes
+.venv/bin/python -m benchmarks.experiments.fact_group_pipeline
 ```
-
-The contract probe's `--extraction` mode and model comparison's `--natural-only`
-mode require the saved source under
-`benchmark_runs/reasoning-policy-20260909-locomo/stores/conv-26/artifacts/sources/source-ed6698b588b14e40.json`.
-Model comparison requires both `gemma4:12b` and `qwen3.5:9b`; other probes use Gemma.
-These are retained investigations, not proof that current production contracts pass.
 
 The historical reasoning runner lives under `historical/`:
 

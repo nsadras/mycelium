@@ -19,7 +19,6 @@ from mycelium.reconsolidation import ReconsolidationReviewService
 from mycelium.store import WikiStore
 from mycelium.structured_outputs import (
     fact_candidate_selection_output_model,
-    fact_truth_output_model,
 )
 from tests.memory_helpers import claim, fact, place, setup_owner
 
@@ -47,16 +46,6 @@ def test_coverage_distinguishes_review_holdback_from_missing_presentation(tmp_pa
     assert report["repeated_fact_claim_ids"] == []
     artifacts.save_consolidated_fact(replace(fact(items["accepted"]), fact_id="duplicate"))
     assert artifacts.coverage_report()["repeated_fact_claim_ids"] == ["accepted"]
-
-
-def test_truth_schema_separates_incoming_from_prior_targets():
-    schema = fact_truth_output_model(["C001"])
-    valid = {"comparisons":[{"target":"C001","scope":"same","reason":"Same state."}],
-             "relation":"supersedes","changed_targets":["C001"],"reason":"The incoming evidence replaces the prior state."}
-    assert schema.model_validate(valid).root.relation == "supersedes"
-    with pytest.raises(ValidationError):
-        schema.model_validate({**valid,"changed_targets":["C002"]})
-
 
 
 def test_fact_candidate_schema_requires_exact_claim_and_fact_aliases():
@@ -115,7 +104,6 @@ def test_truth_input_deduplicates_source_text_and_keeps_claim_citations(tmp_path
     for alias in ("C001", "C002"):
         assert payload["claims"][alias]["citations"][0]["source_id"] == source_id
         assert payload["claims"][alias]["citations"][0]["segment_id"] == segment_id
-
 
 
 @pytest.mark.asyncio
@@ -402,7 +390,6 @@ async def test_batched_truth_changes_preserve_independent_support_for_review(tmp
     assert len(truth_calls) == 1
 
 
-
 @pytest.mark.asyncio
 async def test_incremental_resolution_preserves_unselected_fact_exactly(no_truth_changes, tmp_path):
     artifacts = setup_owner(tmp_path)
@@ -498,7 +485,6 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(no_truth_cha
     assert {cid for item in result.facts for cid in item.member_claim_ids} == {"old", "other", "pending"}
     assert not result.proposals
     llm.call_structured.assert_not_awaited()
-
 
 
 @pytest.mark.asyncio

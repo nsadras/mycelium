@@ -11,25 +11,6 @@ _EXTRACTION_POLICY_TEMPLATES = {
 }
 
 
-def fact_truth_prompt(
-    owner: str,
-    claims: str,
-    existing_facts: str,
-    reviewed_relations: str,
-    incoming_claims: str,
-    prior_decisions: str,
-) -> tuple[str, str]:
-    return render_prompt_pair(
-        "memory/fact_truth",
-        owner=owner,
-        claims=claims,
-        existing_facts=existing_facts,
-        reviewed_relations=reviewed_relations,
-        incoming_claims=incoming_claims,
-        prior_decisions=prior_decisions,
-    )
-
-
 def fact_candidate_selection_prompt(
     incoming_claims: str,
     prior_facts: str,
@@ -49,16 +30,6 @@ def assistant_context_selection_prompt(
         "assistant/context_selection",
         query=query,
         candidates=candidates,
-    )
-
-
-def fact_synthesis_prompt(
-    owner: str, claims: str, existing_facts: str, truth_changes: str, sections: str,
-) -> tuple[str, str]:
-    return render_prompt_pair(
-        "memory/fact_synthesis", owner=owner, claims=claims,
-        existing_facts=existing_facts, truth_changes=truth_changes,
-        sections=sections,
     )
 
 

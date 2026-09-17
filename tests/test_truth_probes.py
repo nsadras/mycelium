@@ -7,8 +7,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from mycelium import Mycelium, prompts
-from mycelium.structured_outputs import fact_truth_output_model
+from mycelium import Mycelium
+from mycelium.truth_review import TruthReviewer
 from tests.model_probe_helpers import capture
 
 
@@ -35,21 +35,18 @@ CASES = [
 async def test_truth_review(tmp_path, monkeypatch, name, prior, incoming, disposition, relation):
     monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path / "llm-errors"))
     memory = Mycelium(tmp_path / "store", config_path=Path(__file__).resolve().parents[1] / "mycelium.toml")
-    schema = fact_truth_output_model(["C001"])
-    system, user = prompts.fact_truth_prompt(
-        "Mira (person)", json.dumps({"C001": prior}), "none", "none",
-        json.dumps({"C002": incoming}), "[]",
-    )
-    result = schema.model_validate(await memory.llm.call_structured(
-        system, user, schema, num_predict=2048, debug_label="truth-probe", think=True,
-    )).model_dump()
+    memory.llm.trace_path = tmp_path / "calls.jsonl"
+    result = (await TruthReviewer(memory.llm, memory.artifacts)._compare_pairs(
+        [("older", "newer")], {"older": {"text": prior}, "newer": {"text": incoming}},
+    ))[("older", "newer")]
     (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
     print(name, tmp_path, json.dumps(result), flush=True)
     decision = result
     assert (decision["relation"] == "no_change") == (disposition == "no_change")
     if relation:
-        assert decision["relation"] == relation
-        assert decision["changed_targets"] == ["C001"]
+        assert decision["relation"] == (
+            "right_supersedes_left" if relation == "supersedes" else relation
+        )
 
 
 @pytest.mark.integration
@@ -65,6 +62,7 @@ async def test_truth_review(tmp_path, monkeypatch, name, prior, incoming, dispos
 async def test_truth_review_two_builds(tmp_path, monkeypatch, prior, incoming, relation):
     monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path / "llm-errors"))
     memory = Mycelium(tmp_path / "store", config_path=Path(__file__).resolve().parents[1] / "mycelium.toml")
+    memory.llm.trace_path = tmp_path / "calls.jsonl"
     await capture(memory, [{"role": "user", "content": prior}], "prior")
     first = await memory.consolidate()
     assert not first.report.failures

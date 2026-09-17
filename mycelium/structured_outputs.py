@@ -1,14 +1,12 @@
 """Structured response contracts used by production LLM calls."""
 
-from collections import Counter
-from collections.abc import Collection, Mapping
-from typing import Any, Literal, Union
+from collections.abc import Collection
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    RootModel,
     create_model,
     model_validator,
 )
@@ -24,7 +22,6 @@ class ExtractedEntityOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     entity: str = Field(min_length=1)
     role: Literal["subject", "owner", "participant"]
-
 
 
 class ReplacementMetadata(BaseModel):
@@ -178,58 +175,6 @@ class FactCandidateSelectionOutput(BaseModel):
     reason: str = Field(min_length=1, max_length=800)
 
 
-def fact_truth_output_model(target_claim_aliases: Collection[str]) -> type[BaseModel]:
-    """One incoming statement, with an explicit comparison for every older target."""
-    targets = tuple(dict.fromkeys(target_claim_aliases))
-    if not targets:
-        raise ValueError("Truth review requires older targets")
-    target_type = Literal.__getitem__(targets)
-    comparisons = tuple(
-        create_model(
-            f"Comparison{index}",
-            __config__=ConfigDict(extra="forbid"),
-            target=(Literal.__getitem__((target,)), ...),
-            scope=(Literal["same", "distinct", "unresolved"], ...),
-            reason=(str, Field(min_length=1, max_length=500)),
-        )
-        for index, target in enumerate(targets)
-    )
-    common = dict(
-        comparisons=(tuple[comparisons], ...),
-        reason=(str, Field(min_length=1, max_length=800)),
-    )
-    unchanged = create_model(
-        "UnchangedTruth",
-        __config__=ConfigDict(extra="forbid"),
-        **common,
-        relation=(Literal["no_change"], ...),
-        changed_targets=(list[target_type], Field(max_length=0)),
-    )
-    changed = create_model(
-        "ChangedTruth",
-        __config__=ConfigDict(extra="forbid"),
-        **common,
-        relation=(Literal["contradicts", "supersedes"], ...),
-        changed_targets=(
-            list[target_type],
-            Field(min_length=1, max_length=len(targets)),
-        ),
-    )
-
-    class ExactTruthDecision(RootModel[unchanged | changed]):
-        @model_validator(mode="after")
-        def validate_targets(self):
-            decision = self.root
-            if len(set(decision.changed_targets)) != len(decision.changed_targets):
-                raise ValueError("Changed targets must be unique")
-            scopes = {c.target: c.scope for c in decision.comparisons}
-            if any(scopes[t] != "same" for t in decision.changed_targets):
-                raise ValueError("Changed targets require established same scope")
-            return self
-
-    return ExactTruthDecision
-
-
 def fact_candidate_selection_output_model(
     incoming_claim_aliases: Collection[str],
     prior_fact_aliases: Collection[str],
@@ -260,102 +205,3 @@ def fact_candidate_selection_output_model(
         __config__=ConfigDict(extra="forbid"),
         decisions=(decisions, ...),
     )
-
-
-def fact_synthesis_output_model(
-    claim_texts: Mapping[str, str],
-    allowed_sections: Collection[str],
-    truth_changes: Collection[Mapping[str, Any]] = (),
-) -> type[BaseModel]:
-    """Partition canonical claims into grounded presentation groups in one response."""
-    if not claim_texts or not allowed_sections:
-        raise ValueError("Synthesis requires claims and allowed sections")
-    alias_type = Literal.__getitem__(tuple(claim_texts))
-    section_type = Literal.__getitem__(tuple(dict.fromkeys(allowed_sections)))
-    common = dict(
-        memory_scope=(str, Field(min_length=1)),
-        prominence=(Literal["briefing", "detail"], ...),
-        state=(Literal["current", "history"], ...),
-        section_key=(section_type, ...),
-    )
-    singleton = create_model(
-        "SingleClaimFact",
-        __config__=ConfigDict(extra="forbid"),
-        member_claim_aliases=(list[alias_type], Field(min_length=1, max_length=1)),
-        text=(type(None), ...),
-        **common,
-    )
-    fact = singleton
-    if len(claim_texts) > 1:
-        combined = create_model(
-            "CombinedFact",
-            __config__=ConfigDict(extra="forbid"),
-            member_claim_aliases=(
-                list[alias_type],
-                Field(min_length=2, max_length=len(claim_texts)),
-            ),
-            text=(str, Field(min_length=1, max_length=1000)),
-            **common,
-        )
-        fact = Union[singleton, combined]
-    base = create_model(
-        "FactSynthesis",
-        __config__=ConfigDict(extra="forbid"),
-        facts=(list[fact], Field(min_length=1, max_length=len(claim_texts))),
-    )
-
-    class ExactFactSynthesis(base):
-        @model_validator(mode="after")
-        def validate_projection(self):
-            supplied = [
-                alias for fact in self.facts for alias in fact.member_claim_aliases
-            ]
-            if len(supplied) != len(set(supplied)) or set(supplied) != set(claim_texts):
-                repeated = sorted(
-                    alias for alias, count in Counter(supplied).items() if count > 1
-                )
-                missing = sorted(set(claim_texts) - set(supplied))
-                raise ValueError(
-                    "Every canonical claim must belong to exactly one display group; "
-                    f"repeated={repeated}; missing={missing}. Do not add a second review-summary group."
-                )
-            for fact in self.facts:
-                members = fact.member_claim_aliases
-                if len(members) == 1 and fact.text is not None:
-                    raise ValueError(
-                        "Singleton text is rendered by the application; return null"
-                    )
-                if len(members) > 1 and not fact.text:
-                    raise ValueError("Multi-claim groups require synthesized text")
-                for change in truth_changes:
-                    if set(members) & set(change["incoming_claim_aliases"]) and set(
-                        members
-                    ) & set(change["target_claim_aliases"]):
-                        raise ValueError("Truth-change sides cannot share a fact")
-            return self
-
-    return ExactFactSynthesis
-
-
-def fact_truth_batch_model(
-    targets_by_incoming: Mapping[str, Collection[str]],
-) -> type[BaseModel]:
-    """Share context while requiring each decision and noncompeting review targets."""
-    decisions = create_model(
-        "TruthDecisions", __config__=ConfigDict(extra="forbid"),
-        **{alias: (fact_truth_output_model(targets), ...)
-           for alias, targets in targets_by_incoming.items()},
-    )
-    base = create_model(
-        "TruthBatch", __config__=ConfigDict(extra="forbid"), decisions=(decisions, ...),
-    )
-
-    class ExactTruthBatch(base):
-        @model_validator(mode="after")
-        def validate_changes(self):
-            targets = [target for _, decision in self.decisions for target in decision.root.changed_targets]
-            if len(targets) != len(set(targets)):
-                raise ValueError("An older claim can be targeted by only one change in a batch")
-            return self
-
-    return ExactTruthBatch

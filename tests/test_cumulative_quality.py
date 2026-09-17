@@ -8,24 +8,8 @@ import pytest
 from pydantic import ValidationError
 
 from mycelium import Mycelium, prompts
-from mycelium.structured_outputs import fact_truth_output_model, extraction_records
-
-
-def test_truth_change_requires_same_scope():
-    schema = fact_truth_output_model(["C001", "C002"])
-    decision = {"comparisons":[{"target":"C001","scope":"same","reason":"Same object."},
-                               {"target":"C002","scope":"distinct","reason":"Another object."}],
-                "relation":"contradicts","changed_targets":["C001"],"reason":"Same object and time."}
-    schema.model_validate(decision)
-    with pytest.raises(ValidationError, match="same scope"):
-        schema.model_validate({**decision,"changed_targets":["C002"]})
-
-
-def test_truth_schema_establishes_scope_before_verdict():
-    schema = fact_truth_output_model(["C001"]).model_json_schema()
-    for branch in schema["anyOf"]:
-        definition = schema["$defs"][branch["$ref"].rsplit("/", 1)[1]]
-        assert list(definition["properties"])[0] == "comparisons"
+from mycelium.structured_outputs import extraction_records
+from mycelium.truth_review import TruthReviewer
 
 
 TEMPORAL_CASES = [
@@ -98,18 +82,10 @@ async def test_temporal_scope_contract(
             ],
         }
 
-    system, user = prompts.fact_truth_prompt(
-        "Rina (person)",
-        json.dumps({"C001": record(old, oldtime)}),
-        "none",
-        "none",
-        json.dumps({"C002": record(new, newtime)}),
-        "[]",
-    )
-    schema = fact_truth_output_model(["C001"])
-    result = await memory.llm.call_structured(
-        system, user, schema, num_predict=2048, dump_success=True, think=True
-    )
+    result = (await TruthReviewer(memory.llm, memory.artifacts)._compare_pairs(
+        [("older", "newer")],
+        {"older": record(old, oldtime), "newer": record(new, newtime)},
+    ))[("older", "newer")]
     (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
     assert ("truth_change" if result["relation"] != "no_change" else "no_change") == expected
 
@@ -156,28 +132,3 @@ async def test_extraction_temporal_and_fidelity_contract(tmp_path, monkeypatch):
     ]:
         await check_meaning(memory, {"expected": expected, "forbidden": forbidden},
                             [c for c in claims if sid in c["segment_ids"]], tmp_path / f"meaning-{sid}.json")
-
-
-def test_truth_schema_requires_each_target_at_a_fixed_position():
-    schema = fact_truth_output_model(["C001", "C002"]).model_json_schema()
-    comparisons = schema["$defs"]["UnchangedTruth"]["properties"]["comparisons"]
-    assert comparisons["minItems"] == comparisons["maxItems"] == 2
-    for item, target in zip(comparisons["prefixItems"], ["C001", "C002"], strict=True):
-        definition = schema["$defs"][item["$ref"].rsplit("/", 1)[1]]
-        assert definition["properties"]["target"]["const"] == target
-
-
-def test_truth_verdict_variants_enforce_changed_targets_in_native_schema():
-    model = fact_truth_output_model(["C001"])
-    schema = model.model_json_schema()
-    unchanged = schema["$defs"]["UnchangedTruth"]["properties"]
-    changed = schema["$defs"]["ChangedTruth"]["properties"]
-    assert unchanged["changed_targets"]["maxItems"] == 0
-    assert changed["changed_targets"]["minItems"] == 1
-    valid = {"comparisons": [{"target": "C001", "scope": "same", "reason": "Same state."}],
-             "reason": "Compatible evidence.", "relation": "no_change", "changed_targets": []}
-    assert model.model_validate(valid).model_dump(mode="json") == valid
-    with pytest.raises(ValidationError):
-        model.model_validate({**valid, "changed_targets": ["C001"]})
-    with pytest.raises(ValidationError):
-        model.model_validate({**valid, "relation": "supersedes"})

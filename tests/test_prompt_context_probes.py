@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 import pytest
-from mycelium import Mycelium, prompts
+from mycelium import Mycelium
 from mycelium.artifacts import (
     ClaimPlacement,
     ClaimProvenance,
@@ -12,11 +12,8 @@ from mycelium.artifacts import (
     SourceDocument,
     SourceSegment,
 )
-from mycelium.facts import FactResolver
-from mycelium.structured_outputs import (
-    fact_truth_output_model,
-    fact_synthesis_output_model,
-)
+from mycelium.truth_review import TruthReviewer
+from tests.model_probe_helpers import grouped_statements, check_meaning
 
 
 pytestmark = [
@@ -78,9 +75,7 @@ def render_truth_claims(memory, records):
             "2026-11-01",
             "2026-11-01",
         )
-    return FactResolver(memory.llm, memory.artifacts)._claims_text(
-        claims, placements, {}, {}
-    )
+    return TruthReviewer(memory.llm, memory.artifacts)._records(claims, placements, {})
 
 
 @pytest.mark.asyncio
@@ -124,6 +119,7 @@ async def test_truth_in_mixed_history(
 ):
     monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path / "llm"))
     memory = Mycelium(tmp_path / "store", config_path=Path.cwd() / "mycelium.toml")
+    memory.llm.trace_path = tmp_path / "calls.jsonl"
     targets = {"C001": record(prior, "2026-03-14")}
     distractions = [
         "Rina repairs antique radios.",
@@ -137,34 +133,27 @@ async def test_truth_in_mixed_history(
     targets.update(
         {f"C{i:03d}": record(t, "2026-04-05") for i, t in enumerate(distractions, 2)}
     )
-    system, user = prompts.fact_truth_prompt(
-        "Rina (person)",
-        render_truth_claims(memory, targets),
-        "none",
-        "none",
-        render_truth_claims(memory, {"C009": record(incoming, "2026-10-22")}),
-        "[]",
+    records = render_truth_claims(memory, {
+        **targets, "C009": record(incoming, "2026-10-22"),
+    })
+    decisions = await TruthReviewer(memory.llm, memory.artifacts)._compare_pairs(
+        [(target, "C009") for target in targets], records,
     )
-    result = await memory.llm.call_structured(
-        system,
-        user,
-        fact_truth_output_model(targets),
-        num_predict=8192,
-        dump_success=True, think=True,
-    )
-    (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
-    decision = result
+    (tmp_path / "response.json").write_text(json.dumps(
+        {left: decision for (left, _), decision in decisions.items()}, indent=2,
+    ))
+    decision = decisions[("C001", "C009")]
     assert (decision["relation"] == "no_change") == (expected == "no_change")
     if scope:
-        assert {c["target"]: c["scope"] for c in decision["comparisons"]}["C001"] == scope
-    if expected == "truth_change":
-        assert decision["changed_targets"] == ["C001"]
+        assert decision["scope"] == scope
+    assert all(d["relation"] == "no_change" for (left, _), d in decisions.items() if left != "C001")
 
 
 @pytest.mark.asyncio
 async def test_synthesis_mixed_history(tmp_path, monkeypatch):
     monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path / "llm"))
     memory = Mycelium(tmp_path / "store", config_path=Path.cwd() / "mycelium.toml")
+    memory.llm.trace_path = tmp_path / "calls.jsonl"
     groups = [
         [
             "Rina attended a bookbinding workshop on March 3.",
@@ -187,31 +176,18 @@ async def test_synthesis_mixed_history(tmp_path, monkeypatch):
         ["Rina volunteers at the library on Fridays."],
     ]
     canonical = {}
-    expected = []
     for g in groups:
-        members = []
         for t in g:
             alias = f"C{len(canonical) + 1:03d}"
-            members.append(alias)
             canonical[alias] = record(t, "2026-11-01", "unknown")
-        expected.append(frozenset(members))
-    system, user = prompts.fact_synthesis_prompt(
-        "Rina (person)",
-        json.dumps(canonical, indent=2),
-        "none",
-        "[]",
+    statements = await grouped_statements(
+        memory, "Rina (person)", canonical,
         "profile: ongoing attributes and plans\nhistory: past occurrences",
+        tmp_path / "response.json",
     )
-    result = await memory.llm.call_structured(
-        system,
-        user,
-        fact_synthesis_output_model(
-            {a: r["text"] for a, r in canonical.items()}, ["profile", "history"]
-        ),
-        num_predict=8192,
-        dump_success=True, think=True,
-    )
-    (tmp_path / "response.json").write_text(json.dumps(result, indent=2))
-    assert {frozenset(f["member_claim_aliases"]) for f in result["facts"]} == set(
-        expected
+    await check_meaning(
+        memory,
+        {"expected": "Rina attended separate bookbinding workshops on March 3 lasting two hours and October 6 at the library; she intends to learn clarinet and try sourdough, adopted a cat April 8, and bought a bicycle April 9.",
+         "forbidden": "The October 6 workshop lasted two hours."},
+        statements, tmp_path / "meaning.json",
     )

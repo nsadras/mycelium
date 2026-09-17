@@ -38,6 +38,9 @@ admission and answer judgment; answering and embeddings are separate below.
 | Main model inference attempts | 321 | 196 |
 | Cached decision returns / seconds | 0 / 0 | 2 / 0.002 |
 | Main model server seconds | 2,804.675 | 1,449.390 |
+| Encoding/organization only: attempts / server seconds | 284 / 2,687.737 | 159 / 1,334.613 |
+| Retrieval admission: attempts / server seconds | 18 / 85.863 | 18 / 83.692 |
+| Evaluator: attempts / server seconds | 19 / 31.075 | 19 / 31.085 |
 | Original client-wall trace seconds (clock-skew limitation) | 2,732.122 | 1,404.578 |
 | Input / output tokens | 2,326,261 / 165,251 | 1,090,182 / 86,317 |
 | Failed attempts | 11 | 3 |
@@ -49,11 +52,14 @@ admission and answer judgment; answering and embeddings are separate below.
 | Truth comparison calls / server seconds | 12 / 155.060 | 14 / 141.960 |
 | Retrieval elapsed seconds, 19 probes | 96.846 | 92.732 |
 | Answer elapsed seconds, 19 probes | 32.159 | 31.103 |
-| QA model seconds | 31.107 | 29.862 |
-| Separate embedding seconds | 9.942 | 8.006 |
+| Answer generation: attempts / server seconds | 19 / 31.922 | 19 / 30.877 |
+| Separate embedding operations / monotonic client seconds | 24 / 9.942 | 24 / 8.006 |
 | Raw judged passes | 10/19 | 10/19 |
 
 Main model server time fell 48.3%, with no change to which raw probe judgments pass.
+Encoding/organization alone fell 50.3%; evaluation and answering are explicitly
+separate from that product-work subtotal. Original answer-generation client-wall
+trace sums were 31.107/29.862s, with the same clock-skew limitation below.
 This supports continued use of the smaller work scope and simpler attribution
 contract, alongside their isolated controls. It does not establish equivalent
 full encoding quality or attribute the entire saving to one mechanism.

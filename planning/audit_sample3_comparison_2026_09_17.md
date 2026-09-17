@@ -89,6 +89,16 @@ link; final checked references resolve. Exact IDs/citations do not establish
 semantic support or completeness. Review-decision counts can include several
 decisions about one identity; they are not necessarily distinct user actions.
 
+Additional fact-membership checks, added after the current session-7 defect,
+find duplicated membership in the old run too: eight claims at session 15,
+a peak of 94 at session 20, and six in the final store. There are 96
+fact/placement owner disagreements at session 20 and six at the end. These
+are stored facts, distinct from legitimate projections of one fact onto several
+pages. The records are retained in
+`source-review/overnight-sample3-v1-fact-integrity.json`. The older pipeline and
+its pending proposals need separate causal analysis; this shared symptom does
+not establish that every historical occurrence had the same failure mechanism.
+
 Prior pending truth proposals also need semantic review, not just a count. The
 first treats planning taekwondo as superseding kickboxing, although the person
 can do both. Another treats a positive opinion of rock climbing as superseding
@@ -115,6 +125,36 @@ they are not just offline encoding. Server time includes loading/overhead and
 does not equal client elapsed or pure GPU compute. Compare the same measurement
 in both arms, retaining missing-duration coverage and failures. Historical daily
 and held-out analyses are also preserved in `source-review/timing-comparison.json`.
+
+The store trace excludes the separate answering trace. The prior run's complete
+recorded cost components are:
+
+| Component | Attempts | Server seconds |
+|---|---:|---:|
+| Extraction and organization | 1,811 | 37,263.297 |
+| Retrieval admission | 193 | 2,197.016 |
+| Answer generation | 194 | 228.779 |
+| Embeddings | 232 | 22.845 |
+| Semantic evaluator | 0 | 0 |
+
+Every listed attempt has server-duration metadata. The 194 answer calls include
+one second round: question 49 uses `memory_sources` successfully, but the shown
+source refers only to unspecified baked goods and the answer still abstains.
+Only one of 193 questions uses a memory tool. Prior retrieval elapsed totals
+2,230.435s and answering elapsed 229.581s; these are measured with monotonic clocks
+and are separate from offline encoding and server-time sums. Current evaluator
+cost will be reported separately because the old run did not use it. Embeddings
+can appear in either the store's `llm-calls.jsonl` or `embedding-calls.jsonl`; the
+inspection includes both without counting them as text generation.
+
+**Shared-model limitation:** a separate bounded validator proof used the same
+host model during session 5, at 10:15:23–10:18:22 and 10:20:57–10:21:14 UTC on
+Sept 17. It made nine real requests (eight paired direct calls and one production
+caller check). Their costs are not added to the benchmark's own traces, but
+queue/cache effects can affect its call and elapsed timings. Session 5 is not an
+uncontended measurement; the full elapsed total also includes any resulting wait.
+The benchmark's code, prompts, schema, data and configuration remain frozen.
+Windows and probe roots are retained in `source-review/model-contention.json`.
 
 ### Session 1
 
@@ -176,7 +216,7 @@ still with its incorrect question citation. A useful view cannot cure bad
 canonical provenance. All checked exact links and IDs resolve in these snapshots.
 
 All 32 source conversations have been read; review anchors are retained in
-`source-review/source-notes.md`. Current page review covers snapshots 1–4 so far.
+`source-review/source-notes.md`. Current page review covers snapshots 1–7 so far.
 Later sources include distinct pets, events and charities, an actual job loss
 versus a tentative new opportunity, and compatible historical activities. These
 will be assessed as source-supported distinctions, not required page names/counts.
@@ -204,12 +244,148 @@ Fact grouping request `926da14a` omits exactly `C027` on each of three attempts:
 44 allowed IDs, 43 returned, no duplicates, largest group 11. The retry error
 says every claim must belong to one group but never names the missing ID.
 Reporting the exact missing/duplicate IDs is a small structural-feedback
-hypothesis worth testing after this frozen workload; it would neither assign
-meaning nor invent an omitted group. It is not integrated during this run.
+hypothesis: it neither assigns meaning nor invents an omitted group. Separate
+proof subsequently passed three neutral controls and this retained repair, while
+the generic-error control still failed the retained case. The production-caller
+check also passed. Commit `4429889` adds only that error feedback in the primary
+checkout, with 70 focused structural tests; it is not loaded into this run.
 The resulting 12 failed additions include useful incident evidence along with
 routine agreements. They remain canonically searchable and retryable, and older
 published facts survive. This demonstrates honest failure handling, not successful
 organization or evidence that three retries were productive.
+
+### Session 5
+
+The build completes in 1,857.5s, including the shared-model limitation above.
+It clears the prior 12-claim publication backlog: 143 total claims, 142 routed,
+one deferred, 62 facts, 30 identities, 19 pages, eight pending identity decisions
+and no truth proposals. No extraction backlog or checked exact-reference defect
+remains. The retained-ID retry fix is **not** in this checkout, so this recovery
+cannot be credited to that fix; later changed grouping inputs succeeded.
+
+Source review confirms useful separation of Maria's aunt, the lonely child and
+John's own childhood doll. Source 5 reuses the fourth Maria identity rather than
+creating a fifth, but does not resolve the earlier fragmentation. The aunt's
+inspiration/help, shelter event and comfort offered to the child are preserved.
+At the same time, generic agreement and thanks remain prominent, long person-page
+paragraphs concatenate independent sentiments, and brief subjects such as a
+handshake photograph or generic teamwork receive their own pages. This is a
+salience/readability failure, independent of exact page-count expectations.
+
+A consequential omission occurs at source segment 1 (`D5:1`): John explicitly
+says he went to the community meeting. It becomes source-only, with no claim.
+The page retains the older future meeting plan. This is an extraction miss,
+not a retrieval problem or a missed comparison between two retained statements.
+The prior run also omits this attendance update, so it is a shared failure,
+not a demonstrated regression introduced by the current changes.
+“Last week” for the shelter event becomes unsupported exact Jan 21; the child's
+page also dates sitting/talking to the conversation's exact Jan 28 timestamp.
+Canonical coverage and derived prose therefore remain untrustworthy despite a
+completed build. “Accounted for” means claimed/source-only/pending bookkeeping,
+not complete useful recall; one cited segment also has a source-only disposition,
+so those counts are overlapping sets, not a partition of 321 source segments.
+
+### Session 6
+
+The session finishes in 1,003.4s: 401 segments, 164 claims (151 routed, ten
+routing-failed, three deferred), 69 facts, 31 identities and 21 pages. Eight
+identity decisions remain pending, with no truth proposals. The 103 rendered
+items and 66 links pass the exact-reference checks; extraction has no backlog.
+
+Useful new evidence includes David's housing difficulties and support referral,
+Maria's family money problems and aunt's assistance, and her conditional offer
+to help with future events when available. Source 6 attaches Maria to the first
+identity while source 5 attached her to the fourth; continuity remains fragmented.
+An independent page for the generic belief that something must be done about
+social problems adds little accessible context. This is a utility observation,
+not a requirement for a particular page count.
+
+“Last Friday” correctly resolves to Feb 3 from the Feb 5 source. However, the
+new charity event is assigned to the existing identity for the earlier shelter
+event without evidence that they are the same occurrence. Correct calendar
+arithmetic does not establish event identity.
+
+Fact-grouping request `645cd207` returns 37 of 40 IDs on all three attempts,
+omitting exactly `C025`, `C035` and `C038`, without duplicates or an oversized
+group. Its generic validation feedback has the same limitation as session 4;
+the separately committed fix is still outside this frozen run. Ten claims remain
+retryable while John's previous published facts survive. The affected additions
+include his initiative's unemployment motivation and volunteer response as well
+as generic support/thanks; missing publication is not uniformly low-impact.
+
+### Session 7
+
+The session finishes in 1,261.2s: 450 segments, 176 claims (157 routed, 14
+routing-failed, five deferred), 74 facts, 34 identities and 24 pages. Nine
+identity decisions remain pending, with no truth proposals or extraction backlog.
+Source review confirms the creative-writing class, renewed candidacy, Jean's
+history and values, and the yoga invitation remain canonical. “Yesterday” resolves
+correctly to Feb 24; “not too soon” stays unresolved. Jean's history/value claims
+still omit the cited antecedent naming her. A fifth Maria page holds her writing
+class while volunteering remains on the first, including within this same source.
+The app's explicitly declared user is bound directly; this third-party import
+does not declare a user or stable external participant IDs. The fragmentation
+does not demonstrate that the app duplicates its declared user.
+
+Grouping request `c2a6c113` omits `C048` and `C049` from 59 IDs in all three
+attempts; the first also repeats `C038`. John's earlier facts survive. The
+workload remains frozen before the separate exact-ID feedback fix.
+
+**A publication-integrity defect is also exposed.** Ownership of
+`claim-2b3349eda8df63fd` changes from `person-john` to `topic-resource-inequality`.
+John's grouping fails, but the destination's new fact and placement override
+still publish. The claim belongs to both `fact-53cd1c38258a` and
+`fact-4945c545dd8b`, and appears twice on the destination page. Filtering failed
+routes alone did not filter the independent fact/placement result. This is a
+transaction-scope bug, independent of semantic grouping quality or the desired
+number of pages. The inspection now checks duplicate fact membership and
+fact/placement owner disagreement as well as resolvable references.
+
+A separate primary-checkout fix, `dbddc04`, holds both sides of a failed transfer, including
+chains of transfers, while independent additions can publish. Global truth-review
+failure also holds staged maintenance. Tests exercise source/destination failure,
+successful transfer, retry and preserved old pages through the real Build commit.
+The fix adds no model call, schema, or semantic decision and stays outside this
+frozen workload. Full structural validation passes 839 tests with 75 integration
+tests deselected; this does not establish the model's semantic correctness.
+
+### First-five-conversation cost/quality checkpoint
+
+This prefix uses the same five conversations (321 segments). Trace boundaries
+are the first extraction request for source 6, so no later-session or QA work is
+included. Old model/code provenance remains incomplete, and current session 5
+has the explicit shared-model interval above: this is not an isolated ablation.
+
+| First-five checkpoint | Prior | Current frozen run |
+|---|---:|---:|
+| Text-generation attempts / failed attempts | 100 / 6 | 387 / 5 |
+| Input tokens | 839,982 | 3,143,541 |
+| Output tokens | 107,165 | 268,468 |
+| Server seconds | 1,670.497 | 4,482.670 |
+| Canonical claims | 138 | 143 |
+| Routed / deferred / failed claims | 138 / 0 / 0 | 142 / 1 / 0 |
+| Facts / identities / pages | 68 / 6 / 5 | 62 / 30 / 19 |
+| Pending identity / truth reviews | 0 / 1 | 8 / 0 |
+
+The current pipeline uses 3.87× as many generation attempts and 2.51× the output
+tokens, with nearly the same retained claim count. Larger page counts are not a
+benefit by themselves. Source review shows worse identity fragmentation, wrong
+date precision, an omitted meeting update and substantial generic prose. The old
+truth proposal incorrectly treats taekwondo as replacing kickboxing; its absence
+in the new run is a local improvement, not enough to justify the extra work.
+At this checkpoint, a broad quality or cost improvement is **not demonstrated**.
+The daily follow-through saving is against a different, already-expanded
+baseline and must not be substituted for this comparison.
+
+Current prefix cost is concentrated in truth screening (96 calls / 1,877.897
+server seconds) and comparison (46 / 480.978), together 52.6% of server time.
+Extraction uses nine calls / 482.937s; discovery/identity/admission 92 / 545.793s;
+attribution/routing 54 / 715.282s; fact selection/grouping/text 90 / 379.783s.
+The bounded candidate cap prevents exhaustive growth but does not make the
+pipeline cheap. These observations favor simplifying duplicated interpretation
+and improving useful source retention before another expansion of retrieval or
+review machinery. They are prefix findings, not a claim about the unfinished
+32-session/193-question result.
 
 ### Prior-run final views and failure profile
 

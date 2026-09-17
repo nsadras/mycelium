@@ -15,10 +15,18 @@ replay completed with residual quality failures. The frozen four-session held-ou
 run and source review are complete: encoding is incomplete and broad semantic
 acceptance fails. Full sample-3 validation is running at frozen `0f9f7ee`. Existing
 storage, review, configuration, retrieval-consistency, and UI fixes remain the
-foundation. The latest recorded structural suite is 833 passed,
-75 integration tests deselected (33.92s); that is not full semantic acceptance.
+foundation. The latest recorded structural suite is 839 passed,
+75 integration tests deselected (35.32s); that is not full semantic acceptance.
 The separately committed duration-clock fix (`f1dfdd9`) passes 57 client tests
-and that full structural suite, and is not loaded by the frozen comparison process.
+and the then-current 833-test structural suite, and is not loaded by the frozen
+comparison process.
+The later exact-ID fact-group retry fix (`4429889`) passes paired direct controls,
+a production-caller check and 70 focused tests; it also stays outside the frozen
+run. Its nine proof calls briefly share the model during session 5, a recorded
+timing limitation rather than an uncontended performance measurement.
+The later publication fix (`dbddc04`) preserves both owners' previous views when
+an ownership transfer fails, including transfer chains. It passes 76 focused
+tests and the 839-test structural suite; it also stays outside the frozen run.
 
 ### Implementation progress after resuming
 

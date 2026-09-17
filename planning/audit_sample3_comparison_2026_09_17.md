@@ -451,6 +451,16 @@ and improving useful source retention before another expansion of retrieval or
 review machinery. They are prefix findings, not a claim about the unfinished
 32-session/193-question result.
 
+A later trace checkpoint during session 9 contains 276 truth-screening and 215
+truth-comparison calls, with **zero cache returns in either stage**. Successful
+validated responses are present in the decision cache, keyed by the full request
+digest; the normal benchmark trace stores call metadata and failures but no
+successful request bodies. Consequently, this run shows no observed reuse of
+whole truth requests at that checkpoint, but does not establish how many
+individual unchanged pairs were repeated. Estimating a per-pair cache saving
+from response aliases alone would be invalid. Pair-level reuse is not adopted
+on this evidence; its semantic input and invalidation contract would need proof.
+
 ### Prior-run final views and failure profile
 
 The prior final index and both main participant pages were reviewed, alongside

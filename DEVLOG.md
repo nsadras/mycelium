@@ -4819,3 +4819,31 @@ source succeeds only on seventh attempt across builds. New names, explicit date
 interpretation, missed current-state change, duplicate user from tool evidence,
 and broad history rerouting need general fixes. The completed diagnostic is not
 product acceptance. No model/setting was changed and no app server was started.
+
+
+## 2026-09-16 — Declare calendar-date syntax before decoding (C1 follow-up)
+
+Product invariant: absolute time bounds are calendar dates; stated month/day/year
+must not silently become a relative weekday operation. Added the existing
+YYYY-MM-DD syntax to JSON schema and clarified the existing absolute-kind
+description. The regular expression validates a declared date field, never
+interprets source language. No new kind, call, nesting, or stored artifact.
+
+Direct paired probe `calendar-date-syntax-contract-20260917T053805Z-c9b17c9c`:
+current4/7, syntax-only6/7, syntax+kind7/7. Current11attempts/83.486s/6failures,
+59,455input/5,457output tokens; selected7attempts/55.083s/0failures,
+24,098input/3,761output. Calendar/clock and explicit-date transition failures
+were tested alongside range, relative-clock and undated counterexamples.
+These are narrow contract checks, not a broad reliability estimate.
+
+Integrated maintained probe `calendar-date-contract-20260917T054402Z-541a1e5d`:
+7/7direct,49.385s,24,098input/3,280output; native capture→Build→retrieval
+9calls/35.852s/0failures retains the scheduled day and exhibition range with
+exact citations. The larger longitudinal gate remains open.
+
+Structural date/correction suite50passed (0.92s), Ruff and whitespace clean.
+Use `.venv/bin/python -m pytest` in the worktree: the shared standalone pytest
+entrypoint imported the primary checkout and caused a misleading missing-schema
+assertion; the module invocation tested this worktree. An initial invocation
+also named a nonexistent legacy test file and collected nothing; neither was
+counted as validation.

@@ -126,3 +126,12 @@ implementation or an independent ingestion benchmark**. Shared extraction and
 organization/review work must be accounted separately. Indexes are rebuilt for
 frozen snapshots; compare their document/query embedding traces before drawing
 latency conclusions. Any source run with incomplete encoding remains diagnostic.
+
+### Calendar-date contract
+
+`python -m benchmarks.experiments.calendar_date_probes --pipeline` runs neutral
+clock/date/range/relative/undated inputs against the production extraction
+schema, then a native Build and retrieval check. Optional repeated
+`--saved STORE SOURCE_ID comma_separated_expected_dates` replays preserved source
+failures without changing production prompts. Requests, model digests, timings,
+and pipeline snapshots are retained.

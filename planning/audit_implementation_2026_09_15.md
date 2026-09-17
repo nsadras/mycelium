@@ -30,7 +30,10 @@ foundation. The latest recorded structural suite is 799 passed, one skipped,
   field without changing its shape or adding calls. Four mixed-source checks,
   14 isolated production controls and the native correction/retrieval workflow
   passed. The matched direct arm also passed; a broad accuracy gain is unproven.
-  The earlier event-scope diagnostic remains visible. E2/V1 remain the gates.
+  The earlier event-scope diagnostic remains visible. E2 reopened absolute-date
+  syntax/kind failures: exposing the existing date format and clarifying the
+  absolute kind passed7/7direct and native date/range Build→retrieval checks,
+  with no extra call or field. Longitudinal replay/V1 remain gates.
 - **C2 implemented:** `57c0a86` separates identity matching from a source-backed
   preferred-name update in the existing call. Direct proposal 14/14, maintained
   production controls 12/12, native routing 8/8; zero failed requests. Broader

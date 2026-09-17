@@ -12,11 +12,17 @@ class StrictTimeModel(BaseModel):
 
 
 class AbsoluteInterval(StrictTimeModel):
-    kind: Literal["absolute"]
-    start: str = Field(
-        description="Explicit ISO calendar date YYYY-MM-DD, including the evidenced year"
+    kind: Literal["absolute"] = Field(
+        description="Use for an explicitly stated calendar date or date range. Preserve its stated month and day with the evidenced year; weekday or offset operations describe relative phrases instead."
     )
-    end: str = Field(description="Inclusive ISO calendar date YYYY-MM-DD")
+    start: str = Field(
+        description="Explicit ISO calendar date YYYY-MM-DD, including the evidenced year",
+        pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+    )
+    end: str = Field(
+        description="Inclusive ISO calendar date YYYY-MM-DD",
+        pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+    )
     precision: Literal["day", "week", "month", "year", "range"]
 
     @model_validator(mode="after")

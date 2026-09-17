@@ -6,6 +6,24 @@ from pydantic import ValidationError
 from mycelium.temporal_contract import TimeAnnotation, CanonicalTime, resolve_annotation
 
 
+def test_calendar_date_syntax_is_exposed_to_structured_decoding():
+    from mycelium.structured_outputs import extraction_output_model
+
+    schema = extraction_output_model(["s1"]).model_json_schema()
+    absolute = schema["$defs"]["AbsoluteInterval"]["properties"]
+    for key in ("start", "end"):
+        assert absolute[key]["pattern"] == r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    with pytest.raises(ValidationError):
+        annotation(
+            {
+                "kind": "absolute",
+                "start": "2031-05-10T15:00:00",
+                "end": "2031-05-10T16:30:00",
+                "precision": "range",
+            }
+        )
+
+
 def annotation(
     meaning,
     *,

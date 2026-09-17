@@ -76,7 +76,7 @@ class ReconsolidationReviewService:
                     self.materializer.config,
                 )
                 service = ReconsolidationReviewService(
-                    artifacts, materializer, FactResolver(self.resolver.llm, artifacts)
+                    artifacts, materializer, FactResolver(self.resolver.llm, artifacts, self.resolver.config)
                 )
                 method = service._approve if action == "approve" else service._reject
                 result = await method(proposal_id, reviewer_note=reviewer_note)

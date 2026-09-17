@@ -1,5 +1,7 @@
 """Lossless batching, context budgets, and removal of empty truth work."""
 
+from mycelium.config import Config
+
 import json
 from collections import Counter
 from itertools import product
@@ -32,7 +34,7 @@ def selection_fixture(
     ]
     placements = {c.claim_id: place(artifacts, c) for c in [*prior, *incoming]}
     llm = AsyncMock(context_window_tokens=context)
-    return FactResolver(llm, artifacts), incoming, placements, [fact(c) for c in prior]
+    return FactResolver(llm, artifacts, Config()), incoming, placements, [fact(c) for c in prior]
 
 
 @pytest.mark.asyncio

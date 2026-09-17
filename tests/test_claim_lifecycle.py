@@ -38,7 +38,7 @@ def setup_service(tmp_path):
         artifacts,
         wiki,
         ClaimLifecycleService(
-            artifacts, materializer, FactResolver(llm, artifacts)
+            artifacts, materializer, FactResolver(llm, artifacts, Config())
         ),
     )
 

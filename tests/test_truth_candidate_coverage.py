@@ -1,3 +1,5 @@
+
+from mycelium.config import Config
 from collections import Counter
 from itertools import combinations
 import json
@@ -53,7 +55,7 @@ async def test_each_unreviewed_pair_is_considered_once_across_all_history(
     llm = SimpleNamespace(
         context_window_tokens=65536, call_structured=AsyncMock(side_effect=respond)
     )
-    reviewer = TruthReviewer(llm, SimpleNamespace(db=object()))
+    reviewer = TruthReviewer(llm, SimpleNamespace(db=object()), Config())
     selected = await reviewer._candidate_pairs(
         incoming, records, excluded_pairs=excluded
     )
@@ -64,7 +66,7 @@ async def test_each_unreviewed_pair_is_considered_once_across_all_history(
 @pytest.mark.asyncio
 async def test_reviewed_and_self_pairs_need_no_candidate_generation():
     llm = SimpleNamespace(context_window_tokens=65536, call_structured=AsyncMock())
-    reviewer = TruthReviewer(llm, SimpleNamespace(db=object()))
+    reviewer = TruthReviewer(llm, SimpleNamespace(db=object()), Config())
     records = {cid: {"claim_id": cid} for cid in ["a", "b", "c"]}
     assert (
         await reviewer._candidate_pairs(

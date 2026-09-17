@@ -31,19 +31,15 @@ def test_staged_bindings_replace_exact_scope_keep_manual_reviews_and_do_not_writ
     stored = {"c0": [old, reviewed], "c1": [other]}
     reviewer.artifacts.list_entity_references = lambda claim_id, **_: stored[claim_id]
     fresh = reference("fresh", entity="new")
-    prepared = reviewer._records(claims, {}, {}, {"c0": [fresh]})
-    assert [r["reference_id"] for r in prepared["c0"]["identity_bindings"]] == [
-        "reviewed",
-        "fresh",
-    ]
-    assert prepared["c1"]["identity_bindings"][0]["reference_id"] == "other"
-    empty = reviewer._records(claims, {}, {}, {"c0": []})
-    assert [r["reference_id"] for r in empty["c0"]["identity_bindings"]] == ["reviewed"]
-    persisted = reviewer._records(claims, {}, {})
-    assert [r["reference_id"] for r in persisted["c0"]["identity_bindings"]] == [
-        "old",
-        "reviewed",
-    ]
+    prepared = reviewer._records(claims, {"c0": [fresh]})
+    assert {(r["origin"], r["entity_id"]) for r in prepared["c0"]["identity_bindings"]} == {
+        ("manual", "reviewed-person"), ("scope", "new"),
+    }
+    assert prepared["c1"]["identity_bindings"][0]["entity_id"] == "old"
+    empty = reviewer._records(claims, {"c0": []})
+    assert [r["origin"] for r in empty["c0"]["identity_bindings"]] == ["manual"]
+    persisted = reviewer._records(claims)
+    assert {r["entity_id"] for r in persisted["c0"]["identity_bindings"]} == {"old", "reviewed-person"}
     assert all(r.status == "active" for refs in stored.values() for r in refs)
 
 
@@ -63,7 +59,7 @@ def test_staged_bindings_replace_exact_scope_keep_manual_reviews_and_do_not_writ
 def test_staged_bindings_reject_invalid_scope_or_state(refs):
     reviewer, claims, _, _ = setup(2)
     with pytest.raises(ValueError, match="Staged truth bindings"):
-        reviewer._records(claims, {}, {}, {"c0": refs})
+        reviewer._records(claims, {"c0": refs})
 
 
 @pytest.mark.asyncio

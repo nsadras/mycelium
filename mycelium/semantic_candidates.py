@@ -43,25 +43,31 @@ class SemanticCandidates:
         self.lock = _LOCKS.setdefault(path.resolve(), asyncio.Lock())
         self.last_trace = {}
 
-    async def select(self, documents, queries, *, limit=24, required_ids=()):
+    async def select(
+        self, documents, queries, *, limit=24, required_ids=(), eligible_ids=None
+    ):
         required = sorted(set(required_ids))
+        eligible = set(documents) if eligible_ids is None else set(eligible_ids)
+        if not eligible <= documents.keys():
+            raise ValueError("Eligible candidate IDs must belong to this snapshot")
         self.last_trace = {
             "required_ids": required,
             "limit": limit,
             "document_count": len(documents),
+            "eligible_count": len(eligible),
         }
-        if limit < 1 or len(required) > limit or not set(required) <= documents.keys():
+        if limit < 1 or len(required) > limit or not set(required) <= eligible:
             raise ValueError(
                 "Required candidate IDs must fit the bound and belong to this snapshot"
             )
         if len(required) == limit:
             return required
-        if len(documents) <= limit:
+        if len(eligible) <= limit:
             return [
                 *required,
                 *(
                     identifier
-                    for identifier in sorted(documents)
+                    for identifier in sorted(eligible)
                     if identifier not in required
                 ),
             ]
@@ -81,15 +87,38 @@ class SemanticCandidates:
                     signature,
                 )
                 ranked = []
-                row_count = await table.count_rows()
+                excluded = documents.keys() - eligible
+                # Exact ID eligibility narrows a ranking domain, not meaning.
+                # Prefer the smaller predicate while retaining one shared index.
+                values, operator = (
+                    (eligible, "IN")
+                    if len(eligible) <= len(excluded)
+                    else (excluded, "NOT IN")
+                )
+                predicate = (
+                    (
+                        "parent_id "
+                        + operator
+                        + " ("
+                        + ", ".join(
+                            "'" + value.replace("'", "''") + "'"
+                            for value in sorted(values)
+                        )
+                        + ")"
+                    )
+                    if values
+                    else None
+                )
+                row_count = await table.count_rows(predicate)
                 for vector in vectors:
                     # ANN is deliberately gated on the separate recall experiment.
                     count = min(row_count, limit)
                     while True:
+                        query = table.query().nearest_to(vector)
+                        if predicate:
+                            query = query.where(predicate)
                         rows = await (
-                            table.query()
-                            .nearest_to(vector)
-                            .distance_type("cosine")
+                            query.distance_type("cosine")
                             .bypass_vector_index()
                             .limit(count)
                             .select(["parent_id", "_distance"])

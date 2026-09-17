@@ -124,7 +124,7 @@ class ClaimLifecycleService:
                     self.materializer.config,
                 )
                 service = ClaimLifecycleService(
-                    artifacts, materializer, FactResolver(self.resolver.llm, artifacts)
+                    artifacts, materializer, FactResolver(self.resolver.llm, artifacts, self.resolver.config)
                 )
                 action = (
                     service._correct_claim

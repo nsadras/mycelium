@@ -48,7 +48,7 @@ complexity lives, so new work can report its delta without another profiler.
 | `dream-page-admission` | page admission | 4096 | Subject candidates; exact candidate decisions |
 | `dream-source-attribution` | claim attribution | 8192 | Bounded asserted content and claim/subject coverage |
 | `dream-claim-routing` | routing | 8192 | Bounded evidence cohort, exact IDs and allowed content sections |
-| `dream-truth-candidates` | eligible comparison matrix | 4096 | Incoming chunks × all historical chunks, each up to 12; grows quadratically cumulatively |
+| `dream-truth-candidates` | eligible comparison matrix | 4096 | At most 48 search candidates per incoming claim (32 global + 16 entity); small histories exhaustive, each request chunk up to 12 |
 | `dream-truth-comparison` | pair comparisons | 4096 | Up to 12 pairs; scope/relation/reason; only human review can apply truth changes |
 | `dream-fact-candidate-selection` | prior fact candidates | 2048 | Per incoming/prior chunks when existing facts can be reused |
 | `dream-fact-grouping` | bounded fact groups | 4096 | Exact partition; at most 12 members per group |
@@ -60,8 +60,8 @@ complexity lives, so new work can report its delta without another profiler.
 Page prose, tool-assisted QA and benchmark judges have their own generation
 calls. They belong in measured totals, separately labelled from memory encoding.
 Native schema nesting is currently largest in extraction temporal alternatives,
-attribution/routing and the truth-candidate matrix. C1/C2 should first clarify
-existing decisions; S1 should reduce the truth search domain. Additional calls,
+attribution/routing and the truth-candidate matrix. C1/C2 clarify existing
+decisions; S1 now bounds the truth search domain. Additional calls,
 new decision layers or new persisted production records need explicit evidence.
 
 ## Decision record template

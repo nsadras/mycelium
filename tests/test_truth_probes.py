@@ -36,7 +36,7 @@ async def test_truth_review(tmp_path, monkeypatch, name, prior, incoming, dispos
     monkeypatch.setenv("MYCELIUM_LLM_DEBUG_DIR", str(tmp_path / "llm-errors"))
     memory = Mycelium(tmp_path / "store", config_path=Path(__file__).resolve().parents[1] / "mycelium.toml")
     memory.llm.trace_path = tmp_path / "calls.jsonl"
-    result = (await TruthReviewer(memory.llm, memory.artifacts)._compare_pairs(
+    result = (await TruthReviewer(memory.llm, memory.artifacts, memory.config)._compare_pairs(
         [("older", "newer")], {"older": {"text": prior}, "newer": {"text": incoming}},
     ))[("older", "newer")]
     (tmp_path / "response.json").write_text(json.dumps(result, indent=2))

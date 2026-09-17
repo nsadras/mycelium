@@ -1,3 +1,5 @@
+
+from mycelium.config import Config
 from dataclasses import replace
 from unittest.mock import AsyncMock
 
@@ -66,7 +68,7 @@ async def test_manual_fact_keeps_exact_membership_and_new_evidence_is_visible(
         return {"groups": [group("C001")]}
 
     llm.call_structured.side_effect = respond
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements,
         affected_entity_ids={"you"},
         incoming_claim_ids={"new"},
@@ -97,7 +99,7 @@ async def test_manual_fact_loses_protection_when_member_is_retracted(
     artifacts.save_claim(replace(old, status="retracted"))
     llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.return_value = {"groups": [group("C001")]}
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements,
         affected_entity_ids={"you"},
         incoming_claim_ids=set(),
@@ -124,7 +126,7 @@ async def test_group_render_request_is_stable_under_member_order_and_ignores_oth
     llm.call_structured.return_value = {
         "text": "The user attends the class on Wednesdays."
     }
-    resolver = FactResolver(llm, artifacts)
+    resolver = FactResolver(llm, artifacts, Config())
     await resolver._render_group("You", [first, second])
     await resolver._render_group("You", [second, first])
     requests = llm.call_structured.await_args_list

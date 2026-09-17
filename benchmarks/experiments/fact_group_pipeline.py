@@ -91,7 +91,7 @@ async def main():
                         )
                     )
                     incoming.add(cid)
-                resolver = FactResolver(memory.llm, artifacts)
+                resolver = FactResolver(memory.llm, artifacts, memory.config)
                 before = len(memory.llm._call_log)
                 result = await resolver.resolve(
                     artifacts.list_placements(),
@@ -172,7 +172,7 @@ async def verify_render_reuse(root):
     for case_root in sorted(root.glob("*-*/store")):
         memory = Mycelium(case_root, config_path="mycelium.toml")
         memory.llm.trace_path = root / "reuse-calls.jsonl"
-        resolver = FactResolver(memory.llm, memory.artifacts)
+        resolver = FactResolver(memory.llm, memory.artifacts, memory.config)
         for fact in memory.artifacts.list_consolidated_facts():
             if len(fact.member_claim_ids) <= 1:
                 continue

@@ -58,7 +58,7 @@ async def main(args):
             for kind in ["model-decisions", "reconsolidation-proposals"]:
                 for identifier in artifacts.db.ids(kind):
                     artifacts.db.delete(kind, identifier)
-            reviewer = TruthReviewer(llm, artifacts)
+            reviewer = TruthReviewer(llm, artifacts, config)
             candidate_call, compare_call = (
                 reviewer._candidate_pairs,
                 reviewer._compare_pairs,

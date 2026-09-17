@@ -82,7 +82,7 @@ async def test_temporal_scope_contract(
             ],
         }
 
-    result = (await TruthReviewer(memory.llm, memory.artifacts)._compare_pairs(
+    result = (await TruthReviewer(memory.llm, memory.artifacts, memory.config)._compare_pairs(
         [("older", "newer")],
         {"older": record(old, oldtime), "newer": record(new, newtime)},
     ))[("older", "newer")]

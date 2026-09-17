@@ -4973,3 +4973,110 @@ remain separate gates.
   no-empty-page and same-source role-context regressions cover this boundary.
 - User explicitly assigned real browser/microphone/Wi-Fi/Tailscale checks to
   themselves after implementation is ready; no app services were started.
+
+### 2026-09-16 — S1 bounded truth discovery and stable semantic inputs
+
+- Product need: fixed-size incoming evidence must not trigger model comparisons
+  against every historical claim. Page ownership is not an identity boundary.
+  Freeze K=48 before held-out testing: 32 global semantic neighbors plus at most
+  16 additional neighbors through exact established entity references. Small
+  eligible histories (≤48) remain exhaustive. Both routes include same-batch
+  claims; the global route includes unresolved and unplaced claims.
+- Reused the existing semantic index and configured embedding model. Exact
+  eligible-ID domains share one index and query-vector cache. No lexical
+  decisions, new model stage, nested output, or canonical record type. Search
+  only proposes pairs; the existing structured decisions and human approval
+  boundary still establish changes. Previously reviewed pairs remain excluded.
+  Each unordered pair receives at most one decision, including asymmetric
+  same-batch hits found only from the later side's search.
+- Direct paired proof: `bounded-truth-contract-20260917T062156Z-40711e82`, 104
+  source-backed records / eight incoming claims. All four annotated critical
+  pairs and all three counterexample pairs survived search. Exhaustive candidate
+  screening covered 796 pairs, chose 223 comparisons, made 28 model calls / 368.446s,
+  175,345 input / 25,155 output tokens. Bounded screening covered 249 pairs, chose 86,
+  made 16 calls / 153.073s, 85,655 input / 10,294 output tokens. Both had zero failed
+  requests; shared embedding preparation cost 3.749s separately. These are narrow
+  single-run costs, not an end-to-end speed or reliability claim.
+- Source adjudication: bounded comparisons matched all four annotated changes;
+  exhaustive misclassified the same-time cost conflict as a replacement. Both
+  falsely proposed a change for an ambiguous Alex and independent museum visits
+  in different years. Exhaustive inference is not ground truth. We retained these
+  failures rather than expanding prompts or the candidate cap to chase a score.
+- Production integration: `truth-candidate-pipeline-20260917T063546Z-ac0eeb60`.
+  Native source/claim/reference preparation → search → comparisons → pending
+  proposals completed with no execution failures; 14 model calls / 144.929s plus 13
+  embedding requests. Canonical claims were unchanged. All four critical pairs
+  were proposed, but this run again called the same-time cost conflict a
+  replacement; the two false-positive counterexamples also remain. Review
+  burden and generalization are open workload measurements. The first harness
+  attempt failed before any model call because its output directory was absent;
+  its log is retained, and the corrected fresh run is the recorded evidence.
+- Compact truth inputs retain cited assertions, time, semantic reference fields,
+  and explicit identity-review IDs. They omit view ownership, recreated reference
+  UUIDs, build IDs, timestamps, and retirement bookkeeping; full references remain
+  in the canonical audit store. Exact duplicate semantic references are deduped
+  and sorted. Source, role, identity, time and human-review changes invalidate
+  inference reuse. Configured embedding settings now flow explicitly through
+  FactResolver/TruthReviewer and their unit-of-work lifecycle callers.
+- Prior direct compact-input proof:
+  `compact-truth-contract-20260917T053706Z-4c3118a3`: current and compact 5/7 each,
+  input 7,161→4,401 tokens, 8.149→6.710s. Its historical case misleadingly declared
+  `temporal_status=current`; it cannot establish historical-event quality.
+  The current-state wording variant and follow-up event wording did not resolve
+  the event failure and were not integrated. No additional truth prompt rule.
+- Native actual rerouting: `truth-rerouting-cache-pipeline-20260917T064657Z-45fab1ad`
+  produced disjoint reference UUIDs with identical semantic records. The second
+  truth-candidate decision reused the durable result; the independent statements
+  needed no comparison call. Focused cache tests separately exercise comparison
+  reuse and invalidation for changed source/role/identity/time/human review.
+- Scale: `truth-candidate-scale-20260917T064245Z-ef9268da`, fixed B=4 at
+  N=100/1000/10000. Eligible pairs 122/156/191 stay below 192. Cold/growing-index
+  elapsed 3.139/8.825/84.830s; warm 0.070/0.223/3.486s. The 1000/10000 arms grow an
+  existing index, not independent cold full rebuilds. This uses short synthetic
+  archive records and measures search/index work, not source preparation, a full
+  ingestion pipeline, model comparisons or realistic retrieval quality. No
+  exhaustive model control was run at 10k. Full-history record preparation and
+  index synchronization still perform linear work.
+- Structural validation: focused 106 passed in 4.71s; full 820 passed, 1 AMI skip,
+  75 integration deselected in 28.13s. The full run also caught the separately fixed
+  declared-speaker/excerpt boundary; earlier failing runs remain in logs.
+
+### 2026-09-16 — Reject unproven external-user identity changes
+
+- The first direct replay accidentally selected a later request where a duplicate
+  person already existed: `external-user-identity-contract-20260917T061649Z-5b2d9d46`.
+  Its claimed expected identity was not a valid creation-control test. The
+  original creation request is `da926f8ec467465886175047e1588d84.json` in the E2
+  diagnostics. Corrected replay: `external-user-identity-contract-20260917T063200Z-aed1483c`.
+- Both current wording and source-independent-user wording passed the three
+  neutral known-user/namesake/ambiguity controls and repeated the original new
+  identity decision. Replacing historical claim paraphrases with exact raw source
+  excerpts also produced no improvement (`identity-source-basis-contract-20260917T063851Z-c9933201`).
+  Neither proposal was integrated; no extra source-input layer or critic call.
+- Source inspection corrects the diagnosis: canonical You has the fixture's
+  configured name as an alias, but the cited history has no direct spoken
+  self-identification. The matching assignment/responsibility makes it plausible
+  that the task refers to the user; it does not justify a deterministic merge.
+  Ignoring that plausible alternative and creating a new identity without review
+  is still a model limitation. The fixture's expected exact merge is not a rule
+  to encode in product code. Preserve this for longitudinal/source review.
+
+### 2026-09-16 — S2 production follow-through
+
+- `revision-scope-pipeline-20260917T064837Z-17f2a9b7`: native capture and Build of
+  an unrelated restoration project left both prior preference claims and their
+  consolidated facts byte-equivalent and made no attribution calls for them.
+  No build failures. This is production code, without the earlier prototype's
+  policy override.
+- `page-promotion-scope-pipeline-20260917T065142Z-b4ddd6d9`: a source-backed
+  provisional printmaker was promoted after a new workshop source. Production
+  exact-reference scope included the earlier ink-preference claim, which appeared
+  on the admitted page. No build failures. The initial provisional identity and
+  prior placement were seeded, so this isolates promotion rather than proving
+  all upstream discovery behavior. Full longitudinal review remains separate.
+
+- Native correction rerouting additionally passed:
+  `truth-rerouting-change-cache-pipeline-20260917T065417Z-0ad07970`. Both the
+  candidate decision and comparison reused durable results after actual routing
+  generated disjoint reference UUIDs. The explicit correction remained a pending
+  supersession proposal; the cache did not apply it to canonical evidence.

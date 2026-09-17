@@ -117,7 +117,7 @@ async def main():
     (root / "probe.py").write_text(Path(__file__).read_text())
     llm.client = RecordingClient(llm.client, root / "requests")
     artifacts = ArtifactStore(root / "store" / "artifacts")
-    reviewer = TruthReviewer(llm, artifacts)
+    reviewer = TruthReviewer(llm, artifacts, config)
     rows = []
     print("OUTPUT", root, flush=True)
     try:
@@ -250,7 +250,7 @@ async def native_case(root, llm, config, records, expected):
                 **{**raw, "entity_id": entities[raw["entity_id"]].entity_id}
             )
         artifacts.save_entity_reference(references["a"])
-        resolver = FactResolver(llm, artifacts)
+        resolver = FactResolver(llm, artifacts, config)
         prior, _ = resolver._direct_projection(
             entities[records["a"]["page_owner"]["entity_id"]],
             artifacts.get_claim("a"),

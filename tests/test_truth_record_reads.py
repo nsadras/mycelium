@@ -1,3 +1,5 @@
+
+from mycelium.config import Config
 from collections import Counter
 from types import SimpleNamespace
 
@@ -52,12 +54,12 @@ def setup(count=1000):
     artifacts = SimpleNamespace(
         get_source=get_source, list_entity_references=lambda **_: []
     )
-    return TruthReviewer(None, artifacts), claims, source, reads
+    return TruthReviewer(None, artifacts, Config()), claims, source, reads
 
 
 def test_truth_preparation_reads_shared_source_and_builds_segment_index_once():
     reviewer, claims, _, reads = setup()
-    records = reviewer._records(claims, {}, {})
+    records = reviewer._records(claims)
     assert len(records) == len(claims)
     assert reads == {"shared": 1}
     for i in range(len(claims)):
@@ -78,10 +80,10 @@ def test_truth_preparation_reads_shared_source_and_builds_segment_index_once():
 )
 def test_next_truth_preparation_observes_source_changes(mutation):
     reviewer, claims, source, reads = setup(2)
-    prior = reviewer._records(claims, {}, {})
+    prior = reviewer._records(claims)
     if mutation == "text":
         source.segments[0].content = "Corrected source."
-        current = reviewer._records(claims, {}, {})
+        current = reviewer._records(claims)
         assert current["c0"]["citations"][0]["text"] == "Corrected source."
         assert prior["c0"]["citations"][0]["text"] == "Statement 0."
         assert reads == {"shared": 2}
@@ -97,4 +99,4 @@ def test_next_truth_preparation_observes_source_changes(mutation):
 
             reviewer.artifacts.get_source = missing
         with pytest.raises(ValueError, match="Claim c0 cites"):
-            reviewer._records(claims, {}, {})
+            reviewer._records(claims)

@@ -135,6 +135,30 @@ async def test_long_documents_keep_later_evidence_and_return_distinct_entities(
 
 
 @pytest.mark.asyncio
+async def test_eligible_domains_share_index_and_query_vectors_without_leaking_ids(
+    fixture,
+):
+    index, embedder, documents = fixture
+    await index.select(documents, ["near-first"], limit=3)
+    calls = len(embedder.document_calls), len(embedder.query_calls)
+    distant = {f"id-{i:02d}" for i in range(20, 30)}
+    result = await index.select(
+        documents, ["near-first"], limit=3, eligible_ids=distant
+    )
+    assert result == ["id-20", "id-21", "id-22"]
+    all_but_nearest = documents.keys() - {"id-00"}
+    assert await index.select(
+        documents, ["near-first"], limit=3, eligible_ids=all_but_nearest
+    ) == ["id-01", "id-02", "id-03"]
+    assert (len(embedder.document_calls), len(embedder.query_calls)) == calls
+    assert await index.select(documents, [], eligible_ids=[]) == []
+    with pytest.raises(ValueError, match="Eligible"):
+        await index.select(documents, [], eligible_ids=["invented"])
+    with pytest.raises(ValueError, match="Required"):
+        await index.select(documents, [], eligible_ids=distant, required_ids=["id-00"])
+
+
+@pytest.mark.asyncio
 async def test_long_queries_preserve_each_chunk_and_cache_repeated_work(
     fixture, monkeypatch
 ):

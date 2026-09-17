@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from benchmarks.shared.adapters import OllamaQaClient
 from mycelium.artifacts import ClaimPlacement, SourceDocument, SourceSegment
-from mycelium.config import LLMConfig
+from mycelium.config import Config, LLMConfig
 from mycelium.facts import FactResolver
 from mycelium.truth_contract import TruthComparison, truth_candidates_model, truth_comparison_model
 from mycelium.truth_review import TruthReviewer
@@ -90,7 +90,7 @@ def test_candidate_contract_excludes_self_and_requires_every_eligible_decision()
 async def test_truth_comparison_crosses_owners_and_incoming_batch_boundaries(tmp_path, same_batch):
     artifacts, llm, placements, entities = fixture(tmp_path, same_batch=same_batch)
     incoming = {"left", "right"} if same_batch else {"right"}
-    result = await TruthReviewer(llm, artifacts).review(incoming, placements, entities, dream_run_id="test")
+    result = await TruthReviewer(llm, artifacts, Config()).review(incoming, placements, entities, dream_run_id="test")
     assert not result.errors
     assert len(result.proposals) == 1
     proposal = result.proposals[0]
@@ -104,7 +104,7 @@ async def test_truth_comparison_crosses_owners_and_incoming_batch_boundaries(tmp
     assert len(comparisons) == 1  # A same-batch pair is compared once, not in both directions.
     artifacts.save_reconsolidation_proposal(proposal)
     llm.call_structured.reset_mock()
-    repeated = await TruthReviewer(llm, artifacts).review(incoming, placements, entities, dream_run_id="again")
+    repeated = await TruthReviewer(llm, artifacts, Config()).review(incoming, placements, entities, dream_run_id="again")
     assert repeated.proposals == []
     llm.call_structured.assert_not_awaited()
 
@@ -115,7 +115,7 @@ async def test_corrupt_provenance_is_explicit_and_blocks_new_review(tmp_path):
     source = artifacts.get_source("source-left")
     source.segments = []
     artifacts.save_source(source)
-    result = await TruthReviewer(llm, artifacts).review({"right"}, placements, entities, dream_run_id="test")
+    result = await TruthReviewer(llm, artifacts, Config()).review({"right"}, placements, entities, dream_run_id="test")
     assert result.failure_claim_ids == {"right"}
     assert result.errors and result.proposals == []
     llm.call_structured.assert_not_awaited()
@@ -124,7 +124,7 @@ async def test_corrupt_provenance_is_explicit_and_blocks_new_review(tmp_path):
 @pytest.mark.asyncio
 async def test_fact_resolution_runs_global_truth_before_single_owner_projection(tmp_path):
     artifacts, llm, placements, entities = fixture(tmp_path)
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         [placements["right"]], affected_entity_ids={entities["person-mara"].entity_id},
         incoming_claim_ids={"right"}, dream_run_id="test",
     )
@@ -139,7 +139,7 @@ async def test_failed_global_review_keeps_prior_facts_and_additions_retryable(tm
     artifacts, llm, placements, entities = fixture(tmp_path)
     llm.call_structured.side_effect = ValueError("Injected invalid decision")
     prior = artifacts.list_consolidated_facts()
-    result = await FactResolver(llm, artifacts).resolve(list(placements.values()),
+    result = await FactResolver(llm, artifacts, Config()).resolve(list(placements.values()),
         affected_entity_ids=set(entities), incoming_claim_ids={"right"}, dream_run_id="test")
     assert result.facts == prior
     assert not result.proposals and not result.deleted_fact_ids and not result.placements
@@ -153,7 +153,7 @@ async def test_global_truth_review_includes_unplaced_claims(tmp_path):
     placements["right"] = replace(placements["right"], owner_entity_id=None, section_key=None,
                                   status="deferred")
     artifacts.save_placement(placements["right"])
-    result = await FactResolver(llm, artifacts).resolve([], affected_entity_ids=set(),
+    result = await FactResolver(llm, artifacts, Config()).resolve([], affected_entity_ids=set(),
         incoming_claim_ids={"right"}, dream_run_id="test")
     assert not result.failures and len(result.proposals) == 1
     assert result.proposals[0].affected_entity_ids == ["project-draft"]
@@ -174,7 +174,7 @@ async def test_source_only_statements_cannot_trigger_or_influence_truth_review(t
     source.segments = []
     artifacts.save_source(source)
     for incoming in ({"left"}, {"right"}, {"left", "right"}):
-        result = await TruthReviewer(llm, artifacts).review(
+        result = await TruthReviewer(llm, artifacts, Config()).review(
             incoming, placements, entities, dream_run_id="test", excluded_claim_ids=exclusions)
         assert not result.errors and not result.proposals
     llm.call_structured.assert_not_awaited()
@@ -185,7 +185,7 @@ async def test_fact_resolution_passes_current_build_exclusions_to_truth_review(t
     artifacts, llm, placements, entities = fixture(tmp_path)
     # Keep only the admitted destination. The excluded active claim has not yet
     # received the source-only disposition that Dream commits at the end.
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         [placements["right"]], affected_entity_ids={"person-mara"},
         incoming_claim_ids={"left", "right"}, dream_run_id="test",
         excluded_claim_ids=frozenset({"left"}),
@@ -198,12 +198,11 @@ async def test_fact_resolution_passes_current_build_exclusions_to_truth_review(t
 @pytest.mark.asyncio
 async def test_approval_invalidates_overlapping_reviews_atomically(tmp_path):
     from mycelium.artifacts import ReconsolidationProposal
-    from mycelium.config import Config
     from mycelium.materialization import PageMaterializer
     from mycelium.reconsolidation import ReconsolidationReviewService, ReviewConflictError
     from mycelium.store import WikiStore
     artifacts, llm, placements, entities = fixture(tmp_path)
-    result = await FactResolver(llm, artifacts).resolve(list(placements.values()),
+    result = await FactResolver(llm, artifacts, Config()).resolve(list(placements.values()),
         affected_entity_ids=set(entities), incoming_claim_ids={"right"}, dream_run_id="test")
     proposal = result.proposals[0]
     artifacts.save_reconsolidation_proposal(proposal)
@@ -215,7 +214,7 @@ async def test_approval_invalidates_overlapping_reviews_atomically(tmp_path):
     for item in result.facts:
         artifacts.save_consolidated_fact(item)
     service = ReconsolidationReviewService(artifacts,
-        PageMaterializer(WikiStore(tmp_path / "wiki"), artifacts, Config.defaults()), FactResolver(llm, artifacts))
+        PageMaterializer(WikiStore(tmp_path / "wiki"), artifacts, Config.defaults()), FactResolver(llm, artifacts, Config()))
     await service.approve(proposal.proposal_id)
     assert artifacts.get_claim("left").status == "superseded"
     assert artifacts.get_reconsolidation_proposal("other-review").status == "stale"

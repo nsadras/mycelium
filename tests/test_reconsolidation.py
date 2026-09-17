@@ -71,7 +71,7 @@ def test_fact_prompt_does_not_expose_recording_time_as_event_evidence(tmp_path):
         "2026-09-03T12:00:00-07:00",
     )
     placement = place(artifacts, item)
-    resolver = FactResolver(AsyncMock(), artifacts)
+    resolver = FactResolver(AsyncMock(), artifacts, Config())
 
     rendered = resolver._claims_text(
         {"C001": item},
@@ -95,7 +95,7 @@ def test_truth_input_deduplicates_source_text_and_keeps_claim_citations(tmp_path
         [SourceSegment(segment_id, 0, "Please send short written updates.", "user", "user")],
     ))
     placements = {c.claim_id: place(artifacts, c) for c in (first, second)}
-    rendered = FactResolver(AsyncMock(), artifacts)._claims_text(
+    rendered = FactResolver(AsyncMock(), artifacts, Config())._claims_text(
         {"C001": first, "C002": second}, placements, {}, {},
     )
     payload = json.loads(rendered)
@@ -122,7 +122,7 @@ async def test_owner_plan_groups_independent_support(no_truth_changes, tmp_path)
         }],
     }, {"text": "The user prefers written updates."}]
 
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements,
         affected_entity_ids={"you"},
         incoming_claim_ids={"first", "second"},
@@ -159,7 +159,7 @@ async def test_synthesis_uses_corrected_claim_not_original_source(no_truth_chang
         return {"groups": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001', 'C002'], 'state': 'current', 'section_key': 'preferences_working_style'}]}
 
     llm.call_structured.side_effect = respond
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements, affected_entity_ids={"you"},
         incoming_claim_ids={corrected.claim_id, related.claim_id}, dream_run_id="dream-corrected",
     )
@@ -190,7 +190,7 @@ async def test_grouping_receives_canonical_members_without_previous_prose(tmp_pa
         return {"groups": [{"prominence": "briefing", 'memory_scope': "The user's update preference.", 'member_claim_aliases': ['C001', 'C002'], 'state': 'current', 'section_key': 'preferences_working_style'}]}
 
     llm.call_structured.side_effect = respond
-    result = await FactResolver(llm, artifacts)._resolve_owner_step(
+    result = await FactResolver(llm, artifacts, Config())._resolve_owner_step(
         "you", [old, new], placements, [previous], set(), "test",
         {"you": artifacts.get_entity("you")},
     )
@@ -223,7 +223,7 @@ async def test_synthesis_keeps_distinct_claim_groups(no_truth_changes, tmp_path)
         ],
     }]
 
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements,
         affected_entity_ids={"you"},
         incoming_claim_ids={"first", "second"},
@@ -272,7 +272,7 @@ async def test_grouped_project_roles_preserve_each_claims_exact_project_link(no_
         }],
     }, {"text": "Rosa coordinates permits for two projects."}]
 
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements,
         affected_entity_ids={person.entity_id},
         incoming_claim_ids={first.claim_id, second.claim_id},
@@ -301,7 +301,7 @@ async def test_truth_change_publishes_both_accounts_for_optional_review(tmp_path
     from tests.truth_support import truth_llm
     llm = truth_llm({("new", "old"): "left_supersedes_right"})
 
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements,
         affected_entity_ids={"you"},
         incoming_claim_ids={"new"},
@@ -345,7 +345,7 @@ async def test_repeated_evidence_joins_and_preserves_the_existing_fact(no_truth_
         {"text": old.text},
     ]
 
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements,
         affected_entity_ids={"you"},
         incoming_claim_ids={repeated.claim_id},
@@ -374,7 +374,7 @@ async def test_batched_truth_changes_preserve_independent_support_for_review(tmp
     llm = truth_llm({("first", "old"): "left_supersedes_right",
                      ("old", "support"): "right_supersedes_left"})
 
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements,
         affected_entity_ids={"you"},
         incoming_claim_ids={"first", "support"},
@@ -414,7 +414,7 @@ async def test_incremental_resolution_preserves_unselected_fact_exactly(no_truth
         {"groups": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C001'], 'state': 'current', 'section_key': 'preferences_working_style'}, {"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style'}]},
     ]
 
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements,
         affected_entity_ids={"you"},
         incoming_claim_ids={"new"},
@@ -446,7 +446,7 @@ async def test_invalid_plan_fails_closed_and_preserves_prior_fact(no_truth_chang
         {"groups": [{"prominence": "briefing", 'memory_scope': 'The fixture memory.', 'member_claim_aliases': ['C002'], 'state': 'current', 'section_key': 'preferences_working_style'}]},
     ]
 
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements,
         affected_entity_ids={"you"},
         incoming_claim_ids={"new"},
@@ -476,7 +476,7 @@ async def test_pending_review_cannot_swallow_an_unrelated_new_claim(no_truth_cha
         dream_run_id="earlier", created_at=old.recorded_at, affected_entity_ids=["you"],
     ))
     llm = AsyncMock(context_window_tokens=32768)
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements, affected_entity_ids={"you"}, incoming_claim_ids={"pending", "other"},
         dream_run_id="next",
     )
@@ -503,7 +503,7 @@ async def test_pending_review_alone_does_not_trigger_more_model_work(tmp_path):
         dream_run_id="earlier", created_at=old.recorded_at, affected_entity_ids=["you"],
     ))
     llm = AsyncMock(context_window_tokens=32768)
-    resolver = FactResolver(llm, artifacts)
+    resolver = FactResolver(llm, artifacts, Config())
     result = await resolver.resolve(
         [], affected_entity_ids={"you"}, incoming_claim_ids=set(), dream_run_id="next",
     )
@@ -536,7 +536,7 @@ async def test_failed_addition_batch_preserves_other_batches(no_truth_changes, t
     if change_placement:
         placements.append(replace(artifacts.placement_for_claim(old.claim_id),
                                   section_key="current_context", page_sections={"you": "current_context"}))
-    resolver = FactResolver(AsyncMock(), artifacts)
+    resolver = FactResolver(AsyncMock(), artifacts, Config())
     batches = []
 
     async def step(owner_id, claims, placements, existing, incoming_ids, *args, **kwargs):
@@ -607,7 +607,7 @@ async def test_large_new_claim_sets_are_grouped_incrementally(no_truth_changes, 
 
     llm.call_structured.side_effect = respond
 
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         placements,
         affected_entity_ids={"you"},
         incoming_claim_ids={item.claim_id for item in claims},
@@ -648,7 +648,7 @@ async def test_approve_supersession_mutates_claims_and_reruns_resolver(tmp_path)
     from tests.lifecycle_support import lifecycle_response
     llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.side_effect = lifecycle_response
-    resolver = FactResolver(llm, artifacts)
+    resolver = FactResolver(llm, artifacts, Config())
     service = ReconsolidationReviewService(
         artifacts,
         PageMaterializer(wiki, artifacts, Config.defaults()),
@@ -673,7 +673,7 @@ def test_claim_evidence_carries_only_cited_occurrence_anchors(tmp_path):
     artifacts.save_source(SourceDocument(source_id, "agent_conversation", "s", item.recorded_at,
         "2026-02-12", ["user"], [SourceSegment(cited_id, 0, item.text, timestamp="2026-02-12T10:00:00Z"),
                                  SourceSegment("uncited", 1, "Unrelated text.", timestamp="2025-01-01")]))
-    resolver = FactResolver(AsyncMock(), artifacts)
+    resolver = FactResolver(AsyncMock(), artifacts, Config())
     rendered = resolver._claims_text({"C001": item}, {item.claim_id: placement}, {}, {})
     assert "2026-02-12T10:00:00Z" in rendered
     assert item.recorded_at not in rendered
@@ -696,7 +696,7 @@ async def test_candidate_selection_receives_canonical_members_and_source_times(t
     existing.text = "An over-broad display sentence that omits the schedule."
     llm = AsyncMock(context_window_tokens=32768)
     llm.call_structured.return_value = {"decisions": {"C001": {"candidate_fact_ids": ["X001"], "reason": "Same workshop."}}}
-    selected = await FactResolver(llm, artifacts)._select_prior_facts(
+    selected = await FactResolver(llm, artifacts, Config())._select_prior_facts(
         [new], placements, [existing], {"you": artifacts.get_entity("you")})
     user = llm.call_structured.call_args.args[1]
     assert old.text in user and "2026-02-12T10:00:00Z" in user

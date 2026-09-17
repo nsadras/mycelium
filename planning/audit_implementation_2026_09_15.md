@@ -9,10 +9,11 @@ order in this file. The historical implementation record remains below;
 `DEVLOG.md` and saved runs retain the detailed evidence.
 
 **Current state:** E1 and focused C1–C3 fixes are implemented. E2 completed both
-comparison arms and source review, reopening date/name/current-state gaps; S1/S2
-and the smallest measured contract fixes are next. Items remain open until their acceptance evidence is recorded below. Existing
+comparison arms and source review. S1 bounded truth discovery, S2 dependency
+maintenance, and measured date/name/attribution fixes are implemented. Longitudinal
+replay and held-out validation remain open. Existing
 storage, review, configuration, retrieval-consistency, and UI fixes remain the
-foundation. The latest recorded structural suite is 807 passed, one skipped,
+foundation. The latest recorded structural suite is 820 passed, one skipped,
 75 integration tests deselected; that is not full semantic acceptance.
 
 ### Implementation progress after resuming
@@ -52,7 +53,19 @@ foundation. The latest recorded structural suite is 807 passed, one skipped,
   entity references and respects caller source/deferred filters. A neutral native
   comparison reduced15to12calls while retaining old claims/facts; a promotion
   counterexample retained earlier page evidence. Structural67passed. Broad
-  longitudinal, scale and cache acceptance remain open.
+  longitudinal acceptance remains open. Production native addition and page
+  promotion also passed: old unrelated claims/facts stayed identical, and earlier
+  referenced evidence appeared on the newly admitted page.
+- **S1 implemented:** frozen cap 48 (32 global semantic plus 16 entity neighbors).
+  All four annotated changes survived search in a paired 104-record control;
+  model calls fell 28→16 and model time 368→153s. Native review preserves canonical
+  claims and produces pending proposals. Fixed B=4 stays below 192 eligible pairs
+  at 100/1,000/10,000 records; warm search 0.070/0.223/3.486s. Compact semantic
+  inputs reuse decisions across regenerated reference IDs; evidence, role,
+  identity, time and human-review changes invalidate reuse. Historical-event and
+  ambiguous-identity false proposals remain visible in both comparison arms;
+  search is approximate, and these measurements do not establish full-workload
+  quality or cost.
 - **W1 attribution cost reduced:** removed the repeated explanation field from
   each attribution cell. Both direct arms14/14; output tokens fell33.5% and
   measured time21.6%. Integrated13/13 and native page-review3/3 passed. This
@@ -62,7 +75,8 @@ foundation. The latest recorded structural suite is 807 passed, one skipped,
   characters. Final extraction is complete; a missing truth proposal blocks the
   intended approval action. [Source review and cost](audit_e2_observations_2026_09_16.md)
   distinguish evaluator disagreements, encoding failures, and QA errors. Product
-  acceptance and S1 onward remain open. No product LLM calls or nested
+  acceptance and the remaining longitudinal/held-out gates remain open. No new
+  product LLM stages or nested
   response structures have been added. Evaluation improvements and focused
   correctness checks do not establish longitudinal memory quality or cost.
 
@@ -440,6 +454,11 @@ not an obligation to reproduce the other project's architecture.
   its reference. Report the remaining semantic error profile and user impact.
 
 ### O1 — Finish existing rollout checks
+
+**User decision (2026-09-16):** leave real browser, microphone, and Wi-Fi/Tailscale
+checks to the user after implementation is ready. Do not start application
+services for these checks. Automated validation continues independently; the
+handoff will include the checks below, with manual results explicitly unverified.
 
 **Acceptance:** with user-started services, verify Wi-Fi/Tailscale chat, source
 inspection, audio upload/playback, transcript review/admission, correction review,

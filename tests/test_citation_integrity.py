@@ -1,3 +1,5 @@
+
+from mycelium.config import Config
 from dataclasses import replace
 from unittest.mock import AsyncMock
 
@@ -40,7 +42,7 @@ def damaged_claim(tmp_path, damage):
 ])
 def test_partial_citations_cannot_be_silently_formatted_as_complete(tmp_path, damage):
     artifacts, item, placement, source = damaged_claim(tmp_path, damage)
-    resolver = FactResolver(AsyncMock(), artifacts)
+    resolver = FactResolver(AsyncMock(), artifacts, Config())
     readers = [
         lambda: cited_source_segments(artifacts, item),
         lambda: resolver._source_times(item),
@@ -59,7 +61,7 @@ def test_partial_citations_cannot_be_silently_formatted_as_complete(tmp_path, da
 async def test_singleton_projection_reports_corruption_without_model_or_fact(tmp_path, incoming):
     artifacts, item, placement, _ = damaged_claim(tmp_path, "secondary_source")
     llm = AsyncMock()
-    result = await FactResolver(llm, artifacts).resolve(
+    result = await FactResolver(llm, artifacts, Config()).resolve(
         [placement], affected_entity_ids={"you"},
         incoming_claim_ids={item.claim_id} if incoming else set(), dream_run_id="test",
     )
@@ -73,7 +75,7 @@ async def test_singleton_projection_reports_corruption_without_model_or_fact(tmp
 async def test_truth_checks_singleton_evidence_before_skipping_comparisons(tmp_path):
     artifacts, item, placement, _ = damaged_claim(tmp_path, "segment")
     llm = AsyncMock()
-    result = await TruthReviewer(llm, artifacts).review(
+    result = await TruthReviewer(llm, artifacts, Config()).review(
         {item.claim_id}, {item.claim_id: placement}, {}, dream_run_id="test",
     )
     assert result.failure_claim_ids == {item.claim_id}

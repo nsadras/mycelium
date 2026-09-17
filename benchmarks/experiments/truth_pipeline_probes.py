@@ -48,7 +48,7 @@ async def main():
                                            "Explicit neutral probe ownership", "2031-01-01", "2031-01-01")
                 artifacts.save_placement(placement)
                 placements.append(placement)
-            resolver = FactResolver(qa.llm, artifacts)
+            resolver = FactResolver(qa.llm, artifacts, config)
             if name != "same_batch":
                 prior, _ = resolver._direct_projection(owners[left_owner], artifacts.get_claim("left"), placements[0])
                 artifacts.save_consolidated_fact(prior)

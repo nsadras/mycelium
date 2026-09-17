@@ -1,3 +1,5 @@
+
+from mycelium.config import Config
 from dataclasses import replace
 from unittest.mock import AsyncMock
 
@@ -41,8 +43,8 @@ async def test_partly_retracted_support_does_not_block_other_truth_review(tmp_pa
     artifacts.save_entity_reference(
         reference("reviewed", "left", origin="manual", entity="person-mara")
     )
-    reviewer = TruthReviewer(llm, artifacts)
-    record = reviewer._records({"left": claim}, placements, entities)["left"]
+    reviewer = TruthReviewer(llm, artifacts, Config())
+    record = reviewer._records({"left": claim})["left"]
     assert record["text"] is None
     assert record["about"] == [] and record["temporal"] == []
     assert {c["source_id"] for c in record["citations"]} == {"remaining"}
@@ -75,7 +77,7 @@ async def test_active_singleton_with_only_withdrawn_support_is_explicit_failure(
         )
     )
     llm = AsyncMock()
-    result = await TruthReviewer(llm, artifacts).review(
+    result = await TruthReviewer(llm, artifacts, Config()).review(
         {"left"},
         placements,
         entities,

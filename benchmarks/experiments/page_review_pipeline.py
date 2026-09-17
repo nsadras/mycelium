@@ -141,7 +141,7 @@ async def run_case(root, definition):
             selected
         )
         with trace_operation("page_review_pipeline_facts", case=name):
-            resolved = await FactResolver(memory.llm, artifacts).resolve(
+            resolved = await FactResolver(memory.llm, artifacts, memory.config).resolve(
                 placements,
                 affected_entity_ids={e.entity_id for e in artifacts.list_entities()},
                 incoming_claim_ids={c.claim_id for c in claims},

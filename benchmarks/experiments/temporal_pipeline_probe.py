@@ -119,7 +119,7 @@ async def main():
             service = ClaimLifecycleService(
                 mem.artifacts,
                 PageMaterializer(mem.wiki, mem.artifacts, mem.config),
-                FactResolver(mem.llm, mem.artifacts),
+                FactResolver(mem.llm, mem.artifacts, mem.config),
             )
             with trace_operation("temporal_pipeline_correction"):
                 review = await service.correct_claim(

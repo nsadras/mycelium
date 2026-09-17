@@ -75,7 +75,7 @@ def render_truth_claims(memory, records):
             "2026-11-01",
             "2026-11-01",
         )
-    return TruthReviewer(memory.llm, memory.artifacts)._records(claims, placements, {})
+    return TruthReviewer(memory.llm, memory.artifacts, memory.config)._records(claims)
 
 
 @pytest.mark.asyncio
@@ -136,7 +136,7 @@ async def test_truth_in_mixed_history(
     records = render_truth_claims(memory, {
         **targets, "C009": record(incoming, "2026-10-22"),
     })
-    decisions = await TruthReviewer(memory.llm, memory.artifacts)._compare_pairs(
+    decisions = await TruthReviewer(memory.llm, memory.artifacts, memory.config)._compare_pairs(
         [(target, "C009") for target in targets], records,
     )
     (tmp_path / "response.json").write_text(json.dumps(

@@ -69,7 +69,7 @@ async def trial(root, number):
         service = ClaimLifecycleService(
             memory.artifacts,
             PageMaterializer(memory.wiki, memory.artifacts, memory.config),
-            FactResolver(memory.llm, memory.artifacts),
+            FactResolver(memory.llm, memory.artifacts, memory.config),
         )
         text = "I will deliver the sculpture by Monday."
         with trace_operation("weekday_pipeline_correction", trial=number):

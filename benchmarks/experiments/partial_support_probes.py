@@ -56,8 +56,8 @@ async def main():
             memory.artifacts.save_source(old)
             left.provenance.extend(support.provenance)
             memory.artifacts.save_claim(left)
-            reviewer = TruthReviewer(memory.llm, memory.artifacts)
-            records = reviewer._records({c.claim_id: c for c in (left, right)}, {}, {})
+            reviewer = TruthReviewer(memory.llm, memory.artifacts, memory.config)
+            records = reviewer._records({c.claim_id: c for c in (left, right)})
             write(root / f"{name}-inputs.json", records)
             pair = (left.claim_id, right.claim_id)
             decision = (await reviewer._compare_pairs([pair], records))[pair]

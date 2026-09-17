@@ -74,7 +74,7 @@ async def test_batched_selection_retains_relevant_history(tmp_path, monkeypatch,
         "new-3": {f"fact-old-{i}" for i in range(28)} if broad else set(),
     }
     start = time.perf_counter()
-    result = await FactResolver(memory.llm, memory.artifacts)._select_prior_facts(
+    result = await FactResolver(memory.llm, memory.artifacts, memory.config)._select_prior_facts(
         incoming,
         placements,
         [fact(c) for c in old],

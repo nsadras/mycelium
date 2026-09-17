@@ -20,6 +20,7 @@ from mycelium.artifacts import (
 )
 from mycelium.batching import structured_input_budget
 from mycelium.budget import request_tokens
+from mycelium.config import Config
 from mycelium.fact_groups import (
     FactText,
     fact_groups_model,
@@ -64,9 +65,10 @@ class FactResolver:
     _MAX_UNREPRESENTED_PER_GROUPING = 12
     _MAX_ADDITIONS_WITH_HISTORY = 12
 
-    def __init__(self, llm: OllamaClient, artifacts: ArtifactStore):
+    def __init__(self, llm: OllamaClient, artifacts: ArtifactStore, config: Config):
         self.llm = llm
         self.artifacts = artifacts
+        self.config = config
 
     async def resolve(
         self,
@@ -87,7 +89,7 @@ class FactResolver:
         existing_facts = self.artifacts.list_consolidated_facts()
         entities = {entity.entity_id: entity for entity in self.artifacts.list_entities()}
         entities.update({entity.entity_id: entity for entity in seed_entities or []})
-        truth = await TruthReviewer(self.llm, self.artifacts).review(
+        truth = await TruthReviewer(self.llm, self.artifacts, self.config).review(
             incoming_claim_ids, placement_by_claim, entities, dream_run_id=dream_run_id,
             excluded_claim_ids=excluded_claim_ids,
             reference_replacements=reference_replacements,

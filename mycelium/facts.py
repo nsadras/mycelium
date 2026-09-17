@@ -26,7 +26,7 @@ from mycelium.fact_groups import (
     fact_text_prompt,
 )
 from mycelium.ollama import OllamaClient
-from mycelium.ontology import entity_type_definition
+from mycelium.ontology import entity_type_definition, routing_section_keys
 from mycelium.projection import display_claim_text
 from mycelium.truth_review import TruthReviewer
 from mycelium.structured_outputs import (
@@ -428,9 +428,12 @@ class FactResolver:
         if canonical:
             system, user = fact_groups_prompt(
                 owner_text, json.dumps(canonical, ensure_ascii=False, indent=2),
-                "\n".join(f"{section.key}: {section.description}" for section in definition.sections),
+                "\n".join(
+                    f"{section.key}: {section.description}"
+                    for section in definition.sections if not section.managed
+                ),
             )
-            schema = fact_groups_model(canonical, definition.section_keys())
+            schema = fact_groups_model(canonical, routing_section_keys(owner.entity_type))
             response = schema.model_validate(await self.llm.call_structured(
                 system, user, schema, num_predict=4096,
                 debug_label="dream-fact-grouping",

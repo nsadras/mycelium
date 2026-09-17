@@ -3,7 +3,7 @@
 import json
 from typing import Literal
 from pydantic import ConfigDict, Field, create_model
-from mycelium.ontology import section_keys
+from mycelium.ontology import routing_section_keys
 from mycelium.prompting import render_prompt
 
 
@@ -18,7 +18,7 @@ def page_plan_model(pages_by_claim, entity_types):
             "PageSections",
             __config__=ConfigDict(extra="forbid"),
             **{
-                eid: (Literal.__getitem__(section_keys(entity_types[eid])), ...)
+                eid: (Literal.__getitem__(routing_section_keys(entity_types[eid])), ...)
                 for eid in pages
             },
         )

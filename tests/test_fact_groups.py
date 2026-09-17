@@ -55,6 +55,14 @@ async def test_manual_fact_keeps_exact_membership_and_new_evidence_is_visible(
         assert kwargs["debug_label"] == "dream-fact-grouping"
         assert old.text not in user and previous.text not in user
         assert new.text in user
+        # Re-grouping must not move accepted content into a workflow section
+        # after the earlier routing stage has already selected a content section.
+        for reserved in ("needs_review", "memory_map"):
+            assert f"{reserved}:" not in user
+            with pytest.raises(ValidationError):
+                _schema.model_validate({
+                    "groups": [{**group("C001"), "section_key": reserved}]
+                })
         return {"groups": [group("C001")]}
 
     llm.call_structured.side_effect = respond

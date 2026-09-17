@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from mycelium.ollama import OllamaClient
-from mycelium.ontology import ENTITY_TYPES, section_keys
+from mycelium.ontology import ENTITY_TYPES, routing_section_keys, section_keys
 from mycelium.page_plan import page_plan_model
 from mycelium.source_attribution import (
     attributed_pages,
@@ -66,15 +66,20 @@ def test_native_schema_requires_one_allowed_section_for_each_attributed_page(kin
     )
     assert page_sections["required"] == ["subject"]
     assert set(page_sections["properties"]["subject"]["enum"]) == set(
-        section_keys(kind)
+        routing_section_keys(kind)
     )
     assert page_sections["additionalProperties"] is False
-    for section in section_keys(kind):
+    for section in routing_section_keys(kind):
         response = {
             "decisions": {"C001": presentation({"subject": section}, "subject")}
         }
         assert schema.model_validate(response).model_dump() == response
-    for section in [None, "invalid", ["overview", "profile"]]:
+    for section in [
+        None,
+        "invalid",
+        ["overview", "profile"],
+        *set(section_keys(kind)) - set(routing_section_keys(kind)),
+    ]:
         with pytest.raises(ValidationError):
             schema.model_validate(
                 {"decisions": {"C001": presentation({"subject": section}, "subject")}}

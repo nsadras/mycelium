@@ -40,7 +40,9 @@ class RoutingFormatter:
         if include_sections:
             payload["section_definitions"] = {
                 kind: {
-                    s.key: s.description for s in entity_type_definition(kind).sections
+                    s.key: s.description
+                    for s in entity_type_definition(kind).sections
+                    if not s.managed
                 }
                 for kind in sorted({e.entity_type for e in active})
             }

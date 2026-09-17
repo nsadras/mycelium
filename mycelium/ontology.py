@@ -23,12 +23,12 @@ CLAIM_TYPES = (
 ClaimType = Literal.__getitem__(CLAIM_TYPES)
 
 
-
 @dataclass(frozen=True)
 class SectionDefinition:
     key: str
     title: str
     description: str
+    managed: bool = False
 
 
 @dataclass(frozen=True)
@@ -54,12 +54,20 @@ class EntityTypeDefinition:
 
 # Persisted human-review choices. Model admission uses page_admission.py; the
 # retired continuity/maturity ontology no longer defines that decision.
-SUBJECT_PERSISTED_SCOPES = ("independent", "component", "occurrence", "standalone_event", "context")
+SUBJECT_PERSISTED_SCOPES = (
+    "independent",
+    "component",
+    "occurrence",
+    "standalone_event",
+    "context",
+)
 SUBJECT_PAGE_STATES = ("materialized", "provisional", "no_page")
 
 
-def _section(key: str, title: str, description: str) -> SectionDefinition:
-    return SectionDefinition(key, title, description)
+def _section(
+    key: str, title: str, description: str, *, managed: bool = False
+) -> SectionDefinition:
+    return SectionDefinition(key, title, description, managed)
 
 
 ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
@@ -94,11 +102,13 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "memory_map",
                 "Memory Map",
                 "orientation links to important memory areas",
+                managed=True,
             ),
             _section(
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
+                managed=True,
             ),
         ),
         (
@@ -161,6 +171,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
+                managed=True,
             ),
         ),
         (
@@ -214,6 +225,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
+                managed=True,
             ),
         ),
         (
@@ -275,6 +287,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
+                managed=True,
             ),
         ),
         (
@@ -329,6 +342,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
+                managed=True,
             ),
         ),
         (
@@ -382,6 +396,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
+                managed=True,
             ),
         ),
         (
@@ -430,6 +445,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
+                managed=True,
             ),
         ),
         (
@@ -481,6 +497,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
+                managed=True,
             ),
         ),
         (
@@ -525,6 +542,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
+                managed=True,
             ),
         ),
         (
@@ -562,6 +580,15 @@ def entity_type_definition(entity_type: str) -> EntityTypeDefinition:
 
 def section_keys(entity_type: str) -> tuple[str, ...]:
     return entity_type_definition(entity_type).section_keys()
+
+
+def routing_section_keys(entity_type: str) -> tuple[str, ...]:
+    """Content choices exclude sections owned by navigation or review state."""
+    return tuple(
+        section.key
+        for section in entity_type_definition(entity_type).sections
+        if not section.managed
+    )
 
 
 def section_pairs(entity_type: str) -> tuple[tuple[str, str], ...]:

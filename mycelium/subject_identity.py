@@ -8,8 +8,18 @@ from pydantic import ConfigDict, Field, create_model, model_validator
 from mycelium.prompting import render_prompt_pair
 
 
-def subject_identity_model(candidate_ids):
+def subject_identity_model(candidate_ids, evidence):
     ids = tuple(candidate_ids)
+    evidence = json.loads(evidence)
+    cited = {
+        (citation["source_id"], citation["segment_id"])
+        for claim in evidence["claims"].values()
+        for citation in claim["citations"]
+    }
+    name_evidence = [
+        evidence["sources"][sid]["segments"][segment_id]["text"]
+        for sid, segment_id in sorted(cited)
+    ]
     common = {"reason": (str, Field(min_length=1, max_length=500))}
     names = {
         "title": (
@@ -31,23 +41,37 @@ def subject_identity_model(candidate_ids):
         )
     ]
     if ids:
-        variants.append(
-            create_model(
-                "ExistingSubjectIdentity",
-                __config__=ConfigDict(extra="forbid"),
-                **common,
-                resolution=(Literal["existing"], ...),
-                entity_id=(Literal.__getitem__(ids), ...),
-                title=(
-                    str,
-                    Field(
-                        description="Preferred title to store for this identity, retaining the registry title unless the source establishes a preferred name",
-                        min_length=1,
-                    ),
+        existing_fields = create_model(
+            "ExistingSubjectIdentityFields",
+            __config__=ConfigDict(extra="forbid"),
+            **common,
+            resolution=(Literal["existing"], ...),
+            entity_id=(Literal.__getitem__(ids), ...),
+            preferred_name_update=(
+                str | None,
+                Field(
+                    description="A new preferred name explicitly established by this source, copied with its exact spelling; null means retain the matched registry title. Choosing an existing identity does not require changing its name.",
+                    min_length=1,
                 ),
-                aliases=(list[str], Field(max_length=12)),
-            )
+            ),
+            aliases=(list[str], Field(max_length=12)),
         )
+
+        class ExistingSubjectIdentity(existing_fields):
+            @model_validator(mode="after")
+            def exact_name_copy(self):
+                # The model decides meaning. Only fidelity to its cited spelling
+                # is deterministic; this never infers identity from matching text.
+                if self.preferred_name_update is not None and not any(
+                    self.preferred_name_update in text for text in name_evidence
+                ):
+                    raise ValueError(
+                        "A new preferred name must be copied exactly from cited source evidence; "
+                        "return null when no name update is established."
+                    )
+                return self
+
+        variants.append(ExistingSubjectIdentity)
     unresolved = create_model(
         "UnresolvedSubjectIdentityFields",
         __config__=ConfigDict(extra="forbid"),

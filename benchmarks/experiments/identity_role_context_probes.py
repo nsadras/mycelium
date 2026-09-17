@@ -118,7 +118,7 @@ async def main():
             system, user = subject_identity_prompt(
                 subject, registry, json.dumps(evidence)
             )
-            schema = subject_identity_model(registry)
+            schema = subject_identity_model(registry, json.dumps(evidence))
             row = {"trial": trial, "case": name, "status": "running"}
             rows.append(row)
             write(root / "results.json", rows)

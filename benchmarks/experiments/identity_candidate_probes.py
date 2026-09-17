@@ -319,7 +319,7 @@ async def main():
                     required_ids={"you"} if "you" in documents else set(),
                 )
                 registry = {eid: records[eid] for eid in ids}
-                schema = subject_identity_model(ids)
+                schema = subject_identity_model(ids, evidence)
                 system, user = subject_identity_prompt(subject, registry, evidence)
                 response = schema.model_validate(
                     await qa.llm.call_structured(

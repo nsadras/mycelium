@@ -227,7 +227,7 @@ def source_first_responses(plan):
         if node["resolution"] == "existing":
             decision.update(
                 entity_id=node["entity_id"],
-                title=node["title"],
+                preferred_name_update=None,
                 aliases=node["aliases"],
             )
         else:

@@ -42,7 +42,7 @@ async def test_inferred_type_does_not_remove_existing_identity_candidates(
                     "resolution": "existing",
                     "entity_id": project.entity_id,
                     "reason": "Same source-described subject",
-                    "title": "Renamed prototype",
+                    "preferred_name_update": None,
                     "aliases": [],
                 }
             },
@@ -93,7 +93,7 @@ async def test_declared_speaker_candidates_remain_people(tmp_path, monkeypatch):
                     "resolution": "existing",
                     "entity_id": person.entity_id,
                     "reason": "Same source speaker",
-                    "title": "Namesake",
+                    "preferred_name_update": None,
                     "aliases": [],
                 }
             },

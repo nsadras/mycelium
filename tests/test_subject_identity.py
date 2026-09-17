@@ -83,17 +83,20 @@ def test_discovery_requires_exact_grounding_ids():
 
 
 def test_identity_result_cannot_change_subject_type_or_select_outside_candidate_snapshot():
-    schema = subject_identity_model(["entity-1", "entity-2"])
+    schema = subject_identity_model(
+        ["entity-1", "entity-2"], '{"claims": {}, "sources": {}}'
+    )
     valid = {
         "resolution": "existing",
         "entity_id": "entity-1",
-        "title": "Stored title",
+        "preferred_name_update": None,
         "aliases": [],
         "reason": "Identity-defining evidence",
     }
     schema.model_validate({"decision": valid})
     for change in [
-        {"title": None},
+        {"preferred_name_update": ""},
+        {"preferred_name_update": "Unsupported name"},
         {"title": ""},
         {"entity_id": "invented"},
         {"entity_type": "project"},
@@ -117,7 +120,7 @@ def test_identity_result_cannot_change_subject_type_or_select_outside_candidate_
 
 
 def test_empty_registry_allows_new_or_unnamed_review_without_invented_candidates():
-    schema = subject_identity_model([])
+    schema = subject_identity_model([], '{"claims": {}, "sources": {}}')
     for decision in [
         {
             "resolution": "new",
@@ -146,6 +149,42 @@ def test_empty_registry_allows_new_or_unnamed_review_without_invented_candidates
                 }
             }
         )
+
+
+def test_preferred_name_updates_require_exact_cited_spelling():
+    import json
+
+    evidence = {
+        "claims": {"C1": {"citations": [{"source_id": "s", "segment_id": "one"}]}},
+        "sources": {
+            "s": {
+                "segments": {
+                    "one": {"text": "I renamed Cedar to Larch."},
+                    "uncited": {"text": "An unrelated Spruce project."},
+                }
+            }
+        },
+    }
+    schema = subject_identity_model(["e1"], json.dumps(evidence))
+    decision = dict(
+        resolution="existing",
+        entity_id="e1",
+        aliases=[],
+        reason="Explicit name update",
+        preferred_name_update="Larch",
+    )
+    assert (
+        schema.model_validate({"decision": decision}).decision.preferred_name_update
+        == "Larch"
+    )
+    for name in ("Lorch", "Spruce", "larch"):
+        with pytest.raises(ValidationError, match="copied exactly"):
+            schema.model_validate(
+                {"decision": {**decision, "preferred_name_update": name}}
+            )
+    assert schema.model_validate(
+        {"decision": {**decision, "preferred_name_update": None}}
+    )
 
 
 def test_review_assignments_preserve_exact_distinct_identities():

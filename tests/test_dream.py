@@ -218,7 +218,7 @@ def split_scope_plan(plan: dict, *, registry=(), existing_titles=None) -> list[d
         if node["resolution"] == "existing":
             decision.update(
                 entity_id=node["entity_id"],
-                title=node["title"],
+                preferred_name_update=None,
                 aliases=node["aliases"],
             )
         else:
@@ -317,7 +317,7 @@ def use_existing_identity(responses, entity_id, *, title, aliases):
     responses[1]["decision"] = {
         "resolution": "existing",
         "entity_id": entity_id,
-        "title": title,
+        "preferred_name_update": title,
         "aliases": aliases,
         "reason": node["description"],
     }
@@ -1643,7 +1643,7 @@ async def test_shorter_person_name_resolves_to_existing_identity(tmp_path):
         registry=artifacts.list_entities(),
     )
     responses = use_existing_identity(
-        responses, person.entity_id, title="Priya Raman", aliases=["Priya"]
+        responses, person.entity_id, title=None, aliases=["Priya"]
     )
     llm.call_structured.side_effect = responses
     result = await dream.router.route([ClaimEvidence(claim, source)])
@@ -1697,6 +1697,8 @@ async def test_later_project_name_updates_stable_identity_without_duplicate(tmp_
         claim_type="identity",
     )
     candidate = scope_candidate("N001", "Lantern", "project", ["C001"])
+    source.segments[0].content = claim.text
+    artifacts.save_source(source)
     responses = split_scope_plan(
         scope_plan({"C001": assignment(project.entity_id)}, [candidate]),
         registry=artifacts.list_entities(),

@@ -178,7 +178,6 @@ class IdentityPlanner:
                     limit=24,
                     required_ids={"you"} if "you" in candidates else (),
                 )
-                schema = subject_identity_model(ids)
                 support = set(subject["supporting_evidence"])
                 claim_aliases = (support & aliases.keys()) | {
                     bindings[a]["claim_alias"] for a in support if a in bindings
@@ -221,6 +220,7 @@ class IdentityPlanner:
                     scoped_evidence,
                     reviews,
                 )
+                schema = subject_identity_model(ids, scoped_evidence)
                 decision = schema.model_validate(
                     await self.llm.call_structured(
                         system,
@@ -231,6 +231,8 @@ class IdentityPlanner:
                         cache_store=self.artifacts.db,
                     )
                 ).model_dump()["decision"]
+                if decision["resolution"] == "existing":
+                    decision["title"] = decision.pop("preferred_name_update")
                 selections.append(
                     {
                         "subject": subject,
@@ -238,8 +240,8 @@ class IdentityPlanner:
                         "index": index.last_trace,
                     }
                 )
-            # The model returns a preferred title. An exact match to the stored
-            # title is a no-op, not a competing rename from another occurrence.
+            # A source may restate its established name. An exact match to the
+            # stored title is a no-op, not a competing rename.
             if (
                 decision["resolution"] == "existing"
                 and decision["title"] == active[decision["entity_id"]].title

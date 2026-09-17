@@ -1,6 +1,7 @@
 """Native source discovery, identity candidates, naming and routing boundaries."""
 
 import asyncio
+import argparse
 from dataclasses import asdict
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def source_claim(artifacts, sid, text, *, current=False):
     return source, claim
 
 
-async def main():
+async def main(trials=1):
     root = fresh_run_root("identity-boundary-pipeline")
     print("OUTPUT", root, flush=True)
     root.mkdir(parents=True, exist_ok=True)
@@ -58,8 +59,12 @@ async def main():
         "distinct_product",
         "person_namesake",
         "new_name_spelling",
+        "explicit_name_correction",
+        "explicit_rename",
+        "additional_nickname",
+        "unnamed_followup",
     }
-    for trial in range(3):
+    for trial in range(trials):
         for (
             name,
             kind,
@@ -163,11 +168,20 @@ async def main():
                     checks["project_retained"] = entities["e1"].entity_type == "project"
                 elif name == "person_namesake":
                     checks["separate_person"] = any(
-                        e.entity_type == "person"
-                        and e.entity_id != "e1"
+                        e.entity_type == "person" and e.entity_id != "e1"
                         for e in entities.values()
                     )
                     checks["project_retained"] = entities["e1"].entity_type == "project"
+                elif resolution == "existing":
+                    checks["same_identity"] = any(
+                        node["resolution"] == "existing"
+                        and node.get("entity_id") == "e1"
+                        for node in work.entity_plan["subjects"]
+                    )
+                    checks["preferred_name"] = entities["e1"].title == expected_title
+                    checks["no_duplicate"] = not any(
+                        e.entity_id not in {"e1", "you"} for e in entities.values()
+                    )
                 else:
                     checks["source_spelling"] = any(
                         e.title == "MetroCloud" and e.entity_type == "organization"
@@ -187,4 +201,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--trials", type=int, default=1)
+    asyncio.run(main(parser.parse_args().trials))

@@ -78,7 +78,7 @@ async def test_matching_receives_same_source_user_binding_without_subject_assign
                 "decision": {
                     "resolution": "existing",
                     "entity_id": "you",
-                    "title": "You",
+                    "preferred_name_update": None,
                     "aliases": [],
                     "reason": "The named person is the declared source user",
                 }

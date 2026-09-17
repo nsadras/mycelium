@@ -27,7 +27,9 @@ Compared runs:
 
 ## Measured work
 
-All numbers include failed attempts. Inference time sums uncached attempts; it is not wall time. Cached decision
+All numbers include failed attempts. Server time sums Ollama's reported duration
+for uncached attempts, including server overhead/loading; it is not overall elapsed
+time or pure GPU compute. Cached decision
 returns are counted separately and consume no generation tokens. The main model log includes extraction, organization, retrieval
 admission and answer judgment; answering and embeddings are separate below.
 
@@ -35,25 +37,36 @@ admission and answer judgment; answering and embeddings are separate below.
 |---|---:|---:|
 | Main model inference attempts | 321 | 196 |
 | Cached decision returns / seconds | 0 / 0 | 2 / 0.002 |
-| Main model inference seconds | 2,732.122 | 1,404.578 |
+| Main model server seconds | 2,804.675 | 1,449.390 |
+| Original client-wall trace seconds (clock-skew limitation) | 2,732.122 | 1,404.578 |
 | Input / output tokens | 2,326,261 / 165,251 | 1,090,182 / 86,317 |
 | Failed attempts | 11 | 3 |
-| Attribution calls / seconds | 37 / 897.70 | 14 / 228.17 |
-| Subject discovery calls / seconds | 15 / 164.28 | 7 / 67.15 |
-| Identity matching calls / seconds | 80 / 258.73 | 32 / 94.23 |
-| Page routing calls / seconds | 32 / 233.81 | 11 / 77.52 |
-| Truth screening calls / seconds | 25 / 481.41 | 21 / 376.77 |
-| Truth comparison calls / seconds | 12 / 150.82 | 14 / 137.79 |
+| Attribution calls / server seconds | 37 / 925.444 | 14 / 237.705 |
+| Subject discovery calls / server seconds | 15 / 166.750 | 7 / 69.240 |
+| Identity matching calls / server seconds | 80 / 265.238 | 32 / 98.347 |
+| Page routing calls / server seconds | 32 / 238.788 | 11 / 78.498 |
+| Truth screening calls / server seconds | 25 / 494.076 | 21 / 388.369 |
+| Truth comparison calls / server seconds | 12 / 155.060 | 14 / 141.960 |
 | Retrieval elapsed seconds, 19 probes | 96.846 | 92.732 |
 | Answer elapsed seconds, 19 probes | 32.159 | 31.103 |
 | QA model seconds | 31.107 | 29.862 |
 | Separate embedding seconds | 9.942 | 8.006 |
 | Raw judged passes | 10/19 | 10/19 |
 
-Main model time fell 48.6%, with no change to which raw probe judgments pass.
+Main model server time fell 48.3%, with no change to which raw probe judgments pass.
 This supports continued use of the smaller work scope and simpler attribution
 contract, alongside their isolated controls. It does not establish equivalent
 full encoding quality or attribute the entire saving to one mechanism.
+
+**Timing correction:** later inspection found `time.time()` differences in the
+structured-call trace, vulnerable to clock adjustments. Server durations exist
+for all 321/196 attempts and are now the stage-cost comparison above. Original
+client-wall sums are retained explicitly, not relabelled as monotonic elapsed.
+Retrieval/answer elapsed, chat-round and embedding timers already use monotonic
+clocks. The timing-only production fix is `f1dfdd9`; earlier direct-probe trace
+latencies also carry this limitation. Semantic findings, counts and tokens do
+not change. Analysis is retained in the full sample-3 run's
+`source-review/timing-comparison.json`.
 
 ## Evidence and successive page review
 

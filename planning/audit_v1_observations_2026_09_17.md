@@ -192,26 +192,35 @@ Configured `gemma4:12b`, temperature 1.0, reasoning disabled, model context
 65,536, session budget 32,768. Dataset/config/model provenance is in the manifest.
 The main model performs **314 inference attempts**, comprising 308 unique
 requests and six retries: eight failed attempts total. Six cache returns take
-0.007s and are excluded from inference counts. Inference totals: **3,634.789s**,
-2,527,628 input tokens and 234,640 output tokens. Per-attempt median 8.685s,
-nearest-rank p95 25.971s, maximum 107.886s (the truncated extraction).
+0.007s and are excluded from inference counts. Tokens: 2,527,628 input and
+234,640 output. Original client-wall trace total is 3,634.789s; those durations
+use a clock vulnerable to adjustment, discovered later in the full sample-3 run.
+Use the independently recorded **3,770.842 server-total seconds** for stage cost
+below: all 314 attempts have server metadata. Server median 9.087s, nearest-rank
+p95 27.016s, maximum 112.733s (the truncated extraction). Server totals include
+server overhead/loading; they are not overall elapsed or pure GPU-compute time.
+The production timer fix is `f1dfdd9`; it does not rewrite this frozen run.
 
-| Stage | Attempts | Failed attempts | Inference seconds |
+| Stage | Attempts | Failed attempts | Server seconds |
 |---|---:|---:|---:|
-| Extraction | 8 | 1 | 512.329 |
-| Subject discovery | 14 | 0 | 148.354 |
-| Identity matching | 65 | 3 | 248.971 |
-| Page admission | 7 | 0 | 39.728 |
-| Attribution | 26 | 4 | 504.764 |
-| Routing | 22 | 0 | 258.046 |
-| Truth screening | 68 | 0 | 1,349.794 |
-| Truth comparison | 30 | 0 | 296.471 |
-| Fact candidate selection | 16 | 0 | 123.480 |
-| Fact grouping | 15 | 0 | 102.906 |
-| Fact text | 43 | 0 | 49.946 |
+| Extraction | 8 | 1 | 532.035 |
+| Subject discovery | 14 | 0 | 152.913 |
+| Identity matching | 65 | 3 | 259.038 |
+| Page admission | 7 | 0 | 39.718 |
+| Attribution | 26 | 4 | 524.042 |
+| Routing | 22 | 0 | 268.567 |
+| Truth screening | 68 | 0 | 1,399.148 |
+| Truth comparison | 30 | 0 | 308.481 |
+| Fact candidate selection | 16 | 0 | 126.961 |
+| Fact grouping | 15 | 0 | 108.848 |
+| Fact text | 43 | 0 | 51.092 |
 
 Separate embeddings: 117 recorded operations / 18.841s / 94,432 input tokens.
-Model seconds are sums of traces, not total wall time. Full per-call traces and
+Original traces and the later independent-server analysis are both retained.
+The latter is in the full sample-3 run's `source-review/timing-comparison.json`.
+Earlier direct-probe client latencies quoted below have the same clock limitation;
+counts, tokens, semantic findings and acceptance decisions are unchanged.
+Full per-call traces and
 failed request/response dumps are retained. Unlike the daily-driver recorder,
 this ordinary runner does not save every successful prompt/response; persisted
 claims, work units, cached decisions and snapshots support source review, but the

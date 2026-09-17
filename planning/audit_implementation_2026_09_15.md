@@ -13,10 +13,12 @@ comparison arms and source review. S1 bounded truth discovery, S2 dependency
 maintenance, and measured date/name/attribution fixes are implemented. Longitudinal
 replay completed with residual quality failures. The frozen four-session held-out
 run and source review are complete: encoding is incomplete and broad semantic
-acceptance fails. Full sample-3 validation remains open. Existing
+acceptance fails. Full sample-3 validation is running at frozen `0f9f7ee`. Existing
 storage, review, configuration, retrieval-consistency, and UI fixes remain the
-foundation. The latest recorded structural suite is 827 passed, one skipped,
-75 integration tests deselected; that is not full semantic acceptance.
+foundation. The latest recorded structural suite is 833 passed,
+75 integration tests deselected (33.92s); that is not full semantic acceptance.
+The separately committed duration-clock fix (`f1dfdd9`) passes 57 client tests
+and that full structural suite, and is not loaded by the frozen comparison process.
 
 ### Implementation progress after resuming
 
@@ -91,7 +93,8 @@ foundation. The latest recorded structural suite is 827 passed, one skipped,
   already present. No new index, entity/time branch or reranker is warranted by
   these observations. See the [follow-through report](audit_followthrough_observations_2026_09_17.md).
 - **Longitudinal replay complete with failures:** `e4cfc9d` uses 196 inference attempts
-  / 1,404.578s plus two cached returns versus 321 / 2,732.122s at `fdcc767`, with the same 10/19 raw QA
+  / 1,449.390 server seconds plus two cached returns versus 321 / 2,804.675 server
+  seconds at `fdcc767`, with the same 10/19 raw QA
   passes. The new run has five routing failures; both miss the pilot-date review.
   Full extraction and valid citations do not establish complete page organization.
   Cost reduction is measured; full quality acceptance remains unproven.
@@ -100,12 +103,20 @@ foundation. The latest recorded structural suite is 827 passed, one skipped,
   claims are routed, with one pending identity review and no truth proposals.
   Source review finds incomplete antecedent citations, wrong date precision,
   useful source-only omissions, routine-chat over-extraction, and cross-owned
-  car content. 314 inference attempts use 3,634.789s; truth work consumes 45.3%.
+  car content. 314 inference attempts use 3,770.842 server seconds; truth work consumes 45.3%.
   Two bounded citation proposals fail and remain unintegrated. A larger output
   reserve completes an exact replay of the truncated request without adding
   calls or schema fields; that does not fix the semantic defects. See the
-  [completed V1 review](audit_v1_observations_2026_09_17.md). Full sample 3 remains
-  the outstanding workload diagnostic; O1 is user-owned and unverified.
+  [completed V1 review](audit_v1_observations_2026_09_17.md). Full sample 3 is now
+  the running workload diagnostic; O1 is user-owned and unverified.
+- **E1 timing follow-through:** elapsed attempt timers now use a monotonic clock.
+  Negative durations revealed clock adjustment in earlier structured-call traces.
+  The daily/V1 cost reports now separately label original client-wall sums and
+  independently recorded server durations, with full coverage in those runs.
+  Earlier direct-probe client latencies also have this limitation; small timing
+  differences do not prove a speed improvement. Counts, tokens, source findings
+  and semantic decisions are unchanged. Server durations include overhead/loading,
+  not just GPU compute, and are not overall elapsed time.
 - **E2 diagnostic complete:** nine production checkpoints and 19/19 probes in
   both arms. The ranked control recovers three answers but uses 8.23× the context
   characters. Final extraction is complete; a missing truth proposal blocks the

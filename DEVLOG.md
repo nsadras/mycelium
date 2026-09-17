@@ -5334,3 +5334,29 @@ remain separate gates.
   tokens, source findings and semantic acceptance are unaffected. The current
   sample-3 review retains a separate `source-review/timing-comparison.json` and
   its read-only inspection script for corrected cost interpretation.
+
+### 2026-09-17 — Full structural validation and frozen comparison review
+
+- The monotonic-clock change passes the complete structural suite: **833 passed,
+  75 integration deselected in 33.92s**. Log:
+  `test_outputs/audit-followthrough/monotonic-timing-full.log`. This validates
+  structural behavior, not the configured model's semantic decisions.
+- Full sample 3 continues from unchanged production revision `0f9f7ee`; neither
+  the clock fix nor these documentation changes are loaded into its checkout.
+  Four snapshots currently exist. Session 4 has 12 retryable fact-addition
+  failures: three attempts omit the same one of 44 claim IDs, while the generic
+  validation error never identifies it. Older published facts remain intact.
+  Exact missing/duplicate-ID feedback is a bounded structural hypothesis for
+  later proof, not a change integrated during this workload.
+- Read all 32 source conversations, all 193 prior predictions, prior
+  early/middle/final principal pages, and all current pages through session 4.
+  The comparison report separates canonical citation/date errors, identity
+  fragmentation, failed publication, retrieval loss and QA mistakes. It also
+  preserves reference defects: two questions have the wrong year and an exact
+  adoption interval is unsupported. No reference edits or benchmark-specific
+  product changes. The current workload has not reached QA and is not a pass.
+- Corrected daily/held-out cost interpretation now uses separately labelled
+  independent Ollama server durations where available. Original client-wall
+  measurements remain visible with their clock-skew limitation. No historical
+  traces were rewritten. The report and read-only inspection artifacts retain
+  measurement coverage and distinguish server work from elapsed runtime.

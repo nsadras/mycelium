@@ -5638,3 +5638,48 @@ remain separate gates.
   Asked whether one retained statement may support multiple distinct view items.
   The current fixed comparison continues unchanged while that clarification is
   pending; no broader quality or adoption result is claimed yet.
+
+### 2026-09-17 — Separate shared evidence from view ownership
+
+- User explicitly permits distinct view items/pages to cite the same retained
+  statement. Remove the experimental exclusive-membership validator. Each fact
+  supplies its own owner, heading and shared destinations; the renderer no longer
+  lets a last-written claim placement move every item citing that claim. No new
+  persistent schema field, semantic stage or model call is added.
+- Refresh only generated items owned by the affected subjects; preserve manual
+  and pending-review items and other owners' items. Omitted statements remain
+  retained. Rendering follows shared claim dependencies when support becomes
+  inactive. Temporary placement-shaped metadata adapts the existing renderer;
+  it is not a persisted claim-ownership decision. This adapter remains confined
+  to the experiment; production lifecycle services still require integration.
+- Four focused tests pass in 0.26s; Ruff and whitespace checks pass. Tests cover
+  shared citations with distinct owners/headings, source metadata, another owner's
+  protected item surviving refresh, inactive support removing all affected views,
+  publication rollback/retry, and exact reference/review boundaries. Retraction
+  coverage here is renderer-level, not a claim that the application API is ready.
+- Offline validation of the original first failed presentation response now
+  accepts its ten items, including three memories cited more than once. This
+  reuses `structured-failure-a5918d4d-attempt-1.json` from the candidate diagnostics;
+  it is a recorded-output contract replay with zero new model requests.
+- The original comparison is terminal. Candidate: 3 source steps and 3 useful
+  agent answers, 514.235s / 20 requests, but every Build reports a view failure.
+  Views lag one Build: subsequent Builds retry the preceding failed refresh
+  before retaining the new source. Build work alone: 14 requests, 143,003 input /
+  33,586 output tokens, 451.234 server seconds; nine presentation attempts fail
+  validation. Answer work: 6 requests / 55.523 server seconds. Search sees newer
+  retained claims despite stale pages; useful answers do not prove view quality.
+- Control stops at its 60-request cap in 597.301s with zero completed Builds or
+  answers. Forty requests are subject identity work (six failed); another
+  subject-discovery request fails. Total 627,427 input / 35,108 output tokens,
+  592.911 server seconds. This run never reaches truth comparison. It is a
+  budget-limited incomplete control, not evidence of matched quality or a
+  completed speedup. The earlier stress run's truth bottleneck does not explain
+  this arm's measured identity workload.
+- The independent source finished under the original contract before the user
+  clarification arrived: 113.792s / 6 requests, one Build with a presentation
+  failure and one answer. No process was killed. Freeze the user-directed revision
+  before examining that source's outputs, then allocate only the original unspent
+  allowances: candidate 385.765s / 40 requests; independent 186.208s / 6 requests.
+  `compact-shared-evidence-20260917T232020Z-13fc977d` saves the revised code and
+  allowance calculation. The repeated independent source is not a fresh holdout.
+  No further prompt variants or budget extensions are authorized by this run.

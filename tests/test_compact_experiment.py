@@ -109,3 +109,70 @@ def test_compact_identity_uses_declared_ids_only():
     for change in ({"id": "invented"}, {"review_required": True}):
         with pytest.raises(ValueError):
             model.model_validate({"subjects": [{**row, **change}], "memories": [], "changes": []})
+
+
+@pytest.mark.asyncio
+async def test_shared_evidence_keeps_distinct_items_and_owners(tmp_path, monkeypatch):
+    async def no_search(*args, **kwargs):
+        return []
+
+    async def retain(llm, payload):
+        a, b = payload["new_subject_ids"][:2]
+        return {"subjects": [{"id": sid, "title": title, "entity_type": "person", "review_required": False}
+                             for sid, title in [(a, "Rowan"), (b, "Sasha")]],
+                "memories": [{"id": "m", "text": "Rowan keeps the receipts; Sasha brings the tools.",
+                              "segment_ids": [payload["segments"][0]["id"]], "subject_ids": [a, b]}],
+                "changes": []}
+
+    async def present(llm, payload):
+        a, b = payload["affected_subject_ids"]
+        cid = payload["memories"][0]["id"]
+        items = [{"owner_id": sid, "heading": heading, "text": text, "memory_ids": [cid],
+                  "linked_subject_ids": [], "state": "current"}
+                 for sid, heading, text in [(a, "Records", "Keeps the receipts."),
+                                           (b, "Equipment", "Brings the tools.")]]
+        return contract.presentation_model(payload).model_validate({"items": items}).model_dump()
+
+    monkeypatch.setattr(contract, "retain", retain)
+    monkeypatch.setattr(contract, "present", present)
+    with Mycelium(tmp_path, memory_profile="none") as memory:
+        pipeline = CompactPipeline(memory)
+        monkeypatch.setattr(memory.retriever.claim_index, "search", no_search)
+        await pipeline.ingest_source(SourceInput("Rowan keeps the receipts; Sasha brings the tools.", "s"))
+        assert not (await pipeline.consolidate()).report.failures
+        claim = memory.artifacts.list_claims()[0]
+        facts = sorted(memory.artifacts.list_consolidated_facts(), key=lambda f: f.owner_entity_id)
+        assert len(facts) == 2
+        assert all(f.member_claim_ids == [claim.claim_id] for f in facts)
+        assert memory.artifacts.list_placements() == []
+        pages = {p.entity_id: p for p in memory.wiki.list_all()}
+        for fact in facts:
+            page = pages[fact.owner_entity_id]
+            item = page.sections[0]["items"][0]
+            assert item["text"] == fact.text
+            assert item["canonical_owner_entity_ids"] == [fact.owner_entity_id]
+            assert item["sources"][0]["segment_ids"] == claim.provenance[0].segment_ids
+            assert page.source_log_entries == [claim.provenance[0].source_id]
+
+        # Refreshing A with the same evidence cannot erase B's distinct item.
+        a, b = facts
+        b.manual_text = True
+        pipeline.artifacts.save_consolidated_fact(b)
+        episode = memory.artifacts.list_episodes()[0]
+        source = memory.artifacts.get_source(episode.source_id)
+        state = {"subject_ids": [a.owner_entity_id], "claim_ids": [], "identity_reviews": {}}
+        payload = pipeline._view_input(state)
+        view = {"items": [{"owner_id": a.owner_entity_id, "heading": "Records", "text": "Stores receipts.",
+                            "memory_ids": [claim.claim_id], "linked_subject_ids": [], "state": "current"}]}
+        contract.presentation_model(payload).model_validate(view)
+        pipeline._save_view("refresh", state, view, source, episode)
+        assert memory.artifacts.get_consolidated_fact(b.fact_id) == b
+        assert len(memory.artifacts.list_consolidated_facts()) == 2
+        assert len(memory.artifacts.list_claims()) == 1
+
+        # All presentations disappear when their canonical support is inactive.
+        # This checks the renderer, not the application's retraction API.
+        claim.status = "retracted"
+        pipeline.artifacts.save_claim(claim)
+        pipeline.materializer.regenerate({a.owner_entity_id})
+        assert memory.wiki.list_all() == []

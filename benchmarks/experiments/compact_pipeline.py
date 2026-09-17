@@ -8,7 +8,7 @@ validation; free sections are local here until the comparison justifies them.
 import hashlib
 import json
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 
 from benchmarks.experiments import compact_contract as contract
@@ -35,14 +35,6 @@ def stable_id(kind, *parts):
 class OpenSectionStore(ArtifactStore):
     """Same exact record references; headings are chosen by the model."""
 
-    def save_placement(self, placement):
-        self.get_claim(placement.claim_id)
-        endpoints = {placement.owner_entity_id, *placement.linked_entity_ids, *placement.page_sections} - {None}
-        for eid in endpoints:
-            if self.get_entity(eid).status != "active":
-                raise ValueError("Page endpoints must be active identities")
-        self.db.put("placements", placement.claim_id, asdict(placement))
-
     def save_consolidated_fact(self, fact):
         if not fact.section_key.strip():
             raise ValueError("View items need a heading")
@@ -55,6 +47,59 @@ class OpenSectionStore(ArtifactStore):
 
 
 class OpenSectionMaterializer(PageMaterializer):
+    """Render each cited item's own destinations, independent of claim placement.
+
+    Temporary placements below adapt the existing renderer's metadata contract;
+    they are never persisted as an exclusive ownership decision for evidence.
+    """
+
+    def regenerate(self, entity_ids):
+        self._identity_reviews = defaultdict(list)
+        for decision in self.artifacts.list_entity_resolution_decisions(review_state="review_required"):
+            for cid in decision.supporting_claim_ids:
+                self._identity_reviews[cid].append(decision.decision_id)
+        # A link becoming available/unavailable affects every referencing item.
+        by_claim = defaultdict(set)
+        for fact in self.artifacts.list_consolidated_facts():
+            for cid in fact.member_claim_ids:
+                by_claim[cid].update({fact.owner_entity_id, *fact.linked_entity_ids})
+        endpoints = list(by_claim.values())
+        affected = set(entity_ids)
+        while True:
+            expanded = affected | {eid for group in endpoints if group & affected for eid in group}
+            if expanded == affected:
+                return super().regenerate(affected)
+            affected = expanded
+
+    @classmethod
+    def _page_facts(cls, entity_id, fact, claims, placements, entities):
+        endpoints = {fact.owner_entity_id, *fact.linked_entity_ids}
+        if entity_id not in endpoints or not all(cid in claims for cid in fact.member_claim_ids):
+            return []
+        return [replace(fact, owner_entity_id=entity_id,
+                        linked_entity_ids=sorted(endpoints - {entity_id}))]
+
+    def _item_placements(self, fact):
+        return {cid: ClaimPlacement(cid, fact.owner_entity_id, fact.section_key,
+                    fact.linked_entity_ids, "placed", "View item metadata", fact.created_at, fact.updated_at,
+                    identity_blocker_ids=self._identity_reviews.get(cid, []))
+                for cid in fact.member_claim_ids}
+
+    def _fact_items(self, values, entities, claims_by_id, **kwargs):
+        items = []
+        for fact in values:
+            canonical = self.artifacts.get_consolidated_fact(fact.fact_id)
+            items.extend(super()._fact_items([fact], entities, claims_by_id,
+                **{**kwargs, "canonical_placements": self._item_placements(canonical)}))
+        return items
+
+    def _build_page(self, entity, owned, entities, placements, pending_proposals_by_claim,
+                    encounters, facts, claims_by_id, existing, projected_entity_ids):
+        owned = [(claims_by_id[cid], placement) for fact in facts
+                 for cid, placement in self._item_placements(fact).items()]
+        return super()._build_page(entity, owned, entities, placements, pending_proposals_by_claim,
+                                  encounters, facts, claims_by_id, existing, projected_entity_ids)
+
     def _sections(self, entity, owned, entities, placements, pending_proposals_by_claim,
                   encounters, facts, claims_by_id, projected_entity_ids):
         sections = super()._sections(entity, owned, entities, placements, pending_proposals_by_claim,
@@ -208,11 +253,14 @@ class CompactPipeline(MemoryPipeline):
         now = datetime.now(timezone.utc).isoformat()
         used = {cid for item in view["items"] for cid in item["memory_ids"]}
         prior = self.artifacts.list_consolidated_facts()
-        replaced = [f for f in prior if set(f.member_claim_ids) & used]
-        # Do not drop the uncited portion of an existing consolidated item.
-        if any(not set(f.member_claim_ids) <= used for f in replaced):
-            raise ValueError("Replacing part of a view item would discard its other evidence")
-        affected = set(state["subject_ids"]) | {f.owner_entity_id for f in replaced}
+        pending = {cid for p in self.artifacts.list_reconsolidation_proposals(status="pending")
+                   for cid in [*p.incoming_claim_ids, *p.target_claim_ids]}
+        # The refresh owns only these generated items. Shared evidence neither
+        # transfers ownership nor authorizes editing another subject's items.
+        replaced = [f for f in prior if f.owner_entity_id in state["subject_ids"]
+                    and not f.manual_text and not set(f.member_claim_ids) & pending]
+        affected = set(state["subject_ids"]) | {eid for f in replaced
+                                               for eid in [f.owner_entity_id, *f.linked_entity_ids]}
         with self.artifacts.db.transaction():
             for f in replaced:
                 self.artifacts.delete_consolidated_fact(f.fact_id)
@@ -224,10 +272,6 @@ class CompactPipeline(MemoryPipeline):
                     item["heading"], item["state"], item["linked_subject_ids"], "model", .8,
                     "Source-led view refresh", now, now))
                 for cid in item["memory_ids"]:
-                    self.artifacts.save_placement(ClaimPlacement(cid, item["owner_id"], item["heading"],
-                        item["linked_subject_ids"], "placed", "Source-led view refresh", now, now,
-                        identity_blocker_ids=[did for eid, did in state["identity_reviews"].items() if eid in endpoints],
-                        page_sections={eid: item["heading"] for eid in endpoints}))
                     claim = self.artifacts.get_claim(cid)
                     claim.dream_disposition = "routed"
                     self.artifacts.save_claim(claim)

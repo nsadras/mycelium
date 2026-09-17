@@ -123,5 +123,30 @@ async def main():
                    for name in ("candidate", "control", "independent")}})
 
 
+async def finish_remaining(previous):
+    """One user-directed contract revision within the original arm allowances."""
+    root = fresh_run_root("compact-shared-evidence")
+    root.mkdir(parents=True)
+    print("OUTPUT", root, flush=True)
+    for module in (Path(__file__), Path(compact_contract.__file__), Path(compact_inputs.__file__), Path(compact_pipeline.__file__)):
+        (root / module.name).write_text(module.read_text())
+    earlier = json.loads((previous / "completion.json").read_text())["arms"]
+    allowances = {name: {"seconds": max(0, seconds - earlier[name]["seconds"]),
+                         "calls": max(0, calls - earlier[name]["metrics"]["attempts"])}
+                  for name, seconds, calls in [("candidate", 900, 60), ("independent", 300, 12)]}
+    write(root / "plan.json", {"previous_run": str(previous), "remaining_allowances": allowances,
+          "change": "User permits distinct view items to cite the same retained statement; ownership belongs to items",
+          "limits": "Control exhausted 60 calls with no completed Build. Independent source already ran under the old contract; its output was not reviewed before freezing this revision. This is not a fresh holdout.",
+          "questions": QUESTIONS, "review_actions": [], "seed": str(SEED)})
+    for name, sequence, questions in [("candidate", SEQUENCE, QUESTIONS),
+            ("independent", [INDEPENDENT], ["What is decided about the holiday, and what needs checking before booking?"])]:
+        allowance = allowances[name]
+        if allowance["seconds"] > 0 and allowance["calls"] > 0:
+            await arm(root, name, sequence, allowance["seconds"], allowance["calls"], questions)
+    write(root / "completion.json", {"status": "finished", "assessment": "requires_source_review",
+          "arms": {name: json.loads((root / name / "completion.json").read_text())
+                   for name in allowances if (root / name / "completion.json").exists()}})
+
+
 if __name__ == "__main__":
     asyncio.run(main())

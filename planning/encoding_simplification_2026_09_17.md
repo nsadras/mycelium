@@ -15,11 +15,13 @@ confuse these structural guarantees with perfect model interpretation.
 **Implementation checkpoint:** the approved execution plan uses a directional
 five-minute Build target per roughly 1,000-word conversation, at most ten minutes
 for feasibility including one revision, then 15 minutes / 60 attempts per native
-arm and five minutes / 12 attempts for a reserved source. These supersede the
-provisional budgets below. The first direct check completed six calls; the one
-revision fixed redundant identity selection but exposed a view-membership
-restriction. A fixed native comparison is running; application adoption remains
-open. See `DEVLOG.md` for paths, failures and the pending product clarification.
+arm and five minutes / 12 attempts for a reserved source. The first comparison
+is terminal: the candidate retained all three conversations but views lagged one
+Build; the control exhausted 60 calls before its first completed Build. The user
+resolved the architectural question: **distinct view items may cite the same
+retained statement**. The experiment now assigns ownership to view items and
+uses only the original unspent allowances for that revision. Application adoption
+remains open. See `DEVLOG.md` for exact paths, accounting and limitations.
 
 ## What the external implementations establish
 
@@ -96,7 +98,9 @@ The experimental contract is deliberately small:
 2. **Present:** one bounded refresh for affected subjects, using source-derived
    headings and cited memory IDs. A subject need not have a page. Existing
    memories remain available regardless of page admission. No fixed taxonomy
-   or claim-by-subject relevance matrix is imposed in this arm.
+   or claim-by-subject relevance matrix is imposed in this arm. Multiple distinct
+   items may cite one statement; owners and headings belong to those items.
+   Refresh affected generated items, preserving manual/pending-review items.
 
 Both are model decisions; code validates exact references and declared states.
 Names cannot establish identity through matching code. Source roles, explicit
@@ -118,8 +122,8 @@ prompt/schema and exact code in a new run root.
   namesakes, historical versus tentative future events, and explicit changed
   plans. Include assistant suggestions that were never adopted. Review source
   meaning manually; deterministic checks only assess structural invariants.
-- Budget: at most **48 actual generation attempts / 12 minutes** for the direct
-  phase, including the existing retry allowance. The expected successful path
+- Budget: at most **48 actual generation attempts / 10 minutes** for feasibility,
+  including one revision and the existing retry allowance. The expected successful path
   is one retain and one presentation call per case/source chunk. Complete the
   fixed cases despite isolated semantic mistakes, then assess overall usefulness.
   Stop at the budget or an unusable structural contract; no stream of wording
@@ -128,8 +132,10 @@ prompt/schema and exact code in a new run root.
   on a short successive-source sequence: current full pipeline versus the
   proposed path. Use the same sources, role/time metadata, initial evidence,
   model/configuration, retrieval/answer budgets and human-review actions.
-  Budget at most **120 attempts / 20 minutes** across both arms. Reserve one
-  independently written sequence before seeing outcomes and do not tune on it.
+  Budget at most **60 attempts / 15 minutes per arm**. Reserve one independently
+  written source, capped at **12 attempts / 5 minutes**, before seeing outcomes.
+  Stop at the first exhausted limit. Repeats consume these same allowances;
+  they do not reset the budget or regain holdout status.
 - Assess useful facts, attribution/identity continuity, conditions, temporal
   precision and unresolved changes together. Require inspectable citations.
   Exact titles, number of pages and benchmark wording are not targets.

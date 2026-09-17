@@ -39,13 +39,14 @@ Use source-derived headings and combine related statements when useful. Preserve
 important context, conditions and uncertainty. Distinguish history from current
 plans. Pending changes are unresolved accounts, not approved replacements.
 
-You are refreshing only the affected subjects. Existing items are supplied for
-continuity. New items may replace existing generated items whose cited memories
-they include; include the context worth keeping. Do not rewrite protected manual
-items or memory involved in pending review. Omitted memories remain searchable;
-every memory need not appear on a page. Do not duplicate the same memory across
-items: use linked_subject_ids for a shared item instead. An incidental subject
-need not have a page. Never invent facts or resolve identity by name alone.
+You are refreshing the generated items owned by the affected subjects. Existing
+items are supplied for continuity; include the context worth keeping. Protected
+manual items and items involved in pending review are kept unchanged: do not
+rewrite their protected memories. Omitted memories remain searchable; every
+memory need not appear on a page. Distinct items may cite the same memory when
+it supports each statement. Use linked_subject_ids when the same item belongs on
+several pages. An incidental subject need not have a page. Never invent facts or
+resolve identity by name alone.
 """
 
 
@@ -143,18 +144,16 @@ def presentation_model(payload):
     class ScopedPresentation(Presentation):
         @model_validator(mode="after")
         def references(self):
-            seen = set()
             for item in self.items:
                 endpoints = {item.owner_id, *item.linked_subject_ids}
                 if item.owner_id not in affected or not endpoints <= subjects:
                     raise ValueError("View endpoints must be supplied subjects and owner affected")
                 if not set(item.memory_ids) <= memories:
                     raise ValueError("View citations must reference supplied memories")
-                if set(item.memory_ids) & (seen | protected):
-                    raise ValueError("A memory cannot be rewritten when protected or appear in two items")
+                if set(item.memory_ids) & protected:
+                    raise ValueError("Protected memory cannot be rewritten")
                 if any((mid, eid) in excluded for mid in item.memory_ids for eid in endpoints):
                     raise ValueError("This evidence has an explicit no-page decision for that subject")
-                seen.update(item.memory_ids)
             return self
 
     return ScopedPresentation

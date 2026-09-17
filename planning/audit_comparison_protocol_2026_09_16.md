@@ -60,7 +60,7 @@ complexity lives, so new work can report its delta without another profiler.
 
 | Stage / label | Output contract | Requested tokens | Invocation/shape |
 |---|---|---:|---|
-| `claim-extraction-*` | extraction output | 8192 | Per source batch; exact segment accounting, bounded claims, cited time declarations |
+| `claim-extraction-*` | extraction output | Up to 16384, at most ¼ model context | Per source batch; exact segment accounting, bounded claims, cited time declarations; batch planner reserves the same allowance |
 | `dream-subject-discovery` | subject discovery | 8192 | Source cohort; bounded subject candidates and participant assignments |
 | `dream-subject-review-bindings` | reviewed bindings | 2048 | Only applicable identity reviews; exact reviewed evidence domain |
 | `dream-subject-identity` | subject identity | 2048 | Per subject; bounded known identities and one decision |

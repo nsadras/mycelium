@@ -133,6 +133,7 @@ class ConsolidationProcess:
             )
         ]
         if newly_materialized:
+            assert routing is not None
             revision_claims = self.policy.scope_revision_claims(
                 queued_claims, newly_materialized
             )
@@ -153,31 +154,26 @@ class ConsolidationProcess:
                 episodes_by_source,
                 incoming_claim_ids,
             )
-            initial_evidence_ids = {item.claim.claim_id for item in evidence}
+            delta_evidence = self.policy.scope_revision_evidence(
+                evidence, revision_evidence, routing, newly_materialized
+            )
             revision_routing = (
                 await self.router.route(
-                    revision_evidence,
+                    delta_evidence,
                     dream_run_id=run_id,
-                    seed_entities=routing.new_entities if routing is not None else [],
-                    seed_identity_decisions=routing.entity_decisions
-                    if routing is not None
-                    else [],
+                    seed_entities=routing.new_entities,
+                    seed_identity_decisions=routing.entity_decisions,
                     participant_source_ids=incoming_source_ids,
                 )
-                if revision_evidence
-                and {item.claim.claim_id for item in revision_evidence}
-                > initial_evidence_ids
+                if delta_evidence
                 else None
             )
             if revision_routing is not None:
                 routing = self.policy.merge_revision_routing(routing, revision_routing)
-                evidence = revision_evidence
                 decisions = revision_decisions
         if routing is not None:
             failed_claim_ids: set[str] = set()
             for failure in routing.failures:
-                if failure.claim_id not in incoming_claim_ids:
-                    continue
                 failed_claim_ids.add(failure.claim_id)
                 failed_source_ids.add(failure.raw_log_entry_id)
                 failures.append(
@@ -264,7 +260,7 @@ class ConsolidationProcess:
                         and prior.owner_entity_id == failure.owner_entity_id
                     )
                 )
-                if affected and route.claim_id in incoming_claim_ids:
+                if affected:
                     failed_source_ids.add(route.raw_log_entry_id)
                     self.policy.set_decision(
                         decisions, route.claim_id, "routing_failed", failure.reason

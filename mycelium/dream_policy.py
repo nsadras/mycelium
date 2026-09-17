@@ -51,6 +51,34 @@ class DreamPolicy:
         )
 
     @staticmethod
+    def scope_revision_evidence(
+        initial_evidence: list[ClaimEvidence],
+        revision_evidence: list[ClaimEvidence],
+        initial: RoutingResult,
+        promoted_entities: list[EntityRecord],
+    ) -> list[ClaimEvidence]:
+        """Retain valid routes; revisit exact endpoints with new page eligibility.
+
+        Older dependencies were selected by scope_revision_claims. An earlier
+        cohort in this build can also describe a page admitted by a later cohort,
+        without yet having a persisted reference or placement on that page.
+        """
+        initial_ids = {item.claim.claim_id for item in initial_evidence}
+        promoted_ids = {entity.entity_id for entity in promoted_entities}
+        affected_ids = {
+            route.claim_id
+            for route in initial.routes
+            if (set(route.described_entity_ids) & promoted_ids)
+            - route.page_sections.keys()
+        }
+        return [
+            item
+            for item in revision_evidence
+            if item.claim.claim_id not in initial_ids
+            or item.claim.claim_id in affected_ids
+        ]
+
+    @staticmethod
     def merge_revision_routing(
         initial: RoutingResult, revision: RoutingResult
     ) -> RoutingResult:
@@ -72,6 +100,12 @@ class DreamPolicy:
         revision.encounters = list(encounters.values())
         initial_routes = {route.claim_id: route for route in initial.routes}
         revision_routes = {route.claim_id: route for route in revision.routes}
+        revised_ids = revision_routes.keys() | {
+            failure.claim_id for failure in revision.failures
+        }
+        revision.failures = [
+            failure for failure in initial.failures if failure.claim_id not in revised_ids
+        ] + revision.failures
         revision.entity_references = [
             ref
             for ref in initial.entity_references

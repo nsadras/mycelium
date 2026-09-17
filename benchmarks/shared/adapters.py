@@ -611,6 +611,14 @@ class MyceliumMemorySystem:
             page_count = len(self.mem.wiki.list_all())
             log_count = len(self.mem.log_store.get_unconsolidated())
         coverage = self.mem.artifacts.coverage_report() if self.mem is not None else {}
+        queue = self.mem.consolidation_status().as_dict() if self.mem is not None else {}
+        incomplete = (
+            log_count
+            or coverage.get("pending_extraction_segments", 0)
+            or queue.get("pending_claims", 0)
+            or queue.get("retryable_failures", 0)
+            or (self.mem and self.mem.db.publication_status())
+        )
         return {
             "system": self.name,
             "encoded_batches": self._encoded_batches,
@@ -621,8 +629,9 @@ class MyceliumMemorySystem:
             "errors": self._errors,
             "dream_failures": self._dream_failures,
             "artifact_coverage": coverage,
+            "consolidation_queue": queue,
             "effective_config": asdict(self.config),
-            "encoding_status": "incomplete" if log_count or coverage.get("pending_extraction_segments", 0) or (self.mem and self.mem.db.publication_status()) else "complete",
+            "encoding_status": "incomplete" if incomplete else "complete",
         }
 
     def _record_dream_report(self, report: Any, *, session_id: str) -> None:

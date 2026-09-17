@@ -11,10 +11,11 @@ order in this file. The historical implementation record remains below;
 **Current state:** E1 and focused C1–C3 fixes are implemented. E2 completed both
 comparison arms and source review. S1 bounded truth discovery, S2 dependency
 maintenance, and measured date/name/attribution fixes are implemented. Longitudinal
-replay completed with residual quality failures; the frozen four-session held-out
-run is in progress (two snapshots reviewed). Full sample-3 validation remains open. Existing
+replay completed with residual quality failures. The frozen four-session held-out
+run and source review are complete: encoding is incomplete and broad semantic
+acceptance fails. Full sample-3 validation remains open. Existing
 storage, review, configuration, retrieval-consistency, and UI fixes remain the
-foundation. The latest recorded structural suite is 822 passed, one skipped,
+foundation. The latest recorded structural suite is 827 passed, one skipped,
 75 integration tests deselected; that is not full semantic acceptance.
 
 ### Implementation progress after resuming
@@ -57,6 +58,14 @@ foundation. The latest recorded structural suite is 822 passed, one skipped,
   longitudinal acceptance remains open. Production native addition and page
   promotion also passed: old unrelated claims/facts stayed identical, and earlier
   referenced evidence appeared on the newly admitted page.
+- **S2 promotion follow-through:** retain valid incoming routes and revisit only
+  exact older dependencies or within-build descriptions missing a newly admitted
+  page. A control sharing the real first routing decision cuts the second pass
+  from four claims to one, with 11→9 fresh downstream inference attempts and
+  40.192→21.609s. A fresh integrated build also passes. An earlier comparison arm
+  failed upstream before reaching the proposed change; it is not a saving.
+  Failed old-evidence maintenance now remains retryable/visible while prior
+  published facts survive. Benchmark completion includes that retry queue.
 - **S1 implemented:** frozen cap 48 (32 global semantic plus 16 entity neighbors).
   All four annotated changes survived search in a paired 104-record control;
   model calls fell 28→16 and model time 368→153s. Native review preserves canonical
@@ -81,11 +90,22 @@ foundation. The latest recorded structural suite is 822 passed, one skipped,
   memory-tool calls. Temporal interpretation still fails with the relevant source
   already present. No new index, entity/time branch or reranker is warranted by
   these observations. See the [follow-through report](audit_followthrough_observations_2026_09_17.md).
-- **Longitudinal replay complete with failures:** `e4cfc9d` uses 198 model attempts
-  / 1,404.580s versus 321 / 2,732.122s at `fdcc767`, with the same 10/19 raw QA
+- **Longitudinal replay complete with failures:** `e4cfc9d` uses 196 inference attempts
+  / 1,404.578s plus two cached returns versus 321 / 2,732.122s at `fdcc767`, with the same 10/19 raw QA
   passes. The new run has five routing failures; both miss the pilot-date review.
   Full extraction and valid citations do not establish complete page organization.
   Cost reduction is measured; full quality acceptance remains unproven.
+- **V1 unused sequence complete with failures:** all four snapshots, zero QA,
+  3,807.956s. One truncated batch leaves 41/293 segments pending; 126 retained
+  claims are routed, with one pending identity review and no truth proposals.
+  Source review finds incomplete antecedent citations, wrong date precision,
+  useful source-only omissions, routine-chat over-extraction, and cross-owned
+  car content. 314 inference attempts use 3,634.789s; truth work consumes 45.3%.
+  Two bounded citation proposals fail and remain unintegrated. A larger output
+  reserve completes an exact replay of the truncated request without adding
+  calls or schema fields; that does not fix the semantic defects. See the
+  [completed V1 review](audit_v1_observations_2026_09_17.md). Full sample 3 remains
+  the outstanding workload diagnostic; O1 is user-owned and unverified.
 - **E2 diagnostic complete:** nine production checkpoints and 19/19 probes in
   both arms. The ranked control recovers three answers but uses 8.23× the context
   characters. Final extraction is complete; a missing truth proposal blocks the

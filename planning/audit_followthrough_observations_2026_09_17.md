@@ -27,14 +27,15 @@ Compared runs:
 
 ## Measured work
 
-All numbers include failed attempts. Model time sums recorded calls; it is not
-wall time. The main model log includes extraction, organization, retrieval
+All numbers include failed attempts. Inference time sums uncached attempts; it is not wall time. Cached decision
+returns are counted separately and consume no generation tokens. The main model log includes extraction, organization, retrieval
 admission and answer judgment; answering and embeddings are separate below.
 
 | Measurement | Baseline | Follow-through |
 |---|---:|---:|
-| Main model attempts | 321 | 198 |
-| Main model seconds | 2,732.122 | 1,404.580 |
+| Main model inference attempts | 321 | 196 |
+| Cached decision returns / seconds | 0 / 0 | 2 / 0.002 |
+| Main model inference seconds | 2,732.122 | 1,404.578 |
 | Input / output tokens | 2,326,261 / 165,251 | 1,090,182 / 86,317 |
 | Failed attempts | 11 | 3 |
 | Attribution calls / seconds | 37 / 897.70 | 14 / 228.17 |

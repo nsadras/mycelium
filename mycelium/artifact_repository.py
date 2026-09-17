@@ -625,11 +625,11 @@ class ArtifactStore:
     def list_short_term_claims(
         self, *, include_deferred: bool = True
     ) -> list[MemoryClaim]:
-        """Return active claims that have not entered canonical wiki memory.
+        """Return active claims needing initial organization or a maintenance retry.
 
         Claim disposition is the durable queue state. A placement is consulted as
-        an integrity guard so a stale disposition cannot make an already placed
-        claim appear in short-term memory.
+        an integrity guard against stale pending/deferred state. An older placed
+        view must not hide an explicit failure from a later maintenance attempt.
         """
         allowed = {"pending", "routing_failed"}
         if include_deferred:
@@ -639,7 +639,11 @@ class ArtifactStore:
             if claim.dream_disposition not in allowed:
                 continue
             placement = self.placement_for_claim(claim.claim_id)
-            if placement and placement.status == "placed":
+            if (
+                placement
+                and placement.status == "placed"
+                and claim.dream_disposition != "routing_failed"
+            ):
                 continue
             queued.append(claim)
         return queued

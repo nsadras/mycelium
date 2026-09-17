@@ -9,6 +9,52 @@ from mycelium.models import DreamReport
 
 
 @pytest.mark.asyncio
+async def test_extraction_batches_reserve_the_actual_generation_budget(tmp_path):
+    from mycelium.artifacts import SourceSegment
+    from mycelium.budget import require_request_budget
+    from mycelium.config import Config, LLMConfig
+    from mycelium.encoder import Encoder
+    from mycelium.artifacts import ArtifactStore
+    from mycelium.store import LogStore
+
+    config = Config(llm=LLMConfig(
+        context_window_tokens=24576, reasoning_enabled=False,
+    ))
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    llm = SimpleNamespace(call_structured=AsyncMock())
+    encoder = Encoder(llm, LogStore(tmp_path / "logs"), config, artifacts)
+    segments = tuple(
+        SourceSegment(f"input-{i:03d}", i, "A source observation. " * 250, "user", "user")
+        for i in range(16)
+    )
+    captured = await encoder.ingest_source(SourceInput(
+        "\n".join(s.content for s in segments), "batch-budget", segments=segments,
+    ))
+    accounted = []
+
+    async def respond(system, user, schema, **kwargs):
+        # Validate the emitted request, including the schema envelope, against
+        # the same output allowance the real client will reserve, including at
+        # a smaller configured context window.
+        require_request_budget(
+            [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            context_window=config.llm.context_window_tokens,
+            output_tokens=kwargs["num_predict"],
+            schema=schema.model_json_schema(),
+        )
+        ids = schema.model_fields["segments"].annotation.model_fields
+        accounted.extend(ids)
+        return {"segments": {sid: None for sid in ids}}
+
+    llm.call_structured.side_effect = respond
+    assert await encoder.extract_pending() == list(captured.episode_ids)
+    source = artifacts.get_source(captured.source_ids[0])
+    assert sorted(accounted) == sorted(s.segment_id for s in source.segments)
+    assert llm.call_structured.await_count > 1
+    assert artifacts.coverage_report()["pending_extraction_segments"] == 0
+
+
+@pytest.mark.asyncio
 async def test_build_snapshot_leaves_concurrent_capture_pending_and_replays_safely(
     tmp_path,
 ):

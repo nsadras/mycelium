@@ -5185,3 +5185,121 @@ remain separate gates.
 - User-owned browser/audio/private-network acceptance is written in
   `planning/audit_device_acceptance_2026_09_17.md`, explicitly unverified. It uses
   the actual upload-based Engram flow. No application service was started/stopped.
+
+- Accounting correction after separating trace cache hits: the longitudinal
+  follow-through log has 198 main-model events, comprising **196 inference
+  attempts / 1,404.578s plus two cached returns / 0.002s**. The baseline has 321
+  attempts / 2,732.122s and no hits. Prior 198/1,404.580 figures included cached
+  returns. Token counts, failures and qualitative conclusions are unchanged; the
+  comparison report and active plan now use explicit inference/cache labels.
+
+### 2026-09-17 — Completed held-out review and stopped citation experiments
+
+- `audit-v1-heldout-2c5c4fe-20260917` finishes all four predeclared sample-10
+  sessions/snapshots in 3,807.956s, zero QA. Execution completes, encoding remains
+  incomplete: the final 41-segment extraction batch truncates at 8,192 tokens.
+  126 retained claims are routed; one identity review is pending. No truth
+  proposals. Source review of all four conversations and successive pages finds
+  unsupported exact dates, incomplete antecedent citations, useful content
+  incorrectly left source-only, routine-chat over-extraction, and cross-owned
+  car content. These fail broad semantic acceptance. Exact references/links
+  resolve but do not prove semantic support. The held-out measurement is retained;
+  subsequent experiments on its failures are regression evidence.
+- Main-model work is 314 actual inference attempts (308 unique requests and six
+  retries), eight failed attempts, 3,634.789s, 2,527,628 input / 234,640 output
+  tokens. Six cache returns / 0.007s are separate. Truth screening/comparison
+  consumes 45.3% of inference time. Separate embeddings: 117 operations / 18.841s.
+  Detailed source review, per-stage/per-call statistics, coverage and recording
+  limits: `planning/audit_v1_observations_2026_09_17.md`; read-only inspection
+  results and script are archived under the run's `source-review/inspection.json`.
+- Citation-domain wording proposal:
+  `reference-citation-contract-20260917T084001Z-1f6ff9df`. Current/proposed both
+  pass 4/9 small/dense neutral controls, with zero malformed outputs. The proposed
+  arm omits almost all dense-case content; lower output/time is not an efficiency
+  gain. Current/proposed: 115.488/37.480s, 35,153/35,855 input, 8,260/1,999 output.
+  Its synthetic dense IDs sort lexically rather than production's padded order;
+  both arms receive the same ordering. Rejected, no production prompt change.
+- Flat unified `supporting_segment_ids` proposal:
+  `unified-reference-contract-20260917T085010Z-f5532aec`. One existing support
+  domain replaces two, without more calls/nesting. The predeclared early-stop
+  rule fires: 1/4 small cases passes, with resolved-place, acceptance and refusal
+  antecedents missing. Four calls / 14.990s / 13,905 input / 723 output, no malformed
+  outputs. Remaining five cases not run. Rejected. Stop this contract experiment
+  round; keep the limitation visible rather than adding a verifier or lexical fix.
+
+### 2026-09-17 — Scope page-promotion maintenance and retain failed updates
+
+- Product invariant: new page eligibility changes only its recorded old
+  dependencies and earlier descriptions missing that page. Keep already valid
+  incoming routes. Failed maintenance stays visible/retryable without deleting
+  the earlier published evidence. This uses exact IDs and existing model
+  descriptions/page decisions, not semantic string rules.
+- `scope_revision_evidence` selects that delta, including earlier cohorts within
+  the same build even if no extra historical claim is found. Partial result
+  merging retains unrelated failures and identity blockers. Routing/fact failures
+  on older dependencies now enter the existing retry queue, even with a placed
+  old view. Benchmark encoding status includes pending claims and retryable
+  maintenance failures. No new LLM stage, output field or persisted record type.
+- Initial paired native experiment:
+  `promotion-delta-contract-20260917T084540Z-979a693a`. Current arm passes with
+  routing sizes 3/4, 14 attempts / 46.892s. Proposed arm fails upstream in identity
+  matching before reaching the changed second pass: a descriptive workshop title
+  is wrongly declared a copied source name and rejected three times. Its seven
+  attempts / 20.947s are **not** an efficiency gain. Preserve that semantic miss.
+- Isolated comparison sharing the actual successful first-pass routing result:
+  `promotion-delta-shared-first-pass-20260917T085140Z-cd79f3d8`. Both fresh
+  downstream arms preserve old ink preference and new workshop/commute/childcare
+  evidence without failures. Second pass 4→1 claims; downstream inference
+  11→9 attempts, 40.192→21.609s, input 28,697→17,461, output 2,335→1,160.
+  Different page counts are permitted. This isolates maintenance scope, not two
+  independent fresh builds. Both inherit an unsupported pronoun from the shared
+  seed extraction; it does not establish fully grounded upstream encoding.
+- Fresh integrated production run:
+  `promotion-delta-integrated-20260917T085844Z-0b16bff1`. Actual capture/extraction
+  produces four new claims; production routing sizes 4/1, only old dependency
+  revisited. All checks pass, prior and incoming evidence retained, no failures.
+  Build: 15 inference attempts / 46.984s. Separate seed extraction: one / 11.505s.
+  The fresh canonical workshop statement has no invented gender pronoun. Source,
+  claims, work units, requests, results and snapshots remain inspectable.
+- Structural red run: four failures before implementation. Focused promotion,
+  policy and benchmark checks: 100 passed in 5.87s. Tests exercise within-build
+  promotion, unaffected failures, old routing/fact failures with intact views,
+  honest completion, and successful later retry.
+
+### 2026-09-17 — Increase bounded extraction output headroom
+
+- Product need: a structurally valid per-segment response can exceed the prior
+  fixed allowance, losing a whole batch's useful extracted evidence. Increase
+  the existing output ceiling to 16,384, bounded to one quarter of model context.
+  Batch planning and the actual request use the same reserve. Prompt/schema and
+  call sequence are unchanged. Smaller contexts retain room for complete source
+  units/schema; tighter requests may require more batches. Reasoning still uses
+  its independently configured allowance. No salvage path, verifier or retry loop.
+- Neutral paired capacity control:
+  `extraction-output-reserve-20260917T085401Z-2932b6c2`. Both 8,192/16,384 limits
+  retain all 32 equipment statements, output 6,028/6,060 tokens, input 8,407 each,
+  77.944/76.772s. Larger allowance does not force larger output. The same script's
+  retained-request replay duplicated the schema instructions. Its zero-claim
+  result is an invalid comparison, preserved as a harness failure.
+- Corrected exact request replay:
+  `extraction-reserve-exact-replay-20260917T090129Z-e3234344`. Assertions verify
+  original messages/schema/model/options, changing only `num_predict`. One call
+  completes: 17,068 input, 8,770 output, 116.774s versus original truncated
+  8,192 output / 107.886s. Useful shop-service and gift content returns. All 41
+  segments become claims, including routine chat/URLs; salience and antecedent
+  omissions remain. This is capacity recovery, not a general semantic gain.
+- Integrated retry on a **copy** of the frozen final snapshot:
+  `extraction-reserve-integrated-20260917T091010Z-39ca977b`. One call / 117.068s /
+  17,068 input / 8,342 output completes only the failed batch, adds 41 claims and
+  clears extraction backlog. Existing sources, claims and completed batches stay
+  unchanged as serialized records. New claims include the useful service
+  and gift evidence but also routine chat; they are pending organization because
+  this check runs extraction only. Original held-out store is unchanged.
+- A first fixed 16k-reserve test exposed loss of input room at a 24k context;
+  bounding the reserve to a quarter fixes that general resource issue. The new
+  structural test checks actual emitted request budgets and lossless segment
+  coverage across batches at the smaller context. Focused combined suite:
+  87 passed in 6.09s. Full structural suite: **827 passed, one AMI skip, 75
+  integration deselected in 33.03s**. Ruff on changed files and diff check pass.
+  No UI changes; existing UI checks were not rerun. Native tests/probes above
+  establish model observations separately from this structural suite.

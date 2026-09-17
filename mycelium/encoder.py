@@ -30,6 +30,10 @@ from mycelium.artifacts import (
 )
 
 
+# Ceiling for the existing per-segment contract; leave room for source and schema.
+EXTRACTION_OUTPUT_TOKENS = 16384
+
+
 class Encoder:
     def __init__(
         self,
@@ -381,6 +385,9 @@ class Encoder:
         self, source: SourceDocument, episode: EpisodeManifest
     ) -> None:
         try:
+            output_reserve = min(
+                EXTRACTION_OUTPUT_TOKENS, self.config.llm.context_window_tokens // 4
+            )
             context_sources = [
                 self.artifacts.get_source(source_id)
                 for source_id in source.metadata.get("context_source_ids", [])
@@ -445,9 +452,9 @@ class Encoder:
             def fits(batch):
                 system, user, schema, _, think = request_for(batch)
                 output_tokens = (
-                    max(8192, self.config.llm.reasoning_output_tokens)
+                    max(output_reserve, self.config.llm.reasoning_output_tokens)
                     if think and self.config.llm.reasoning_enabled
-                    else 8192
+                    else output_reserve
                 )
                 try:
                     require_request_budget(
@@ -491,7 +498,7 @@ class Encoder:
                             system,
                             user,
                             claim_model,
-                            num_predict=8192,
+                            num_predict=output_reserve,
                             think=think,
                             debug_label=f"claim-extraction-{source.source_id}-batch-{batch_index}",
                         )

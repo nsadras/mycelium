@@ -1290,7 +1290,7 @@ async def test_promoted_entity_revises_prior_you_scope_through_recorded_referenc
         about="Atlas",
     )
     initial_support = ["C001", "C002"]
-    revision_support = ["C001", "C002", "C003"]
+    revision_support = ["C001"]
     discovery_responses = split_scope_plan(
         scope_plan(
             {alias: assignment("N001") for alias in initial_support},
@@ -1311,7 +1311,10 @@ async def test_promoted_entity_revises_prior_you_scope_through_recorded_referenc
         "reason": "Explicit prior identity",
     }
     revision_responses = split_scope_plan(
-        scope_plan({alias: assignment("project-atlas") for alias in revision_support}),
+        scope_plan(
+            {alias: assignment("project-atlas") for alias in revision_support},
+            participants={},
+        ),
         registry=artifacts.list_entities(),
         existing_titles={"project-atlas": "Atlas"},
     )

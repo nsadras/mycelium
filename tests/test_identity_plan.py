@@ -187,12 +187,13 @@ def route(owner="you", *, entities=None, section="overview", uncertainty=None):
             "attributions": {
                 "C001": {
                     eid: {
+                        "assertions": ["Explicit fixture assertion"]
+                        if eid == owner
+                        else [],
                         "relation_to_claim": "described"
                         if eid == owner
                         else "unrelated",
-                        "reason": "Explicit fixture attribution"
-                        if eid == owner
-                        else None,
+                        "reason": "Explicit fixture attribution",
                     }
                     for eid in entities
                 }

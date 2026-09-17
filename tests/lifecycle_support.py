@@ -44,6 +44,7 @@ def lifecycle_response(_system, user, schema, **kwargs):
             "attributions": {
                 a: {
                     "you": {
+                        "assertions": ["Explicit fixture assertion"],
                         "relation_to_claim": "described",
                         "reason": "Fixture user preference.",
                     }

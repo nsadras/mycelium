@@ -25,8 +25,11 @@ def presentation(pages, owner):
 
 def attribution(relation):
     return {
+        "assertions": ["Cited source assertion"] if relation == "described" else [],
         "relation_to_claim": relation,
-        "reason": None if relation == "unrelated" else "Cited source relationship",
+        "reason": "Cited source relationship"
+        if relation != "unrelated"
+        else "No assertion about this entity",
     }
 
 
@@ -108,7 +111,10 @@ def test_attribution_requires_every_exact_pair_and_limits_reporting_to_source_pa
         {
             "C001": {
                 **row,
-                "project": {"relation_to_claim": "unrelated", "reason": "Guess"},
+                "project": {
+                    **attribution("unrelated"),
+                    "assertions": ["Contradictory asserted content"],
+                },
             },
             "C002": row,
         },
@@ -116,6 +122,23 @@ def test_attribution_requires_every_exact_pair_and_limits_reporting_to_source_pa
     for response in invalid:
         with pytest.raises(ValidationError):
             schema.model_validate({"attributions": response})
+
+
+@pytest.mark.parametrize("relation", ["described", "reporting_only", "unrelated"])
+def test_asserted_content_agrees_with_relation_and_is_bounded(relation):
+    schema = source_attribution_model(["C001"], ["you"], {"you"})
+    row = attribution(relation)
+    schema.model_validate({"attributions": {"C001": {"you": row}}})
+    assertions = [] if relation == "described" else ["An assertion about this person"]
+    with pytest.raises(ValidationError, match="Only described"):
+        schema.model_validate(
+            {"attributions": {"C001": {"you": {**row, "assertions": assertions}}}}
+        )
+    for assertions in [[""], ["x" * 501], ["Assertion"] * 13]:
+        with pytest.raises(ValidationError):
+            schema.model_validate(
+                {"attributions": {"C001": {"you": {**row, "assertions": assertions}}}}
+            )
 
 
 def test_presentation_cannot_add_omit_or_reassign_pages():

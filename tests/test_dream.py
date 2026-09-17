@@ -259,14 +259,15 @@ def split_scope_plan(plan: dict, *, registry=(), existing_titles=None) -> list[d
         "attributions": {
             alias: {
                 eid: {
+                    "assertions": ["Explicit fixture assertion"]
+                    if eid in d["pages"]
+                    else [],
                     "relation_to_claim": "described"
                     if eid in d["pages"]
                     else "reporting_only"
                     if eid in participant_ids
                     else "unrelated",
-                    "reason": "Explicit fixture attribution"
-                    if eid in d["pages"] or eid in participant_ids
-                    else None,
+                    "reason": "Explicit fixture attribution",
                 }
                 for eid in sorted(resolved_ids)
             }
@@ -662,6 +663,7 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
                 "attributions": {
                     alias: {
                         "you": {
+                            "assertions": ["Explicit fixture assertion"],
                             "relation_to_claim": "described",
                             "reason": "Fixture user preference",
                         }

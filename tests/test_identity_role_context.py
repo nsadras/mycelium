@@ -6,8 +6,44 @@ import pytest
 
 from mycelium.identity_planner import IdentityPlanner
 from mycelium.semantic_candidates import SemanticCandidates
+from mycelium.subject_identity import subject_identity_prompt
 from tests.discovery_support import discovery_response
 from tests.test_identity_plan import setup_router
+
+
+def test_matching_excludes_page_metadata_without_changing_identity_evidence():
+    subject = {
+        "title": "New name",
+        "entity_type": "artifact",
+        "description": "Source description",
+    }
+    identity = {
+        "title": "Earlier name",
+        "entity_type": "project",
+        "page_state": "materialized",
+        "identity_evidence": [{"text": "Earlier identity evidence"}],
+        "aliases": ["Alias"],
+        "reviewer_notes": ["Explicit human review"],
+    }
+    before = json.dumps([subject, identity])
+    _, user = subject_identity_prompt(
+        subject, {"e": identity}, "Cited source", "Scoped review"
+    )
+    incoming, registry = user.split("Source-discovered subject:\n")[1].split(
+        "\n\nEligible identities:\n"
+    )
+    registry = registry.split("\n\nSource evidence:\n")[0]
+    assert json.loads(incoming) == {
+        "title": "New name",
+        "description": "Source description",
+    }
+    assert json.loads(registry) == {
+        "e": {
+            k: v for k, v in identity.items() if k not in {"entity_type", "page_state"}
+        }
+    }
+    assert "Cited source" in user and "Scoped review" in user
+    assert json.dumps([subject, identity]) == before
 
 
 @pytest.mark.asyncio

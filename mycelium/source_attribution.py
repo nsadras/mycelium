@@ -1,8 +1,8 @@
 """Source-backed claim attribution, independent of wiki page availability."""
 
 import json
-from typing import Literal, Union
-from pydantic import ConfigDict, Field, create_model
+from typing import Annotated, Literal
+from pydantic import ConfigDict, Field, create_model, model_validator
 from mycelium.prompting import render_prompt
 
 
@@ -11,40 +11,58 @@ def source_attribution_model(claim_ids, entity_ids, source_participants):
     for eid in entity_ids:
         reporting = eid in source_participants
         if reporting not in variants:
-            variants[reporting] = Union[
-                tuple(
-                    create_model(
-                        relation.title(),
-                        __config__=ConfigDict(extra="forbid"),
-                        relation_to_claim=(Literal.__getitem__((relation,)), ...),
-                        reason=(
-                            str if relation != "unrelated" else type(None),
-                            Field(min_length=1, max_length=500)
-                            if relation != "unrelated"
-                            else ...,
-                        ),
-                    )
-                    for relation in (
-                        "described",
-                        *(("reporting_only",) if reporting else ()),
-                        "unrelated",
-                    )
-                )
-            ]
+            variants[reporting] = create_model(
+                "ParticipantAttribution" if reporting else "EntityAttribution",
+                __config__=ConfigDict(extra="forbid"),
+                assertions=(
+                    list[Annotated[str, Field(min_length=1, max_length=500)]],
+                    Field(
+                        max_length=12,
+                        description="What the statement asserts about this entity; empty if none",
+                    ),
+                ),
+                reason=(str, Field(min_length=1, max_length=500)),
+                relation_to_claim=(
+                    Literal.__getitem__(
+                        (
+                            "described",
+                            *(("reporting_only",) if reporting else ()),
+                            "unrelated",
+                        )
+                    ),
+                    ...,
+                ),
+            )
         subjects[eid] = (variants[reporting], ...)
-    relations = create_model(
+    entities = create_model(
         "EntityAttributions", __config__=ConfigDict(extra="forbid"), **subjects
     )
     claims = create_model(
         "ClaimAttributions",
         __config__=ConfigDict(extra="forbid"),
-        **{cid: (relations, ...) for cid in claim_ids},
+        **{cid: (entities, ...) for cid in claim_ids},
     )
-    return create_model(
+    base = create_model(
         "SourceAttribution",
         __config__=ConfigDict(extra="forbid"),
         attributions=(claims, ...),
     )
+
+    class SourceAttribution(base):
+        @model_validator(mode="after")
+        def consistent_assertions(self):
+            for subjects in self.attributions.model_dump().values():
+                for decision in subjects.values():
+                    assertions = decision["assertions"]
+                    if bool(assertions) != (
+                        decision["relation_to_claim"] == "described"
+                    ):
+                        raise ValueError(
+                            "Only described relations have asserted content"
+                        )
+            return self
+
+    return SourceAttribution
 
 
 def source_attribution_prompt(subjects, evidence):

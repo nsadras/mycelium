@@ -207,7 +207,9 @@ Important behavior:
   the exact canonical user binding even when a discovered mention lacks a direct speaker assignment.
   Explicit source user roles and accepted human reviews then constrain exact canonical identity IDs. Remaining
   subjects receive registry candidates across inferred types, at most 24 each, and a structured existing/new/review-required
-  decision. Declared speakers remain restricted to people. Matching retains canonical types and establishes the
+  decision. Declared speakers remain restricted to people. Inferred types and page publication state stay outside
+  the identity-matching prompt; neither establishes whether two mentions denote the same subject.
+  Matching retains canonical types and establishes the
   preferred source-backed title; discovery labels cannot overwrite that decision. Candidate retrieval uses model embeddings with changed-document and query reuse; it never uses
   lexical identity rules. These stages preserve cited claim/participant evidence for inspection. Candidate
   limits bound individual matching requests, not the cost of reading the full identity history.
@@ -223,6 +225,10 @@ Important behavior:
   A separate structured admission decision requires a type-specific positive basis and cited claims before a
   provisional subject becomes eligible for placement. Previously materialized subjects remain eligible. Only
   subjects resolved from the source enter the placement domain; You is not an implicit destination for every claim.
+  Attribution first lists what each statement asserts about each resolved subject, then distinguishes described,
+  reporting-only and unrelated entities. A described decision requires nonempty asserted content; other relations
+  require an empty list. These explanations remain attached to the source-backed work unit and do not create new
+  canonical claims. Meaning still comes from the model; schema validation checks coverage, domains and consistency.
 - Uncertain identities remain reviewable proposals and defer affected routing. Existing registry IDs/types and
   explicit human identity decisions cannot be overridden by the planner. Historical audit record readers and
   manual organization APIs remain; retired maturity-assessment storage, contracts, and UI have been removed.

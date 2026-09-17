@@ -69,6 +69,13 @@ comparison now receives current-build references (12native checks), and prose
 rendering omits unused local claim labels (27native builds; persisted reuse holds).
 The naming/reasoning proposals remain rejected; full longitudinal gates stay open.
 
+Further follow-through: assertion-first attribution passed42 direct checks and9
+native routing cases, including all3 formerly omitted named-user statements.
+Removing inferred page categories from identity matching passed30/30 direct
+identity decisions (paired control28/30) and12/12 native boundaries. Long-context
+service spelling still fails; page admission/section choice still vary. These
+changes pass their narrow acceptance gates, not full H–M or longitudinal acceptance.
+
 1. Finish A–G structural acceptance before taking benchmark scores as evidence.
 2. Prove H–M contracts with the configured host Ollama model: small neutral
    positive/negative cases, three trials, no critical semantic mistakes. Retain

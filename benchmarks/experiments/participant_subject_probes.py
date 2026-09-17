@@ -125,6 +125,9 @@ async def main():
             )
         )
     if args.case:
+        unknown = set(args.case) - {item[0] for item in inputs}
+        if unknown:
+            parser.error(f"Unknown cases: {sorted(unknown)}")
         inputs = [item for item in inputs if item[0] in args.case]
     rows = []
     for trial in range(3):

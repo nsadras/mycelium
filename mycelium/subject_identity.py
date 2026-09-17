@@ -76,10 +76,21 @@ def subject_identity_model(candidate_ids):
 
 
 def subject_identity_prompt(subject, registry, evidence, reviewed="none"):
+    # Classification and publication state do not establish identity. Keep those
+    # fields for downstream routing, outside this semantic matching decision.
+    excluded = {"entity_type", "page_state"}
     return render_prompt_pair(
         "memory/subject_identity",
-        subject=json.dumps(subject, ensure_ascii=False),
-        registry=json.dumps(registry, ensure_ascii=False),
+        subject=json.dumps(
+            {k: v for k, v in subject.items() if k not in excluded}, ensure_ascii=False
+        ),
+        registry=json.dumps(
+            {
+                eid: {k: v for k, v in row.items() if k not in excluded}
+                for eid, row in registry.items()
+            },
+            ensure_ascii=False,
+        ),
         evidence=evidence,
         reviewed=reviewed,
     )

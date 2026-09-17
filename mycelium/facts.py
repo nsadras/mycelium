@@ -30,6 +30,7 @@ from mycelium.ollama import OllamaClient
 from mycelium.ontology import entity_type_definition, routing_section_keys
 from mycelium.projection import display_claim_text
 from mycelium.truth_review import TruthReviewer
+from mycelium.artifact_integrity import cited_source_segments
 from mycelium.structured_outputs import (
     fact_candidate_selection_output_model,
 )
@@ -148,17 +149,18 @@ class FactResolver:
             if not owner_claims:
                 result.deleted_fact_ids.update(fact.fact_id for fact in owner_existing)
                 continue
-            if len(owner_claims) == 1 and not owner_existing:
-                claim = owner_claims[0]
-                placement = placement_by_claim[claim.claim_id]
-                owner = entities[owner_id]
-                direct_fact, direct_placement = self._direct_projection(
-                    owner, claim, placement
-                )
-                result.facts.append(direct_fact)
-                result.placements.append(direct_placement)
-                continue
             try:
+                if len(owner_claims) == 1 and not owner_existing:
+                    claim = owner_claims[0]
+                    cited_source_segments(self.artifacts, claim)
+                    placement = placement_by_claim[claim.claim_id]
+                    owner = entities[owner_id]
+                    direct_fact, direct_placement = self._direct_projection(
+                        owner, claim, placement
+                    )
+                    result.facts.append(direct_fact)
+                    result.placements.append(direct_placement)
+                    continue
                 resolved = await self._resolve_owner(
                     owner_id,
                     owner_claims,
@@ -631,16 +633,12 @@ class FactResolver:
     def _source_times(self, claim: MemoryClaim) -> list[dict]:
         """Carry cited occurrence anchors, never ingestion wall-clock time."""
         times = []
-        for provenance in claim.provenance:
-            try:
-                source = self.artifacts.get_source(provenance.source_id)
-            except FileNotFoundError:
-                continue
+        for _, source, segments in cited_source_segments(self.artifacts, claim):
             times.append({
                 "source_id": source.source_id,
                 "occurred_at": source.occurred_at,
                 "segments": [{"segment_id": segment.segment_id, "timestamp": segment.timestamp}
-                             for segment in source.segments if segment.segment_id in provenance.segment_ids],
+                             for segment in segments],
             })
         return times
 
@@ -651,10 +649,12 @@ class FactResolver:
         alias_for_entity: dict[str, str],
         entities: dict[str, EntityRecord],
     ) -> str:
-        claims, sources = {}, {}
+        claims, sources, source_cache = {}, {}, {}
         for alias, claim in aliases.items():
             citations = []
-            for provenance in claim.provenance:
+            for provenance, source, segments in cited_source_segments(
+                self.artifacts, claim, source_cache=source_cache
+            ):
                 citations.extend(
                     {
                         "source_id": provenance.source_id,
@@ -664,10 +664,6 @@ class FactResolver:
                     }
                     for sid in provenance.segment_ids
                 )
-                try:
-                    source = self.artifacts.get_source(provenance.source_id)
-                except FileNotFoundError:
-                    continue
                 entry = sources.setdefault(
                     source.source_id,
                     {
@@ -676,14 +672,13 @@ class FactResolver:
                         "segments": {},
                     },
                 )
-                for segment in source.segments:
-                    if segment.segment_id in provenance.segment_ids:
-                        entry["segments"][segment.segment_id] = {
-                            "speaker": segment.speaker,
-                            "role": segment.role,
-                            "timestamp": segment.timestamp,
-                            "text": segment.content,
-                        }
+                for segment in segments:
+                    entry["segments"][segment.segment_id] = {
+                        "speaker": segment.speaker,
+                        "role": segment.role,
+                        "timestamp": segment.timestamp,
+                        "text": segment.content,
+                    }
             claims[alias] = {
                 "claim_id": claim.claim_id,
                 "claim_type": claim.claim_type,

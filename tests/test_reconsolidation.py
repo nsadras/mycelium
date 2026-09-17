@@ -20,7 +20,7 @@ from mycelium.store import WikiStore
 from mycelium.structured_outputs import (
     fact_candidate_selection_output_model,
 )
-from tests.memory_helpers import claim, fact, place, setup_owner
+from tests.memory_helpers import claim, fact, place, save_evidence, setup_owner
 
 
 def test_coverage_distinguishes_review_holdback_from_missing_presentation(tmp_path):
@@ -247,6 +247,7 @@ async def test_grouped_project_roles_preserve_each_claims_exact_project_link(no_
     second = claim("second", "Rosa coordinates permits for Garden.", "2026-08-02T12:00:00")
     placements = []
     for item, project in ((first, first_project), (second, second_project)):
+        save_evidence(artifacts, item)
         artifacts.save_claim(item)
         placement = ClaimPlacement(
             item.claim_id,

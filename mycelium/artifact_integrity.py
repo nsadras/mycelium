@@ -4,6 +4,41 @@ from typing import Any
 from collections import Counter
 
 
+def cited_source_segments(store, claim, *, source_cache=None):
+    """Resolve every exact citation before using any of a claim's evidence.
+
+    Source status is returned intact; callers choose whether retracted evidence
+    can be shown as history. Missing citations must never look like complete
+    evidence merely because another citation was valid.
+    """
+    cache = {} if source_cache is None else source_cache
+    if not claim.provenance:
+        raise ValueError(f"Claim {claim.claim_id} has no cited source segments")
+    resolved = []
+    for provenance in claim.provenance:
+        if not provenance.segment_ids:
+            raise ValueError(f"Claim {claim.claim_id} has an empty source citation")
+        if provenance.source_id not in cache:
+            try:
+                source = store.get_source(provenance.source_id)
+            except FileNotFoundError as exc:
+                raise ValueError(
+                    f"Claim {claim.claim_id} cites missing source {provenance.source_id}"
+                ) from exc
+            cache[provenance.source_id] = (
+                source, {segment.segment_id: segment for segment in source.segments}
+            )
+        source, by_id = cache[provenance.source_id]
+        missing = set(provenance.segment_ids) - by_id.keys()
+        if missing:
+            raise ValueError(
+                f"Claim {claim.claim_id} cites missing segments in source "
+                f"{source.source_id}: {sorted(missing)}"
+            )
+        resolved.append((provenance, source, [by_id[sid] for sid in provenance.segment_ids]))
+    return resolved
+
+
 def coverage_report(store) -> dict[str, Any]:
     sources = store.list_sources()
     claims = store.list_claims()

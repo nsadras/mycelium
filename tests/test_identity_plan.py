@@ -125,7 +125,7 @@ def test_shared_source_text_is_included_once_with_each_claim_reference(tmp_path)
     )
 
 
-def test_routing_evidence_retains_cross_source_context_and_missing_citations(tmp_path):
+def test_routing_evidence_retains_cross_source_context_and_rejects_missing_citations(tmp_path):
     memory, _, _, evidence = setup_router(tmp_path)
     item = evidence[0]
     context = SourceDocument(
@@ -147,12 +147,7 @@ def test_routing_evidence_retains_cross_source_context_and_missing_citations(tmp
         metadata={"title": "Planning discussion"},
     )
     memory.artifacts.save_source(context)
-    item.claim.provenance.extend(
-        [
-            ClaimProvenance("s2", ["seg1"]),
-            ClaimProvenance("missing-source", ["seg1"]),
-        ]
-    )
+    item.claim.provenance.append(ClaimProvenance("s2", ["seg1"]))
     rendered = RoutingFormatter(memory.artifacts).format_evidence({"C001": item}, {})
     payload = json.loads(rendered)
     assert (
@@ -165,8 +160,10 @@ def test_routing_evidence_retains_cross_source_context_and_missing_citations(tmp
     assert payload["claims"]["C001"]["citations"] == [
         {"source_id": "s1", "segment_id": "seg1"},
         {"source_id": "s2", "segment_id": "seg1"},
-        {"source_id": "missing-source", "segment_id": "seg1"},
     ]
+    item.claim.provenance.append(ClaimProvenance("missing-source", ["seg1"]))
+    with pytest.raises(ValueError, match="missing source missing-source"):
+        RoutingFormatter(memory.artifacts).format_evidence({"C001": item}, {})
 
 
 def test_page_catalog_limits_sections_to_supplied_active_types(tmp_path):

@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
 from mycelium.artifacts import ArtifactStore, ReconsolidationProposal, temporal_records
+from mycelium.artifact_integrity import cited_source_segments
 from mycelium.budget import ContextBudgetError, require_request_budget
 from mycelium.prompting import render_prompt_pair
 from mycelium.truth_contract import TruthComparison, truth_candidates_model, truth_comparison_model, truth_comparison_prompt
@@ -30,24 +31,17 @@ class TruthReviewer:
         placement = placements.get(claim.claim_id)
         owner = entities.get(placement.owner_entity_id) if placement else None
         citations = []
-        for provenance in claim.provenance:
-            if provenance.source_id not in sources:
-                source = self.artifacts.get_source(provenance.source_id)
-                sources[provenance.source_id] = (
-                    source, {s.segment_id: s for s in source.segments}
-                )
-            source, segments = sources[provenance.source_id]
+        for _, source, segments in cited_source_segments(
+            self.artifacts, claim, source_cache=sources
+        ):
             if source.status != "active":
                 raise ValueError(f"Claim {claim.claim_id} cites an inactive source")
-            for segment_id in provenance.segment_ids:
-                segment = segments[segment_id]
+            for segment in segments:
                 citations.append({
-                    "source_id": source.source_id, "segment_id": segment_id,
+                    "source_id": source.source_id, "segment_id": segment.segment_id,
                     "source_time": source.occurred_at, "message_time": segment.timestamp,
                     "speaker": segment.speaker, "text": segment.content,
                 })
-        if not citations:
-            raise ValueError(f"Claim {claim.claim_id} has no cited source segments")
         bindings = self.artifacts.list_entity_references(
             claim_id=claim.claim_id, status="active"
         )
@@ -96,12 +90,19 @@ class TruthReviewer:
         claims = {c.claim_id: c for c in self.artifacts.list_claims(status="active")
                   if c.dream_disposition != "excluded_source_policy" and c.claim_id not in excluded_claim_ids}
         incoming = sorted(incoming_claim_ids & claims.keys())
-        if not incoming or len(claims) < 2:
+        if not incoming:
             return result
         try:
             if any(ref.dream_run_id != dream_run_id
                    for refs in (reference_replacements or {}).values() for ref in refs):
                 raise ValueError("Staged truth bindings must belong to the current build")
+            if len(claims) < 2:
+                # There is no truth comparison to make, but direct projection
+                # still requires complete citations. A retained claim can cite
+                # both active and retracted sources; its view marks uncertainty.
+                for claim in claims.values():
+                    cited_source_segments(self.artifacts, claim)
+                return result
             records = self._records(claims, placements, entities, reference_replacements)
             reviewed_pairs = {
                 tuple(sorted((left, right)))

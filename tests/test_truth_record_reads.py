@@ -86,18 +86,15 @@ def test_next_truth_preparation_observes_source_changes(mutation):
         assert prior["c0"]["citations"][0]["text"] == "Statement 0."
         assert reads == {"shared": 2}
     else:
-        error = ValueError
         if mutation == "retraction":
             source.status = "retracted"
         elif mutation == "missing_segment":
             source.segments.clear()
-            error = KeyError
         else:
 
             def missing(_):
                 raise FileNotFoundError("Source removed")
 
             reviewer.artifacts.get_source = missing
-            error = FileNotFoundError
-        with pytest.raises(error):
+        with pytest.raises(ValueError, match="Claim c0 cites"):
             reviewer._records(claims, {}, {})

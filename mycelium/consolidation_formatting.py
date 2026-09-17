@@ -12,6 +12,7 @@ from mycelium.artifacts import (
     SourceDocument,
 )
 from mycelium.consolidation_models import ClaimEvidence
+from mycelium.artifact_integrity import cited_source_segments
 from mycelium.ontology import entity_type_definition
 
 
@@ -153,22 +154,21 @@ class RoutingFormatter:
         participants: dict[str, tuple[SourceDocument, str, str | None]],
     ) -> str:
         claims, sources = {}, {}
+        source_cache = {
+            item.source.source_id: (
+                item.source, {segment.segment_id: segment for segment in item.source.segments}
+            ) for item in aliases.values()
+        }
         for alias, item in aliases.items():
             claim = item.claim
             citations = []
-            for provenance in claim.provenance:
+            for provenance, source, segments in cited_source_segments(
+                self.artifacts, claim, source_cache=source_cache
+            ):
                 citations.extend(
                     {"source_id": provenance.source_id, "segment_id": sid}
                     for sid in provenance.segment_ids
                 )
-                try:
-                    source = (
-                        item.source
-                        if provenance.source_id == item.source.source_id
-                        else self.artifacts.get_source(provenance.source_id)
-                    )
-                except FileNotFoundError:
-                    continue
                 entry = sources.setdefault(
                     source.source_id,
                     {
@@ -179,16 +179,13 @@ class RoutingFormatter:
                 )
                 if source.metadata.get("title"):
                     entry["title"] = source.metadata["title"]
-                by_id = {s.segment_id: s for s in source.segments}
-                for sid in provenance.segment_ids:
-                    if sid in by_id:
-                        seg = by_id[sid]
-                        entry["segments"][sid] = {
-                            "speaker": seg.speaker,
-                            "role": seg.role,
-                            "timestamp": seg.timestamp,
-                            "text": seg.content,
-                        }
+                for segment in segments:
+                    entry["segments"][segment.segment_id] = {
+                        "speaker": segment.speaker,
+                        "role": segment.role,
+                        "timestamp": segment.timestamp,
+                        "text": segment.content,
+                    }
             claims[alias] = {
                 "text": claim.text,
                 "claim_id": claim.claim_id,

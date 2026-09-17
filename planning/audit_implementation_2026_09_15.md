@@ -27,6 +27,18 @@ timing limitation rather than an uncontended performance measurement.
 The later publication fix (`dbddc04`) preserves both owners' previous views when
 an ownership transfer fails, including transfer chains. It passes 76 focused
 tests and the 839-test structural suite; it also stays outside the frozen run.
+`1883fb6` also prevents a second fact for evidence already protected by pending
+review after a page-owner change (70 focused tests). These mechanical fixes
+preserve canonical evidence and review, without adding model work.
+
+An additional flat truth-shortlist proposal is **not adopted**. Paired direct
+and downstream controls reduce output tokens, but the fresh production caller
+does not finish its six-minute gate after admitting many same-batch candidates.
+The provisional integration is removed and its patch/requests retained. No
+further wording variants or larger budget are selected to rescue this proposal.
+The restored production contracts pass 25 focused tests. This failed experiment
+does not invalidate the committed bounded-search mechanism or establish that
+flattening caused the failure: there is no matched native control for that pool.
 
 ### Implementation progress after resuming
 

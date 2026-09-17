@@ -5462,3 +5462,64 @@ remain separate gates.
   that difference for investigation; it is not by itself corruption. Duplicate
   stored fact membership is separate from showing one fact on several pages.
   Neither historical snapshots nor the running frozen workload are modified.
+
+### 2026-09-17 — Reject the unproven flat truth-shortlist integration
+
+- Product need: truth discovery consumes over half the first-five-conversation
+  model cost. Test whether the existing candidate-screening call can return a
+  flat list of candidate IDs per incoming claim, removing the full relevance
+  matrix and repeated reason. Candidate search/cap, later semantic comparison,
+  and human approval remain unchanged; no new stage or persisted record.
+- Direct paired proof:
+  `benchmark_runs/truth-shortlist-contract-20260917T113104Z-0d4b6dbe`.
+  Five neutral cases cover an explicit reschedule, ambiguous identity, separate
+  historical occurrences, unrelated properties, and 12 independent equipment
+  updates. Ten calls, no retries, completed in 149.901s. The predeclared exact
+  shortlist criterion fails: control 3/5, proposal 2/5. Both preserve all 14
+  required candidate inclusions; proposal admits one additional unrelated pair.
+  Control/proposal input tokens 18,109/10,616, output 2,632/209, server seconds
+  88.732/61.033. Conveniently aligned aliases in the dense direct case and
+  shared-model timing limit generalization. This initial failure stays recorded.
+- A separate downstream criterion was explicitly recorded before further calls:
+  a conservative prefilter may admit extras if the existing comparison rejects
+  them, preserves all 13 explicit changes, adds no false change versus control,
+  and reduces combined output by at least 20% without increasing input. This
+  changes the evaluation question; it does not retroactively pass the first test.
+  `truth-shortlist-downstream-20260917T113818Z-44f0774e` reuses the saved selections
+  with the actual comparison caller and separate fresh caches. Ten calls finish
+  in 128.983s. Both arms find 13/13 changes and both falsely equate two ambiguous
+  namesakes. Historical occurrences and unrelated properties remain distinct;
+  the additional unrelated-person candidate is rejected downstream. Combined
+  selection/comparison input 27,071/19,915, output 3,586/1,156 (67.8% less), server
+  seconds 150.633/127.526. These are narrow paired observations, not reliability
+  estimates or complete Build results.
+- The provisional production integration uses exactly the directly tested
+  prompt/schema. Structural validation passes 86 focused tests and 840 tests
+  with 75 integration deselected (37.65s), logged in
+  `test_outputs/audit-followthrough/truth-shortlist-full.log`. Passing structural
+  tests is insufficient to adopt the semantic change.
+- Fresh production-caller gate:
+  `truth-shortlist-integrated-20260917T114836Z-3032d4cf`, using actual candidate
+  pooling/chunking and comparison on neutral canonical records. Four cases
+  finish with the same known ambiguous-identity error. The dense fifth case
+  includes same-batch candidates absent from the direct control and selects
+  **89/210 eligible pairs, including all 66 same-batch pairs**. The six-minute
+  gate exhausts its budget: 16 requests start, 15 complete and one is cancelled.
+  Completed calls consume 48,021 input / 4,709 output tokens and 342.715 server
+  seconds. The final dense-case result is incomplete. No matched old-contract
+  native arm exists for this expanded pool, so this is not a causal regression
+  estimate; it is insufficient adoption evidence.
+- Stop this proposal. Preserve `proposed-production.patch`, the experiment
+  scripts/plans, exact requests and `native-candidate-inspection.json` in the
+  run roots; restore all nine provisional production/probe/test files to
+  committed `1883fb6`. No semantic patch is committed, no additional variant
+  or enlarged experiment budget is selected. The restored truth candidate,
+  truth scope and ownership-atomicity suites pass **25 tests in 2.68s**. The
+  most recent full test of the adopted code remains 839 before the later
+  protected-fact regression; the 840-test result above includes the rejected
+  prototype and must not be relabelled as a full validation of restored HEAD.
+- Shared-model windows during frozen sample3: direct 11:31:04–11:33:27 UTC
+  (10 calls), downstream 11:38:18–11:40:21 (10), integrated 11:48:36–11:54:19
+  (16 started / 15 completed / one cancelled), overlapping sessions 8–9. Queue
+  and cache effects limit latency comparisons; counts/tokens remain in their
+  own experiment traces. The frozen benchmark code and settings are unchanged.

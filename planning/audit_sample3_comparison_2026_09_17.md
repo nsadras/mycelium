@@ -52,9 +52,9 @@ embedding: `embeddinggemma:latest`, digest
 `85462619ee721b466c5927d109d4cb765861907d5417b9109caebc4e614679f1`.
 Temperature 1.0, top-p 0.95, top-k 64, reasoning disabled, model context 65,536,
 session budget 32,768; retrieval limits are in the captured effective config.
-The benchmark checkout stays frozen and no other model-dependent experiments
-run alongside it. A timing-only correction is validated in the separate primary
-checkout; it is not loaded by this process.
+The benchmark checkout stays frozen. Separate bounded model experiments briefly
+share the host during the intervals recorded below. Later primary-checkout fixes
+are not loaded by this process.
 
 Final reporting must separate encoding, retrieval, answering and judge work,
 including retries/cache returns. Preserve incomplete encoding as incomplete even
@@ -98,6 +98,15 @@ pages. The records are retained in
 `source-review/overnight-sample3-v1-fact-integrity.json`. The older pipeline and
 its pending proposals need separate causal analysis; this shared symptom does
 not establish that every historical occurrence had the same failure mechanism.
+All six final duplicated claims are under pending truth review. A second current
+production reproduction shows how this can happen even without a model failure:
+the original protected fact survives, but a new owner receives another direct
+fact for the same member. Commit `1883fb6` checks protected membership globally
+and lets existing placement-based rendering show the original fact on the new
+page. Seventy focused tests pass. A retained fact's original grouping owner may
+legitimately differ from its current page placement under review; that difference
+alone is diagnostic, not proof of corruption. Duplicate stored membership is
+distinct from legitimate multi-page projection of a single fact.
 
 Prior pending truth proposals also need semantic review, not just a count. The
 first treats planning taekwondo as superseding kickboxing, although the person
@@ -155,6 +164,14 @@ queue/cache effects can affect its call and elapsed timings. Session 5 is not an
 uncontended measurement; the full elapsed total also includes any resulting wait.
 The benchmark's code, prompts, schema, data and configuration remain frozen.
 Windows and probe roots are retained in `source-review/model-contention.json`.
+
+Three later shortlist experiments also share the host: ten direct calls at
+11:31:04–11:33:27 UTC and ten downstream calls at 11:38:18–11:40:21 during session
+8; then 16 started requests (15 completed, one cancelled) at 11:48:36–11:54:19
+during sessions 8–9. These sessions likewise cannot be presented as uncontended.
+The proposal is not adopted: its fresh production-caller gate exhausts its
+six-minute budget. See the separate decision record in `DEVLOG.md`; isolated
+output-token savings do not establish a full-pipeline quality or cost gain.
 
 ### Session 1
 
@@ -348,6 +365,53 @@ successful transfer, retry and preserved old pages through the real Build commit
 The fix adds no model call, schema, or semantic decision and stays outside this
 frozen workload. Full structural validation passes 839 tests with 75 integration
 tests deselected; this does not establish the model's semantic correctness.
+
+### Session 8
+
+Completes in 2,437.9s, with the shared-model intervals above. All 535 source
+segments are accounted for and none awaits extraction. There are 215 claims:
+181 routed, 33 routing-failed, one deferred; 87 facts, 42 identities, 31 pages,
+135 rendered items, 97 item links, 11 pending identity decisions and no truth
+proposal. The existing duplicate membership from session 7 persists; other
+checked references/links resolve. Checked source-coverage sets overlap and are
+not a partition of the 535 segments.
+
+Source 8 and all changed page bodies were reviewed against session 7. Useful
+retained additions include Kyle's name/age, family park activities, Maria's
+childhood activities, London/England inspiration for her home decor, and how
+she developed shelter relationships. The London claim adds a context citation,
+but cites the earlier question about the picture's inspiration (`seg-0048`)
+rather than the nearer England question (`seg-0056`) or trip statement
+(`seg-0050`). Exact citation validity alone still does not establish complete
+antecedent support. Maria's related England and London assertions split across
+`maria` and `maria-2`; five Maria identities remain, with warnings on uncertain
+assignments. Fragmentation continues within one conversation.
+
+Her grandmother's death is retained canonically with the appropriate Feb 27–Mar 5
+week range, but deferred because only the grandmother is attributed and has no
+eligible page. A related grief statement appears on `maria-2`. This demonstrates
+a page-coverage consequence of attribution/admission, not missing extraction.
+In contrast, the park's “last weekend” becomes **March 3**, from model-declared
+`day_offset(-3)`, and the test retake's “last week” becomes **Feb 27** as an exact
+day. Neither exact day is supported. The calendar calculator executes the
+declared operations; the semantic interpretation remains wrong.
+
+The retake claim also omits the source's “great results,” while the old failed
+test remains the visible history. No truth proposal is required just because a
+later, distinct test succeeds; the issue is preserving and publishing both
+historical events. New picnic, violin-concert, parenting and service-goal claims
+are routing-failed along with routine acknowledgments. Old John facts survive,
+but useful additions do not reach his page. Grouping request `b825ca77` omits
+`C009` and `C015` from its 48-ID partition in all three attempts; there are no
+duplicates and the largest group has 12 members. This is the same generic retry
+feedback defect targeted by the separately validated `4429889`, which is not
+loaded by this frozen run.
+
+Organization still gives generic agreement and encouragement substantial space,
+including “Relationship to You” with no configured user. The index describes
+John with “Maria agrees with John”; this is an unhelpful summary of a rich page.
+New places/artifacts can provide navigable context, but their count is not a
+quality gain and long combined sentiment paragraphs remain hard to scan.
 
 ### First-five-conversation cost/quality checkpoint
 

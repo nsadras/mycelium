@@ -5303,3 +5303,34 @@ remain separate gates.
   integration deselected in 33.03s**. Ruff on changed files and diff check pass.
   No UI changes; existing UI checks were not rerun. Native tests/probes above
   establish model observations separately from this structural suite.
+
+### 2026-09-17 — Use monotonic attempt durations
+
+- The frozen sample-3 run exposed a negative structured-call latency: fact text
+  request `bf34f654` reports -169ms while Ollama reports 1.117s server duration.
+  `call_messages` operation summaries and `_call_structured` attempt traces used
+  `time.time()` differences, which can move backward on clock adjustment. Actual
+  chat-round traces, cache timings, embeddings and benchmark session/retrieval
+  measurements already use monotonic timers.
+- Replace only those elapsed-time measurements with `perf_counter`; wall-clock
+  timestamps remain timestamps. No prompt, schema, model, retry, or output change.
+  Validation simulates a one-hour backward clock jump during a successful call,
+  transport failure and malformed structured output, checking both durable
+  attempt traces and in-memory operation summaries. Before the fix, three
+  structured cases fail; chat-round traces already pass. Afterward all five
+  scenarios and the full **57-client-test suite pass in 0.40s**. Ruff and diff
+  checks pass. No configured-model call is needed for a clock-source change.
+- This fix is made in the primary checkout while the benchmark continues from
+  frozen `0f9f7ee` in `audit-followthrough`; it does not alter that process. The
+  full run retains the timing limitation. Use separately labelled Ollama server
+  durations where present and monotonic session/overall totals; never clamp
+  negative values to zero or treat server time as client elapsed time.
+- Historical inspection: prior full sample3 has four negative entries among
+  2,004 attempts, 36,923.269 recorded client-wall seconds versus 39,460.313
+  server-total seconds (all 2,004 have server durations, including failed output).
+  Held-out: 314 attempts, 3,634.789 client-wall versus 3,770.842 server seconds;
+  no negative entry does not prove absence of clock skew. Earlier quoted client
+  trace latencies remain historical measurements with this limitation. Counts,
+  tokens, source findings and semantic acceptance are unaffected. The current
+  sample-3 review retains a separate `source-review/timing-comparison.json` and
+  its read-only inspection script for corrected cost interpretation.

@@ -22,6 +22,60 @@ def snapshot_call(kwargs):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind,outcome", [
+    ("messages", "success"), ("messages", "timeout"),
+    ("structured", "success"), ("structured", "invalid"), ("structured", "timeout"),
+])
+async def test_attempt_duration_survives_wall_clock_adjustment(
+    tmp_path, monkeypatch, kind, outcome
+):
+    from mycelium import ollama as ollama_module
+
+    class Answer(BaseModel):
+        answer: str
+
+    clock = SimpleNamespace(wall=10000.0, elapsed=10.0)
+    monkeypatch.setattr(ollama_module, "time", SimpleNamespace(
+        time=lambda: clock.wall,
+        perf_counter=lambda: clock.elapsed,
+        monotonic=lambda: clock.elapsed,
+    ))
+
+    async def chat(**kwargs):
+        clock.wall -= 3600  # NTP/device clock correction during the request.
+        clock.elapsed += 1.25
+        if outcome == "timeout":
+            raise ReadTimeout("injected timeout")
+        return SimpleNamespace(message=SimpleNamespace(
+            content='{}' if outcome == "invalid" else '{"answer": "yes"}',
+        ))
+
+    path = tmp_path / "calls.jsonl"
+    client = OllamaClient("http://localhost:11434", "test", trace_path=path)
+    client.client = SimpleNamespace(chat=AsyncMock(side_effect=chat))
+
+    async def invoke():
+        if kind == "structured":
+            return await client.call_structured("system", "question", Answer, max_retries=1)
+        return await client.call_messages(
+            [{"role": "user", "content": "question"}], max_retries=1, enable_tools=False,
+        )
+
+    if outcome == "success":
+        await invoke()
+    else:
+        with pytest.raises(ReadTimeout if outcome == "timeout" else ValueError):
+            await invoke()
+
+    attempts = [json.loads(line) for line in path.read_text().splitlines()]
+    assert attempts[-1]["latency_ms"] == 1250
+    assert client._call_log[-1]["latency_ms"] == 1250
+    assert attempts[-1]["timestamp"] == clock.wall
+    assert attempts[-1]["success"] == (outcome == "success")
+    assert client.client.chat.await_count == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("structured", [False, True], ids=["messages", "structured"])
 @pytest.mark.parametrize("timeout_type", [ReadTimeout, ConnectTimeout, WriteTimeout, PoolTimeout])
 @pytest.mark.parametrize("recovers", [True, False], ids=["recovers", "exhausted"])

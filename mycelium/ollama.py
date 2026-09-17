@@ -171,7 +171,7 @@ class OllamaClient:
         execution_trace: list[AgentExecutionStep] = []
 
         for attempt in range(max_retries):
-            start_time = time.time()
+            start_time = time.perf_counter()
             self._log_request(
                 call_id=call_id,
                 attempt=attempt + 1,
@@ -207,7 +207,7 @@ class OllamaClient:
                     if values:
                         metadata[key] = sum(values)
                 metadata["inference_rounds"] = len(execution_trace)
-                latency_ms = int((time.time() - start_time) * 1000)
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
                 self._log_call(
                     call_id,
                     attempt + 1,
@@ -226,7 +226,7 @@ class OllamaClient:
                 )
 
             except (RequestError, ResponseError, TimeoutException) as e:
-                latency_ms = int((time.time() - start_time) * 1000)
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
                 self._log_call(
                     call_id,
                     attempt + 1,
@@ -649,7 +649,7 @@ class OllamaClient:
         for attempt in range(max_retries):
             require_request_budget(messages, context_window=self.context_window_tokens,
                                    output_tokens=num_predict)
-            start_time = time.time()
+            start_time = time.perf_counter()
             self._log_request(
                 call_id=call_id,
                 attempt=attempt + 1,
@@ -681,7 +681,7 @@ class OllamaClient:
                     thinking_chars=len(str(assistant_message.get("thinking", "") or "")),
                     content_chars=len(content),
                 )
-                latency_ms = int((time.time() - start_time) * 1000)
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
 
                 try:
                     if metadata.get("done_reason") == "length":
@@ -751,7 +751,7 @@ class OllamaClient:
                     continue
 
             except (RequestError, ResponseError, TimeoutException) as e:
-                latency_ms = int((time.time() - start_time) * 1000)
+                latency_ms = int((time.perf_counter() - start_time) * 1000)
                 self._log_call(call_id, attempt + 1, system, user, str(e), latency_ms, False, stage=debug_label or "structured")
                 if attempt == max_retries - 1 or (
                     isinstance(e, ResponseError) and e.status_code is not None

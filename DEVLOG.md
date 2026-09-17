@@ -5127,6 +5127,10 @@ remain separate gates.
   `attribution-identity-canonical-scope-20260917T072453Z-bf43aa82`.
   Controls include distinct projects using the same description, a namesake
   person, reporting-only sources, ownership, relationships and unrelated facts.
+  Against the recorded 20-case current arm, accepted input tokens rise
+  19,312→21,054 (+9.0%), output falls 2,568→2,360, and time is 43.989→41.577s.
+  These single trials support a small input-cost tradeoff for recovered coverage,
+  not a latency or general accuracy guarantee.
 - Native initial sequence:
   `identity-context-pipeline-20260917T073018Z-9d69fd75`, 17 calls / 56.677s, no
   execution failures. Discovery selects the scans rather than the archive app,
@@ -5150,3 +5154,34 @@ remain separate gates.
   unchanged canonical aliases, source provenance and invalid-output rejection
   are covered. The earlier failed proposal and native discovery miss remain
   available alongside successful results.
+
+### 2026-09-17 — Frozen V1 evidence and user-owned rollout checks
+
+- Started `audit-v1-heldout-2c5c4fe-20260917` at production revision `2c5c4fe`,
+  using the predeclared first four sessions of unused LoCoMo sample 10, zero QA,
+  normal configured models/settings, and a snapshot per session. Production is
+  frozen while it runs. The first two snapshots are complete (308.5s / 1,901.2s);
+  sessions 3–4 remain in progress. This entry is not a terminal result.
+- First snapshot retains six routing failures after a copied-name check rejects
+  Japan absent from the selected claim citations. The normalized source claim
+  cites only a pronoun reply, omitting the antecedent. The country is real in the
+  source conversation. A neutral proposal clarifies existing new/context citation
+  fields; it remains unintegrated and untested against the model at this point.
+- Second snapshot recovers all six failures; 77 claims are routed with 34 facts.
+  Source review still finds incomplete antecedent citations, unsupported exact
+  dates for week/weekend expressions, a potentially misresolved performer, and
+  excessive routine conversation in claims and prominent page sections. Valid
+  IDs, complete execution and searchable claims do not establish semantic quality.
+  Details: `planning/audit_v1_observations_2026_09_17.md`.
+- Code inspection finds whole-batch rerouting after page promotion, even when
+  only a small subset has changed eligibility. An isolated exact-ID prototype and
+  paired native test are prepared under `/tmp`, pending the frozen run's end.
+  Already valid routes, outstanding failures, old dependencies and within-build
+  promotions must be preserved. No extra semantic stage is proposed.
+- Full sample-3 comparison is prepared, not launched. Verified old artifacts
+  include 32 snapshots, 193 questions and 440 failed attempts among 2,004 recorded
+  calls. Model context is 65,536 while session budget is 32,768; older model/config
+  provenance is incomplete. See `planning/audit_sample3_comparison_2026_09_17.md`.
+- User-owned browser/audio/private-network acceptance is written in
+  `planning/audit_device_acceptance_2026_09_17.md`, explicitly unverified. It uses
+  the actual upload-based Engram flow. No application service was started/stopped.

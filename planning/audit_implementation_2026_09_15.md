@@ -11,7 +11,8 @@ order in this file. The historical implementation record remains below;
 **Current state:** E1 and focused C1–C3 fixes are implemented. E2 completed both
 comparison arms and source review. S1 bounded truth discovery, S2 dependency
 maintenance, and measured date/name/attribution fixes are implemented. Longitudinal
-replay completed with residual quality failures; held-out validation remains open. Existing
+replay completed with residual quality failures; the frozen four-session held-out
+run is in progress (two snapshots reviewed). Full sample-3 validation remains open. Existing
 storage, review, configuration, retrieval-consistency, and UI fixes remain the
 foundation. The latest recorded structural suite is 822 passed, one skipped,
 75 integration tests deselected; that is not full semantic acceptance.
@@ -473,7 +474,8 @@ not an obligation to reproduce the other project's architecture.
 **User decision (2026-09-16):** leave real browser, microphone, and Wi-Fi/Tailscale
 checks to the user after implementation is ready. Do not start application
 services for these checks. Automated validation continues independently; the
-handoff will include the checks below, with manual results explicitly unverified.
+handoff is recorded in [the device checklist](audit_device_acceptance_2026_09_17.md),
+with manual results explicitly unverified.
 
 **Acceptance:** with user-started services, verify Wi-Fi/Tailscale chat, source
 inspection, audio upload/playback, transcript review/admission, correction review,

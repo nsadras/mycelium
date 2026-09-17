@@ -1,8 +1,8 @@
 """Artifact-level evaluation for Daily Driver fixtures.
 
-The evaluator deliberately operates on stable artifact IDs and exact fixture evidence
-labels. Text similarity is retained only to disambiguate multiple propositions emitted
-from the same source segment; every such match is exposed for review.
+Exact IDs establish artifact accounting. Lexical candidate associations remain
+unvalidated diagnostics: they cannot establish coverage, truth, identity or release
+readiness. Source-grounded review is required to interpret those values.
 """
 
 from __future__ import annotations
@@ -206,7 +206,7 @@ def gold_fact_definitions(fixture: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def match_snapshot(fixture: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:
-    """Map gold records to generated records using exact evidence before semantics."""
+    """Expose unreviewed candidate associations within exact source evidence."""
     generated_claims = snapshot.get("claims") or []
     placement_by_claim = {
         str(row.get("claim_id")): row for row in snapshot.get("placements") or []
@@ -235,7 +235,12 @@ def match_snapshot(fixture: dict[str, Any], snapshot: dict[str, Any]) -> dict[st
                 "gold_section": gold.get("section"),
                 "gold_evidence": sorted(gold_evidence),
                 "candidate_found": best is not None,
-                "semantic_candidate": eligible,
+                "source_linked_candidates": [
+                    {"claim_id": row["claim_id"], "text": row["text"],
+                     "evidence": sorted(_claim_evidence(row))}
+                    for row in candidates
+                ],
+                "lexical_candidate": eligible,
                 "generated_claim_id": best.get("claim_id") if best else None,
                 "generated_text": best.get("text") if best else None,
                 "generated_status": best.get("status") if best else None,
@@ -314,7 +319,7 @@ def match_snapshot(fixture: dict[str, Any], snapshot: dict[str, Any]) -> dict[st
         generated_member_ids = {
             str(row["generated_claim_id"])
             for row in expected_claims
-            if row["semantic_candidate"] and row["generated_claim_id"]
+            if row["lexical_candidate"] and row["generated_claim_id"]
         }
         candidates = [
             fact
@@ -351,7 +356,7 @@ def match_snapshot(fixture: dict[str, Any], snapshot: dict[str, Any]) -> dict[st
                 "expected_locations": expected_locations,
                 "expected_generated_locations": expected_generated_locations,
                 "gold_claim_ids": gold_fact.get("claim_ids") or [],
-                "semantic_claim_available": bool(generated_member_ids),
+                "candidate_claim_available": bool(generated_member_ids),
                 "generated_fact_id": selected.get("fact_id") if selected else None,
                 "generated_member_claim_ids": (
                     list(map(str, selected.get("member_claim_ids") or []))
@@ -394,12 +399,11 @@ def match_snapshot(fixture: dict[str, Any], snapshot: dict[str, Any]) -> dict[st
 def proposition_completeness(
     fixture: dict[str, Any], snapshot_match: dict[str, Any]
 ) -> dict[str, Any]:
-    """Require distinct generated claims for distinct gold propositions per segment."""
+    """Count candidate proposition coverage separately from claim granularity."""
     by_segment: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for gold in fixture["gold_claims"].get("claims") or []:
         for evidence_id in gold.get("evidence") or []:
             by_segment[str(evidence_id)].append(gold)
-    generated_by_segment: dict[str, set[str]] = defaultdict(set)
     row_by_gold = {row["gold_claim_id"]: row for row in snapshot_match["claim_rows"]}
     rows: list[dict[str, Any]] = []
     for segment_id, propositions in sorted(by_segment.items()):
@@ -407,17 +411,12 @@ def proposition_completeness(
         for proposition in propositions:
             row = row_by_gold[proposition["id"]]
             claim_id = row.get("generated_claim_id")
-            if row.get("semantic_candidate") and claim_id:
-                generated_by_segment[segment_id].add(str(claim_id))
+            if row.get("lexical_candidate") and claim_id:
                 matches.append((str(proposition["id"]), str(claim_id)))
-        # One broad generated sentence cannot satisfy several atomic gold propositions.
-        unique_claims: set[str] = set()
-        represented: list[str] = []
-        for gold_id, claim_id in matches:
-            if claim_id in unique_claims:
-                continue
-            unique_claims.add(claim_id)
-            represented.append(gold_id)
+        # One statement can contain several propositions. Its granularity is a
+        # separate measure, not evidence that the other information disappeared.
+        unique_claims = {claim_id for _, claim_id in matches}
+        represented = [gold_id for gold_id, _ in matches]
         rows.append(
             {
                 "segment_id": segment_id,
@@ -427,12 +426,14 @@ def proposition_completeness(
                 "gold_claim_ids": [row["id"] for row in propositions],
                 "represented_gold_claim_ids": represented,
                 "generated_claim_ids": sorted(unique_claims),
+                "distinct_generated_claim_count": len(unique_claims),
             }
         )
     multi = [row for row in rows if row["proposition_count"] > 1]
     total = sum(row["proposition_count"] for row in rows)
     represented = sum(row["represented_count"] for row in rows)
     return {
+        "assessment_status": "requires_source_review",
         "propositions_total": total,
         "propositions_represented": represented,
         "recall": represented / total if total else 1.0,
@@ -702,7 +703,7 @@ def _checkpoint_results(
                         "status": row.get("generated_status"),
                         "disposition": row.get("generated_disposition"),
                     },
-                    "passed": bool(row.get("semantic_candidate"))
+                    "passed": bool(row.get("lexical_candidate"))
                     and row.get("generated_status") == "active"
                     and row.get("generated_disposition") in {"routed", "deferred"},
                 }
@@ -961,7 +962,7 @@ def evaluate_run(
     projectable_fact_rows = [
         row
         for row in wiki_fact_rows
-        if row["semantic_claim_available"] and row["gold_state"] == "current"
+        if row["candidate_claim_available"] and row["gold_state"] == "current"
     ]
     probes_by_id = {row["probe_id"]: row for row in probe_results}
     rubric_dimensions = fixture["rubric"].get("dimensions") or []
@@ -990,12 +991,12 @@ def evaluate_run(
     provenance_exact = [
         row
         for row in claim_rows
-        if row["semantic_candidate"] and row["actual_evidence"] == row["gold_evidence"]
+        if row["lexical_candidate"] and row["actual_evidence"] == row["gold_evidence"]
     ]
     envelope_checks = [
         passed
         for row in claim_rows
-        if row["semantic_candidate"]
+        if row["lexical_candidate"]
         for passed in (
             row["type_match"],
             row["predicate_match"],
@@ -1006,7 +1007,7 @@ def evaluate_run(
     ownership_rows = [
         row
         for row in claim_rows
-        if row["semantic_candidate"]
+        if row["lexical_candidate"]
         and row["expected_generated_owner"]
         and row["gold_state"] == "active"
     ]
@@ -1104,7 +1105,7 @@ def evaluate_run(
         ),
         "provenance_accuracy": _ratio_metric(
             numerator=len(provenance_exact),
-            denominator=sum(row["semantic_candidate"] for row in claim_rows),
+            denominator=sum(row["lexical_candidate"] for row in claim_rows),
             target=1.0,
         ),
         "semantic_envelope_accuracy": _ratio_metric(
@@ -1341,8 +1342,8 @@ def evaluate_run(
             "evidence_candidate_found": sum(
                 row["candidate_found"] for row in claim_rows
             ),
-            "semantic_candidate_found": sum(
-                row["semantic_candidate"] for row in claim_rows
+            "lexical_candidate_found": sum(
+                row["lexical_candidate"] for row in claim_rows
             ),
         },
         "entities": {
@@ -1393,10 +1394,12 @@ def evaluate_run(
         row["evaluated"] and row["passed"] for row in acceptance_dimensions
     )
     return {
+        "assessment_status": "requires_source_review",
         "final_checkpoint": final_id,
         "dimensions": dimensions,
         "gates": gate_results,
         "summary": {
+            "assessment_status": "requires_source_review",
             "dimensions_passed": sum(row["passed"] for row in dimensions),
             "dimensions_total": len(dimensions),
             "acceptance_dimensions_passed": sum(
@@ -1405,7 +1408,7 @@ def evaluate_run(
             "acceptance_dimensions_total": len(acceptance_dimensions),
             "gates_passed": sum(row["passed"] for row in gate_results),
             "gates_total": len(gate_results),
-            "release_ready": gates_pass and acceptance_dimensions_pass,
+            "diagnostic_thresholds_pass": gates_pass and acceptance_dimensions_pass,
         },
         "proposition_completeness": propositions,
         "checkpoint_diffs": checkpoint_results,
@@ -1415,7 +1418,7 @@ def evaluate_run(
         "duplicate_rendered_facts": duplicate_rows,
         "retrieval_probes": probe_results,
         "qualitative_page_diff": page_diff,
-        "unsupported_rendered_claim_ids": sorted(unsupported_rendered),
+        "outside_gold_evidence_claim_ids": sorted(unsupported_rendered),
         "artifact_summary": artifact_summary,
         "final_match": final_match,
     }
@@ -1481,7 +1484,7 @@ def evaluate_gates(
                 row
                 for row in match["claim_rows"]
                 if row.get("gold_owner") in owners
-                and row.get("semantic_candidate")
+                and row.get("lexical_candidate")
                 and row.get("gold_state") == "active"
             ]
             ownership_offending = [

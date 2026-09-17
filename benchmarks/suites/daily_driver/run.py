@@ -360,8 +360,9 @@ def _best_claim_candidates(
                 "gold_state": gold.get("state"),
                 "gold_evidence": sorted(expected_evidence),
                 "candidate_found": bool(best),
-                "likely_semantic_match": likely,
+                "lexical_candidate": likely,
                 "best_candidate": best,
+                "source_linked_candidates": candidates,
                 "candidate_count": len(candidates),
             }
         )
@@ -493,7 +494,7 @@ def compare_final(fixture: dict[str, Any], memory: Mycelium) -> dict[str, Any]:
             {
                 row["best_candidate"]["claim_id"]
                 for row in matching_rows
-                if row["likely_semantic_match"]
+                if row["lexical_candidate"]
                 and row["best_candidate"]
                 and row["best_candidate"]["claim_id"] in rendered_claim_ids
             }
@@ -527,8 +528,8 @@ def compare_final(fixture: dict[str, Any], memory: Mycelium) -> dict[str, Any]:
         "claim_comparison": {
             "gold_total": len(claim_rows),
             "candidate_found": sum(row["candidate_found"] for row in claim_rows),
-            "likely_semantic_match": sum(
-                row["likely_semantic_match"] for row in claim_rows
+            "lexical_candidate": sum(
+                row["lexical_candidate"] for row in claim_rows
             ),
             "rows": claim_rows,
         },
@@ -735,17 +736,18 @@ def _report_markdown(
         f"- Completion: execution `{run.get('execution_status', 'unknown')}`, encoding `{run.get('encoding_status', 'unknown')}`, QA `{run.get('qa_status', 'unknown')}`.",
         "- QA mode: one grounded answer call over the initial retrieval evidence.",
         "- Scope: production encoding, Dream, reviewed reconsolidation, wiki projection, retrieval probes, and semantic answer checks.",
-        "- Comparison policy: provenance, state, ownership, sections, and rendered IDs are authoritative. Text matching is an exposed diagnostic used only to associate source-grounded propositions.",
+        "- Quality assessment: requires source review. Lexical claim/entity links can be wrong; their derived counts do not establish coverage, correctness, organization or release readiness.",
+        "- Exact IDs establish provenance and state accounting. A shared source label does not prove that a claim is supported by that source.",
         "- Dimensions remain separate; there is no aggregate quality score.",
         "",
-        "## Release gates",
+        "## Diagnostic checks",
         "",
         *[
             f"- {'PASS' if gate['passed'] else 'FAIL'} `{gate['id']}` — {gate['rule']}"
             for gate in evaluation["gates"]
         ],
         "",
-        "## Rubric dimensions",
+        "## Diagnostic rubric values",
         "",
         *[
             (
@@ -762,13 +764,13 @@ def _report_markdown(
         f"- Source-only segments represented in extracted claims: {len(source['source_only_claimed'])}/{source['source_only_total']}",
         f"- Source-only segments rendered into the wiki: {len(source['source_only_rendered'])}/{source['source_only_total']}",
         f"- Gold claims with an evidence-linked candidate: {claims['evidence_candidate_found']}/{claims['gold_total']}",
-        f"- Evidence-grounded semantic candidates: {claims['semantic_candidate_found']}/{claims['gold_total']}",
+        f"- Unreviewed lexical claim candidates: {claims['lexical_candidate_found']}/{claims['gold_total']}",
         f"- Gold entities found: {entities['found']}/{entities['gold_total']}",
         f"- Extra generated entities: {len(entities['extra'])}",
         f"- Gold wiki facts rendered at their required page/section endpoints: {wiki_facts['rendered_correctly']}/{wiki_facts['gold_total']}",
         f"- Active generated claims placed: {projection['active_placed']}/{projection['active_claims']}",
         f"- Active generated claims rendered: {projection['active_rendered']}/{projection['active_claims']}",
-        f"- Atomic propositions represented: {evaluation['proposition_completeness']['propositions_represented']}/{evaluation['proposition_completeness']['propositions_total']}",
+        f"- Unreviewed proposition candidates (independent of claim count): {evaluation['proposition_completeness']['propositions_represented']}/{evaluation['proposition_completeness']['propositions_total']}",
         f"- Complete multi-assertion segments: {evaluation['proposition_completeness']['complete_multi_assertion_segments']}/{evaluation['proposition_completeness']['multi_assertion_segments']}",
         "",
         "## Known capability boundary",
@@ -1049,6 +1051,7 @@ async def run_daily_driver_trials(
         for row in result["evaluation"]["gates"]:
             gate_values[row["id"]].append(bool(row["passed"]))
     summary = {
+        "assessment_status": "requires_source_review",
         "scenario_id": results[0]["run"]["scenario_id"],
         "trials": trials,
         "extraction_mode": results[0]["run"]["extraction_mode"],

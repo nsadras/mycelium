@@ -147,7 +147,7 @@ def test_first_build_claim_check_allows_useful_evidence_without_a_page(
             {
                 "gold_claim_id": "gold",
                 "generated_status": "active",
-                "semantic_candidate": True,
+                "lexical_candidate": True,
                 "generated_disposition": disposition,
                 "generated_owner": None,
             }

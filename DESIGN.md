@@ -639,7 +639,9 @@ The current page-structure milestone accepts page admission, stable identity sep
 claim ownership, and coherent page organization. Correction, retraction, retrieval, and answering are separate
 milestones. Their dimensions and probes remain in Daily Driver reports so regressions stay visible, but only entries
 under a fixture's active `gates` are hard safety blockers; `deferred_gates` name later acceptance checks. Passing
-the gates is necessary but not sufficient: every dimension named in `acceptance.dimensions` must reach its target.
+the diagnostic thresholds does not establish acceptance: lexical associations can misidentify claims and entities.
+Reports require source review and do not infer release readiness. The `daily-driver review` command exports exact
+source-linked candidates, complete wiki snapshots, and successive-state changes for that review.
 
 ## Development
 

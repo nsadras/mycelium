@@ -243,7 +243,7 @@ def test_transfer_fixture_vocabulary_does_not_enter_production_code():
     )
 
 
-def test_proposition_completeness_requires_distinct_generated_claims():
+def test_proposition_coverage_is_independent_of_claim_granularity():
     fixture = {
         "gold_claims": {
             "claims": [
@@ -256,12 +256,12 @@ def test_proposition_completeness_requires_distinct_generated_claims():
         "claim_rows": [
             {
                 "gold_claim_id": "c-one",
-                "semantic_candidate": True,
+                "lexical_candidate": True,
                 "generated_claim_id": "claim-broad",
             },
             {
                 "gold_claim_id": "c-two",
-                "semantic_candidate": True,
+                "lexical_candidate": True,
                 "generated_claim_id": "claim-broad",
             },
         ]
@@ -270,9 +270,11 @@ def test_proposition_completeness_requires_distinct_generated_claims():
     result = proposition_completeness(fixture, snapshot_match)
 
     assert result["propositions_total"] == 2
-    assert result["propositions_represented"] == 1
-    assert result["complete_multi_assertion_segments"] == 0
-    assert result["rows"][0]["complete"] is False
+    assert result["propositions_represented"] == 2
+    assert result["complete_multi_assertion_segments"] == 1
+    assert result["rows"][0]["complete"] is True
+    assert result["rows"][0]["distinct_generated_claim_count"] == 1
+    assert result["assessment_status"] == "requires_source_review"
 
 
 def test_page_entity_score_ignores_provisional_identities():

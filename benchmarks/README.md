@@ -146,6 +146,29 @@ independent acceptance trials or `--skip-probe-answers` to skip answer generatio
 and judging while retaining retrieval checks. New runs require empty/fresh output
 directories; they do not resume. Each trial has its own subdirectory.
 
+Claim/entity associations based on wording are **unreviewed diagnostics**. Their
+derived coverage and organization values can be wrong, and matching evidence
+labels do not prove source support. Reports therefore record
+`assessment_status: requires_source_review`; `diagnostic_thresholds_pass` is not
+a release decision. Proposition candidates and distinct claim count are reported
+separately because one sentence can preserve several facts.
+
+Export complete source-linked candidates and changes across successive snapshots
+without model calls or changes to the original run:
+
+```bash
+.venv/bin/python -m benchmarks daily-driver review "$fixture" \
+  --run-dir benchmark_runs/daily-driver-v2-baseline \
+  --output-dir benchmark_runs/daily-driver-v2-source-review
+```
+
+The output directory must be new. Each pack includes the full source/wiki state,
+exact input hashes, all evidence-linked claim candidates, and additions, removals
+and changes since the preceding available checkpoint. Missing checkpoints and
+reference evidence that has not appeared yet are explicit. Inspect actual wording,
+conditions, ownership, usefulness and successive-build coherence before judging
+quality or compute value. The exporter does not make those semantic decisions.
+
 Replay extraction while rerunning downstream memory work:
 
 ```bash

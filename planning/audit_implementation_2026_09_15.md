@@ -50,6 +50,13 @@ No server or firewall changes were executed. The first validated tranche was com
 
 ## Remaining rollout order and acceptance
 
+Latest diagnostic run `audit-daily-v2-source-grounded-20260917` stopped after three
+checkpoints with complete source review packs. Its full-run acceptance is open:
+identity continuity and name fidelity, independent page usefulness, stale unnamed
+state, and clean fact prose failed despite earlier narrow probes. Benchmark
+lexical metrics now explicitly require source review and cannot assert release
+readiness. See DEVLOG for retained failures, source packs and validation.
+
 1. Finish A–G structural acceptance before taking benchmark scores as evidence.
 2. Prove H–M contracts with the configured host Ollama model: small neutral
    positive/negative cases, three trials, no critical semantic mistakes. Retain

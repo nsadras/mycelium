@@ -14,7 +14,9 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("fixture_dir", type=Path)
     run_parser.add_argument("--output-root", type=Path, default=Path("benchmark_runs"))
-    run_parser.add_argument("--run-id", help="Run name (default: daily-driver-<fixture>-YYYYMMDD-HHMMSS).")
+    run_parser.add_argument(
+        "--run-id", help="Run name (default: daily-driver-<fixture>-YYYYMMDD-HHMMSS)."
+    )
     run_parser.add_argument("--config-path", type=Path, default=Path("mycelium.toml"))
     run_parser.add_argument(
         "--replay-extraction-store",
@@ -41,13 +43,32 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     compare_parser.add_argument(
         "--config-path", type=Path, default=Path("mycelium.toml")
     )
+    review_parser = subparsers.add_parser(
+        "review",
+        help="Export source-linked inputs and successive snapshot changes for review.",
+    )
+    review_parser.add_argument("fixture_dir", type=Path)
+    review_parser.add_argument("--run-dir", type=Path, required=True)
+    review_parser.add_argument("--output-dir", type=Path, required=True)
 
 
 def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if args.command == "review":
+        from benchmarks.suites.daily_driver.source_review import export_source_review
+
+        print(
+            json.dumps(
+                export_source_review(args.fixture_dir, args.run_dir, args.output_dir),
+                indent=2,
+            )
+        )
+        return
     if args.command == "run":
         from benchmarks.shared.cli import default_run_id
 
-        args.output_dir = args.output_root / (args.run_id or default_run_id("daily-driver", args.fixture_dir.name))
+        args.output_dir = args.output_root / (
+            args.run_id or default_run_id("daily-driver", args.fixture_dir.name)
+        )
     if args.command == "validate":
         print(
             json.dumps(validate_fixture(args.fixture_dir), indent=2, ensure_ascii=False)

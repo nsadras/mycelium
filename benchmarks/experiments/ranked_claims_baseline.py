@@ -43,7 +43,10 @@ async def retrieve_ranked_claims(retriever, request):
         for hit in hits
         if (row := builder.current_hit(hit)) is not None and row.memory_tier != "source"
     ]
-    selected = builder.distinct_hits(current, retriever.initial_result_limit)
+    # A generated fact can bundle many claims. A five-record cap would give this
+    # control less evidence by construction. Match candidate and token budgets,
+    # and let ranked canonical records fill the same available context.
+    selected = builder.distinct_hits(current, retriever.claim_index.candidate_limit)
     evidence = builder.build(
         selected, budget_tokens=budget, more_available=len(current) > len(selected)
     )
@@ -100,6 +103,7 @@ async def run(source_run, output, config_path):
         "effective_config": asdict(config),
         "shared_work": "extraction, source policy, canonical reviews and identity metadata",
         "fresh_work": "claim index construction, ranking, direct claim rendering, QA and evaluation",
+        "context_policy": "Same candidate and token budgets; ranked claims fill context without a generated-fact count cap.",
         "limitations": "Conditional retrieval/presentation comparison, not standalone ingestion or an external Mem0 implementation. First snapshot queries rebuild cold indexes; document/query embedding traces distinguish this work, but raw latency is not a matched warm-index comparison.",
         "probe_judgment": probe_judgment_specification(),
         "snapshots": {},

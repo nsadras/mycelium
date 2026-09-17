@@ -113,9 +113,11 @@ After a terminal daily-driver run with frozen fixture/evaluator inputs:
 
 The control clones each checkpoint and preserves admitted claims, source policy,
 canonical reviews and identity metadata. It uses the same hybrid candidate ranker,
-result/context budgets, source-backed renderer, QA model and judge, with direct
+candidate/context budgets, source-backed renderer, QA model and judge, with direct
 ranked claims instead of generative admission and generated fact prose. It makes
-no changes to the production store. Effective settings, model weights and judge
+no changes to the production store. Ranked claims fill the token budget without
+the production five-fact cap: a generated fact may bundle many claims, so equal
+record counts would give the simple arm less evidence by construction. Effective settings, model weights and judge
 identity must match. Raw requests, per-call timing, exact input database hashes
 and terminal status are recorded.
 

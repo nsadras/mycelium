@@ -57,7 +57,7 @@ async def test_ranked_control_keeps_canonical_state_and_citations_without_fact_p
 
 
 @pytest.mark.asyncio
-async def test_ranked_control_enforces_same_result_and_context_bounds(tmp_path):
+async def test_ranked_control_uses_candidate_and_token_bounds_not_fact_count(tmp_path):
     artifacts = setup_owner(tmp_path)
     rows = [
         claim(f"c{i}", "Recorded assertion " + "long " * 600, "2031-05-03")
@@ -83,6 +83,6 @@ async def test_ranked_control_enforces_same_result_and_context_bounds(tmp_path):
     )
     from mycelium.budget import count_tokens
 
-    assert len(result.trace["selected_claim_ids"]) == 1
+    assert len(result.trace["selected_claim_ids"]) == 3
     assert not result.evidence.records
     assert count_tokens(result.rendered_context) <= 300

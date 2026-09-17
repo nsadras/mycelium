@@ -479,7 +479,6 @@ class ConsolidationProcess:
                 if any((p.source_id in source_ids for p in claim.provenance))
             ]
         incoming_claim_ids = {claim.claim_id for claim in queued_claims}
-        queued_claims = self.policy.initial_scope_claims(queued_claims)
         queued_claim_ids = {claim.claim_id for claim in queued_claims}
         queued_source_ids = {
             provenance.source_id

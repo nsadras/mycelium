@@ -20,67 +20,33 @@ class DreamPolicy:
     def __init__(self, artifacts: ArtifactStore) -> None:
         self.artifacts = artifacts
 
-    def initial_scope_claims(
-        self, queued_claims: list[MemoryClaim]
-    ) -> list[MemoryClaim]:
-        """Join incoming evidence only to explicitly deferred scope."""
-        if not queued_claims:
-            return []
-        claim_ids = {claim.claim_id for claim in queued_claims}
-        claim_ids.update(
-            (
-                placement.claim_id
-                for placement in self.artifacts.list_placements(status="deferred")
-            )
-        )
-        claims = {
-            claim.claim_id: claim
-            for claim in self.artifacts.list_claims(status="active")
-            if claim.dream_disposition != "excluded_source_policy"
-        }
-        return sorted(
-            (claims[claim_id] for claim_id in claim_ids if claim_id in claims),
-            key=lambda item: (item.recorded_at, item.claim_id),
-        )
-
     def scope_revision_claims(
         self, queued_claims: list[MemoryClaim], revision_entities: list[EntityRecord]
     ) -> list[MemoryClaim]:
-        """Expand a Dream with explicit prior scope neighborhoods, never lexical similarity."""
+        """Revisit recorded dependencies of newly materialized pages.
+
+        The caller already selected incoming/deferred evidence. Previous cohorts
+        and unrelated owners cannot broaden that selection. Exact references can
+        bring earlier evidence onto a page that has just become independently useful.
+        """
         if not queued_claims:
             return []
-        claim_ids = {claim.claim_id for claim in queued_claims}
-        cohorts = self.artifacts.list_scope_cohorts()
-        if cohorts:
-            claim_ids.update(cohorts[-1].claim_ids)
-        for placement in self.artifacts.list_placements():
-            if placement.status == "deferred" or placement.owner_entity_id == "you":
-                claim_ids.add(placement.claim_id)
-        current_entity_ids = {entity.entity_id for entity in revision_entities} | {
-            reference.entity_id
-            for claim in queued_claims
+        claims = {claim.claim_id: claim for claim in queued_claims}
+        for entity in revision_entities:
             for reference in self.artifacts.list_entity_references(
-                claim_id=claim.claim_id, status="active"
-            )
-            if reference.entity_id
-        }
-        if current_entity_ids:
-            claim_ids.update(
-                (
-                    reference.claim_id
-                    for reference in self.artifacts.list_entity_references(
-                        status="active"
+                entity_id=entity.entity_id, status="active"
+            ):
+                if reference.claim_id not in claims:
+                    claims[reference.claim_id] = self.artifacts.get_claim(
+                        reference.claim_id
                     )
-                    if reference.entity_id in current_entity_ids
-                )
-            )
-        claims = {
-            claim.claim_id: claim
-            for claim in self.artifacts.list_claims(status="active")
-            if claim.dream_disposition != "excluded_source_policy"
-        }
         return sorted(
-            (claims[claim_id] for claim_id in claim_ids if claim_id in claims),
+            (
+                claim
+                for claim in claims.values()
+                if claim.status == "active"
+                and claim.dream_disposition != "excluded_source_policy"
+            ),
             key=lambda item: (item.recorded_at, item.claim_id),
         )
 
@@ -107,7 +73,9 @@ class DreamPolicy:
         initial_routes = {route.claim_id: route for route in initial.routes}
         revision_routes = {route.claim_id: route for route in revision.routes}
         revision.entity_references = [
-            ref for ref in initial.entity_references if ref.claim_id not in revision_routes
+            ref
+            for ref in initial.entity_references
+            if ref.claim_id not in revision_routes
         ] + [
             ref for ref in revision.entity_references if ref.claim_id in revision_routes
         ]

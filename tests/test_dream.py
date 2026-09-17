@@ -1233,7 +1233,7 @@ async def test_model_declared_project_role_projects_to_both_endpoint_pages(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_new_entity_revises_prior_you_scope_without_string_matching(
+async def test_promoted_entity_revises_prior_you_scope_through_recorded_reference(
     no_truth_changes, tmp_path
 ):
     dream, _, wiki, logs, artifacts = build_dream(tmp_path, llm_response=you_scope())
@@ -1248,6 +1248,24 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(
     )
     await dream.run()
     assert artifacts.get_placement(early.claim_id).owner_entity_id == "you"
+    provisional = artifacts.create_entity(
+        "project", "Atlas", materialization_state="provisional"
+    )
+    artifacts.save_entity_reference(
+        ClaimEntityReference(
+            "early-subject",
+            early.claim_id,
+            "subject",
+            None,
+            provisional.entity_id,
+            0.9,
+            "Explicit prior subject binding",
+            "scope",
+            "prior",
+            "active",
+            "now",
+        )
+    )
     _, named_source = add_source(logs, artifacts, suffix="named")
     identity = add_claim(
         artifacts,
@@ -1278,6 +1296,15 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(
         ),
         registry=artifacts.list_entities(),
     )
+    # The source matches a retained identity whose page is newly useful.
+    # Admission remains required for this provisional entity.
+    discovery_responses[1]["decision"] = {
+        "resolution": "existing",
+        "entity_id": provisional.entity_id,
+        "preferred_name_update": None,
+        "aliases": [],
+        "reason": "Explicit prior identity",
+    }
     revision_responses = split_scope_plan(
         scope_plan({alias: assignment("project-atlas") for alias in revision_support}),
         registry=artifacts.list_entities(),
@@ -1358,7 +1385,7 @@ async def test_later_dream_discovers_page_from_claims_across_episodes(
             incoming_aliases=["C002"],
         ),
     ]
-    report = await dream.run()
+    report = await dream.run(include_deferred=True)
     assert report.pages_created == 1
     assert (
         artifacts.get_placement(first.claim_id).owner_entity_id

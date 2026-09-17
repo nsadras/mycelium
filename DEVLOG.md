@@ -4847,3 +4847,38 @@ entrypoint imported the primary checkout and caused a misleading missing-schema
 assertion; the module invocation tested this worktree. An initial invocation
 also named a nonexistent legacy test file and collected nothing; neither was
 counted as validation.
+
+
+## 2026-09-16 — Rebuild only exact page-promotion dependencies (S2)
+
+Product invariant: caller-selected evidence remains scoped by its source/deferred
+filters. A newly materialized page can revisit earlier statements linked to that
+entity by active recorded references; page ownership and the previous batch do
+not establish relevance. Removed the redundant initial scope expansion and the
+all-You/all-deferred/last-cohort expansion. Promotion uses existing entity-reference
+indexes and exact claim reads rather than enumerating all claims/placements.
+No new model call, semantic heuristic, schema, or persisted production record.
+
+Native prototype `revision-scope-contract-20260917T054843Z-c4c7b44b`: same seed,
+unrelated named-project addition. Current15calls/66.208s,49,743input/3,880output;
+exact dependencies12calls/52.930s,42,143input/3,152output. Zero failed model calls.
+Current re-attributed both old claims; proposed re-attributed neither, retaining
+old canonical claim and fact records exactly. A report parser initially expected
+a claim_id stripped from attribution inputs; preserved the completed control
+and resumed only the untouched proposal arm using exact text+citation record
+accounting. Failed harness log and all model requests remain available.
+
+Counterexample `page-promotion-scope-contract-20260917T055415Z-7eb03ec7`: a
+source-backed provisional person gains a useful page; its earlier ink-preference
+claim is reconsidered through the recorded entity reference and appears on the
+new page. No broad history replay or lexical matching. This is a native prototype
+with a seeded provisional identity, not a claim of end-to-end identity discovery.
+
+Structural67passed/3.64s, including explicit include_deferred and source-limited
+requests, retired/retracted/policy-excluded references, exact promotion, manual
+page reviews and reference replacement. Two obsolete mocks assumed implicit
+deferred inclusion or automatic replay of every You claim; updated them to
+request deferred evidence or provide the explicit subject reference. The new
+regressions failed on the old policy (4failed/1passed) and now pass. Ruff and
+whitespace checks pass. Integrated/native and full longitudinal follow-through
+continue with attribution simplification; scale/cache measurements remain S1.

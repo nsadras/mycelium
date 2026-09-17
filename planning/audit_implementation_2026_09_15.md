@@ -45,6 +45,11 @@ foundation. The latest recorded structural suite is 799 passed, one skipped,
   source assertions directly, preserving canonical history and manual bindings;
   three direct and three integrated semantic controls passed. Latest structural
   suite: 799 passed, one skipped, 75 integration deselected.
+- **S2 focused mechanism implemented:** page promotion now follows exact active
+  entity references and respects caller source/deferred filters. A neutral native
+  comparison reduced15to12calls while retaining old claims/facts; a promotion
+  counterexample retained earlier page evidence. Structural67passed. Broad
+  longitudinal, scale and cache acceptance remain open.
 - **E2 diagnostic complete:** nine production checkpoints and 19/19 probes in
   both arms. The ranked control recovers three answers but uses 8.23× the context
   characters. Final extraction is complete; a missing truth proposal blocks the

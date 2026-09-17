@@ -30,7 +30,7 @@ def lifecycle_response(_system, user, schema, **kwargs):
             "decision": {
                 "resolution": "existing",
                 "entity_id": "you",
-                "title": None,
+                "title": "You",
                 "reason": "The statement concerns the user.",
                 "aliases": [],
             }

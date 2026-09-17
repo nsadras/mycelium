@@ -50,12 +50,14 @@ def test_identity_result_cannot_change_subject_type_or_select_outside_candidate_
     valid = {
         "resolution": "existing",
         "entity_id": "entity-1",
-        "title": None,
+        "title": "Stored title",
         "aliases": [],
         "reason": "Identity-defining evidence",
     }
     schema.model_validate({"decision": valid})
     for change in [
+        {"title": None},
+        {"title": ""},
         {"entity_id": "invented"},
         {"entity_type": "project"},
         {"supporting_evidence": []},
@@ -70,6 +72,8 @@ def test_identity_result_cannot_change_subject_type_or_select_outside_candidate_
                         "resolution": "review_required",
                         "candidate_entity_ids": ids,
                         "reason": "Unresolved",
+                        "title": "Unknown person",
+                        "aliases": [],
                     }
                 }
             )
@@ -78,11 +82,18 @@ def test_identity_result_cannot_change_subject_type_or_select_outside_candidate_
 def test_empty_registry_allows_new_or_unnamed_review_without_invented_candidates():
     schema = subject_identity_model([])
     for decision in [
-        {"resolution": "new", "reason": "Distinct subject"},
+        {
+            "resolution": "new",
+            "reason": "Distinct subject",
+            "title": "Subject",
+            "aliases": [],
+        },
         {
             "resolution": "review_required",
             "reason": "Unknown person",
             "candidate_entity_ids": [],
+            "title": "Unidentified person",
+            "aliases": [],
         },
     ]:
         schema.model_validate({"decision": decision})

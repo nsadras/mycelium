@@ -123,7 +123,14 @@ async def test_declared_user_identity_respects_configured_profile(
                     }
                 ]
             },
-            {"decision": {"resolution": "new", "reason": "A distinct source speaker"}},
+            {
+                "decision": {
+                    "resolution": "new",
+                    "reason": "A distinct source speaker",
+                    "title": "Rae",
+                    "aliases": [],
+                }
+            },
         ]
         selection = AsyncMock(return_value=[])
         monkeypatch.setattr(SemanticCandidates, "select", selection)

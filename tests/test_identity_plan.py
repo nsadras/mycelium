@@ -231,8 +231,10 @@ def source_first_responses(plan):
                 title=node["title"],
                 aliases=node["aliases"],
             )
-        elif node["resolution"] == "review_required":
-            decision["candidate_entity_ids"] = node["candidate_entity_ids"]
+        else:
+            decision.update(title=node["title"], aliases=node["aliases"])
+            if node["resolution"] == "review_required":
+                decision["candidate_entity_ids"] = node["candidate_entity_ids"]
         matches.append({"decision": decision})
     admissions = {}
     for node in plan["subjects"]:
@@ -302,6 +304,7 @@ async def test_retry_replans_after_registry_changes_without_duplicating_identity
                     subject(
                         resolution="existing",
                         entity_id=first.new_entities[0].entity_id,
+                        title=first.new_entities[0].title,
                         participant_evidence=[],
                     )
                 ]
@@ -549,7 +552,14 @@ async def test_review_assignment_binds_one_discovered_subject_without_hiding_the
                 "R001": {"subject_alias": "S001", "reason": "The reviewed person"}
             }
         },
-        {"decision": {"resolution": "new", "reason": "Separate project"}},
+        {
+            "decision": {
+                "resolution": "new",
+                "reason": "Separate project",
+                "title": "Exhibit",
+                "aliases": [],
+            }
+        },
         admit("project-exhibit", "project"),
         *route("project-exhibit", entities=["you", "project-exhibit"]),
     ]
@@ -605,6 +615,7 @@ async def test_matching_a_provisional_identity_preserves_its_pending_review_on_n
                     subject(
                         resolution="existing",
                         entity_id=entity.entity_id,
+                        title=entity.title,
                         participant_evidence=[],
                     )
                 ]
@@ -637,6 +648,7 @@ async def test_rejected_page_admission_is_not_an_eligible_destination(tmp_path):
                     subject(
                         resolution="existing",
                         entity_id=entity.entity_id,
+                        title=entity.title,
                         participant_evidence=[],
                     )
                 ]

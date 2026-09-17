@@ -97,10 +97,15 @@ def scope_plan(
     }
 
 
-def split_scope_plan(plan: dict) -> list[dict]:
+def split_scope_plan(plan: dict, *, registry=(), existing_titles=None) -> list[dict]:
     """Bind fixture node IDs and fill default sections; preserve explicit decisions."""
     assignments = dict(plan.get("assignments", {}))
     candidates = list(plan.get("candidates", []))
+    titles = {
+        "you": "You",
+        **{e.entity_id: e.title for e in registry},
+        **(existing_titles or {}),
+    }
     candidate_entities = {
         candidate[
             "candidate_id"
@@ -146,7 +151,7 @@ def split_scope_plan(plan: dict) -> list[dict]:
                 {
                     "resolution": "existing",
                     "entity_id": entity_id,
-                    "title": None,
+                    "title": titles.get(entity_id),
                     "aliases": [],
                     "supporting_evidence": list(assignments),
                     "participant_evidence": [],
@@ -171,7 +176,7 @@ def split_scope_plan(plan: dict) -> list[dict]:
                 {
                     "resolution": "existing",
                     "entity_id": participant["entity"],
-                    "title": None,
+                    "title": titles.get(participant["entity"]),
                     "aliases": [],
                     "supporting_evidence": [alias],
                     "participant_evidence": [alias],
@@ -215,8 +220,10 @@ def split_scope_plan(plan: dict) -> list[dict]:
                 title=node["title"],
                 aliases=node["aliases"],
             )
-        elif node["resolution"] == "review_required":
-            decision["candidate_entity_ids"] = node["candidate_entity_ids"]
+        else:
+            decision.update(title=node["title"], aliases=node["aliases"])
+            if node["resolution"] == "review_required":
+                decision["candidate_entity_ids"] = node["candidate_entity_ids"]
         matches.append({"decision": decision})
     from mycelium.page_admission import ADMISSION_BASES, NO_PAGE_BASIS
 
@@ -590,7 +597,8 @@ async def test_later_dream_routes_claim_with_identity_review_annotation(tmp_path
         )
     )
     llm.call_structured.side_effect = split_scope_plan(
-        scope_plan({"C001": assignment(person.entity_id)})
+        scope_plan({"C001": assignment(person.entity_id)}),
+        registry=artifacts.list_entities(),
     )
     result = await dream.router.route([ClaimEvidence(claim, source)])
     assert result.failures == []
@@ -600,7 +608,8 @@ async def test_later_dream_routes_claim_with_identity_review_annotation(tmp_path
     project.materialization_state = "materialized"
     artifacts.save_entity(project)
     resolved_responses = split_scope_plan(
-        scope_plan({"C001": assignment(person.entity_id)})
+        scope_plan({"C001": assignment(person.entity_id)}),
+        registry=artifacts.list_entities(),
     )
     llm.call_structured.side_effect = resolved_responses
     resolved = await dream.router.route([ClaimEvidence(claim, source)])
@@ -640,7 +649,7 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
                 "decision": {
                     "resolution": "existing",
                     "entity_id": "you",
-                    "title": None,
+                    "title": "You",
                     "aliases": [],
                     "reason": "Explicit fixture user",
                 }
@@ -1183,7 +1192,8 @@ async def test_model_declared_project_role_projects_to_both_endpoint_pages(tmp_p
         about="Priya Raman",
     )
     responses = split_scope_plan(
-        scope_plan({"C001": assignment(person.entity_id, links=[project.entity_id])})
+        scope_plan({"C001": assignment(person.entity_id, links=[project.entity_id])}),
+        registry=artifacts.list_entities(),
     )
     llm.call_structured.side_effect = responses
     await dream.run()
@@ -1236,10 +1246,13 @@ async def test_new_entity_revises_prior_you_scope_without_string_matching(
                 scope_candidate("N001", "Atlas", "project", initial_support),
                 scope_candidate("N002", "Supporting Concept", "topic", ["C002"]),
             ],
-        )
+        ),
+        registry=artifacts.list_entities(),
     )
     revision_responses = split_scope_plan(
-        scope_plan({alias: assignment("project-atlas") for alias in revision_support})
+        scope_plan({alias: assignment("project-atlas") for alias in revision_support}),
+        registry=artifacts.list_entities(),
+        existing_titles={"project-atlas": "Atlas"},
     )
     dream.llm.call_structured.side_effect = [
         *discovery_responses,
@@ -1303,7 +1316,8 @@ async def test_later_dream_discovers_page_from_claims_across_episodes(
         scope_plan(
             {"C001": assignment("N001"), "C002": assignment("N001")},
             [scope_candidate("N001", "Ava's Adoption", "project", support)],
-        )
+        ),
+        registry=artifacts.list_entities(),
     )
     llm.call_structured.side_effect = [
         *discovery_responses,
@@ -1498,7 +1512,8 @@ async def test_subject_graph_accepts_an_existing_person_participant(tmp_path):
         scope_plan(
             {"C001": assignment(ava.entity_id)},
             participants={"P001": participant(ava.entity_id)},
-        )
+        ),
+        registry=artifacts.list_entities(),
     )
     dream.llm.call_structured.side_effect = responses
     result = await dream.router.route([ClaimEvidence(claim, source)])
@@ -1541,7 +1556,10 @@ async def test_ambiguous_subject_type_is_published_for_optional_review(tmp_path)
         about="Neighborhood Salon",
         claim_type="plan",
     )
-    responses = split_scope_plan(new_scope("C001", "Neighborhood Salon", "project"))
+    responses = split_scope_plan(
+        new_scope("C001", "Neighborhood Salon", "project"),
+        registry=artifacts.list_entities(),
+    )
     responses[1]["decision"].update(
         {
             "resolution": "review_required",
@@ -1568,7 +1586,9 @@ async def test_configured_user_routes_to_the_discovered_canonical_identity(tmp_p
     dream, llm, _, logs, artifacts = build_dream(tmp_path, llm_response={})
     _, source = add_source(logs, artifacts)
     claim = add_claim(artifacts, source, text="The user prefers concise reports.")
-    llm.call_structured.side_effect = split_scope_plan(you_scope())
+    llm.call_structured.side_effect = split_scope_plan(
+        you_scope(), registry=artifacts.list_entities()
+    )
     result = await dream.router.route([ClaimEvidence(claim, source)])
     assert result.failures == []
     assert result.routes[0].owner_entity_id == "you"
@@ -1590,7 +1610,8 @@ async def test_shorter_person_name_resolves_to_existing_identity(tmp_path):
     )
     candidate = scope_candidate("N001", "Priya", "person", ["C001"])
     responses = split_scope_plan(
-        scope_plan({"C001": assignment(person.entity_id)}, [candidate])
+        scope_plan({"C001": assignment(person.entity_id)}, [candidate]),
+        registry=artifacts.list_entities(),
     )
     responses = use_existing_identity(
         responses, person.entity_id, title="Priya Raman", aliases=["Priya"]
@@ -1618,7 +1639,10 @@ async def test_new_identity_does_not_mutate_existing_person(tmp_path):
         claim_type="state",
     )
     candidate = scope_candidate("N001", "Omar Haddad", "person", ["C001"])
-    responses = split_scope_plan(scope_plan({"C001": assignment("N001")}, [candidate]))
+    responses = split_scope_plan(
+        scope_plan({"C001": assignment("N001")}, [candidate]),
+        registry=artifacts.list_entities(),
+    )
     llm.call_structured.side_effect = responses
     result = await dream.router.route([ClaimEvidence(claim, source)])
     assert [(entity.entity_id, entity.title) for entity in result.new_entities] == [
@@ -1645,7 +1669,8 @@ async def test_later_project_name_updates_stable_identity_without_duplicate(tmp_
     )
     candidate = scope_candidate("N001", "Lantern", "project", ["C001"])
     responses = split_scope_plan(
-        scope_plan({"C001": assignment(project.entity_id)}, [candidate])
+        scope_plan({"C001": assignment(project.entity_id)}, [candidate]),
+        registry=artifacts.list_entities(),
     )
     responses = use_existing_identity(
         responses,
@@ -1716,7 +1741,10 @@ async def test_dream_regenerates_existing_page_without_rewrite_call(
         claim_type="plan",
     )
     llm.call_structured.side_effect = [
-        *split_scope_plan(scope_plan({"C001": assignment("topic-stable-page")})),
+        *split_scope_plan(
+            scope_plan({"C001": assignment("topic-stable-page")}),
+            registry=artifacts.list_entities(),
+        ),
         {
             "decisions": {
                 "C001": {
@@ -1800,7 +1828,7 @@ async def test_dream_preserves_accepted_fact_while_contradiction_is_pending(tmp_
     )
     from tests.truth_support import truth_response
 
-    routing = iter(split_scope_plan(you_scope()))
+    routing = iter(split_scope_plan(you_scope(), registry=artifacts.list_entities()))
 
     async def respond(system, user, schema, **kwargs):
         if kwargs["debug_label"] in {
@@ -1915,7 +1943,7 @@ async def test_invalid_fact_resolution_keeps_source_pending_and_page_unchanged(
         text="The user no longer prefers deterministic memory views.",
     )
     llm.call_structured.side_effect = [
-        *split_scope_plan(you_scope()),
+        *split_scope_plan(you_scope(), registry=artifacts.list_entities()),
         {
             "decisions": {
                 "C002": {

@@ -1,4 +1,4 @@
-"""Resolve one source-discovered subject within a typed candidate registry."""
+"""Resolve a source-discovered subject and its name from identity evidence."""
 
 import json
 from typing import Literal, Union
@@ -11,12 +11,23 @@ from mycelium.prompting import render_prompt_pair
 def subject_identity_model(candidate_ids):
     ids = tuple(candidate_ids)
     common = {"reason": (str, Field(min_length=1, max_length=500))}
+    names = {
+        "title": (
+            str,
+            Field(
+                min_length=1,
+                description="Source-established name or a descriptive title when unnamed",
+            ),
+        ),
+        "aliases": (list[str], Field(max_length=12)),
+    }
     variants = [
         create_model(
             "NewSubjectIdentity",
             __config__=ConfigDict(extra="forbid"),
             **common,
             resolution=(Literal["new"], ...),
+            **names,
         )
     ]
     if ids:
@@ -28,9 +39,9 @@ def subject_identity_model(candidate_ids):
                 resolution=(Literal["existing"], ...),
                 entity_id=(Literal.__getitem__(ids), ...),
                 title=(
-                    str | None,
+                    str,
                     Field(
-                        description="Explicitly established name change; otherwise null",
+                        description="Preferred title to store for this identity, retaining the registry title unless the source establishes a preferred name",
                         min_length=1,
                     ),
                 ),
@@ -46,6 +57,7 @@ def subject_identity_model(candidate_ids):
             list[Literal.__getitem__(ids)] if ids else list[str],
             Field(max_length=len(ids)),
         ),
+        **names,
     )
 
     class UnresolvedSubjectIdentity(unresolved):

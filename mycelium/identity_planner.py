@@ -1,4 +1,4 @@
-"""Source-first discovery followed by bounded, typed identity resolution."""
+"""Source-first discovery followed by bounded identity evidence comparison."""
 
 import json
 
@@ -147,23 +147,28 @@ class IdentityPlanner:
                 }
                 selections.append({"subject": subject, "required_entity_id": eid})
             else:
-                kind = subject["entity_type"]
-                typed = {
+                # Inferred types describe a discovery; they do not prove that
+                # it differs from an existing identity. Only explicit source
+                # speaker bindings impose the structural person-only domain.
+                speaker = any(a in participants for a in subject["supporting_evidence"])
+                candidates = {
                     eid: document
                     for eid, document in documents.items()
-                    if records[eid]["entity_type"] == kind
-                    or (kind == "person" and records[eid]["entity_type"] == "you")
+                    if not speaker or records[eid]["entity_type"] in {"person", "you"}
                 }
                 index = SemanticCandidates(
-                    self.artifacts.root.parent / "indexes" / "identity" / kind,
+                    self.artifacts.root.parent
+                    / "indexes"
+                    / "identity"
+                    / ("people" if speaker else "subjects"),
                     self.embedder,
                     self.artifacts.db,
                 )
                 ids = await index.select(
-                    typed,
+                    candidates,
                     [json.dumps(subject, ensure_ascii=False)],
                     limit=24,
-                    required_ids={"you"} if "you" in typed else (),
+                    required_ids={"you"} if "you" in candidates else (),
                 )
                 schema = subject_identity_model(ids)
                 support = set(subject["supporting_evidence"])
@@ -220,13 +225,20 @@ class IdentityPlanner:
                         "index": index.last_trace,
                     }
                 )
+            # The model returns a preferred title. An exact match to the stored
+            # title is a no-op, not a competing rename from another occurrence.
+            if (
+                decision["resolution"] == "existing"
+                and decision["title"] == active[decision["entity_id"]].title
+            ):
+                decision = {**decision, "title": None}
             node = {
                 "supporting_evidence": subject["supporting_evidence"],
                 "aliases": subject["alternate_names"],
                 **decision,
             }
             if decision["resolution"] != "existing":
-                node.update(title=subject["title"], entity_type=subject["entity_type"])
+                node["entity_type"] = subject["entity_type"]
             subjects.append(node)
         # Multiple source occurrences may resolve to one exact canonical ID.
         merged = []

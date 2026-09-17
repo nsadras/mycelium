@@ -312,20 +312,11 @@ async def main():
             ).model_dump()
             decisions, selections = [], []
             for subject in discovered["subjects"]:
-                typed = {
-                    eid: doc
-                    for eid, doc in documents.items()
-                    if records[eid]["entity_type"] == subject["entity_type"]
-                    or (
-                        subject["entity_type"] == "person"
-                        and records[eid]["entity_type"] == "you"
-                    )
-                }
                 ids = await candidates.select(
-                    typed,
+                    documents,
                     [json.dumps(subject)],
                     limit=24,
-                    required_ids={"you"} if "you" in typed else set(),
+                    required_ids={"you"} if "you" in documents else set(),
                 )
                 registry = {eid: records[eid] for eid in ids}
                 schema = subject_identity_model(ids)

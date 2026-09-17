@@ -123,7 +123,8 @@ class FactResolver:
         # Keep whole existing presentations intact while any member is under
         # review; isolate newly arriving sides without inferring a truth change.
         protected_facts = [f for f in existing_facts if set(f.member_claim_ids) & held_claim_ids]
-        held_claim_ids.update(cid for f in protected_facts for cid in f.member_claim_ids)
+        protected_member_ids = {cid for f in protected_facts for cid in f.member_claim_ids}
+        held_claim_ids.update(protected_member_ids)
         active_claims = {
             c.claim_id: c for c in self.artifacts.list_claims(status="active")
             if c.claim_id not in held_claim_ids
@@ -133,8 +134,10 @@ class FactResolver:
         for owner_id in sorted(affected_entity_ids):
             retained = [f for f in protected_facts if f.owner_entity_id == owner_id]
             result.facts.extend(retained)
-            represented = {cid for f in retained for cid in f.member_claim_ids}
-            for claim_id in sorted(held_claim_ids - represented):
+            # Page ownership may move while review protects the original fact.
+            # Reproject that fact through placements; do not create a second
+            # canonical fact merely because it was grouped under another owner.
+            for claim_id in sorted(held_claim_ids - protected_member_ids):
                 placement = placement_by_claim.get(claim_id)
                 if not self._owned_by(placement, owner_id):
                     continue

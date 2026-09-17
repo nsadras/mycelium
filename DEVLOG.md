@@ -5437,3 +5437,28 @@ remain separate gates.
 - The read-only snapshot inspection now also records duplicate fact membership
   and fact/placement owner disagreement. These complement citation/link checks;
   none establishes semantic support, useful coverage, or release readiness.
+
+### 2026-09-17 — Reuse protected facts after page ownership changes
+
+- All six duplicated claims in the prior sample3 final snapshot are covered by
+  pending truth proposals. Current production reproduces another duplication
+  path without a failed model request: it preserves an old fact for review,
+  then creates a second direct fact when a member moves to a different owner.
+- Product invariant: review protects the original fact's exact membership;
+  moving a page destination does not require another canonical fact for that
+  same evidence. Check protected membership across all owners when deciding
+  whether a held claim needs direct projection. Existing placement-based
+  rendering can show the preserved fact on its new page. Canonical claims and
+  pending review remain unchanged. No new call, prompt, schema, or semantic rule.
+- The regression first fails with two facts for the old claim. It then passes
+  through the real resolver and page materializer: each side appears once,
+  the old fact is unchanged, both sides stay active and display their pending
+  review. Focused truth, partial-support, ownership, promotion, Build and commit
+  suites: **70 passed in 5.49s**. An initial command named a nonexistent test file
+  and ran no tests; the corrected command above completed. Ruff and diff pass.
+  The most recent full structural run remains 839 passed before this extra test.
+- A fact's retained grouping owner can legitimately differ from a current page
+  placement while review protects that fact. The read-only inspection reports
+  that difference for investigation; it is not by itself corruption. Duplicate
+  stored fact membership is separate from showing one fact on several pages.
+  Neither historical snapshots nor the running frozen workload are modified.

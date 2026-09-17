@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from dataclasses import replace
 from unittest.mock import AsyncMock
 
@@ -9,6 +10,8 @@ from benchmarks.shared.adapters import OllamaQaClient
 from mycelium.artifacts import ClaimPlacement, SourceDocument, SourceSegment
 from mycelium.config import Config, LLMConfig
 from mycelium.facts import FactResolver
+from mycelium.materialization import PageMaterializer
+from mycelium.store import WikiStore
 from mycelium.truth_contract import TruthComparison, truth_candidates_model, truth_comparison_model
 from mycelium.truth_review import TruthReviewer
 from tests.memory_helpers import claim, fact, setup_owner
@@ -145,6 +148,34 @@ async def test_failed_global_review_keeps_prior_facts_and_additions_retryable(tm
     assert not result.proposals and not result.deleted_fact_ids and not result.placements
     assert result.failures[0].partial and result.failures[0].claim_ids == ["left", "right"]
     assert artifacts.get_claim("left").status == "active"
+
+
+@pytest.mark.asyncio
+async def test_owner_transfer_does_not_duplicate_a_fact_protected_by_review(tmp_path):
+    artifacts, llm, placements, entities = fixture(tmp_path)
+    prior_fact = artifacts.list_consolidated_facts()[0]
+    moved = replace(placements["left"], owner_entity_id="person-mara", section_key="goals_plans")
+    result = await FactResolver(llm, artifacts, Config()).resolve(
+        [moved], affected_entity_ids=set(entities), incoming_claim_ids={"right"},
+        dream_run_id="test",
+    )
+    assert not result.failures and len(result.proposals) == 1
+    assert Counter(cid for f in result.facts for cid in f.member_claim_ids) == {"left": 1, "right": 1}
+    assert prior_fact in result.facts
+    assert not result.deleted_fact_ids
+    for proposal in result.proposals:
+        artifacts.save_reconsolidation_proposal(proposal)
+    wiki = WikiStore(tmp_path / "wiki")
+    materializer = PageMaterializer(wiki, artifacts, Config())
+    staged = materializer.stage(
+        [], facts=result.facts, placement_overrides=[moved, placements["right"]],
+    )
+    materializer.persist(staged)
+    page = wiki.get("mara")
+    items = [item for section in page.sections for item in section["items"]]
+    assert Counter(cid for item in items for cid in item["claim_ids"]) == {"left": 1, "right": 1}
+    assert all(item["reconciliation_proposal_ids"] for item in items)
+    assert all(artifacts.get_claim(cid).status == "active" for cid in ("left", "right"))
 
 
 @pytest.mark.asyncio

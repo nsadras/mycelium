@@ -58,7 +58,15 @@ async def test_inferred_type_does_not_remove_existing_identity_candidates(
         assert project.entity_id in captured[0][0]
         assert captured[0][2]["limit"] == 24
         assert result["subjects"][0]["entity_id"] == project.entity_id
+        assert result["subjects"][0]["source_subjects"] == [
+            {
+                "title": "Renamed prototype",
+                "description": "The source-described prototype",
+                "supporting_evidence": ["C001"],
+            }
+        ]
         assert memory.artifacts.get_entity(project.entity_id).entity_type == "project"
+        assert memory.artifacts.get_entity(project.entity_id).aliases == []
 
 
 @pytest.mark.asyncio

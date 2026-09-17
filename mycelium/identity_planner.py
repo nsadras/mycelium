@@ -249,6 +249,19 @@ class IdentityPlanner:
                 decision = {**decision, "title": None}
             node = {
                 "supporting_evidence": subject["supporting_evidence"],
+                # Preserve the interpretation just matched to this identity.
+                # These local descriptions are not canonical names or aliases.
+                "source_subjects": [
+                    {
+                        "title": subject["title"],
+                        "description": subject["description"],
+                        "supporting_evidence": [
+                            alias
+                            for alias in subject["supporting_evidence"]
+                            if alias in aliases
+                        ],
+                    }
+                ],
                 "aliases": subject["alternate_names"],
                 **decision,
             }
@@ -283,6 +296,7 @@ class IdentityPlanner:
                 )
             )
             prior["reason"] += "\n" + node["reason"]
+            prior["source_subjects"].extend(node["source_subjects"])
         return {
             "subjects": merged,
             "discovery": discovered,

@@ -50,15 +50,22 @@ def source_attribution_model(claim_ids, entity_ids, source_participants):
     class SourceAttribution(base):
         @model_validator(mode="after")
         def consistent_assertions(self):
-            for subjects in self.attributions.model_dump().values():
-                for decision in subjects.values():
+            invalid = []
+            for cid, subjects in self.attributions.model_dump().items():
+                for eid, decision in subjects.items():
                     assertions = decision["assertions"]
                     if bool(assertions) != (
                         decision["relation_to_claim"] == "described"
                     ):
-                        raise ValueError(
-                            "Only described relations have asserted content"
-                        )
+                        invalid.append(f"{cid}/{eid}")
+            if invalid:
+                raise ValueError(
+                    "Inconsistent attribution at "
+                    + ", ".join(invalid)
+                    + ": described requires nonempty assertions; reporting_only "
+                    "and unrelated require empty assertions. Reconsider the "
+                    "assertions and relation together using the cited statement."
+                )
             return self
 
     return SourceAttribution
@@ -74,6 +81,23 @@ def source_attribution_prompt(subjects, evidence):
             for cid, row in evidence["claims"].items()
         },
     }
+    subjects = [
+        {
+            **subject,
+            "source_subjects": [
+                {**context, "supporting_evidence": support}
+                for context in subject.get("source_subjects", [])
+                if (
+                    support := [
+                        cid
+                        for cid in context["supporting_evidence"]
+                        if cid in evidence["claims"]
+                    ]
+                )
+            ],
+        }
+        for subject in subjects
+    ]
     return (
         render_prompt("memory/source_attribution.system.jinja"),
         json.dumps({"resolved_subjects": subjects, **evidence}),

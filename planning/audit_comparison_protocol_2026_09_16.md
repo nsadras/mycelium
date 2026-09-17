@@ -33,6 +33,25 @@ exact prose layout. Production baseline before the regrouping: `01ac86d`.
 - Freeze each accepted proposal before V1. Failures found there are evidence of
   generalization limits; once used to tune a prompt the case is regression data.
 
+### V1 scope declared before inspecting the reserved sequence
+
+On 2026-09-17, select the **first four chronological sessions of sample 10** as
+the unused longitudinal encoding/view diagnostic. Use the ordinary recorded
+LoCoMo runner, snapshot every session, and run zero dataset QA questions: the
+remaining conversation is unencoded and must not supply a misleading full-sample
+score. Review source fidelity, identity, time, conditional statements, provenance,
+incremental page coverage and per-stage cost after execution. Do not tune on this
+sequence or extend it just to obtain a desired outcome. This bounded diagnostic
+does not establish full sample-10 accuracy or statistical generalization.
+
+Then run all 32 sessions and 193 questions of sample 3 under the configured model
+and current settings, preserving snapshots and failures. It is development/stress
+data, not a second holdout. The prior `overnight-sample3-v1` completed 193 questions
+but predates honest encoding-status reporting; it retains known encoding failures.
+Compare matching settings where verifiable and explicitly report provenance,
+prompt/evaluator and completion differences rather than treating its aggregate
+score or 39,897s elapsed time as a clean causal baseline.
+
 ## Current inference inventory
 
 Limits below are requested output tokens, not measured usage. Splits/retries may

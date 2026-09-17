@@ -127,7 +127,7 @@ def test_asserted_content_agrees_with_relation_and_is_bounded(relation):
     row = attribution(relation)
     schema.model_validate({"attributions": {"C001": {"you": row}}})
     assertions = [] if relation == "described" else ["An assertion about this person"]
-    with pytest.raises(ValidationError, match="Only described"):
+    with pytest.raises(ValidationError, match="Inconsistent attribution at C001/you"):
         schema.model_validate(
             {"attributions": {"C001": {"you": {**row, "assertions": assertions}}}}
         )
@@ -136,6 +136,25 @@ def test_asserted_content_agrees_with_relation_and_is_bounded(relation):
             schema.model_validate(
                 {"attributions": {"C001": {"you": {**row, "assertions": assertions}}}}
             )
+
+
+def test_attribution_error_identifies_every_inconsistent_cell_without_repairing_it():
+    schema = source_attribution_model(["C001", "C002"], ["you"], {"you"})
+    response = {
+        "attributions": {
+            "C001": {
+                "you": {
+                    "assertions": ["An assertion"],
+                    "relation_to_claim": "reporting_only",
+                }
+            },
+            "C002": {"you": {"assertions": [], "relation_to_claim": "described"}},
+        }
+    }
+    before = json.dumps(response)
+    with pytest.raises(ValidationError, match="C001/you, C002/you"):
+        schema.model_validate(response)
+    assert json.dumps(response) == before
 
 
 def test_presentation_cannot_add_omit_or_reassign_pages():
@@ -184,6 +203,7 @@ def test_attribution_input_carries_evidence_and_identity_without_page_state():
             "entity_type": "person",
             "title": "Person",
             "participant_bindings": [],
+            "source_subjects": [],
         }
     ]
     evidence = {
@@ -206,3 +226,42 @@ def test_attribution_input_carries_evidence_and_identity_without_page_state():
     )
     _, changed = source_attribution_prompt(subjects, evidence)
     assert changed == user
+
+
+def test_attribution_scopes_identity_descriptions_without_mutating_the_plan():
+    subjects = [
+        {
+            "entity_id": "p",
+            "title": "Canonical name",
+            "source_subjects": [
+                {
+                    "title": "Earlier description",
+                    "description": "A previously resolved occurrence",
+                    "supporting_evidence": ["C001", "C002"],
+                },
+                {
+                    "title": "Separate occurrence",
+                    "description": "Context from a different batch",
+                    "supporting_evidence": ["C003"],
+                },
+            ],
+        }
+    ]
+    evidence = {
+        "claims": {
+            "C002": {
+                "text": "A statement",
+                "citations": [{"source_id": "s", "segment_id": "x"}],
+            }
+        },
+        "sources": {"s": {"segments": {"x": {"text": "Exact source"}}}},
+    }
+    before = json.dumps([subjects, evidence])
+    _, user = source_attribution_prompt(subjects, evidence)
+    payload = json.loads(user)
+    assert payload["resolved_subjects"][0]["source_subjects"] == [
+        {**subjects[0]["source_subjects"][0], "supporting_evidence": ["C002"]}
+    ]
+    assert payload["claims"] == evidence["claims"]
+    assert payload["sources"] == evidence["sources"]
+    assert json.dumps([subjects, evidence]) == before

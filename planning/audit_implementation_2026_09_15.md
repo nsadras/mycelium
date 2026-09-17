@@ -1,6 +1,6 @@
 # Consolidated audit implementation plan
 
-**Updated:** 2026-09-16. **Reviewed production baseline:** `01ac86d`.
+**Updated:** 2026-09-17. **Reviewed production baseline:** `01ac86d`.
 
 This is the authoritative forward priority list. It incorporates the
 [regrouping audit](mycelium-audit-2026-09-16-regroup.md) and the useful methods
@@ -11,9 +11,9 @@ order in this file. The historical implementation record remains below;
 **Current state:** E1 and focused C1–C3 fixes are implemented. E2 completed both
 comparison arms and source review. S1 bounded truth discovery, S2 dependency
 maintenance, and measured date/name/attribution fixes are implemented. Longitudinal
-replay and held-out validation remain open. Existing
+replay completed with residual quality failures; held-out validation remains open. Existing
 storage, review, configuration, retrieval-consistency, and UI fixes remain the
-foundation. The latest recorded structural suite is 820 passed, one skipped,
+foundation. The latest recorded structural suite is 822 passed, one skipped,
 75 integration tests deselected; that is not full semantic acceptance.
 
 ### Implementation progress after resuming
@@ -70,6 +70,21 @@ foundation. The latest recorded structural suite is 820 passed, one skipped,
   each attribution cell. Both direct arms14/14; output tokens fell33.5% and
   measured time21.6%. Integrated13/13 and native page-review3/3 passed. This
   simplifies existing work; cumulative page usefulness remains a replay gate.
+- **W1 source context implemented:** carry existing identity interpretations into
+  attribution with exact supporting IDs. The narrower contract passes 20/20
+  direct controls and a native successive-build positive/counterexample; no new
+  model calls or output fields. An earlier native discovery miss remains recorded.
+  Stale current-state summaries and missed truth proposals remain quality limits.
+- **R1 evaluated; additional retrieval machinery not selected:** seven frozen
+  evidence controls show app prompts recovering several answers without any
+  memory-tool calls. Temporal interpretation still fails with the relevant source
+  already present. No new index, entity/time branch or reranker is warranted by
+  these observations. See the [follow-through report](audit_followthrough_observations_2026_09_17.md).
+- **Longitudinal replay complete with failures:** `e4cfc9d` uses 198 model attempts
+  / 1,404.580s versus 321 / 2,732.122s at `fdcc767`, with the same 10/19 raw QA
+  passes. The new run has five routing failures; both miss the pilot-date review.
+  Full extraction and valid citations do not establish complete page organization.
+  Cost reduction is measured; full quality acceptance remains unproven.
 - **E2 diagnostic complete:** nine production checkpoints and 19/19 probes in
   both arms. The ranked control recovers three answers but uses 8.23× the context
   characters. Final extraction is complete; a missing truth proposal blocks the

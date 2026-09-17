@@ -5080,3 +5080,73 @@ remain separate gates.
   candidate decision and comparison reused durable results after actual routing
   generated disjoint reference UUIDs. The explicit correction remained a pending
   supersession proposal; the cache did not apply it to canonical evidence.
+
+### 2026-09-17 — Full longitudinal comparison and existing answer paths
+
+- Completed `audit-daily-followthrough-e4cfc9d-20260917` against E2's frozen
+  `fdcc767` run with matching fixture, config, model digests and evaluator.
+  Nine checkpoints and 19/19 probes finish. Both runs miss the explicit
+  pilot-date approval; the new run additionally ends with five routing failures.
+  No extraction backlog or unresolved exact citations; all 48 final item links
+  resolve. Main model work falls 321→198 attempts, 2,732.122→1,404.580 seconds,
+  2,326,261→1,090,182 input and 165,251→86,317 output tokens. Failed attempts
+  11→3. Both raw answer panels pass the same 10/19. This is an observed cost
+  reduction with incomplete organization, not quality equivalence or release
+  acceptance. Detailed source review, stages, transitions and limits:
+  `planning/audit_followthrough_observations_2026_09_17.md`.
+- R1 diagnostic: `daily-runtime-qa-control-20260917T072149Z-09655d90` compares
+  static QA and the existing tool-enabled benchmark prompt on seven identical
+  saved evidence sets. `daily-app-qa-control-20260917T072637Z-d8775dfa` uses the
+  actual app prompt/budget builder and memory loop, without web tools or prior
+  chat. Model digests/config are checked. No memory tool calls occur. App-style
+  responses recover deadline, privacy and pilot history from existing evidence;
+  all paths still incorrectly use an earlier date for the next interview despite
+  explicit uncertainty in retrieved sources. No source index, retrieval branch
+  or reranker dependency adopted. This isolates answering-contract limitations,
+  not a full app or device test. Archived scripts, requests and results retained.
+
+### 2026-09-17 — Carry resolved source descriptions into attribution
+
+- Product invariant: renaming an entity must not erase the interpretation of
+  its earlier source descriptions between identity matching and attribution.
+  The prior implementation discarded that context and supplied only canonical
+  titles, requiring attribution to infer the identity again.
+- Preserve each already resolved source title/description with its exact local
+  supporting claim IDs, merge occurrences by accepted entity ID, and scope them
+  to the current attribution batch. They are not canonical aliases or assertions.
+  Page admission retains its prior inputs. The existing attribution call still
+  determines assertions from cited evidence, within the canonical statement's
+  scope. No new model calls, output fields, semantic rules or canonical record
+  types. The existing identity work-unit audit contains the carried context.
+- Initial direct paired proof:
+  `attribution-identity-context-contract-20260917T072247Z-21804b7b`. Both arms
+  19/20. Carrying context fixes the retained project-constraint omission but
+  incorrectly attributes an adjacent, separate statement in a neutral control.
+  This first proposal was not accepted. Clarifying the existing assertion scope
+  passes 20/20, zero failed requests, 41.577s:
+  `attribution-identity-canonical-scope-20260917T072453Z-bf43aa82`.
+  Controls include distinct projects using the same description, a namesake
+  person, reporting-only sources, ownership, relationships and unrelated facts.
+- Native initial sequence:
+  `identity-context-pipeline-20260917T073018Z-9d69fd75`, 17 calls / 56.677s, no
+  execution failures. Discovery selects the scans rather than the archive app,
+  so attribution cannot add the requirement to the app page. This upstream
+  omission remains a limitation; the run is not a passed end-to-end quality case.
+- Second neutral sequence isolates the app requirement explicitly:
+  `identity-context-app-pipeline-20260917T073237Z-711cce12`, 19 calls / 58.286s,
+  zero failed requests. Native discovery→matching→attribution→page publication
+  preserves Cedar's identity, puts the source-described app's local-storage
+  requirement on that page, and keeps Dalia's unrelated journey off it. Prior
+  purpose and workstation evidence survive both builds. Source/claim/work-unit
+  records and both snapshots are retained. This proves the in-situ mechanism,
+  not every possible upstream discovery or longitudinal transition.
+- Attribution validation now identifies every inconsistent claim/entity cell
+  and describes the existing empty/nonempty constraint in retry diagnostics.
+  It does not alter, accept or semantically repair an invalid decision. Structural
+  tests check the unchanged rejection boundary and precise locations; no model
+  reliability gain is claimed for the diagnostic change.
+- Validation: focused 41 passed; full 822 passed, one AMI skip, 75 integration
+  tests deselected in 30.34s. Exact batch scoping, merged identity occurrences,
+  unchanged canonical aliases, source provenance and invalid-output rejection
+  are covered. The earlier failed proposal and native discovery miss remain
+  available alongside successful results.

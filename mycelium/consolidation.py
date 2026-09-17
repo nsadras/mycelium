@@ -291,10 +291,16 @@ class ClaimRouter:
                     "participant_bindings": node["participant_evidence"],
                 }
             )
+        # Local identity descriptions support attribution; page admission keeps
+        # its existing source-evidence contract.
+        page_subjects = [
+            {key: value for key, value in node.items() if key != "source_subjects"}
+            for node in resolved
+        ]
         page_context = (
-            {"subjects": resolved, "human_page_reviews": page_reviews}
+            {"subjects": page_subjects, "human_page_reviews": page_reviews}
             if page_reviews
-            else resolved
+            else page_subjects
         )
         eligible_ids = {
             node["entity_id"] for node in resolved if node["entity_id"] is not None
@@ -353,6 +359,12 @@ class ClaimRouter:
                 "entity_id": eid,
                 "entity_type": entity.entity_type,
                 "title": entity.title,
+                "source_subjects": [
+                    subject
+                    for node in resolved
+                    if node["entity_id"] == eid
+                    for subject in node["source_subjects"]
+                ],
                 "participant_bindings": sorted(
                     {
                         p

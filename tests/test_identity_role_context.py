@@ -128,4 +128,16 @@ async def test_matching_receives_same_source_user_binding_without_subject_assign
         assert set(scoped["sources"]) == {"a"}
         assert len(result["subjects"]) == 1
         assert result["subjects"][0]["entity_id"] == "you"
+        assert result["subjects"][0]["source_subjects"] == [
+            {
+                "title": "Rae",
+                "description": "The person described in the source",
+                "supporting_evidence": ["C001"],
+            },
+            {
+                "title": "You",
+                "description": "The declared user",
+                "supporting_evidence": ["C001", "C002"],
+            },
+        ]
         assert payload["participants"]["P001"].get("canonical_entity_id") is None

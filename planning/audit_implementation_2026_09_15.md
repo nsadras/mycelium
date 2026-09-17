@@ -15,8 +15,9 @@ replay completed with residual quality failures. The frozen four-session held-ou
 run and source review are complete: encoding is incomplete and broad semantic
 acceptance fails. Full sample-3 validation is running at frozen `0f9f7ee`. Existing
 storage, review, configuration, retrieval-consistency, and UI fixes remain the
-foundation. The latest recorded structural suite is 839 passed,
-75 integration tests deselected (35.32s); that is not full semantic acceptance.
+foundation. The latest structural suite on the retained production code is
+840 passed, 75 integration tests deselected (34.57s); that is not full semantic
+acceptance.
 The separately committed duration-clock fix (`f1dfdd9`) passes 57 client tests
 and the then-current 833-test structural suite, and is not loaded by the frozen
 comparison process.
@@ -146,6 +147,30 @@ flattening caused the failure: there is no matched native control for that pool.
   product LLM stages or nested
   response structures have been added. Evaluation improvements and focused
   correctness checks do not establish longitudinal memory quality or cost.
+
+## Remaining work at the current checkpoint
+
+Selected mechanisms are implemented; product acceptance is still open. The
+completed daily comparison and four-session unused sequence are valid diagnostic
+results with failures. They must not be relabelled successful memory quality.
+The full sample-3 run is still frozen and running, with eight reviewed snapshots
+and no QA result yet.
+
+| Priority | Remaining issue | Next decision or validation | Acceptance |
+|---|---|---|---|
+| P1 | Source meaning is lost or changed: incomplete antecedents, wrong date precision, useful details omitted | Choose the next bounded encoding change after reviewing the cumulative evidence; the two citation proposals remain rejected | Source-reviewed neutral and native cases preserve speakers, context, conditions and supported precision; no lexical repairs or forced expected wording |
+| P1 | Identity fragments across successive conversations and within one conversation | Reassess the existing source/identity representation before adding more review steps | Supported continuity survives topic changes; distinct namesakes stay distinct; explicit reviews remain authoritative |
+| P1 | Broad quality has not justified total encoding cost | Finish the current declared diagnostic and report all stages, failures and limits; select simplification only through a bounded comparison | A useful quality/cost gain on comparable inputs, accounting for failed/skipped work; isolated token savings are insufficient |
+| P1 | V1/full-workload acceptance remains unmet | Complete source/view/QA attribution for the running workload; keep failed or incomplete encoding explicit | Honest terminal report and reviewed error profile; benchmark perfection is not required, unsupported evidence is not excused by an aggregate score |
+| P2 | Failed grouping blocks useful new page content; ownership transfers could duplicate facts | Exact-ID retry feedback and two publication fixes are committed outside the frozen run; retain focused mechanical and direct-caller evidence | Failed publication preserves prior views and retry state; retry publishes each evidence membership once; do not credit the frozen run with later fixes |
+| P2 | Pages contain generic repetition, fragmented context and stale plans | Judge readability/useful coverage in successive snapshots; make changes only where the existing decisions demonstrably improve the view | Relevant current/history context is accessible, pending alternatives are clear, and layout differences alone do not trigger added model work |
+| P2 | Browser/audio/private-network behavior remains unverified | User runs the existing device checklist after implementation | Recorded browser/device/network results; automated tests cannot stand in for these checks |
+
+No extra retrieval index, reranker, semantic repair pass, graph backend, or flat
+truth-shortlist integration is currently selected. The latest shortlist attempt
+is stopped after its incomplete native gate. The implementation-direction
+question is about the next semantic tranche, not permission to run already
+authorized tests or commit validated fixes.
 
 ## Objective and fixed product decisions
 

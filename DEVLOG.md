@@ -5523,3 +5523,21 @@ remain separate gates.
   (16 started / 15 completed / one cancelled), overlapping sessions 8–9. Queue
   and cache effects limit latency comparisons; counts/tokens remain in their
   own experiment traces. The frozen benchmark code and settings are unchanged.
+
+### 2026-09-17 — Close structural validation of the retained tranche
+
+- After removing the shortlist prototype, run the full structural suite once
+  on the adopted production revision, including the protected-fact regression:
+  **840 passed, 75 integration deselected in 34.57s**. Log:
+  `test_outputs/audit-followthrough/retained-production-full.log`. This supersedes
+  the earlier 839-test adopted-code result and is distinct from the full run
+  that included the rejected prototype. No model-dependent or UI suite is
+  repeated for this validation.
+- All **340** recorded source-file hashes in the running sample3 manifest still
+  match its worktree. Only audit documents differ there; later main-branch fixes
+  cannot be credited to that run. Eight snapshots have source/view review;
+  session 9 is still executing and no QA result is available.
+- The plan now separates implemented mechanisms from reopened semantic quality,
+  compute, full-workload and user-owned device gates. Asked for direction on
+  simplification versus additional targeted semantic work after the cumulative
+  cost/quality evidence; this does not block already authorized validation.

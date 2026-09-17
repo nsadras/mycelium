@@ -25,9 +25,20 @@ foundation. The latest recorded structural suite is 799 passed, one skipped,
   tests; 27/28 migrated native cases passed. The failing relative-date event
   distinction remains visible under C1. The evaluator's proposed support contract
   passed 45/45 direct cases, then 15/15 through the maintained native runner.
-- C1–C3 and the longitudinal quality/cost gates remain open. No new product LLM
-  calls or nested production response structures were added in E1. Evaluation
-  improved; this is not evidence of improved memory encoding or retrieval yet.
+- **C1 implemented provisionally:** `68498fa` clarifies the existing weekday
+  field without changing its shape or adding calls. Four mixed-source checks,
+  14 isolated production controls and the native correction/retrieval workflow
+  passed. The matched direct arm also passed; a broad accuracy gain is unproven.
+  The earlier event-scope diagnostic remains visible. E2/V1 remain the gates.
+- **C3 partly implemented:** `742196c` rejects incomplete exact citations before
+  routing/fact projection. Projection now resolves links against the complete
+  planned page set, refreshes references on destination changes, and coverage
+  uses source/segment pairs. Latest structural suite: 796 passed, one skipped,
+  75 integration deselected. Multi-claim truth review of partially retracted
+  evidence still needs alignment with the existing retained-claim policy.
+- **C2, remaining C3 and E2 onward remain open.** No product LLM calls or nested
+  response structures have been added. Evaluation improvements and focused
+  correctness checks do not establish longitudinal memory quality or cost.
 
 ## Objective and fixed product decisions
 

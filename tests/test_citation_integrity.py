@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from mycelium.artifact_integrity import cited_source_segments
+from mycelium.artifact_integrity import cited_source_segments, coverage_report
 from mycelium.artifacts import ClaimProvenance, SourceDocument, SourceSegment
 from mycelium.consolidation_formatting import RoutingFormatter
 from mycelium.consolidation_models import ClaimEvidence
@@ -92,3 +92,22 @@ def test_resolver_preserves_retracted_source_status_for_explicit_history(tmp_pat
     _, resolved, segments = cited_source_segments(artifacts, item)[0]
     assert resolved.status == "retracted"
     assert [s.segment_id for s in segments] == item.provenance[0].segment_ids
+
+
+def test_coverage_does_not_credit_a_segment_cited_under_the_wrong_source(tmp_path):
+    artifacts, item, _, _ = damaged_claim(tmp_path, "wrong_source")
+    report = coverage_report(artifacts)
+    assert report["claimed_segments"] == 1 and report["segment_coverage"] == 0.5
+    assert report["unresolved_citations"] == [
+        {"source_id": item.provenance[0].source_id, "segment_id": "elsewhere"}
+    ]
+
+
+def test_coverage_counts_distinct_source_segment_pairs(tmp_path):
+    artifacts = setup_owner(tmp_path)
+    item = claim("record", "A supported statement.", "2031-05-06")
+    item.provenance = [ClaimProvenance("first", ["same-id"]), ClaimProvenance("second", ["same-id"])]
+    place(artifacts, item)
+    report = coverage_report(artifacts)
+    assert report["segments"] == report["claimed_segments"] == 2
+    assert report["segment_coverage"] == 1 and not report["unresolved_citations"]

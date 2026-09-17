@@ -230,46 +230,86 @@ class PageMaterializer:
             entity_ids, all_claims, placements, entities
         )
 
-        for entity_id in sorted(entity_ids):
-            entity = entities.get(entity_id)
-            if (
-                entity is None
-                or entity.status != "active"
-            ):
-                continue
-            entity_claims = []
-            for placement in placements.values():
-                claim = claims.get(placement.claim_id)
+        # Availability is a property of the whole projected page set, not the
+        # order in which entity IDs happen to render. Canonical references may
+        # legitimately point to identities with no independent page.
+        existing_pages = {page.entity_id: page for page in self.wiki.list_all()}
+        inputs, prepared = {}, set()
+
+        def prepare(ids):
+            for entity_id in sorted(ids):
+                prepared.add(entity_id)
+                entity = entities.get(entity_id)
                 if (
-                    claim is None
-                    or placement.status != "placed"
+                    entity is None
+                    or entity.status != "active"
                 ):
                     continue
-                page_placement = self._page_placement(
-                    entity_id, claim, placement, entities
-                )
-                if page_placement is not None:
-                    entity_claims.append((claim, page_placement))
-            entity_facts = []
-            for fact in facts.values():
-                page_facts = self._page_facts(
-                    entity_id, fact, claims, placements, entities
-                )
-                entity_facts.extend(page_facts)
-            existing = self._existing_page(entity)
-            if not entity_facts and entity_id != "you":
-                result.entities[entity_id] = replace(entity, materialization_state="provisional")
-                entities[entity_id] = result.entities[entity_id]
-                if existing is not None:
-                    result.deleted_slugs.add(entity.slug)
-                continue
-            if entity.materialization_state != "materialized":
-                entity = replace(entity, materialization_state="materialized")
-                result.entities[entity_id] = entities[entity_id] = entity
+                entity_claims = []
+                for placement in placements.values():
+                    claim = claims.get(placement.claim_id)
+                    if (
+                        claim is None
+                        or placement.status != "placed"
+                    ):
+                        continue
+                    page_placement = self._page_placement(
+                        entity_id, claim, placement, entities
+                    )
+                    if page_placement is not None:
+                        entity_claims.append((claim, page_placement))
+                entity_facts = []
+                for fact in facts.values():
+                    page_facts = self._page_facts(
+                        entity_id, fact, claims, placements, entities
+                    )
+                    entity_facts.extend(page_facts)
+                existing = self._existing_page(entity)
+                if not entity_facts and entity_id != "you":
+                    result.entities[entity_id] = replace(entity, materialization_state="provisional")
+                    entities[entity_id] = result.entities[entity_id]
+                    if existing is not None:
+                        result.deleted_slugs.add(entity.slug)
+                    continue
+                if entity.materialization_state != "materialized":
+                    entity = replace(entity, materialization_state="materialized")
+                    result.entities[entity_id] = entities[entity_id] = entity
+                inputs[entity_id] = (entity, entity_claims, entity_facts, existing)
+
+        prepare(entity_ids)
+        while True:
+            projected_ids = {
+                eid for eid, page in existing_pages.items()
+                if page.slug not in result.deleted_slugs
+                and eid in entities and entities[eid].status == "active"
+                and entities[eid].slug == page.slug
+            } | inputs.keys()
+            changed_targets = (projected_ids ^ existing_pages.keys()) | {
+                eid for eid in inputs.keys() & existing_pages.keys()
+                if inputs[eid][0].title != existing_pages[eid].title
+            }
+            dependent_ids = set()
+            for placement in placements.values():
+                if placement.status != "placed":
+                    continue
+                endpoints = {
+                    placement.owner_entity_id, *placement.page_sections,
+                    *placement.linked_entity_ids,
+                } - {None}
+                if endpoints & changed_targets:
+                    dependent_ids.update(endpoints)
+            if changed_targets and "you" in existing_pages:
+                dependent_ids.add("you")
+            pending = dependent_ids - prepared
+            if not pending:
+                break
+            prepare(pending)
+
+        for entity_id, (entity, entity_claims, entity_facts, existing) in sorted(inputs.items()):
             page = self._build_page(
                 entity, entity_claims, entities, placements,
                 pending_proposals_by_claim,
-                encounters, entity_facts, claims, existing,
+                encounters, entity_facts, claims, existing, projected_ids,
             )
             if existing is None:
                 page.update_log = [UpdateLogEntry(
@@ -397,11 +437,12 @@ class PageMaterializer:
         facts: list[ConsolidatedFact],
         claims_by_id: dict[str, MemoryClaim],
         existing: WikiPage | None,
+        projected_entity_ids: set[str],
     ) -> WikiPage:
         sections = self._sections(
             entity, owned, entities, placements, pending_proposals_by_claim,
             encounters,
-            facts, claims_by_id,
+            facts, claims_by_id, projected_entity_ids,
         )
         claims = [claim for claim, _ in owned]
         source_ids = sorted({
@@ -430,7 +471,7 @@ class PageMaterializer:
             tags=[],
             related=[
                 Edge(target=entities[entity_id].slug, relation="informs")
-                for entity_id in related_ids
+                for entity_id in related_ids if entity_id in projected_entity_ids
             ],
             source_log_entries=source_ids,
             update_log=list(existing.update_log) if existing else [],
@@ -450,6 +491,7 @@ class PageMaterializer:
         encounters: list,
         facts: list[ConsolidatedFact],
         claims_by_id: dict[str, MemoryClaim],
+        projected_entity_ids: set[str],
     ) -> list[dict]:
         grouped: dict[str, list[ConsolidatedFact]] = defaultdict(list)
         for fact in facts:
@@ -481,7 +523,7 @@ class PageMaterializer:
         sections: list[dict] = []
         for key, title in section_pairs(entity.entity_type):
             if key == "memory_map" and entity.entity_type == "you":
-                links = self._memory_map(entities)
+                links = self._memory_map(entities, projected_entity_ids)
                 if links:
                     sections.append({"key": key, "title": title, "items": links})
                 continue
@@ -494,6 +536,7 @@ class PageMaterializer:
                 page_entity_id=entity.entity_id,
                 canonical_placements=placements,
                 chronological=(key == "timeline"),
+                projected_entity_ids=projected_entity_ids,
                 pending_proposals_by_claim=pending_proposals_by_claim,
             )
             if key == "timeline" and encounter_items:
@@ -518,6 +561,7 @@ class PageMaterializer:
         page_entity_id: str,
         canonical_placements: dict[str, ClaimPlacement],
         chronological: bool,
+        projected_entity_ids: set[str],
         pending_proposals_by_claim: dict[str, set[str]],
     ) -> list[dict]:
         if not values:
@@ -562,7 +606,7 @@ class PageMaterializer:
             uncertain = pending or bool(review_ids or identity_reviews or uncertainty)
             links = sorted({
                 linked_id for linked_id in fact.linked_entity_ids
-                if linked_id in entities and entities[linked_id].status == "active"
+                if linked_id in projected_entity_ids
             })
             qualifiers = []
             if claim.evidence_modality == "tool":
@@ -665,7 +709,7 @@ class PageMaterializer:
         return items
 
     @staticmethod
-    def _memory_map(entities: dict[str, EntityRecord]) -> list[dict]:
+    def _memory_map(entities: dict[str, EntityRecord], projected_entity_ids: set[str]) -> list[dict]:
         return [
             {
                 "kind": "link",
@@ -677,7 +721,7 @@ class PageMaterializer:
             for entity in sorted(entities.values(), key=lambda value: (value.entity_type, value.title.lower()))
             if entity.entity_id != "you"
             and entity.status == "active"
-            and entity.materialization_state == "materialized"
+            and entity.entity_id in projected_entity_ids
         ]
 
     def rebuild_index(

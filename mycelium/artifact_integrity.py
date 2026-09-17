@@ -58,22 +58,23 @@ def coverage_report(store) -> dict[str, Any]:
         if placement.status == "placed" and placement.owner_entity_id
     }
     all_segments = {
-        segment.segment_id for source in sources for segment in source.segments
+        (source.source_id, segment.segment_id)
+        for source in sources for segment in source.segments
     }
     claimed_segments = {
-        segment_id
+        (provenance.source_id, segment_id)
         for claim in claims
         for provenance in claim.provenance
         for segment_id in provenance.segment_ids
     }
     source_only_segments = {
-        disposition.segment_id
+        (episode.source_id, disposition.segment_id)
         for episode in episodes
         for disposition in episode.segment_dispositions
         if disposition.disposition == "source_only"
     }
     pending_segments = {
-        segment_id
+        (episode.source_id, segment_id)
         for episode in episodes
         for batch in episode.extraction_batches
         if batch.status != "complete"
@@ -105,11 +106,11 @@ def coverage_report(store) -> dict[str, Any]:
         "accounted_coverage": len(accounted_segments) / len(all_segments)
         if all_segments
         else 1.0,
-        "unassigned_segment_ids": sorted(all_segments - claimed_segments),
+        "unassigned_segment_ids": sorted(sid for _, sid in all_segments - claimed_segments),
         "unaccounted_segment_ids": sorted(
-            all_segments - claimed_segments - source_only_segments - pending_segments
+            sid for _, sid in all_segments - claimed_segments - source_only_segments - pending_segments
         ),
-        "pending_extraction_segment_ids": sorted(all_segments & pending_segments),
+        "pending_extraction_segment_ids": sorted(sid for _, sid in all_segments & pending_segments),
         "unplaced_claim_ids": sorted(
             (
                 claim.claim_id
@@ -120,7 +121,11 @@ def coverage_report(store) -> dict[str, Any]:
                 )
             )
         ),
-        "unresolved_provenance_ids": sorted(unresolved),
+        "unresolved_provenance_ids": sorted({sid for _, sid in unresolved}),
+        "unresolved_citations": [
+            {"source_id": source_id, "segment_id": segment_id}
+            for source_id, segment_id in sorted(unresolved)
+        ],
         "failed_episode_ids": sorted(
             (ep.episode_id for ep in episodes if ep.extraction_status == "failed")
         ),
@@ -188,7 +193,8 @@ def artifact_integrity(mem) -> dict:
             )
         ),
         "claims_missing_provenance": sorted(
-            (claim.claim_id for claim in claims if not claim.provenance)
+            (claim.claim_id for claim in claims
+             if not claim.provenance or any(not p.segment_ids for p in claim.provenance))
         ),
         "claims_missing_source": sorted(
             (

@@ -1,4 +1,5 @@
 from tests.extraction_support import stored_time
+from dataclasses import replace
 import pytest
 from mycelium.artifacts import (
     ArtifactStore,
@@ -242,6 +243,64 @@ def test_ordinary_linked_fact_is_not_copied_to_linked_page(tmp_path):
     materializer.regenerate({person.entity_id, project.entity_id})
     assert "reviewed Mycelium" in wiki.get(person.slug).content
     assert not wiki.exists(project.slug)
+
+
+def test_links_follow_destination_lifecycle_and_leave_canonical_references_available(tmp_path):
+    artifacts, wiki, materializer, _, project = setup_store(tmp_path)
+    person = artifacts.create_entity("person", "Rae")
+    mention = claim("mention", "Rae reviewed the project.")
+    place(artifacts, mention, person, "timeline", links=[project.entity_id])
+    materializer.regenerate({person.entity_id, project.entity_id})
+
+    def shown_links():
+        return [link for section in wiki.get(person.slug).sections
+                for item in section["items"] for link in item.get("links", [])]
+
+    assert not shown_links() and not wiki.exists(project.slug)
+    assert artifacts.get_placement(mention.claim_id).linked_entity_ids == [project.entity_id]
+    assert artifacts.get_consolidated_fact("fact-mention").linked_entity_ids == [project.entity_id]
+    assert f"[[{project.slug}]]" not in wiki.get(person.slug).content
+    assert all(edge.target != project.slug for edge in wiki.get(person.slug).related)
+
+    independent = claim("independent", "The project organizes local records.")
+    place(artifacts, independent, project, "overview")
+    created = materializer.regenerate({project.entity_id})
+    assert person.slug in created.updated_slugs
+    assert shown_links() == [{"entity_id": project.entity_id, "slug": project.slug, "title": project.title}]
+
+    artifacts.save_entity(replace(project, title="Revised project name"))
+    renamed = materializer.regenerate({project.entity_id})
+    assert person.slug in renamed.updated_slugs
+    assert shown_links()[0]["title"] == "Revised project name"
+
+    independent.status = "retracted"
+    artifacts.save_claim(independent)
+    removed = materializer.regenerate({project.entity_id})
+    assert project.slug in removed.deleted_slugs and person.slug in removed.updated_slugs
+    assert not shown_links() and f"[[{project.slug}]]" not in wiki.get(person.slug).content
+    assert artifacts.get_placement(mention.claim_id).linked_entity_ids == [project.entity_id]
+    version = wiki.get(person.slug).version
+    unchanged = materializer.regenerate({person.entity_id, project.entity_id})
+    assert not unchanged.changed_pages and wiki.get(person.slug).version == version
+
+
+def test_pages_created_together_can_link_to_later_rendered_destinations(tmp_path):
+    artifacts, wiki, materializer, _, project = setup_store(tmp_path)
+    person = artifacts.create_entity("person", "Rae")
+    assert person.entity_id < project.entity_id
+    place(artifacts, claim("mention", "Rae reviewed the project."), person, "timeline",
+          links=[project.entity_id])
+    place(artifacts, claim("context", "The project organizes local records."), project, "overview")
+    result = materializer.regenerate({person.entity_id, project.entity_id})
+    assert {person.slug, project.slug} <= result.created_slugs
+    assert f"[[{project.slug}]]" in wiki.get(person.slug).content
+    for page in wiki.list_all():
+        assert all(wiki.exists(edge.target) for edge in page.related)
+        for section in page.sections:
+            for item in section["items"]:
+                if item["kind"] == "link":
+                    assert wiki.exists(item["slug"])
+                assert all(wiki.exists(link["slug"]) for link in item.get("links", []))
 
 
 def test_removing_project_role_regenerates_both_endpoint_views(tmp_path):

@@ -5401,3 +5401,39 @@ remain separate gates.
   are observations, not an isolated speed comparison. No code/configuration
   changed in the running benchmark checkout, and its results do not validate
   this later fix. Full benchmark/source review continues separately.
+
+### 2026-09-17 — Publish both sides of ownership transfers atomically
+
+- Frozen sample3 session 7 exposes a publication defect. Claim
+  `claim-2b3349eda8df63fd` moves from `person-john` to
+  `topic-resource-inequality`; the old owner's grouping fails, but the new
+  owner's fact and placement override still commit. The claim then belongs to
+  both `fact-53cd1c38258a` and `fact-4945c545dd8b`. Exact references resolve,
+  yet the destination page repeats the claim. The inverse failure can remove
+  its only published view while preserving the canonical claim.
+- Product invariant: moving published evidence requires both affected owners'
+  views to commit together. Resolve failure scope over exact prior/proposed
+  owner IDs, including transfer chains. Restore prior facts and suppress fact
+  deletions/placement overrides throughout that scope; independent additions
+  can still publish. Existing retry handling records the dependent failures.
+  A global truth-review failure also holds staged maintenance because its
+  proposed placements have not passed fact resolution.
+- No new model call, prompt/schema change, semantic rule, persisted artifact,
+  or fallback synthesis. This is publication atomicity; configured-model proof
+  is not needed to change an exact transaction boundary. The frozen benchmark
+  is not modified and does not validate this separately integrated fix.
+- Three model-boundary failure-injection controls first reproduce duplicate or
+  missing published membership; a fourth reproduces unheld older maintenance
+  after truth-review failure. The tests run the actual owner resolver, Build
+  commit, database and page materializer around supplied decisions. They cover
+  failure at either end or the middle of a transfer chain, an independent
+  successful addition, unchanged prior facts/pages, successful transfer and
+  successful retry. Early test-harness fixes corrected a mismatched page owner,
+  queued existing maintenance explicitly, and supplied the required queue option.
+- Focused resolver/Build/commit/review suites: **76 passed in 5.46s**. Full
+  structural suite: **839 passed, 75 integration deselected in 35.32s**; log
+  `test_outputs/audit-followthrough/ownership-atomicity-full.log`. Ruff and diff
+  check pass. This verifies storage/publication behavior, not model meaning.
+- The read-only snapshot inspection now also records duplicate fact membership
+  and fact/placement owner disagreement. These complement citation/link checks;
+  none establishes semantic support, useful coverage, or release readiness.

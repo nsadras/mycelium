@@ -60,7 +60,7 @@ class FactResolutionResult:
 
 
 class FactResolver:
-    """Resolve bounded additions; preserve atomicity when changing existing ownership."""
+    """Resolve bounded additions; publish ownership transfers atomically."""
 
     _MAX_UNREPRESENTED_PER_GROUPING = 12
     _MAX_ADDITIONS_WITH_HISTORY = 12
@@ -82,9 +82,11 @@ class FactResolver:
         reference_replacements: dict[str, list[ClaimEntityReference]] | None = None,
     ) -> FactResolutionResult:
         result = FactResolutionResult()
+        prior_placements = {
+            item.claim_id: item for item in self.artifacts.list_placements()
+        }
         placement_by_claim = {
-            item.claim_id: item
-            for item in [*self.artifacts.list_placements(), *placements]
+            **prior_placements, **{item.claim_id: item for item in placements}
         }
         existing_facts = self.artifacts.list_consolidated_facts()
         entities = {entity.entity_id: entity for entity in self.artifacts.list_entities()}
@@ -96,12 +98,16 @@ class FactResolver:
         )
         if truth.failure_claim_ids:
             # A failed comparison never publishes unchecked additions. Prior
-            # facts remain intact and these exact inputs stay retryable.
+            # facts remain intact. Hold staged maintenance too: no owner has
+            # resolved its facts against those proposed placement changes.
+            blocked_claim_ids = truth.failure_claim_ids | {
+                placement.claim_id for placement in placements
+            }
             result.facts = [f for f in existing_facts if f.owner_entity_id in affected_entity_ids]
             result.failures.append(FactResolutionFailure(
-                owner_entity_id="", claim_ids=sorted(truth.failure_claim_ids),
+                owner_entity_id="", claim_ids=sorted(blocked_claim_ids),
                 raw_log_entry_ids=sorted({
-                    p.raw_log_entry_id for cid in truth.failure_claim_ids
+                    p.raw_log_entry_id for cid in blocked_claim_ids
                     for p in self.artifacts.get_claim(cid).provenance if p.raw_log_entry_id
                 }), reason="; ".join(truth.errors), partial=True,
             ))
@@ -195,7 +201,64 @@ class FactResolver:
                 fact.fact_id for fact in owner_existing
                 if fact.fact_id not in output_ids
             )
+        self._hold_failed_transfers(
+            result, placement_by_claim, prior_placements, existing_facts
+        )
         return result
+
+    def _hold_failed_transfers(
+        self,
+        result: FactResolutionResult,
+        placements: dict[str, ClaimPlacement],
+        prior_placements: dict[str, ClaimPlacement],
+        existing_facts: list[ConsolidatedFact],
+    ) -> None:
+        # Ownership transfer is one publication operation: both owners must
+        # succeed. Retaining one owner's old group while publishing the other
+        # side can duplicate a claim; deleting it first can lose its only view.
+        failed = result.failed_owner_ids
+        if not failed:
+            return
+        transfers = [
+            {prior.owner_entity_id, placement.owner_entity_id}
+            for cid, placement in placements.items()
+            if (prior := prior_placements.get(cid)) is not None
+            and prior.owner_entity_id and placement.owner_entity_id
+            and prior.owner_entity_id != placement.owner_entity_id
+        ]
+        held = set(failed)
+        while True:
+            expanded = held | {eid for pair in transfers if pair & held for eid in pair}
+            if expanded == held:
+                break
+            held = expanded
+        for owner_id in sorted(held - failed):
+            claim_ids = sorted(
+                cid for cid, placement in placements.items()
+                if placement.owner_entity_id == owner_id
+                or ((prior := prior_placements.get(cid)) is not None
+                    and prior.owner_entity_id == owner_id)
+            )
+            result.failures.append(FactResolutionFailure(
+                owner_entity_id=owner_id,
+                claim_ids=claim_ids,
+                raw_log_entry_ids=sorted({
+                    p.raw_log_entry_id for cid in claim_ids
+                    for p in self.artifacts.get_claim(cid).provenance
+                    if p.raw_log_entry_id
+                }),
+                reason="Ownership transfer depends on failed fact resolution; "
+                f"previous views retained for linked owners {sorted(held)}.",
+            ))
+        retained = [f for f in existing_facts if f.owner_entity_id in held]
+        result.facts = [f for f in result.facts if f.owner_entity_id not in held] + retained
+        result.deleted_fact_ids.difference_update(f.fact_id for f in retained)
+        result.placements = [
+            placement for placement in result.placements
+            if placement.owner_entity_id not in held
+            and ((prior := prior_placements.get(placement.claim_id)) is None
+                 or prior.owner_entity_id not in held)
+        ]
 
     async def _resolve_owner(
         self,

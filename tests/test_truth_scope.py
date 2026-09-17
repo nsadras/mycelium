@@ -143,7 +143,7 @@ async def test_failed_global_review_keeps_prior_facts_and_additions_retryable(tm
         affected_entity_ids=set(entities), incoming_claim_ids={"right"}, dream_run_id="test")
     assert result.facts == prior
     assert not result.proposals and not result.deleted_fact_ids and not result.placements
-    assert result.failures[0].partial and result.failures[0].claim_ids == ["right"]
+    assert result.failures[0].partial and result.failures[0].claim_ids == ["left", "right"]
     assert artifacts.get_claim("left").status == "active"
 
 

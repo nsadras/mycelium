@@ -1,3 +1,4 @@
+from tests.discovery_support import discovery_response
 import json
 from unittest.mock import AsyncMock
 
@@ -250,7 +251,7 @@ def source_first_responses(plan):
                 ],
             }
     return [
-        {"subjects": discovery},
+        discovery_response({"subjects": discovery}),
         *matches,
         *([{"page_admissions": admissions}] if admissions else []),
     ]
@@ -529,24 +530,26 @@ async def test_review_assignment_binds_one_discovered_subject_without_hiding_the
         )
     )
     llm.call_structured.side_effect = [
-        {
-            "subjects": [
-                {
-                    "entity_type": "person",
-                    "title": "The user",
-                    "description": "The person preparing the exhibit",
-                    "alternate_names": [],
-                    "supporting_evidence": ["C001"],
-                },
-                {
-                    "entity_type": "project",
-                    "title": "Exhibit",
-                    "description": "The exhibit being prepared",
-                    "alternate_names": [],
-                    "supporting_evidence": ["C001"],
-                },
-            ]
-        },
+        discovery_response(
+            {
+                "subjects": [
+                    {
+                        "entity_type": "person",
+                        "title": "The user",
+                        "description": "The person preparing the exhibit",
+                        "alternate_names": [],
+                        "supporting_evidence": ["C001"],
+                    },
+                    {
+                        "entity_type": "project",
+                        "title": "Exhibit",
+                        "description": "The exhibit being prepared",
+                        "alternate_names": [],
+                        "supporting_evidence": ["C001"],
+                    },
+                ]
+            }
+        ),
         {
             "assignments": {
                 "R001": {"subject_alias": "S001", "reason": "The reviewed person"}

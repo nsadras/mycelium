@@ -14,6 +14,7 @@ def user(claims=None):
 
 def person(support):
     return {
+        "subject_id": "S001",
         "supporting_evidence": support,
         "description": "A reported person",
         "entity_type": "person",
@@ -29,14 +30,25 @@ def test_declared_user_is_required_even_without_a_claim_about_them():
     assert list(schema.model_json_schema()["properties"]) == [
         "declared_user",
         "subjects",
+        "participant_subjects",
     ]
-    schema.model_validate({"declared_user": user(), "subjects": [person(["C001"])]})
+    schema.model_validate(
+        {
+            "declared_user": user(),
+            "subjects": [person(["C001"])],
+            "participant_subjects": {},
+        }
+    )
     with pytest.raises(ValidationError):
         schema.model_validate({"subjects": [person(["C001"])]})
     for alias in ["P001", "P002"]:
         with pytest.raises(ValidationError):
             schema.model_validate(
-                {"declared_user": user(), "subjects": [person([alias, "C001"])]}
+                {
+                    "declared_user": user(),
+                    "subjects": [person([alias, "C001"])],
+                    "participant_subjects": {},
+                }
             )
 
 
@@ -46,7 +58,9 @@ def test_user_support_requires_distinct_exact_claim_ids(claims):
         ["C001", "C002"], {"P001": "user"}, {}, canonical_user=True
     )
     with pytest.raises(ValidationError):
-        schema.model_validate({"declared_user": user(claims), "subjects": []})
+        schema.model_validate(
+            {"declared_user": user(claims), "subjects": [], "participant_subjects": {}}
+        )
 
 
 def test_other_participants_remain_required_and_cannot_become_the_user():
@@ -54,7 +68,11 @@ def test_other_participants_remain_required_and_cannot_become_the_user():
         ["C001"], {"P001": "user", "P002": "participant"}, {}, canonical_user=True
     )
     schema.model_validate(
-        {"declared_user": user(), "subjects": [person(["P002", "C001"])]}
+        {
+            "declared_user": user(),
+            "subjects": [person(["C001"])],
+            "participant_subjects": {"P002": {"subject_id": "S001"}},
+        }
     )
     with pytest.raises(ValidationError):
         schema.model_validate({"declared_user": user(["C001"]), "subjects": []})
@@ -64,5 +82,13 @@ def test_other_participants_remain_required_and_cannot_become_the_user():
 
 def test_profile_without_canonical_user_keeps_role_occurrences_as_people():
     schema = subject_discovery_model(["C001"], {"P001": "user"}, {})
-    assert list(schema.model_json_schema()["properties"]) == ["subjects"]
-    schema.model_validate({"subjects": [person(["P001"])]})
+    assert list(schema.model_json_schema()["properties"]) == [
+        "subjects",
+        "participant_subjects",
+    ]
+    schema.model_validate(
+        {
+            "subjects": [person([])],
+            "participant_subjects": {"P001": {"subject_id": "S001"}},
+        }
+    )

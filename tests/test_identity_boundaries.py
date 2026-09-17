@@ -1,3 +1,4 @@
+from tests.discovery_support import discovery_response
 from unittest.mock import AsyncMock
 
 import pytest
@@ -23,17 +24,19 @@ async def test_inferred_type_does_not_remove_existing_identity_candidates(
 
         monkeypatch.setattr(SemanticCandidates, "select", select)
         llm.call_structured.side_effect = [
-            {
-                "subjects": [
-                    {
-                        "entity_type": "artifact",
-                        "title": "Renamed prototype",
-                        "description": "The source-described prototype",
-                        "alternate_names": [],
-                        "supporting_evidence": ["C001"],
-                    }
-                ]
-            },
+            discovery_response(
+                {
+                    "subjects": [
+                        {
+                            "entity_type": "artifact",
+                            "title": "Renamed prototype",
+                            "description": "The source-described prototype",
+                            "alternate_names": [],
+                            "supporting_evidence": ["C001"],
+                        }
+                    ]
+                }
+            ),
             {
                 "decision": {
                     "resolution": "existing",
@@ -72,17 +75,19 @@ async def test_declared_speaker_candidates_remain_people(tmp_path, monkeypatch):
 
         monkeypatch.setattr(SemanticCandidates, "select", select)
         llm.call_structured.side_effect = [
-            {
-                "subjects": [
-                    {
-                        "entity_type": "person",
-                        "title": "Namesake",
-                        "description": "A speaker in the source",
-                        "alternate_names": [],
-                        "supporting_evidence": ["P001"],
-                    }
-                ]
-            },
+            discovery_response(
+                {
+                    "subjects": [
+                        {
+                            "entity_type": "person",
+                            "title": "Namesake",
+                            "description": "A speaker in the source",
+                            "alternate_names": [],
+                            "supporting_evidence": ["P001"],
+                        }
+                    ]
+                }
+            ),
             {
                 "decision": {
                     "resolution": "existing",
@@ -123,17 +128,19 @@ async def test_final_identity_name_and_aliases_replace_discovery_proposals(
         if resolution == "review_required":
             final["candidate_entity_ids"] = []
         llm.call_structured.side_effect = [
-            {
-                "subjects": [
-                    {
-                        "entity_type": "project",
-                        "title": "Incorrect proposal",
-                        "description": "A discovered subject",
-                        "alternate_names": ["Incorrect alias"],
-                        "supporting_evidence": ["C001"],
-                    }
-                ]
-            },
+            discovery_response(
+                {
+                    "subjects": [
+                        {
+                            "entity_type": "project",
+                            "title": "Incorrect proposal",
+                            "description": "A discovered subject",
+                            "alternate_names": ["Incorrect alias"],
+                            "supporting_evidence": ["C001"],
+                        }
+                    ]
+                }
+            ),
             {"decision": final},
         ]
         result = await IdentityPlanner(llm, memory.artifacts, memory.config).plan(

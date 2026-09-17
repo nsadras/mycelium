@@ -1,5 +1,7 @@
 """Explicit neutral decisions for lifecycle mechanics; native probes prove semantics."""
 
+from tests.discovery_support import discovery_response
+
 import json
 
 
@@ -14,17 +16,19 @@ def lifecycle_response(_system, user, schema, **kwargs):
             "facets": {"times": [], "inference_basis": None},
         }
     if stage == "dream-subject-discovery":
-        return {
-            "subjects": [
-                {
-                    "entity_type": "person",
-                    "title": "You",
-                    "description": "The statement concerns the user.",
-                    "supporting_evidence": ["C001"],
-                    "alternate_names": [],
-                }
-            ]
-        }
+        return discovery_response(
+            {
+                "subjects": [
+                    {
+                        "entity_type": "person",
+                        "title": "You",
+                        "description": "The statement concerns the user.",
+                        "supporting_evidence": ["C001"],
+                        "alternate_names": [],
+                    }
+                ]
+            }
+        )
     if stage == "dream-subject-identity":
         return {
             "decision": {

@@ -1,3 +1,4 @@
+from tests.discovery_support import discovery_response
 import json
 from datetime import datetime
 from dataclasses import replace
@@ -242,7 +243,7 @@ def split_scope_plan(plan: dict, *, registry=(), existing_titles=None) -> list[d
             if eid in selected_pages
             else NO_PAGE_BASIS,
         }
-    discovery = {"subjects": discovered}
+    discovery = discovery_response({"subjects": discovered})
     if declared_user is not None:
         discovery["declared_user"] = declared_user
     resolved_ids = {
@@ -636,14 +637,16 @@ async def test_invalid_routing_batch_does_not_discard_other_batches(tmp_path):
     async def response(system, user, output_type, **kwargs):
         nonlocal routing_calls
         if "subjects" in output_type.model_fields:
-            return {
-                "declared_user": {
-                    "description": "The user whose preferences are recorded",
-                    "supporting_claims": ["C001"],
-                    "alternate_names": [],
-                },
-                "subjects": [],
-            }
+            return discovery_response(
+                {
+                    "declared_user": {
+                        "description": "The user whose preferences are recorded",
+                        "supporting_claims": ["C001"],
+                        "alternate_names": [],
+                    },
+                    "subjects": [],
+                }
+            )
         if "decision" in output_type.model_fields:
             return {
                 "decision": {

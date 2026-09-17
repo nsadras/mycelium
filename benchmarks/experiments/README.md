@@ -59,6 +59,19 @@ timings in fresh directories, and perform three trials per neutral case:
 These small contract probes do not establish benchmark recall, QA accuracy or
 compute improvements on large stores.
 
+Required source-participant assignments have direct and native routing probes:
+
+```bash
+.venv/bin/python -m benchmarks.experiments.participant_subject_probes
+.venv/bin/python -m benchmarks.experiments.participant_subject_probes --pipeline \
+  --case reporting_only_speaker --case same_speaker_two_sources \
+  --case different_people_same_name
+```
+
+`--replay-failure PATH` accepts a retained discovery failure request. Completion
+means the schema validated and routing finished; inspect `results.json` against
+the source to assess assignment, identity and ownership separately.
+
 ## Current source attribution and page review
 
 These probes use the configured host model in `mycelium.toml` and retain fresh

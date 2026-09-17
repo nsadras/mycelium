@@ -57,6 +57,11 @@ state, and clean fact prose failed despite earlier narrow probes. Benchmark
 lexical metrics now explicitly require source review and cannot assert release
 readiness. See DEVLOG for retained failures, source packs and validation.
 
+Required speaker assignments now pass21 direct and9 native binding checks with
+zero retries. The native same-name cases still expose a separate duplicate
+canonical-user identity; source-role context must reach the matching stage.
+Quoted-name experiments remain unaccepted and outside production.
+
 1. Finish A–G structural acceptance before taking benchmark scores as evidence.
 2. Prove H–M contracts with the configured host Ollama model: small neutral
    positive/negative cases, three trials, no critical semantic mistakes. Retain

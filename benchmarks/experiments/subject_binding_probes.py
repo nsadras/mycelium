@@ -92,6 +92,9 @@ async def main():
                     debug_label="source-subject-bindings-probe",
                 )
             ).model_dump()
+            subjects = {s["subject_id"]: s for s in response["subjects"]}
+            for pid, assignment in response["participant_subjects"].items():
+                subjects[assignment["subject_id"]]["supporting_evidence"].append(pid)
             # Exact occurrence IDs must stay separate when they bind different canonical identities.
             passed = all(
                 len(

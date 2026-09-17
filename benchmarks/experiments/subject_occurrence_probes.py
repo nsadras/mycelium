@@ -135,7 +135,8 @@ async def main(args):
                         )).model_dump()
                 ids = set(evidence["claims"]) | set(roles)
                 misplaced = [alias for subject in output["subjects"] for alias in subject["alternate_names"] if alias in ids]
-                distinct = bool(replay) or all(sum(p in s["supporting_evidence"] for p in roles) <= 1 for s in output["subjects"])
+                assignments = [row["subject_id"] for row in output["participant_subjects"].values()]
+                distinct = bool(replay) or len(assignments) == len(set(assignments))
                 record.update(output=output, passed=not misplaced and distinct)
             except Exception as exc:
                 record.update(passed=False, error=f"{type(exc).__name__}: {exc}")

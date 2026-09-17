@@ -70,11 +70,19 @@ class IdentityPlanner:
         ).model_dump()
         assignments = {}
         discovered_subjects = {
-            f"S{i:03d}": subject for i, subject in enumerate(discovered["subjects"], 1)
+            subject["subject_id"]: {
+                **subject,
+                "supporting_evidence": list(subject["supporting_evidence"]),
+            }
+            for subject in discovered["subjects"]
         }
+        for alias, assignment in discovered["participant_subjects"].items():
+            discovered_subjects[assignment["subject_id"]]["supporting_evidence"].append(
+                alias
+            )
         if user_participants:
             declared = discovered["declared_user"]
-            discovered_subjects[f"S{len(discovered_subjects) + 1:03d}"] = {
+            discovered_subjects["declared_user"] = {
                 "entity_type": "person",
                 "title": active["you"].title,
                 "description": declared["description"],

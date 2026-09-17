@@ -39,7 +39,9 @@ def test_structured_model_contracts_derive_from_the_ontology() -> None:
     identity_definitions = subject_discovery_model(["C001"], {}, {}).model_json_schema()["$defs"]
     identity_types = set()
     for definition in identity_definitions.values():
-        field = definition["properties"]["entity_type"]
+        field = definition["properties"].get("entity_type")
+        if field is None:
+            continue
         identity_types.update(field.get("enum", [field["const"]] if "const" in field else []))
 
     assert set(claim_schema["properties"]["claim_type"]["enum"]) == set(CLAIM_TYPES)

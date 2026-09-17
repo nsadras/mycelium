@@ -1,3 +1,4 @@
+from tests.discovery_support import discovery_response
 from unittest.mock import AsyncMock
 
 import pytest
@@ -103,26 +104,30 @@ async def test_declared_user_identity_respects_configured_profile(
         memory.artifacts.save_claim(item.claim)
         llm = AsyncMock()
         llm.call_structured.side_effect = [
-            {
-                "declared_user": {
-                    "supporting_claims": [],
-                    "description": "The source speaker",
-                    "alternate_names": [],
-                },
-                "subjects": [],
-            }
-            if profile == "user"
-            else {
-                "subjects": [
-                    {
-                        "entity_type": "person",
-                        "title": "Rae",
+            discovery_response(
+                {
+                    "declared_user": {
+                        "supporting_claims": [],
                         "description": "The source speaker",
                         "alternate_names": [],
-                        "supporting_evidence": ["P001"],
-                    }
-                ]
-            },
+                    },
+                    "subjects": [],
+                }
+            )
+            if profile == "user"
+            else discovery_response(
+                {
+                    "subjects": [
+                        {
+                            "entity_type": "person",
+                            "title": "Rae",
+                            "description": "The source speaker",
+                            "alternate_names": [],
+                            "supporting_evidence": ["P001"],
+                        }
+                    ]
+                }
+            ),
             {
                 "decision": {
                     "resolution": "new",

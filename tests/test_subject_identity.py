@@ -6,41 +6,78 @@ from mycelium.subject_identity import subject_identity_model
 from mycelium.subject_review_bindings import subject_review_model
 
 
-def discovered(kind="person", evidence=None):
+def discovered(kind="person", evidence=None, subject_id="S001"):
     return {
+        "subject_id": subject_id,
         "entity_type": kind,
         "title": "Subject",
         "description": "Grounded subject",
         "alternate_names": [],
-        "supporting_evidence": evidence or ["C001"],
+        "supporting_evidence": evidence if evidence is not None else ["C001"],
     }
 
 
 def test_discovery_cannot_change_reviewed_type_or_bind_participant_to_project():
+    from copy import deepcopy
+
     schema = subject_discovery_model(["C001"], {"P001": "user"}, {"R001": "project"})
-    schema.model_validate(
-        {"subjects": [discovered(evidence=["P001"]), discovered("project", ["R001"])]}
-    )
-    for subjects in [
-        [discovered(evidence=["P001", "R001"])],
-        [discovered("project", ["P001", "R001"])],
-        [discovered(evidence=["P001"])],
-        [discovered(evidence=["P001", "P001"]), discovered("project", ["R001"])],
-        [
-            discovered(evidence=["P001"]),
-            discovered(evidence=["P001"]),
-            discovered("project", ["R001"]),
-        ],
+    valid = {
+        "subjects": [discovered(evidence=[]), discovered("project", ["R001"], "S002")],
+        "participant_subjects": {"P001": {"subject_id": "S001"}},
+    }
+    schema.model_validate(valid)
+    invalid = []
+    for binding in [
+        {},
+        {"P001": {"subject_id": "S002"}},
+        {"P001": {"subject_id": "S003"}},
+        {"P001": {"subject_id": "S001"}, "P002": {"subject_id": "S001"}},
     ]:
+        invalid.append({**valid, "participant_subjects": binding})
+    for change in [
+        {"supporting_evidence": ["P001"]},
+        {"supporting_evidence": ["R001"]},
+        {"supporting_evidence": ["C001", "C001"]},
+        {"subject_id": "S002"},
+    ]:
+        item = deepcopy(valid)
+        item["subjects"][0].update(change)
+        invalid.append(item)
+    item = deepcopy(valid)
+    item["subjects"][1]["supporting_evidence"] = []
+    invalid.append(item)
+    for item in invalid:
         with pytest.raises(ValidationError):
-            schema.model_validate({"subjects": subjects})
+            schema.model_validate(item)
+
+
+def test_multiple_participant_occurrences_can_bind_one_grounded_person():
+    schema = subject_discovery_model(["C001"], {"P001": None, "P002": None}, {})
+    result = schema.model_validate(
+        {
+            "subjects": [discovered(evidence=[])],
+            "participant_subjects": {
+                "P001": {"subject_id": "S001"},
+                "P002": {"subject_id": "S001"},
+            },
+        }
+    )
+    assert result.subjects[0].supporting_evidence == []
 
 
 def test_discovery_requires_exact_grounding_ids():
     schema = subject_discovery_model(["C001"], {}, {})
     with pytest.raises(ValidationError):
-        schema.model_validate({"subjects": [discovered(evidence=["invented"])]})
-    assert schema.model_validate({"subjects": []}).subjects == []
+        schema.model_validate(
+            {
+                "subjects": [discovered(evidence=["invented"])],
+                "participant_subjects": {},
+            }
+        )
+    assert (
+        schema.model_validate({"subjects": [], "participant_subjects": {}}).subjects
+        == []
+    )
     with pytest.raises(ValueError, match="source evidence"):
         subject_discovery_model([], {}, {})
 

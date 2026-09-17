@@ -10,6 +10,7 @@ from datetime import datetime
 from mycelium import prompts
 from mycelium.artifacts import (
     ArtifactStore,
+    ClaimEntityReference,
     ClaimPlacement,
     ConsolidatedFact,
     EntityRecord,
@@ -75,6 +76,7 @@ class FactResolver:
         dream_run_id: str,
         seed_entities: list[EntityRecord] | None = None,
         excluded_claim_ids: frozenset[str] = frozenset(),
+        reference_replacements: dict[str, list[ClaimEntityReference]] | None = None,
     ) -> FactResolutionResult:
         result = FactResolutionResult()
         placement_by_claim = {
@@ -87,6 +89,7 @@ class FactResolver:
         truth = await TruthReviewer(self.llm, self.artifacts).review(
             incoming_claim_ids, placement_by_claim, entities, dream_run_id=dream_run_id,
             excluded_claim_ids=excluded_claim_ids,
+            reference_replacements=reference_replacements,
         )
         if truth.failure_claim_ids:
             # A failed comparison never publishes unchecked additions. Prior
@@ -494,12 +497,13 @@ class FactResolver:
     async def _render_group(self, owner_text: str, members: list[MemoryClaim]) -> str:
         if len(members) == 1:
             return display_claim_text(members[0])
-        # Local, stable aliases keep unrelated groups and changing cohort IDs out
-        # of this request's durable cache key. Only the actual evidence matters.
-        canonical = {
-            f"C{index:03d}": self._canonical_record(claim)
-            for index, claim in enumerate(sorted(members, key=lambda c: c.claim_id), 1)
-        }
+        # Text rendering makes no membership decisions. Ordered records retain
+        # all content and temporal context without introducing citation labels
+        # that could be copied into prose. Ordering keeps durable reuse stable.
+        canonical = [
+            self._canonical_record(claim)
+            for claim in sorted(members, key=lambda c: c.claim_id)
+        ]
         system, user = fact_text_prompt(
             owner_text, json.dumps(canonical, ensure_ascii=False, indent=2, sort_keys=True),
         )

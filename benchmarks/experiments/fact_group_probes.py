@@ -104,7 +104,7 @@ async def main():
                 else:
                     system, user = fact_text_prompt(
                         owner,
-                        json.dumps({alias: canonical[alias] for alias in members}),
+                        json.dumps([canonical[alias] for alias in members]),
                     )
                     text = FactText.model_validate(
                         await memory.llm.call_structured(

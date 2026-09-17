@@ -62,6 +62,13 @@ zero retries. The native same-name cases still expose a separate duplicate
 canonical-user identity; source-role context must reach the matching stage.
 Quoted-name experiments remain unaccepted and outside production.
 
+Follow-through: source-role context now fixes the duplicate canonical user in all
+three native counterexamples (12direct/9native identity checks), but downstream
+attribution still omits the user's own part of that compound statement. Truth
+comparison now receives current-build references (12native checks), and prose
+rendering omits unused local claim labels (27native builds; persisted reuse holds).
+The naming/reasoning proposals remain rejected; full longitudinal gates stay open.
+
 1. Finish A–G structural acceptance before taking benchmark scores as evidence.
 2. Prove H–M contracts with the configured host Ollama model: small neutral
    positive/negative cases, three trials, no critical semantic mistakes. Retain

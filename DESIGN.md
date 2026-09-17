@@ -202,12 +202,20 @@ Important behavior:
 - `source_only` is not a model-authored scope outcome: every admitted claim is placed or explicitly deferred.
 - Subject discovery first inventories source referents and types without exposing the identity registry or
   prior review metadata. A separate structured assignment binds reviewed identity occurrences to those subjects.
+  Every external speaker has a required assignment to a returned person subject; speaker assignments are distinct
+  from supporting claims. Identity matching receives participant-role context for the cited sources, including
+  the exact canonical user binding even when a discovered mention lacks a direct speaker assignment.
   Explicit source user roles and accepted human reviews then constrain exact canonical identity IDs. Remaining
   subjects receive registry candidates across inferred types, at most 24 each, and a structured existing/new/review-required
   decision. Declared speakers remain restricted to people. Matching retains canonical types and establishes the
   preferred source-backed title; discovery labels cannot overwrite that decision. Candidate retrieval uses model embeddings with changed-document and query reuse; it never uses
   lexical identity rules. These stages preserve cited claim/participant evidence for inspection. Candidate
   limits bound individual matching requests, not the cost of reading the full identity history.
+- Truth comparison receives the current build's successful identity-reference replacements before publication.
+  Empty replacements clear stale automatic context, failed/unprocessed scopes retain prior context, and manual
+  reviews survive. Preparing this view does not write references; the Dream commit publishes the same decisions.
+- Fact grouping uses local claim IDs to select membership. Text-only rendering receives the ordered canonical
+  records without those temporary aliases, retaining all statement and temporal fields.
 - Page usefulness is independent of identity confidence. A known identity can exist without a page; the persisted
   state is still named `provisional`, but there is no maturity threshold or continuity verifier. Pages without
   selected statements are not manufactured from participant encounters. External speakers who only report facts about

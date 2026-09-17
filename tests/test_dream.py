@@ -882,7 +882,28 @@ async def test_updating_existing_subject_does_not_replan_historical_neighborhood
 
 
 @pytest.mark.asyncio
-async def test_dream_routes_claim_and_materializes_deterministic_page(tmp_path):
+async def test_dream_routes_claim_and_materializes_deterministic_page(
+    tmp_path, monkeypatch
+):
+    from mycelium.truth_review import TruthReviewer
+
+    original_review = TruthReviewer.review
+    staged = {}
+
+    async def inspect_truth_context(reviewer, *args, **kwargs):
+        staged.update(kwargs["reference_replacements"])
+        for cid, refs in staged.items():
+            assert refs
+            assert not any(
+                ref.role == "canonical_owner"
+                for ref in reviewer.artifacts.list_entity_references(
+                    claim_id=cid, status="active"
+                )
+            )
+            assert all(ref.dream_run_id == kwargs["dream_run_id"] for ref in refs)
+        return await original_review(reviewer, *args, **kwargs)
+
+    monkeypatch.setattr(TruthReviewer, "review", inspect_truth_context)
     dream, llm, wiki, logs, artifacts = build_dream(
         tmp_path, llm_response=new_scope("C001", "Memory Design")
     )
@@ -920,6 +941,9 @@ async def test_dream_routes_claim_and_materializes_deterministic_page(tmp_path):
     references = artifacts.list_entity_references(
         claim_id=claim.claim_id, status="active"
     )
+    assert {ref.reference_id for ref in staged[claim.claim_id]} == {
+        ref.reference_id for ref in references if ref.origin != "manual"
+    }
     assert {(item.role, item.entity_id) for item in references} == {
         ("context", None),
         ("canonical_owner", entity.entity_id),

@@ -198,9 +198,14 @@ class IdentityPlanner:
                     {
                         "claims": selected_claims,
                         "participants": {
-                            p: value
+                            p: {
+                                **value,
+                                "canonical_entity_id": "you"
+                                if value["role"] == "user" and "you" in active
+                                else None,
+                            }
                             for p, value in evidence["participants"].items()
-                            if p in support
+                            if value["source_id"] in source_ids
                         },
                         "sources": {
                             sid: value

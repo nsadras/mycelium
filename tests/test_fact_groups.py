@@ -60,9 +60,9 @@ async def test_manual_fact_keeps_exact_membership_and_new_evidence_is_visible(
         for reserved in ("needs_review", "memory_map"):
             assert f"{reserved}:" not in user
             with pytest.raises(ValidationError):
-                _schema.model_validate({
-                    "groups": [{**group("C001"), "section_key": reserved}]
-                })
+                _schema.model_validate(
+                    {"groups": [{**group("C001"), "section_key": reserved}]}
+                )
         return {"groups": [group("C001")]}
 
     llm.call_structured.side_effect = respond
@@ -130,6 +130,12 @@ async def test_group_render_request_is_stable_under_member_order_and_ignores_oth
     requests = llm.call_structured.await_args_list
     assert requests[0] == requests[1]
     assert unrelated.text not in requests[0].args[1]
+    import json
+
+    records = json.loads(requests[0].args[1].split("CANONICAL STORED CLAIMS\n", 1)[1])
+    assert isinstance(records, list)
+    assert [record["text"] for record in records] == [first.text, second.text]
+    assert all("temporal" in record and "source_times" in record for record in records)
     assert await resolver._render_group("You", [first]) == first.text
     assert llm.call_structured.await_count == 2
 

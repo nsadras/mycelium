@@ -26,7 +26,7 @@ class TruthReviewer:
     def __init__(self, llm, artifacts: ArtifactStore):
         self.llm, self.artifacts = llm, artifacts
 
-    def _record(self, claim, placements, entities, sources):
+    def _record(self, claim, placements, entities, sources, reference_replacements):
         placement = placements.get(claim.claim_id)
         owner = entities.get(placement.owner_entity_id) if placement else None
         citations = []
@@ -48,26 +48,48 @@ class TruthReviewer:
                 })
         if not citations:
             raise ValueError(f"Claim {claim.claim_id} has no cited source segments")
+        bindings = self.artifacts.list_entity_references(
+            claim_id=claim.claim_id, status="active"
+        )
+        if claim.claim_id in reference_replacements:
+            # Match the commit's exact replacement scope. An empty replacement
+            # clears stale automatic bindings; explicit human reviews survive.
+            bindings = [ref for ref in bindings if ref.origin == "manual"] + list(
+                reference_replacements[claim.claim_id]
+            )
+        if len({ref.reference_id for ref in bindings}) != len(bindings):
+            raise ValueError("Truth identity context contains duplicate reference IDs")
         return {
             "claim_id": claim.claim_id, "text": claim.text, "about": claim.about,
             "temporal_status": claim.temporal_status, "temporal": temporal_records(claim.facets),
             "page_owner": {"entity_id": owner.entity_id, "title": owner.title} if owner else None,
-            "identity_bindings": [asdict(ref) for ref in self.artifacts.list_entity_references(
-                claim_id=claim.claim_id, status="active")],
+            "identity_bindings": [asdict(ref) for ref in bindings],
             "citations": citations,
         }
 
-    def _records(self, claims, placements, entities):
+    def _records(self, claims, placements, entities, reference_replacements=None):
         # Exact source reads and segment indexes are shared only within this
         # synchronous preparation. The next review observes all source changes.
         sources = {}
+        reference_replacements = reference_replacements or {}
+        staged_ids = set()
+        for cid, references in reference_replacements.items():
+            for ref in references:
+                if (
+                    ref.claim_id != cid
+                    or ref.status != "active"
+                    or ref.origin not in {"scope", "extraction"}
+                    or ref.reference_id in staged_ids
+                ):
+                    raise ValueError("Staged truth bindings must be unique active automatic references in their exact claim scope")
+                staged_ids.add(ref.reference_id)
         return {
-            cid: self._record(claim, placements, entities, sources)
+            cid: self._record(claim, placements, entities, sources, reference_replacements)
             for cid, claim in claims.items()
         }
 
     async def review(self, incoming_claim_ids, placements, entities, *, dream_run_id,
-                     excluded_claim_ids=frozenset()):
+                     excluded_claim_ids=frozenset(), reference_replacements=None):
         result = TruthReviewResult()
         # A retained source statement is not canonical evidence. Current-build
         # exclusions arrive before their disposition is committed to the store.
@@ -77,7 +99,10 @@ class TruthReviewer:
         if not incoming or len(claims) < 2:
             return result
         try:
-            records = self._records(claims, placements, entities)
+            if any(ref.dream_run_id != dream_run_id
+                   for refs in (reference_replacements or {}).values() for ref in refs):
+                raise ValueError("Staged truth bindings must belong to the current build")
+            records = self._records(claims, placements, entities, reference_replacements)
             reviewed_pairs = {
                 tuple(sorted((left, right)))
                 for proposal in self.artifacts.list_reconsolidation_proposals()

@@ -226,6 +226,10 @@ class ConsolidationProcess:
             for placement in [self.artifacts.placement_for_claim(route.claim_id)]
             if placement is not None and placement.owner_entity_id
         }
+        reference_replacements = {route.claim_id: [] for route in successful_routes}
+        for reference in routing.entity_references if routing is not None else []:
+            if reference.claim_id in reference_replacements:
+                reference_replacements[reference.claim_id].append(reference)
         fact_result = await self.fact_resolver.resolve(
             [placement_from_route(route) for route in successful_routes],
             affected_entity_ids={
@@ -234,6 +238,7 @@ class ConsolidationProcess:
             incoming_claim_ids=incoming_claim_ids,
             dream_run_id=run_id,
             seed_entities=retained_new_entities,
+            reference_replacements=reference_replacements,
             excluded_claim_ids=frozenset(
                 cid for cid, decision in decisions.items()
                 if decision.disposition == "excluded_source_policy"

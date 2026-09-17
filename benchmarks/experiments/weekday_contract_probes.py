@@ -83,6 +83,25 @@ CASES = [
         "The exhibition opens on 2031-06-18.",
         {("event_time", "2031-06-18")},
     ),
+    (
+        "past_deadline", "2031-05-06",
+        "The permit application was due last Friday.",
+        {("deadline", "2031-05-02")},
+    ),
+    (
+        "same_day_deadline", "2031-05-09",
+        "I will submit the application by this Friday, today.",
+        {("deadline", "2031-05-09")},
+    ),
+    (
+        "missing_reference", None,
+        "I will return the library book this coming Monday.", set(),
+    ),
+    (
+        "undated_report", "2031-05-06",
+        "I found an undated note from an old trip: 'I will return the library book next Monday.' I do not know when it was written.",
+        set(),
+    ),
 ]
 
 
@@ -115,7 +134,9 @@ async def main(args):
                 "agent_conversation",
                 "source",
                 ["Rae"],
-                f"[new] speaker=Rae; role=user; message_time={anchor}T10:00:00\n{text}",
+                "[new] speaker=Rae; role=user"
+                + (f"; message_time={anchor}T10:00:00" if anchor else "")
+                + f"\n{text}",
             )
             schema = extraction_output_model(["new"])
             if args.correction:
@@ -175,6 +196,17 @@ async def main(args):
                 if name == "recurring_counterexample":
                     typed = bool(declarations) and all(
                         m["kind"] == "recurring" for m in declarations
+                    )
+                if name == "same_day_deadline":
+                    typed = bool(declarations)
+                if name == "missing_reference":
+                    typed = bool(declarations) and all(
+                        m["kind"] in {"weekday_occurrence", "weekday_in_week"}
+                        for m in declarations
+                    )
+                if name == "undated_report":
+                    typed = bool(declarations) and all(
+                        m["kind"] == "unresolved" for m in declarations
                     )
                 record.update(
                     output=output,

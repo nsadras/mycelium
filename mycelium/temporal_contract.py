@@ -95,7 +95,9 @@ class WeekdayInWeek(StrictTimeModel):
 class WeekdayOccurrence(StrictTimeModel):
     kind: Literal["weekday_occurrence"]
     weekday: Literal.__getitem__(WEEKDAYS)
-    direction: Literal["next", "previous", "on_or_after", "on_or_before"]
+    direction: Literal["next", "previous", "on_or_after", "on_or_before"] = Field(
+        description="Which named weekday occurrence is meant relative to the cited reference day? Use next or on_or_after for an upcoming occurrence, previous or on_or_before for a past occurrence. next/previous exclude the reference day; on_or_after/on_or_before include it. This field locates the weekday itself, independently of the action's deadline bound. A future task due by an upcoming weekday still refers to that upcoming weekday."
+    )
 
 
 class RecurringTime(StrictTimeModel):

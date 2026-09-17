@@ -4797,3 +4797,25 @@ Started `audit-daily-e2-fdcc767-20260917` with production `fdcc767`, the configu
 Two focused structural tests passed for source-policy/retraction exclusion, superseded-state preservation, exact canonical text/citations, absence of generated fact prose, no admission calls, and result/context bounds. Ruff/whitespace passed. The native arm runs after the production invocation is terminal, to avoid overlapping model work. No production changes or additional production LLM calls.
 
 E2 control clarification before running the native arm: a generated fact may bundle multiple canonical claims. Applying the same five-record cap to raw claims would restrict their evidence by construction. The control now fills the same token budget from the same bounded candidate pool, without the five-fact cap. This is a stronger simple baseline; the change preceded observing any native control result. Both focused tests still pass; no production retrieval behavior changed.
+
+
+## 2026-09-16 — E2 complete diagnostic and ranked-claims comparison
+
+Production `fdcc767` reached all nine daily-driver checkpoints; 19/19 answers,
+zero final extraction backlog, execution complete with one failed approval
+action (no pilot-date proposal). Ranked control `cccbe23` completed 19/19 on
+immutable snapshots with matched digests/configuration/evaluator. Raw judge
+10/19 vs 13/19; source review exposes overstrict family-purpose and tool-fact
+abstention expectations, retained as evaluation disagreements. Retrieval
+96.85s vs 4.07s and QA32.16s vs55.62s; control emits8.23× context characters,
+with cold-index/shared-ingestion limitations. No broad speed/accuracy claim.
+
+Runs: `benchmark_runs/audit-daily-e2-fdcc767-20260917`,
+`benchmark_runs/audit-daily-e2-ranked-cccbe23-20260917`; source-review packs in
+`benchmark_runs/audit-daily-e2-fdcc767-20260917-source-review`. Full analysis in
+`planning/audit_e2_observations_2026_09_16.md`. Production memory trace321attempts,
+2732.122s,11failed structured attempts; attribution897.700s dominates. Calendar
+source succeeds only on seventh attempt across builds. New names, explicit date
+interpretation, missed current-state change, duplicate user from tool evidence,
+and broad history rerouting need general fixes. The completed diagnostic is not
+product acceptance. No model/setting was changed and no app server was started.

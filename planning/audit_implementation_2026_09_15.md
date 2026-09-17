@@ -8,8 +8,9 @@ identified in Mem0, Graphiti, and Hindsight. It replaces the earlier rollout
 order in this file. The historical implementation record remains below;
 `DEVLOG.md` and saved runs retain the detailed evidence.
 
-**Current state:** E1 and the focused C1–C3 fixes are implemented; the complete
-longitudinal comparison is next. Items remain open until their acceptance evidence is recorded below. Existing
+**Current state:** E1 and focused C1–C3 fixes are implemented. E2 completed both
+comparison arms and source review, reopening date/name/current-state gaps; S1/S2
+and the smallest measured contract fixes are next. Items remain open until their acceptance evidence is recorded below. Existing
 storage, review, configuration, retrieval-consistency, and UI fixes remain the
 foundation. The latest recorded structural suite is 799 passed, one skipped,
 75 integration tests deselected; that is not full semantic acceptance.
@@ -41,7 +42,12 @@ foundation. The latest recorded structural suite is 799 passed, one skipped,
   source assertions directly, preserving canonical history and manual bindings;
   three direct and three integrated semantic controls passed. Latest structural
   suite: 799 passed, one skipped, 75 integration deselected.
-- **E2 onward remain open.** No product LLM calls or nested
+- **E2 diagnostic complete:** nine production checkpoints and 19/19 probes in
+  both arms. The ranked control recovers three answers but uses 8.23× the context
+  characters. Final extraction is complete; a missing truth proposal blocks the
+  intended approval action. [Source review and cost](audit_e2_observations_2026_09_16.md)
+  distinguish evaluator disagreements, encoding failures, and QA errors. Product
+  acceptance and S1 onward remain open. No product LLM calls or nested
   response structures have been added. Evaluation improvements and focused
   correctness checks do not establish longitudinal memory quality or cost.
 

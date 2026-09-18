@@ -1,6 +1,7 @@
 """Artifact inspection endpoints."""
 
 from dataclasses import asdict
+from collections import defaultdict
 from fastapi import APIRouter, HTTPException
 from mycelium.artifact_integrity import artifact_integrity
 from mycelium.ontology import ontology_response
@@ -25,8 +26,11 @@ async def artifact_overview():
     reconsolidation_proposals = mem.artifacts.list_reconsolidation_proposals()
     coverage = mem.artifacts.coverage_report()
     coverage["suppressed_claims"] = len(claims) - coverage["active_claims"]
-    placements = mem.artifacts.list_placements()
-    assigned = [placement for placement in placements if placement.status == "placed"]
+    destinations = defaultdict(set)
+    for fact in mem.artifacts.list_consolidated_facts():
+        for cid in fact.member_claim_ids:
+            destinations[cid].update([fact.owner_entity_id, *fact.linked_entity_ids])
+    assigned = list(destinations.values())
     disposition_counts: dict[str, int] = {}
     for claim in claims:
         disposition_counts[claim.dream_disposition] = (
@@ -46,11 +50,11 @@ async def artifact_overview():
         },
         "short_term_memory": mem.consolidation_status().as_dict(),
         "projection": {
-            "page_assignments": len(assigned),
+            "page_assignments": sum(map(len, assigned)),
             "assigned_claims": len(assigned),
-            "multi_page_claims": 0,
-            "average_pages_per_claim": 1.0 if assigned else 0.0,
-            "max_pages_per_claim": 1 if assigned else 0,
+            "multi_page_claims": sum(len(ids) > 1 for ids in assigned),
+            "average_pages_per_claim": sum(map(len, assigned)) / len(assigned) if assigned else 0.0,
+            "max_pages_per_claim": max(map(len, assigned), default=0),
         },
         "integrity": artifact_integrity(mem),
         "dream_audit": {
@@ -207,9 +211,7 @@ async def list_artifact_claims():
             "claim_type": claim.claim_type,
             "evidence_modality": claim.evidence_modality,
             "dream_disposition": claim.dream_disposition,
-            "placement": asdict(placement)
-            if (placement := artifacts.placement_for_claim(claim.claim_id))
-            else None,
+            "view_count": len(artifacts.facts_for_claim(claim.claim_id)),
         }
         for claim in artifacts.list_claims()
     ]
@@ -220,10 +222,9 @@ async def get_artifact_claim(claim_id: str):
     try:
         artifacts = get_mem().artifacts
         claim = artifacts.get_claim(claim_id)
-        placement = artifacts.placement_for_claim(claim_id)
         return {
             **asdict(claim),
-            "placement": asdict(placement) if placement else None,
+            "identity_review_ids": [d.decision_id for d in artifacts.list_entity_resolution_decisions(review_state="review_required") if claim_id in d.supporting_claim_ids],
             "facts": [asdict(fact) for fact in artifacts.facts_for_claim(claim_id)],
             "scope_decisions": [
                 asdict(item)
@@ -317,9 +318,7 @@ async def get_artifact_entity(entity_id: str):
         page_exists = (mem.wiki.wiki_dir / f"{entity.slug}.md").exists()
         return {
             **asdict(entity),
-            "placements": [
-                asdict(item) for item in artifacts.placements_for_entity(entity_id)
-            ],
+            "claim_ids": [c.claim_id for c in artifacts.claims_for_entity(entity_id)],
             "facts": [
                 asdict(item)
                 for item in artifacts.list_consolidated_facts(owner_entity_id=entity_id)

@@ -125,6 +125,7 @@ class MemoryEvidence:
     records: tuple[EvidenceRecord, ...] = ()
     sources: tuple[EvidenceSource, ...] = ()
     more_available: bool = False
+    build_incomplete: bool = False
 
     @property
     def claim_ids(self) -> tuple[str, ...]:
@@ -188,7 +189,7 @@ class RetrievalError(RuntimeError):
 @dataclass(frozen=True)
 class ConsolidationRequest:
     dry_run: bool = False
-    include_deferred: bool = True
+    include_deferred: bool = False
 
 
 @dataclass(frozen=True)

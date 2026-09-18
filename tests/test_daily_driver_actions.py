@@ -11,7 +11,7 @@ from tests.test_claim_lifecycle import NOW, add_claim, add_source, setup_service
 def memory_and_fixture(tmp_path):
     artifacts, wiki, service = setup_service(tmp_path)
     memory = SimpleNamespace(artifacts=artifacts, consolidator=SimpleNamespace(
-        materializer=service.materializer, fact_resolver=service.resolver))
+        materializer=service.materializer, views=service.views))
     for source_id, label in [("old", "old-evidence"), ("new", "new-evidence"), ("other", "other-evidence")]:
         add_source(artifacts, source_id)
         source = artifacts.get_source(source_id)
@@ -80,7 +80,8 @@ async def test_daily_retraction_uses_exact_source_binding_and_production_lifecyc
     assert memory.artifacts.get_source("old").status == "retracted"
     assert memory.artifacts.get_claim("new").status == "active"
     assert memory.artifacts.get_claim("other").status == "active"
-    assert memory.artifacts.facts_for_claim("old-1") == []
+    assert memory.artifacts.facts_for_claim("old-1")  # Hidden views remain inspectable.
+    assert all("old-1" not in item.get("claim_ids", []) for page in memory.consolidator.materializer.wiki.list_all() for section in page.sections for item in section["items"])
     assert memory.artifacts.get_reconsolidation_proposal("proposal").status == "stale"
     assert wiki.get("you") is not None
 

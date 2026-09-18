@@ -304,7 +304,7 @@ async def run_consolidation() -> dict[str, Any]:
             async with get_session_lock(session_id):
                 await capture_saved_turns(session_id)
         result = await get_mem().consolidate(
-            ConsolidationRequest(include_deferred=True)
+            ConsolidationRequest()
         )
     return _dream_report_response(result.report)
 

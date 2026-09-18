@@ -71,7 +71,6 @@ def main(argv: list[str] | None = None) -> None:
         context_budget_tokens=args.context_budget_tokens,
         dream_policy=args.dream_policy,
         replay_store=args.replay_store,
-        replay_assignments=args.replay_assignments,
         frozen_store=args.frozen_store,
         include_retrieval_context=args.include_retrieval_context,
     )
@@ -167,11 +166,6 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help="Copy an exact completed store and benchmark retrieval/answering only.",
-    )
-    parser.add_argument(
-        "--replay-assignments",
-        action="store_true",
-        help="Preserve fixture claim-to-page assignments and benchmark projection only.",
     )
     parser.add_argument(
         "--include-retrieval-context",

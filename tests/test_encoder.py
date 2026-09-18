@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from mycelium.artifacts import ArtifactStore
 from mycelium.encoder import Encoder
 from mycelium.config import Config
@@ -60,21 +60,12 @@ async def test_ingest_source_returns_an_explicit_empty_result(
 async def test_ingest_source_derives_segments_when_the_caller_omits_them(
     encoder, mock_llm
 ):
-    with patch.object(
-        encoder, "_extract_claims", new_callable=AsyncMock
-    ) as extract_claims:
-        result = await encoder.ingest_source(
-            SourceInput(
-                transcript="USER: Keep this memory.",
-                session_id="ses-123",
-                source_type="multi_party_conversation",
-                idempotency_key="derive-default-segments",
-            )
-        )
+    result = await encoder.ingest_source(SourceInput(
+        transcript="USER: Keep this memory.", session_id="ses-123",
+        source_type="multi_party_conversation", idempotency_key="derive-default-segments"))
 
     source = encoder.artifacts.get_source(result.source_ids[0])
     assert [segment.content for segment in source.segments] == ["Keep this memory."]
-    extract_claims.assert_not_awaited()
     assert result.status == "captured"
     mock_llm.call_structured.assert_not_called()
 

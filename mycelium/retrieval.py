@@ -89,7 +89,7 @@ class MemoryRetriever:
                     AssistantContextCandidate(
                         candidate_id=f"claim:{hit.claim_id}",
                         kind=f"{hit.memory_tier}_claim",
-                        title=hit.owner_title or "Unassigned memory",
+                        title="Retained memory",
                         content=render_memory_evidence(
                             builder.build([hit], budget_tokens=budget_tokens)
                         ),

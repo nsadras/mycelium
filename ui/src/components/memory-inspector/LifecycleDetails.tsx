@@ -45,12 +45,12 @@ export function ClaimDetail({ claim, selectSource, selectFact, selectIdentity, s
       </div>
       <div className="grid gap-3 text-sm md:grid-cols-2">
         <div className="rounded-lg border border-slate-200 p-3"><strong>Predicate:</strong> {claim.predicate ?? 'None'}<br /><strong>Slot:</strong> {claim.slot ?? 'None'}<br /><strong>Recorded:</strong> {formatDate(claim.recorded_at)}</div>
-        <div className="rounded-lg border border-slate-200 p-3"><strong>Wiki owner:</strong><div className="mt-2 flex flex-wrap gap-1">{claim.placement?.owner_entity_id ? <Badge tone="indigo">{claim.placement.owner_entity_id} · {claim.placement.section_key}</Badge> : <span className="text-slate-400">Short-term / deferred</span>}</div></div>
+        <div className="rounded-lg border border-slate-200 p-3"><strong>Cited views:</strong><div className="mt-2">{claim.facts?.length ?? 0} items use this evidence. Each item has its own destination.</div></div>
       </div>
       <section className="rounded-xl border border-slate-200 p-4">
         <h3 className="mb-2 text-sm font-bold">Latest Dream decision</h3>
         <div className="text-sm text-slate-700">{claim.dream_disposition_reason ?? 'This claim has not been evaluated by Dream.'}</div>
-        {(claim.placement?.identity_blocker_ids ?? []).length > 0 && <div className="mt-3"><div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Unresolved identity blockers</div><div className="mt-2 flex flex-wrap gap-1">{claim.placement!.identity_blocker_ids.map((id) => <button key={id} onClick={() => selectIdentity(id)} className="rounded-md bg-amber-100 px-2 py-1 font-mono text-xs text-amber-800 hover:bg-amber-200">{id}</button>)}</div></div>}
+        {(claim.identity_review_ids ?? []).length > 0 && <div className="mt-3"><div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Unresolved identity blockers</div><div className="mt-2 flex flex-wrap gap-1">{claim.identity_review_ids!.map((id) => <button key={id} onClick={() => selectIdentity(id)} className="rounded-md bg-amber-100 px-2 py-1 font-mono text-xs text-amber-800 hover:bg-amber-200">{id}</button>)}</div></div>}
         <div className="mt-2 break-all font-mono text-xs text-slate-400">{claim.dream_run_id ?? 'No run'} · {formatDate(claim.dream_disposition_at)}</div>
       </section>
       <section className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
@@ -138,17 +138,17 @@ interface EntityDetailProps {
 
 export function EntityDetail({ entity, selectFact, selectClaim }: EntityDetailProps) {
   const counts: [string, number][] = [
-    ['Claims', entity.placements.length],
+    ['Claims', entity.claim_ids.length],
     ['Facts', entity.facts.length],
     ['Encounters', entity.encounters.length],
     ['Identity decisions', entity.resolution_decisions.length],
   ];
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-5 md:p-8">
-      <div><div className="flex flex-wrap gap-2"><Badge tone="indigo">{entity.entity_type}</Badge><Badge tone={entity.status === 'active' ? 'green' : 'slate'}>{entity.status}</Badge><Badge tone={entity.materialization_state === 'materialized' ? 'green' : 'amber'}>{entity.materialization_state}</Badge>{entity.page?.exists && <Badge tone="green">wiki page</Badge>}</div><h2 className="mt-4 text-2xl font-bold">{entity.title}</h2><div className="mt-2 break-all font-mono text-xs text-slate-400">{entity.entity_id} · {entity.slug}</div>{entity.materialization_state === 'provisional' && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">This identity is canonical but does not have a wiki page yet. It is waiting for stronger continuity evidence or an explicit identity adjudication.</p>}</div>
+      <div><div className="flex flex-wrap gap-2"><Badge tone="indigo">{entity.entity_type}</Badge><Badge tone={entity.status === 'active' ? 'green' : 'slate'}>{entity.status}</Badge><Badge tone={entity.materialization_state === 'materialized' ? 'green' : 'amber'}>{entity.materialization_state}</Badge>{entity.page?.exists && <Badge tone="green">wiki page</Badge>}</div><h2 className="mt-4 text-2xl font-bold">{entity.title}</h2><div className="mt-2 break-all font-mono text-xs text-slate-400">{entity.entity_id} · {entity.slug}</div>{entity.materialization_state === 'provisional' && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">This identity is canonical but does not have a wiki page yet. Retained evidence is searchable even without a page.</p>}</div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">{counts.map(([label, value]) => <div key={label} className="rounded-lg bg-slate-50 p-3"><div className="text-lg font-bold">{value}</div><div className="text-xs text-slate-500">{label}</div></div>)}</div>
       <section><h3 className="mb-3 text-sm font-bold">Current consolidated facts</h3><div className="space-y-2">{entity.facts.map((fact) => <button key={fact.fact_id} onClick={() => selectFact(fact.fact_id)} className="flex w-full items-center justify-between rounded-lg border border-slate-200 p-3 text-left"><span><strong className="text-sm">{fact.text}</strong><br /><span className="text-xs text-slate-500">{fact.section_key} · {fact.member_claim_ids.length} claims</span></span><ChevronRight size={15} /></button>)}{!entity.facts.length && <EmptyState>No current facts for this entity.</EmptyState>}</div></section>
-      <section><h3 className="mb-3 text-sm font-bold">Canonical claim assignments</h3><div className="flex flex-wrap gap-2">{entity.placements.map((placement) => <button key={placement.claim_id} onClick={() => selectClaim(placement.claim_id)} className="rounded-md bg-indigo-50 px-3 py-2 font-mono text-xs text-indigo-700">{placement.claim_id}</button>)}{!entity.placements.length && <span className="text-sm text-slate-500">No claims are assigned to this entity.</span>}</div></section>
+      <section><h3 className="mb-3 text-sm font-bold">Retained evidence</h3><div className="flex flex-wrap gap-2">{entity.claim_ids.map((claimId) => <button key={claimId} onClick={() => selectClaim(claimId)} className="rounded-md bg-indigo-50 px-3 py-2 font-mono text-xs text-indigo-700">{claimId}</button>)}{!entity.claim_ids.length && <span className="text-sm text-slate-500">No retained evidence references this identity.</span>}</div></section>
       <section><h3 className="mb-2 text-sm font-bold">Identity resolution audit</h3><JsonBlock value={entity.resolution_decisions} /></section>
       <section><h3 className="mb-2 text-sm font-bold">Encounter history</h3><JsonBlock value={entity.encounters} /></section>
     </div>

@@ -1,4 +1,4 @@
-"""Deterministic typed wiki projection from entities, claims, and placements."""
+"""Deterministic wiki projection of independent, source-cited view items."""
 
 from __future__ import annotations
 
@@ -6,35 +6,25 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Literal, cast
+from typing import cast
 
-from mycelium.artifacts import (
-    ArtifactStore,
-    ClaimPlacement,
-    ConsolidatedFact,
-    EntityRecord,
-    MemoryClaim,
-)
+from mycelium.artifacts import ArtifactStore, ConsolidatedFact, EntityRecord, MemoryClaim
 from mycelium.config import Config
-from mycelium.consolidation import ClaimRoute, placement_from_route
+from mycelium.artifact_integrity import cited_source_segments
 from mycelium.models import Edge, UpdateLogEntry, WikiPage
-from mycelium.ontology import ENTITY_ONTOLOGY, PageType, section_pairs
-from mycelium.projection import display_claim_text
+from mycelium.ontology import ENTITY_ONTOLOGY, PageType
+from mycelium.page_reviews import reviewed_page_exclusions
 from mycelium.store import WikiStore
 from mycelium.temporal import temporal_records
 
-
-INDEX_GROUPS: tuple[tuple[PageType, str], ...] = tuple(
-    (cast(PageType, definition.key), definition.plural_label)
-    for definition in ENTITY_ONTOLOGY
-)
+INDEX_GROUPS = tuple((definition.key, definition.plural_label) for definition in ENTITY_ONTOLOGY)
 
 
 def sections_markdown(
     sections: list[dict],
-    seen_claim_ids: set[str] | None = None,
+    seen_fact_ids: set[str] | None = None,
 ) -> str:
-    """Render sections, optionally deduplicating shared statements across prompt pages."""
+    """Render sections, optionally deduplicating the same view item across prompt pages."""
     lines: list[str] = []
     evidence_labels: dict[tuple[str, tuple[str, ...]], str] = {}
 
@@ -66,11 +56,11 @@ def sections_markdown(
                     }])
                 )
                 continue
-            claim_ids = set(item.get("claim_ids", []))
-            if seen_claim_ids is not None:
-                if claim_ids and claim_ids <= seen_claim_ids:
+            fact_id = item.get("fact_id")
+            if seen_fact_ids is not None and fact_id:
+                if fact_id in seen_fact_ids:
                     continue
-                seen_claim_ids.update(claim_ids)
+                seen_fact_ids.add(fact_id)
             qualifiers = item.get("qualifiers", [])
             suffix = f" _({'; '.join(qualifiers)})_" if qualifiers else ""
             linked = " ".join(
@@ -105,451 +95,121 @@ class MaterializationResult:
     updated_slugs: set[str] = field(default_factory=set)
     deleted_slugs: set[str] = field(default_factory=set)
     entities: dict[str, EntityRecord] = field(default_factory=dict)
-    placements: dict[str, ClaimPlacement] = field(default_factory=dict)
-    facts: dict[str, ConsolidatedFact] = field(default_factory=dict)
-    deleted_fact_ids: set[str] = field(default_factory=set)
 
 
 class PageMaterializer:
     def __init__(self, wiki: WikiStore, artifacts: ArtifactStore, config: Config):
-        self.wiki = wiki
-        self.artifacts = artifacts
-        self.config = config
-
-    def stage(
-        self,
-        routes: list[ClaimRoute],
-        new_entities: list[EntityRecord] | None = None,
-        facts: list[ConsolidatedFact] | None = None,
-        deleted_fact_ids: set[str] | None = None,
-        placement_overrides: list[ClaimPlacement] | None = None,
-    ) -> MaterializationResult:
-        result = MaterializationResult()
-        result.entities = {entity.entity_id: entity for entity in new_entities or []}
-        now = datetime.now().astimezone().isoformat()
-        for route in routes:
-            result.placements[route.claim_id] = placement_from_route(route, now=now)
-        result.placements.update({
-            placement.claim_id: placement for placement in placement_overrides or []
-        })
-        result.facts = {fact.fact_id: fact for fact in facts or []}
-        result.deleted_fact_ids = set(deleted_fact_ids or ())
-        affected = {
-            entity_id
-            for placement in result.placements.values()
-            for entity_id in [placement.owner_entity_id, *placement.linked_entity_ids]
-            if entity_id
-        }
-        # A removed destination must be regenerated too, not just the new destinations.
-        affected.update(
-            entity_id
-            for claim_id in result.placements
-            for prior in [self.artifacts.placement_for_claim(claim_id)] if prior is not None
-            for entity_id in [prior.owner_entity_id, *prior.page_sections] if entity_id
-        )
-        affected.update(fact.owner_entity_id for fact in result.facts.values())
-        deleted_facts = {
-            fact.fact_id: fact for fact in self.artifacts.list_consolidated_facts()
-            if fact.fact_id in result.deleted_fact_ids
-        }
-        affected.update(fact.owner_entity_id for fact in deleted_facts.values())
-        existing_entities = {
-            entity.entity_id: entity for entity in self.artifacts.list_entities()
-        }
-        for entity_id in affected:
-            if entity_id not in result.entities and entity_id in existing_entities:
-                result.entities[entity_id] = replace(
-                    existing_entities[entity_id], updated_at=now
-                )
-        if result.entities:
-            affected.update(result.entities)
-            affected.add("you")
-        self._stage_entities(result, affected)
-        return result
-
-    def persist(self, result: MaterializationResult) -> None:
-        for entity in result.entities.values():
-            self.artifacts.save_entity(entity)
-        for placement in result.placements.values():
-            self.artifacts.save_placement(placement)
-        for fact_id in result.deleted_fact_ids:
-            self.artifacts.delete_consolidated_fact(fact_id)
-        for fact in result.facts.values():
-            self.artifacts.save_consolidated_fact(fact)
-        for slug in result.deleted_slugs:
-            self.wiki.delete(slug)
-        for page in result.changed_pages.values():
-            self.wiki.save(page)
-        self.rebuild_index(result.changed_pages, result.deleted_slugs)
+        self.wiki, self.artifacts, self.config = wiki, artifacts, config
 
     def regenerate(self, entity_ids: set[str]) -> MaterializationResult:
+        # Projection is mechanical. No semantic rewriting occurs when support changes.
         result = MaterializationResult()
-        self._stage_entities(result, entity_ids)
-        self.persist(result)
-        return result
-
-    def regenerate_all(self) -> MaterializationResult:
-        return self.regenerate({
-            entity.entity_id for entity in self.artifacts.list_entities()
-            if entity.status != "merged" and entity.materialization_state == "materialized"
-        })
-
-    def _stage_entities(
-        self, result: MaterializationResult, entity_ids: set[str]
-    ) -> None:
+        entities = {e.entity_id: e for e in self.artifacts.list_entities()}
+        claims = {c.claim_id: c for c in self.artifacts.list_claims()
+                  if c.status == "active" and c.dream_disposition != "excluded_source_policy"}
+        facts = sorted(self.artifacts.list_consolidated_facts(), key=lambda f: (f.created_at, f.fact_id))
+        existing = {p.entity_id: p for p in self.wiki.list_all()}
         self._retracted_source_ids = {s.source_id for s in self.artifacts.list_sources() if s.status == "retracted"}
-        entities = {entity.entity_id: entity for entity in self.artifacts.list_entities()}
-        entities.update(result.entities)
-        placements = {
-            placement.claim_id: placement for placement in self.artifacts.list_placements()
-        }
-        placements.update(result.placements)
-        all_claims = {
-            claim.claim_id: claim for claim in self.artifacts.list_claims()
-        }
-        claims = {
-            claim_id: claim
-            for claim_id, claim in all_claims.items()
-            if claim.status == "active"
-        }
-        pending_proposals_by_claim: dict[str, set[str]] = defaultdict(set)
+        self._identity_reviews = defaultdict(list)
+        for decision in self.artifacts.list_entity_resolution_decisions(review_state="review_required"):
+            for cid in decision.supporting_claim_ids:
+                self._identity_reviews[cid].append(decision.decision_id)
+        pending = defaultdict(set)
         for proposal in self.artifacts.list_reconsolidation_proposals(status="pending"):
-            for claim_id in {
-                *proposal.incoming_claim_ids,
-                *proposal.target_claim_ids,
-            }:
-                pending_proposals_by_claim[claim_id].add(proposal.proposal_id)
-        encounters = self.artifacts.list_encounters()
-        facts = {
-            fact.fact_id: fact
-            for fact in self.artifacts.list_consolidated_facts()
-            if fact.fact_id not in result.deleted_fact_ids
-        }
-        facts.update(result.facts)
-        entity_ids = self._expand_placement_endpoints(
-            entity_ids, all_claims, placements, entities
-        )
-
-        # Availability is a property of the whole projected page set, not the
-        # order in which entity IDs happen to render. Canonical references may
-        # legitimately point to identities with no independent page.
-        existing_pages = {page.entity_id: page for page in self.wiki.list_all()}
-        inputs, prepared = {}, set()
-
-        def prepare(ids):
-            for entity_id in sorted(ids):
-                prepared.add(entity_id)
-                entity = entities.get(entity_id)
-                if (
-                    entity is None
-                    or entity.status != "active"
+            for cid in [*proposal.incoming_claim_ids, *proposal.target_claim_ids]:
+                pending[cid].add(proposal.proposal_id)
+        exclusions, _ = reviewed_page_exclusions(self.artifacts, claims)
+        by_entity = defaultdict(list)
+        by_claim = defaultdict(set)
+        for fact in facts:
+            endpoints = {fact.owner_entity_id, *fact.linked_entity_ids}
+            for cid in fact.member_claim_ids:
+                by_claim[cid].update(endpoints)
+            # A synthesis with withdrawn support is hidden as a whole; the retained
+            # statements and manual item remain available for inspection/review.
+            if not all(cid in claims for cid in fact.member_claim_ids):
+                continue
+            if entities[fact.owner_entity_id].status != "active":
+                continue
+            for eid in endpoints:
+                if entities[eid].status == "active" and not any(
+                    eid in exclusions.get(cid, set()) for cid in fact.member_claim_ids
                 ):
-                    continue
-                entity_claims = []
-                for placement in placements.values():
-                    claim = claims.get(placement.claim_id)
-                    if (
-                        claim is None
-                        or placement.status != "placed"
-                    ):
-                        continue
-                    page_placement = self._page_placement(
-                        entity_id, claim, placement, entities
-                    )
-                    if page_placement is not None:
-                        entity_claims.append((claim, page_placement))
-                entity_facts = []
-                for fact in facts.values():
-                    page_facts = self._page_facts(
-                        entity_id, fact, claims, placements, entities
-                    )
-                    entity_facts.extend(page_facts)
-                existing = self._existing_page(entity)
-                if not entity_facts and entity_id != "you":
-                    result.entities[entity_id] = replace(entity, materialization_state="provisional")
-                    entities[entity_id] = result.entities[entity_id]
-                    if existing is not None:
-                        result.deleted_slugs.add(entity.slug)
+                    by_entity[eid].append(fact)
+        projected = set(by_entity)
+        if "you" in entities and entities["you"].status == "active":
+            projected.add("you")
+        changed_targets = projected ^ existing.keys()
+        changed_targets.update(eid for eid in projected & existing.keys()
+                               if entities[eid].title != existing[eid].title
+                               or entities[eid].slug != existing[eid].slug)
+        affected = set(entity_ids) | changed_targets
+        # Follow shared evidence and page links once to their complete connected set.
+        while True:
+            expanded = affected | {eid for group in by_claim.values() if group & affected for eid in group}
+            if expanded == affected:
+                break
+            affected = expanded
+        if "you" in entities:
+            affected.add("you")
+        with self.artifacts.db.transaction():
+            for eid in sorted(affected & entities.keys()):
+                entity, old = entities[eid], existing.get(eid)
+                if eid not in projected:
+                    if old is not None:
+                        result.deleted_slugs.add(old.slug)
+                        self.wiki.delete(old.slug)
+                    if entity.materialization_state != "provisional":
+                        entity = replace(entity, materialization_state="provisional")
+                        result.entities[eid] = entity
+                        self.artifacts.save_entity(entity)
                     continue
                 if entity.materialization_state != "materialized":
                     entity = replace(entity, materialization_state="materialized")
-                    result.entities[entity_id] = entities[entity_id] = entity
-                inputs[entity_id] = (entity, entity_claims, entity_facts, existing)
-
-        prepare(entity_ids)
-        while True:
-            projected_ids = {
-                eid for eid, page in existing_pages.items()
-                if page.slug not in result.deleted_slugs
-                and eid in entities and entities[eid].status == "active"
-                and entities[eid].slug == page.slug
-            } | inputs.keys()
-            changed_targets = (projected_ids ^ existing_pages.keys()) | {
-                eid for eid in inputs.keys() & existing_pages.keys()
-                if inputs[eid][0].title != existing_pages[eid].title
-            }
-            dependent_ids = set()
-            for placement in placements.values():
-                if placement.status != "placed":
+                    result.entities[eid] = entity
+                    self.artifacts.save_entity(entity)
+                groups = defaultdict(list)
+                for fact in by_entity[eid]:
+                    groups[fact.section_key].append(fact)
+                sections = [{"key": heading, "title": heading, "items": self._fact_items(
+                    group, entities, claims, page_entity_id=eid,
+                    projected_entity_ids=projected, pending_proposals_by_claim=pending)}
+                    for heading, group in groups.items()]
+                if eid == "you":
+                    links = self._memory_map(entities, projected)
+                    if links:
+                        sections.append({"key": "memory_map", "title": "Memory Map", "items": links})
+                source_ids = sorted({p.raw_log_entry_id or p.source_id for fact in by_entity[eid]
+                                     for cid in fact.member_claim_ids for p in claims[cid].provenance})
+                related = sorted({other for fact in by_entity[eid]
+                                  for other in [fact.owner_entity_id, *fact.linked_entity_ids]
+                                  if other in projected and other != eid})
+                now = datetime.now()
+                page = WikiPage(slug=entity.slug, title=entity.title, content=sections_markdown(sections),
+                    created=old.created if old else now, last_updated=now,
+                    version=old.version if old else 1, page_type=cast(PageType, entity.entity_type),
+                    tags=[], related=[Edge(target=entities[x].slug, relation="informs") for x in related],
+                    source_log_entries=source_ids, update_log=list(old.update_log) if old else [],
+                    entity_id=eid, entity_status=entity.status, aliases=entity.aliases, sections=sections)
+                if old is not None and self._same_page(old, page) and old.slug == page.slug:
                     continue
-                endpoints = {
-                    placement.owner_entity_id, *placement.page_sections,
-                    *placement.linked_entity_ids,
-                } - {None}
-                if endpoints & changed_targets:
-                    dependent_ids.update(endpoints)
-            if changed_targets and "you" in existing_pages:
-                dependent_ids.add("you")
-            pending = dependent_ids - prepared
-            if not pending:
-                break
-            prepare(pending)
+                if old is None:
+                    result.created_slugs.add(page.slug)
+                else:
+                    page.version += 1
+                    result.updated_slugs.add(page.slug)
+                    if old.slug != page.slug:
+                        result.deleted_slugs.add(old.slug)
+                        self.wiki.delete(old.slug)
+                page.update_log.append(UpdateLogEntry(version=page.version, date=now,
+                    session_id="system", trigger="dream", reason="Regenerated cited memory views"))
+                result.changed_pages[page.slug] = page
+                self.wiki.save(page)
+            self.rebuild_index(result.changed_pages, result.deleted_slugs)
+        return result
 
-        for entity_id, (entity, entity_claims, entity_facts, existing) in sorted(inputs.items()):
-            page = self._build_page(
-                entity, entity_claims, entities, placements,
-                pending_proposals_by_claim,
-                encounters, entity_facts, claims, existing, projected_ids,
-            )
-            if existing is None:
-                page.update_log = [UpdateLogEntry(
-                    version=1,
-                    date=datetime.now(),
-                    session_id="system",
-                    trigger="dream",
-                    reason="Initial entity-owned deterministic projection",
-                )]
-                result.changed_pages[entity.slug] = page
-                result.created_slugs.add(entity.slug)
-            elif not self._same_page(existing, page):
-                page.created = existing.created
-                page.version = existing.version + 1
-                page.update_log = [*existing.update_log, UpdateLogEntry(
-                    version=page.version,
-                    date=datetime.now(),
-                    session_id="system",
-                    trigger="dream",
-                    reason="Regenerated entity-owned deterministic projection",
-                )]
-                result.changed_pages[entity.slug] = page
-                result.updated_slugs.add(entity.slug)
-
-    @classmethod
-    def _expand_placement_endpoints(
-        cls,
-        entity_ids: set[str],
-        claims: dict[str, MemoryClaim],
-        placements: dict[str, ClaimPlacement],
-        entities: dict[str, EntityRecord],
-    ) -> set[str]:
-        """Regenerate every selected view when a canonical statement changes."""
-        expanded = set(entity_ids)
-        for placement in placements.values():
-            claim = claims.get(placement.claim_id)
-            if claim is None or placement.status != "placed":
-                continue
-            endpoints = {placement.owner_entity_id, *placement.page_sections} - {None}
-            if endpoints & expanded:
-                expanded.update(endpoints)
-        return expanded
-
-    @classmethod
-    def _page_placement(
-        cls,
-        entity_id: str,
-        claim: MemoryClaim,
-        placement: ClaimPlacement,
-        entities: dict[str, EntityRecord],
-    ) -> ClaimPlacement | None:
-        if placement.owner_entity_id == entity_id:
-            return placement
-        if entity_id in placement.page_sections:
-            return replace(
-                placement,
-                owner_entity_id=entity_id,
-                section_key=placement.page_sections[entity_id],
-                linked_entity_ids=sorted({placement.owner_entity_id, *placement.page_sections} - {entity_id, None}),
-            )
-        return None
-
-    @classmethod
-    def _page_facts(
-        cls,
-        entity_id: str,
-        fact: ConsolidatedFact,
-        claims: dict[str, MemoryClaim],
-        placements: dict[str, ClaimPlacement],
-        entities: dict[str, EntityRecord],
-    ) -> list[ConsolidatedFact]:
-        if fact.owner_entity_id == entity_id and all(
-            claim_id in claims and (placement := placements.get(claim_id))
-            and placement.status == "placed" and placement.owner_entity_id == entity_id
-            for claim_id in fact.member_claim_ids
-        ):
-            return [fact]
-        grouped: dict[str, list[str]] = defaultdict(list)
-        for claim_id in fact.member_claim_ids:
-            placement = placements.get(claim_id)
-            if claim_id in claims and placement and placement.status == "placed":
-                section = (placement.section_key if placement.owner_entity_id == entity_id
-                           else placement.page_sections.get(entity_id))
-                if section:
-                    grouped[section].append(claim_id)
-        views = []
-        for section, member_ids in grouped.items():
-            complete = set(member_ids) == set(fact.member_claim_ids)
-            # A synthesized group may contain claims not selected for this page. In that
-            # case display only its selected canonical statements, never the whole group.
-            views.append(replace(
-                fact, owner_entity_id=entity_id, section_key=section,
-                member_claim_ids=member_ids,
-                text=fact.text if complete else " ".join(display_claim_text(claims[c]) for c in member_ids),
-                linked_entity_ids=sorted({fact.owner_entity_id, *(
-                    e for c in member_ids for e in placements[c].page_sections
-                )} - {entity_id}),
-                synthesis_origin=fact.synthesis_origin if complete else "claim",
-                manual_text=fact.manual_text if complete else False,
-            ))
-        return views
-
-    def _existing_page(self, entity: EntityRecord) -> WikiPage | None:
-        if entity.status == "archived":
-            return None
-        if not self.wiki.exists(entity.slug):
-            return None
-        page = self.wiki.get(entity.slug)
-        if not page.entity_id:
-            raise ValueError(
-                "Wiki uses the pre-entity schema. Clear the derived wiki and rebuild from claims."
-            )
-        if page.entity_id != entity.entity_id:
-            raise ValueError(f"Wiki slug {entity.slug!r} belongs to another entity")
-        return page
-
-    def _build_page(
-        self,
-        entity: EntityRecord,
-        owned: list[tuple[MemoryClaim, ClaimPlacement]],
-        entities: dict[str, EntityRecord],
-        placements: dict[str, ClaimPlacement],
-        pending_proposals_by_claim: dict[str, set[str]],
-        encounters: list,
-        facts: list[ConsolidatedFact],
-        claims_by_id: dict[str, MemoryClaim],
-        existing: WikiPage | None,
-        projected_entity_ids: set[str],
-    ) -> WikiPage:
-        sections = self._sections(
-            entity, owned, entities, placements, pending_proposals_by_claim,
-            encounters,
-            facts, claims_by_id, projected_entity_ids,
-        )
-        claims = [claim for claim, _ in owned]
-        source_ids = sorted({
-            provenance.raw_log_entry_id or provenance.source_id
-            for claim in claims for provenance in claim.provenance
-        })
-        related_ids = sorted({
-            linked_id for _, placement in owned for linked_id in placement.linked_entity_ids
-            if linked_id in entities and entities[linked_id].status == "active"
-        } | {
-            placement.owner_entity_id
-            for placement in placements.values()
-            if entity.entity_id in placement.linked_entity_ids
-            and placement.owner_entity_id in entities
-            and entities[placement.owner_entity_id].status == "active"
-        })
-        now = datetime.now()
-        return WikiPage(
-            slug=entity.slug,
-            title=entity.title,
-            content=sections_markdown(sections),
-            created=existing.created if existing else now,
-            last_updated=now,
-            version=existing.version if existing else 1,
-            page_type=cast(PageType, entity.entity_type),
-            tags=[],
-            related=[
-                Edge(target=entities[entity_id].slug, relation="informs")
-                for entity_id in related_ids if entity_id in projected_entity_ids
-            ],
-            source_log_entries=source_ids,
-            update_log=list(existing.update_log) if existing else [],
-            entity_id=entity.entity_id,
-            entity_status=cast(Literal["active", "archived", "merged"], entity.status),
-            aliases=list(entity.aliases),
-            sections=sections,
-        )
-
-    def _sections(
-        self,
-        entity: EntityRecord,
-        owned: list[tuple[MemoryClaim, ClaimPlacement]],
-        entities: dict[str, EntityRecord],
-        placements: dict[str, ClaimPlacement],
-        pending_proposals_by_claim: dict[str, set[str]],
-        encounters: list,
-        facts: list[ConsolidatedFact],
-        claims_by_id: dict[str, MemoryClaim],
-        projected_entity_ids: set[str],
-    ) -> list[dict]:
-        grouped: dict[str, list[ConsolidatedFact]] = defaultdict(list)
-        for fact in facts:
-            grouped[fact.section_key].append(fact)
-
-        encounter_items: list[dict] = []
-        if entity.entity_type == "person":
-            represented_source_ids = {
-                provenance.source_id for claim, _ in owned for provenance in claim.provenance
-            }
-            for encounter in encounters:
-                if (
-                    encounter.entity_id != entity.entity_id
-                    or encounter.source_id in represented_source_ids
-                ):
-                    continue
-                date = str(encounter.occurred_at or "").split("T", 1)[0]
-                context = encounter.title or "a recorded meeting"
-                date_suffix = f" on {date}" if date else ""
-                encounter_items.append({
-                    "kind": "encounter",
-                    "encounter_id": encounter.encounter_id,
-                    "text": f"Participated in {context}{date_suffix}.",
-                    "source_id": encounter.source_id,
-                    "raw_log_entry_id": encounter.raw_log_entry_id,
-                    "event_time": date or None,
-                })
-
-        sections: list[dict] = []
-        for key, title in section_pairs(entity.entity_type):
-            if key == "memory_map" and entity.entity_type == "you":
-                links = self._memory_map(entities, projected_entity_ids)
-                if links:
-                    sections.append({"key": key, "title": title, "items": links})
-                continue
-            values = grouped.get(key, [])
-            items = self._fact_items(
-                values,
-                entities,
-                claims_by_id,
-                pending=(key == "needs_review"),
-                page_entity_id=entity.entity_id,
-                canonical_placements=placements,
-                chronological=(key == "timeline"),
-                projected_entity_ids=projected_entity_ids,
-                pending_proposals_by_claim=pending_proposals_by_claim,
-            )
-            if key == "timeline" and encounter_items:
-                items.extend(encounter_items)
-            if key == "timeline":
-                items.sort(key=lambda item: (
-                    not bool(item.get("event_time")),
-                    str(item.get("event_time") or ""),
-                    str(item.get("fact_id") or item.get("encounter_id") or ""),
-                ))
-            if items:
-                sections.append({"key": key, "title": title, "items": items})
-        return sections
+    def regenerate_all(self) -> MaterializationResult:
+        return self.regenerate({e.entity_id for e in self.artifacts.list_entities()})
 
     def _fact_items(
         self,
@@ -557,10 +217,7 @@ class PageMaterializer:
         entities: dict[str, EntityRecord],
         claims_by_id: dict[str, MemoryClaim],
         *,
-        pending: bool,
         page_entity_id: str,
-        canonical_placements: dict[str, ClaimPlacement],
-        chronological: bool,
         projected_entity_ids: set[str],
         pending_proposals_by_claim: dict[str, set[str]],
     ) -> list[dict]:
@@ -569,45 +226,24 @@ class PageMaterializer:
         items = []
         retracted_source_ids = self._retracted_source_ids
 
-        def fact_order(value: ConsolidatedFact) -> tuple:
-            if not chronological:
-                return (value.created_at, value.fact_id)
-            starts = sorted(
-                str(temporal["start"])
-                for claim_id in value.member_claim_ids
-                if claim_id in claims_by_id
-                for temporal in temporal_records(claims_by_id[claim_id].facets)
-                if temporal.get("role") == "event_time" and temporal.get("start")
-            )
-            return (
-                not bool(starts),
-                starts[0] if starts else value.created_at,
-                value.fact_id,
-            )
-
-        for fact in sorted(values, key=fact_order):
+        for fact in sorted(values, key=lambda f: (f.created_at, f.fact_id)):
             members = [
                 claims_by_id[claim_id] for claim_id in fact.member_claim_ids
                 if claim_id in claims_by_id
             ]
             if not members:
                 continue
+            for member in members:
+                cited_source_segments(self.artifacts, member)
             claim = members[0]
             member_ids = list(fact.member_claim_ids)
             review_ids = sorted({proposal_id for claim_id in member_ids
                                  for proposal_id in pending_proposals_by_claim.get(claim_id, set())})
-            identity_reviews = sorted({decision_id for claim_id in member_ids
-                                      if claim_id in canonical_placements
-                                      for decision_id in canonical_placements[claim_id].identity_blocker_ids})
-            uncertainty = list(dict.fromkeys(
-                canonical_placements[cid].uncertainty for cid in member_ids
-                if cid in canonical_placements and canonical_placements[cid].uncertainty
-            ))
-            uncertain = pending or bool(review_ids or identity_reviews or uncertainty)
-            links = sorted({
-                linked_id for linked_id in fact.linked_entity_ids
-                if linked_id in projected_entity_ids
-            })
+            identity_reviews = sorted({did for cid in member_ids
+                                       for did in self._identity_reviews.get(cid, [])})
+            uncertain = bool(review_ids or identity_reviews)
+            links = sorted(({fact.owner_entity_id, *fact.linked_entity_ids} - {page_entity_id})
+                           & projected_entity_ids)
             qualifiers = []
             if claim.evidence_modality == "tool":
                 qualifiers.append("external research")
@@ -615,7 +251,6 @@ class PageMaterializer:
                 qualifiers.append("unresolved accounts; optional review")
             if identity_reviews:
                 qualifiers.append("identity uncertain; optional review")
-            qualifiers.extend(uncertainty)
             retracted_sources = sorted({p.source_id for member in members for p in member.provenance
                                         if p.source_id in retracted_source_ids})
             if retracted_sources:
@@ -649,18 +284,6 @@ class PageMaterializer:
                 }
                 for member in members for provenance in member.provenance
             ]
-            canonical_owner_ids = sorted({
-                cast(str, canonical_placements[claim_id].owner_entity_id)
-                for claim_id in member_ids
-                if claim_id in canonical_placements
-                and canonical_placements[claim_id].owner_entity_id
-            })
-            canonical_linked_ids = sorted({
-                linked_id
-                for claim_id in member_ids
-                if claim_id in canonical_placements
-                for linked_id in canonical_placements[claim_id].linked_entity_ids
-            })
             items.append({
                 "kind": "fact",
                 "fact_id": fact.fact_id,
@@ -672,23 +295,9 @@ class PageMaterializer:
                 "synthesis_confidence": fact.confidence,
                 "synthesis_reason": fact.reason,
                 "manual_text": fact.manual_text,
-                "canonical_owner_entity_ids": canonical_owner_ids,
-                "canonical_linked_entity_ids": canonical_linked_ids,
-                "relationship_kind": (
-                    "project_role"
-                    if any(
-                        canonical_placements[claim_id].relationship_kind
-                        == "project_role"
-                        for claim_id in member_ids
-                        if claim_id in canonical_placements
-                    )
-                    else None
-                ),
-                "projection": (
-                    "shared_endpoint"
-                    if any(owner_id != page_entity_id for owner_id in canonical_owner_ids)
-                    else "canonical"
-                ),
+                "canonical_owner_entity_ids": [fact.owner_entity_id],
+                "canonical_linked_entity_ids": list(fact.linked_entity_ids),
+                "projection": "canonical" if page_entity_id == fact.owner_entity_id else "shared_endpoint",
                 "qualifiers": list(dict.fromkeys(qualifiers)),
                 "evidence_modality": claim.evidence_modality,
                 "event_time": event_times[0] if event_times else None,

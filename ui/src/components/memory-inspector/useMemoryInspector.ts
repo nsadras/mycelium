@@ -297,7 +297,7 @@ export function useMemoryInspector(refreshKey: number, initialTarget?: Inspector
   const filteredSources = sources.filter((item) => includes([item.source_id, item.source_type, item.session_id, ...item.participants]));
   const filteredChatEpisodes = chatEpisodes.filter((item) => includes([item.session_id, item.query]));
   const filteredEpisodes = episodes.filter((item) => includes([item.episode_id, item.source_id, item.source_type, item.extraction_status, ...item.participants]));
-  const filteredClaims = claims.filter((item) => includes([item.claim_id, item.text, item.claim_type, item.dream_disposition, item.placement?.owner_entity_id]));
+  const filteredClaims = claims.filter((item) => includes([item.claim_id, item.text, item.claim_type, item.dream_disposition]));
   const filteredFacts = facts.filter((item) => includes([item.fact_id, item.text, item.owner_entity_id, item.section_key]));
   const filteredEntities = entities.filter((item) => includes([item.entity_id, item.title, item.slug, item.entity_type, item.status, ...item.aliases]));
   const filteredIdentityDecisions = identityDecisions.filter((item) => includes([item.decision_id, item.review_state, item.proposed_entity_type, item.proposed_title, item.proposed_scope, item.entity_id, item.reason]));

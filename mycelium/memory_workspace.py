@@ -176,6 +176,7 @@ def merge_memory_evidence(
         records=tuple(records.values()),
         sources=tuple(sources.values()),
         more_available=current.more_available or incoming.more_available,
+        build_incomplete=current.build_incomplete or incoming.build_incomplete,
     )
 
 

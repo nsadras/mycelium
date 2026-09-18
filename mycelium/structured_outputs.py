@@ -1,7 +1,7 @@
 """Structured response contracts used by production LLM calls."""
 
 from collections.abc import Collection
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -11,7 +11,7 @@ from pydantic import (
     model_validator,
 )
 
-from mycelium.temporal_contract import ExtractedDetails, temporal_details_model
+from mycelium.temporal_contract import temporal_details_model
 
 from mycelium.ontology import (
     ClaimType,
@@ -31,115 +31,6 @@ class ReplacementMetadata(BaseModel):
     predicate: Literal["project_role"] | None
     temporal_status: Literal["past", "current", "future", "recurring", "atemporal", "unknown"]
     facets: temporal_details_model(["replacement"])
-
-
-class ExtractedClaimOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    text: str = Field(
-        min_length=1,
-        max_length=1000,
-        description="Complete statement with names, qualifications and referenced details. State accepting or declining a proposal explicitly.",
-    )
-    claim_type: ClaimType
-    predicate: Literal["project_role"] | None = None
-    evidence_modality: Literal["speech", "visual", "tool", "mixed", "unknown"]
-    temporal_status: Literal[
-        "past", "current", "future", "recurring", "atemporal", "unknown"
-    ]
-    about: list[ExtractedEntityOutput] = Field(min_length=1, max_length=12)
-    segment_ids: list[str] = Field(min_length=1, max_length=32)
-    facets: ExtractedDetails
-
-
-def extraction_output_model(
-    segment_ids: Collection[str],
-    context_segment_ids: Collection[str] = (),
-) -> type[BaseModel]:
-    """Extract and account for every new segment in one validated response."""
-    ids = tuple(sorted(set(segment_ids)))
-    if not ids:
-        raise ValueError("Extraction requires source segments")
-    id_type = Literal.__getitem__(ids)
-    fields = {}
-    if context_segment_ids:
-        context_type = Literal.__getitem__(tuple(sorted(set(context_segment_ids))))
-        fields["context_segment_ids"] = (
-            list[context_type],
-            Field(
-                description="Exact earlier-context evidence IDs used to resolve or support this statement. Required; empty only if the new segments support the entire statement independently."
-            ),
-        )
-    claim = create_model(
-        "ExtractedStatement",
-        __base__=ExtractedClaimOutput,
-        segment_ids=(list[id_type], Field(max_length=32)),
-        facets=(temporal_details_model([*ids, *context_segment_ids]), ...),
-        **fields,
-    )
-    evidence_order = ["segment_ids", *fields, "temporal_status", "facets"]
-    ordered_fields = [
-        *evidence_order,
-        *(name for name in claim.model_fields if name not in evidence_order),
-    ]
-    claim = create_model(
-        "EvidenceFirstStatement",
-        __config__=ConfigDict(extra="forbid"),
-        **{
-            name: (claim.model_fields[name].annotation, claim.model_fields[name])
-            for name in ordered_fields
-        },
-    )
-    claimed = create_model(
-        "ExtractedClaims",
-        __config__=ConfigDict(extra="forbid"),
-        claims=(list[claim], Field(min_length=1, max_length=128)),
-    )
-    decision = claimed | None
-    segments = create_model(
-        "SegmentDecisions",
-        __config__=ConfigDict(extra="forbid"),
-        **{sid: (decision, ...) for sid in ids},
-    )
-    base = create_model(
-        "ExtractionResponse",
-        __config__=ConfigDict(extra="forbid"),
-        segments=(segments, ...),
-    )
-
-    class ExactExtractionResponse(base):
-        @model_validator(mode="after")
-        def validate_anchors(self):
-            for sid, value in self.segments:
-                if not isinstance(value, claimed):
-                    continue
-                for item in value.claims:
-                    cited = {sid, *item.segment_ids, *getattr(item, 'context_segment_ids', [])}
-                    for annotation in item.facets.times:
-                        if annotation.evidence_segment_id not in cited:
-                            raise ValueError("A time anchor must be one of the claim's cited evidence segments")
-            return self
-
-    return ExactExtractionResponse
-
-
-def extraction_records(response: dict[str, Any]) -> dict[str, Any]:
-    """Flatten validated per-segment decisions, preserving their explicit evidence."""
-    claims = []
-    source_only = []
-    for sid, value in response["segments"].items():
-        if value is None:
-            source_only.append({"segment_id": sid, "reason": "Model marked this segment as adding no new claim."})
-        else:
-            for claim in value["claims"]:
-                claims.append(
-                    {
-                        **claim,
-                        "segment_ids": list(
-                            dict.fromkeys([sid, *claim["segment_ids"]])
-                        ),
-                    }
-                )
-    return {"claims": claims, "source_only": source_only}
 
 
 class GroundedAnswerOutput(BaseModel):
@@ -167,41 +58,3 @@ def complementary_selection_model(candidate_aliases: Collection[str], limit: int
             return self
 
     return ComplementarySelection
-
-
-class FactCandidateSelectionOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    candidate_fact_ids: list[str] = Field(max_length=12)
-    reason: str = Field(min_length=1, max_length=800)
-
-
-def fact_candidate_selection_output_model(
-    incoming_claim_aliases: Collection[str],
-    prior_fact_aliases: Collection[str],
-) -> type[BaseModel]:
-    """Select bounded prior fact candidates for every incoming claim."""
-    incoming = tuple(
-        dict.fromkeys(str(value) for value in incoming_claim_aliases if value)
-    )
-    facts = tuple(dict.fromkeys(str(value) for value in prior_fact_aliases if value))
-    if not incoming or not facts:
-        raise ValueError("Fact candidate selection requires claims and prior facts")
-    fact_type = Literal.__getitem__(facts)
-    decision = create_model(
-        "ExactFactCandidateSelection",
-        __base__=FactCandidateSelectionOutput,
-        candidate_fact_ids=(
-            list[fact_type],  # type: ignore[valid-type]
-            Field(max_length=len(facts)),
-        ),
-    )
-    decisions = create_model(
-        "ExactFactCandidateDecisions",
-        __config__=ConfigDict(extra="forbid"),
-        **{alias: (decision, ...) for alias in incoming},
-    )
-    return create_model(
-        "ExactFactCandidatePlan",
-        __config__=ConfigDict(extra="forbid"),
-        decisions=(decisions, ...),
-    )

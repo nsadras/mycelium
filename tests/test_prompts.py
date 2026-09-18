@@ -4,14 +4,8 @@ import pytest
 from jinja2 import StrictUndefined, UndefinedError
 
 from mycelium.prompting import TEMPLATE_ROOT, prompt_environment, render_prompt
-from mycelium import prompts
 
 
-@pytest.mark.parametrize("source_type", ["agent_conversation", "meeting_transcript", "multi_party_conversation", "tool_observation"])
-def test_extraction_includes_the_policy_for_its_source(source_type):
-    system, _ = prompts.claim_extraction_prompt(source_type, "source-test", [], "")
-    policy = render_prompt(prompts._EXTRACTION_POLICY_TEMPLATES[source_type])
-    assert "Policy for this source: " + policy in system
 
 
 def test_every_prompt_is_an_external_strict_jinja_template() -> None:
@@ -100,11 +94,11 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
 
 def test_missing_template_variables_fail_closed() -> None:
     with pytest.raises(UndefinedError):
-        render_prompt("memory/extraction.user.jinja", source_id="source-1")
+        render_prompt("assistant/context_selection.user.jinja", query="query")
 
 
 def test_templates_are_packaged_inside_the_python_package() -> None:
-    assert Path(TEMPLATE_ROOT, "memory", "extraction.system.jinja").is_file()
+    assert Path(TEMPLATE_ROOT, "memory", "correction.system.jinja").is_file()
     assert Path(TEMPLATE_ROOT, "assistant", "memory_agent.system.jinja").is_file()
     assert Path(TEMPLATE_ROOT, "assistant", "memory_request.user.jinja").is_file()
     assert Path(TEMPLATE_ROOT, "engram", "summary.system.jinja").is_file()

@@ -3,13 +3,13 @@
 from mycelium.artifacts import ArtifactStore
 
 
-def reviewed_page_exclusions(artifacts: ArtifactStore, aliases):
+def reviewed_page_exclusions(artifacts: ArtifactStore, claim_ids):
     """A no-page review constrains its cited evidence, never the whole identity."""
-    alias_for_claim = {item.claim.claim_id: alias for alias, item in aliases.items()}
+    claim_ids = set(claim_ids)
     exclusions: dict[str, set[str]] = {}
     reviews = []
     for decision in artifacts.list_entity_resolution_decisions(review_state="accepted"):
-        overlap = set(decision.supporting_claim_ids) & alias_for_claim.keys()
+        overlap = set(decision.supporting_claim_ids) & claim_ids
         if (
             not overlap
             or decision.reviewed_at is None
@@ -41,7 +41,7 @@ def reviewed_page_exclusions(artifacts: ArtifactStore, aliases):
             for ref in refs:
                 if ref.entity_id is None:
                     raise ValueError("A reviewed page exclusion has no bound identity")
-                alias = alias_for_claim[claim_id]
+                alias = claim_id
                 exclusions.setdefault(alias, set()).add(ref.entity_id)
                 reviews.append(
                     {

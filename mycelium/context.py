@@ -9,10 +9,10 @@ from mycelium.models import WikiPage
 def render_memory_context(pages: list[WikiPage]) -> str:
     """Render retrieved pages exactly as they should appear in a model prompt."""
     blocks: list[str] = []
-    seen_claim_ids: set[str] = set()
+    seen_fact_ids: set[str] = set()
     for page in pages:
         body = (
-            sections_markdown(page.sections, seen_claim_ids)
+            sections_markdown(page.sections, seen_fact_ids)
             if page.sections
             else page.content
         )

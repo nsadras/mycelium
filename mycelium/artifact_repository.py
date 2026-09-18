@@ -451,11 +451,8 @@ class ArtifactStore:
         owner = self.get_entity(fact.owner_entity_id)
         if owner.status != "active":
             raise ValueError("Consolidated facts require an active owner entity")
-        allowed = set(section_keys(owner.entity_type))
-        if fact.section_key not in allowed:
-            raise ValueError(
-                f"Section {fact.section_key!r} is invalid for consolidated fact owner"
-            )
+        if not fact.section_key.strip():
+            raise ValueError("View items require a nonempty heading")
         for claim_id in fact.member_claim_ids:
             self.get_claim(claim_id)
         for linked_id in fact.linked_entity_ids:
@@ -486,6 +483,15 @@ class ArtifactStore:
             self.get_consolidated_fact(path)
             for path in self.db.ids("consolidated-facts", "member_claim_ids", claim_id)
         ]
+
+    def entities_for_claims(self, claim_ids: set[str]) -> set[str]:
+        """Exact subjects and every cited view destination; evidence has no sole owner."""
+        return {eid for cid in claim_ids
+                for fact in self.facts_for_claim(cid)
+                for eid in [fact.owner_entity_id, *fact.linked_entity_ids]} | {
+                    ref.entity_id for cid in claim_ids
+                    for ref in self.list_entity_references(claim_id=cid, status="active")
+                    if ref.entity_id}
 
     def placements_for_entity(self, entity_id: str) -> list[ClaimPlacement]:
         return [
@@ -627,9 +633,8 @@ class ArtifactStore:
     ) -> list[MemoryClaim]:
         """Return active claims needing initial organization or a maintenance retry.
 
-        Claim disposition is the durable queue state. A placement is consulted as
-        an integrity guard against stale pending/deferred state. An older placed
-        view must not hide an explicit failure from a later maintenance attempt.
+        Claim disposition is the durable queue state. Existing views must not
+        hide explicitly requested maintenance, including identity review.
         """
         allowed = {"pending", "routing_failed"}
         if include_deferred:
@@ -638,24 +643,22 @@ class ArtifactStore:
         for claim in self.list_claims(status="active"):
             if claim.dream_disposition not in allowed:
                 continue
-            placement = self.placement_for_claim(claim.claim_id)
-            if (
-                placement
-                and placement.status == "placed"
-                and claim.dream_disposition != "routing_failed"
-            ):
-                continue
             queued.append(claim)
         return queued
 
+    def build_incomplete(self) -> bool:
+        active = {s.source_id for s in self.list_sources() if s.status == "active"}
+        complete = {e.source_id for e in self.list_episodes() if e.extraction_status == "complete"}
+        return bool(active - complete) or any(
+            c.status == "active" and c.dream_disposition in {"pending", "routing_failed"}
+            and any(p.source_id in active for p in c.provenance)
+            for c in self.list_claims())
+
     def memory_tier(self, claim_id: str) -> str:
         claim = self.get_claim(claim_id)
-        placement = self.placement_for_claim(claim_id)
         if claim.dream_disposition == "excluded_source_policy":
             return "source"
-        if claim.dream_disposition in SHORT_TERM_DISPOSITIONS and (
-            not (placement and placement.status == "placed")
-        ):
+        if claim.dream_disposition in SHORT_TERM_DISPOSITIONS and not self.facts_for_claim(claim_id):
             return "short_term"
         return "canonical"
 
@@ -670,9 +673,10 @@ class ArtifactStore:
         ]
 
     def claims_for_entity(self, entity_id: str) -> list[MemoryClaim]:
-        claim_ids = {
-            placement.claim_id for placement in self.placements_for_entity(entity_id)
-        }
+        claim_ids = {ref.claim_id for ref in self.list_entity_references(entity_id=entity_id, status="active")}
+        claim_ids.update(cid for fact in self.list_consolidated_facts()
+                         if entity_id in {fact.owner_entity_id, *fact.linked_entity_ids}
+                         for cid in fact.member_claim_ids)
         return [
             claim
             for claim in self.list_claims(status="active")

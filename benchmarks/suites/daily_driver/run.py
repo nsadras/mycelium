@@ -284,7 +284,7 @@ async def _approve_proposal(
             f"Expected one pending proposal for {fixture_proposal_id}, found {len(candidates)}"
         )
     service = ReconsolidationReviewService(
-        memory.artifacts, memory.consolidator.materializer, memory.consolidator.fact_resolver
+        memory.artifacts, memory.consolidator.materializer, memory.consolidator.views
     )
     result = await service.approve(
         candidates[0].proposal_id,
@@ -301,7 +301,7 @@ async def _retract_source(memory: Mycelium, fixture_source_id: str) -> dict[str,
             f"Expected one source for {fixture_source_id}, found {len(sources)}"
         )
     service = ClaimLifecycleService(
-        memory.artifacts, memory.consolidator.materializer, memory.consolidator.fact_resolver
+        memory.artifacts, memory.consolidator.materializer, memory.consolidator.views
     )
     result = await service.retract_source(
         sources[0].source_id, reason=f"Retracted by fixture action retract:{fixture_source_id}"

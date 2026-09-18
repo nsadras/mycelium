@@ -207,8 +207,7 @@ async def test_append_tool_event_logs_creates_claim_artifacts(tmp_path, monkeypa
     )
     assert artifacts.list_claims() == []
     llm.call_structured.assert_not_awaited()
-    await encoder.extract_pending()
-    assert artifacts.list_claims()[0].evidence_modality == "tool"
+    assert artifacts.list_sources()[0].segments[0].role == "tool"
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 
 from mycelium.artifacts import ArtifactStore, MemoryClaim, ReconsolidationProposal
-from mycelium.facts import FactResolver
+from mycelium.views import ViewOrganizer
 from mycelium.materialization import PageMaterializer
 from mycelium.lifecycle_transaction import LifecycleTransaction, mutation_lock
 from mycelium.store import WikiStore
@@ -30,17 +30,17 @@ def add_claim_link(claim: MemoryClaim, relation: str, target: str) -> None:
 
 
 class ReconsolidationReviewService:
-    """Apply reviewed truth changes, then rerun the canonical fact resolver."""
+    """Apply reviewed truth changes, then refresh affected cited views."""
 
     def __init__(
         self,
         artifacts: ArtifactStore,
         materializer: PageMaterializer,
-        resolver: FactResolver,
+        views: ViewOrganizer,
     ) -> None:
         self.artifacts = artifacts
         self.materializer = materializer
-        self.resolver = resolver
+        self.views = views
 
     async def approve(
         self, proposal_id: str, *, reviewer_note: str | None = None
@@ -76,7 +76,7 @@ class ReconsolidationReviewService:
                     self.materializer.config,
                 )
                 service = ReconsolidationReviewService(
-                    artifacts, materializer, FactResolver(self.resolver.llm, artifacts, self.resolver.config)
+                    artifacts, materializer, ViewOrganizer(self.views.llm, artifacts, materializer, self.views.config)
                 )
                 method = service._approve if action == "approve" else service._reject
                 result = await method(proposal_id, reviewer_note=reviewer_note)
@@ -189,21 +189,9 @@ class ReconsolidationReviewService:
             self.artifacts.save_claim(new_claim)
 
     async def _rebuild(self, proposal: ReconsolidationProposal):
-        resolution = await self.resolver.resolve(
-            [],
-            affected_entity_ids=set(proposal.affected_entity_ids),
-            incoming_claim_ids=set(),
-            dream_run_id=f"review-{proposal.proposal_id}",
-        )
-        if resolution.failures:
-            raise ReviewConflictError(resolution.failures[0].reason)
-        for placement in resolution.placements:
-            self.artifacts.save_placement(placement)
-        for fact_id in resolution.deleted_fact_ids:
-            self.artifacts.delete_consolidated_fact(fact_id)
-        for fact in resolution.facts:
-            self.artifacts.save_consolidated_fact(fact)
-        return self.materializer.regenerate(set(proposal.affected_entity_ids))
+        ids = set(proposal.incoming_claim_ids + proposal.target_claim_ids)
+        return await self.views.refresh(ids, context_ids=[],
+            entity_ids=set(proposal.affected_entity_ids), run_id=f"review-{proposal.proposal_id}")
 
     def _invalidate_overlapping_reviews(self, applied, targets):
         """A pending review may not continue to cite a superseded claim."""

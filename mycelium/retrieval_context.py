@@ -40,7 +40,7 @@ def fit_memory_evidence(
     if fits(evidence):
         return evidence
     # Reserve the omission notice so adding it cannot overflow the budget.
-    selected = MemoryEvidence(more_available=True)
+    selected = MemoryEvidence(more_available=True, build_incomplete=evidence.build_incomplete)
     if not fits(selected):
         raise ValueError("Evidence budget is smaller than the empty evidence envelope")
     for record in evidence.records:
@@ -155,6 +155,8 @@ def _render_evidence_envelope(
     lines = [f"<{tag}{rendered_attributes}>", *preamble]
     if preamble and (evidence.records or evidence.sources):
         lines.append("")
+    if evidence.build_incomplete:
+        lines.append("Build Memory is incomplete. Captured conversations or view updates are still pending; this evidence may miss recent information.")
     lines.extend(_render_records(evidence.records))
     if evidence.records and evidence.sources:
         lines.append("")
@@ -335,24 +337,9 @@ class RetrievedContextBuilder:
             return None
         if claim.status not in {"active", "superseded"}:
             return None
-        placement = self.artifacts.placement_for_claim(claim.claim_id)
-        owner = placement.owner_entity_id if placement else None
-        try:
-            entity = self.artifacts.get_entity(owner) if owner else None
-        except FileNotFoundError as exc:
-            raise RetrievalError(
-                "evidence_integrity",
-                f"Claim {claim.claim_id} has missing owner {owner}",
-            ) from exc
-        return replace(
-            hit,
-            claim_text=claim.text,
+        return replace(hit, claim_text=claim.text,
             memory_tier=self.artifacts.memory_tier(claim.claim_id),
-            owner_entity_id=owner,
-            owner_title=entity.title if entity else None,
-            page_slug=entity.slug if entity else None,
-            section_key=placement.section_key if placement else None,
-        )
+            owner_entity_id=None, owner_title=None, page_slug=None, section_key=None)
 
     def _source_uncertainty(self, claims):
         notes = []
@@ -573,6 +560,7 @@ class RetrievedContextBuilder:
             seen_record_ids.add(claim.claim_id)
         return MemoryEvidence(
             records=tuple(records),
+            build_incomplete=self.artifacts.build_incomplete(),
         )
 
     def _structured_record(
@@ -649,23 +637,11 @@ class RetrievedContextBuilder:
                     for r in self.reviews_by_claim.get(cid, [])
                 }.values()
             ),
-            uncertainty=tuple(
-                dict.fromkeys(
-                    note
-                    for cid in claim_ids
-                    for placement in [self.artifacts.placement_for_claim(cid)]
-                    if placement is not None
-                    for note in [
-                        placement.uncertainty,
-                        *(
-                            f"Identity unresolved; optional review {decision_id}"
-                            for decision_id in placement.identity_blocker_ids
-                        ),
-                    ]
-                    if note
-                )
-            )
-            + self._source_uncertainty(claims),
+            uncertainty=tuple(dict.fromkeys(
+                f"Identity unresolved; optional review {decision.decision_id}"
+                for decision in self.artifacts.list_entity_resolution_decisions(review_state="review_required")
+                if set(claim_ids) & set(decision.supporting_claim_ids)
+            )) + self._source_uncertainty(claims),
             revisions=tuple(self._revisions(claims)),
         )
 

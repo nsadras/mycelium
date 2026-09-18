@@ -46,7 +46,7 @@ def _review_service():
     return ReconsolidationReviewService(
         mem.artifacts,
         mem.consolidator.materializer,
-        mem.consolidator.fact_resolver,
+        mem.consolidator.views,
     )
 
 
@@ -67,7 +67,7 @@ def _claim_lifecycle_service():
     return ClaimLifecycleService(
         mem.artifacts,
         mem.consolidator.materializer,
-        mem.consolidator.fact_resolver,
+        mem.consolidator.views,
     )
 
 

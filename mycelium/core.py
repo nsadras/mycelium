@@ -82,9 +82,6 @@ class Mycelium:
 
         from mycelium.dream import ConsolidationProcess
 
-        self.consolidator = ConsolidationProcess(
-            self.llm, self._wiki, self._log_store, self.config, self.artifacts
-        )
         self.retriever = MemoryRetriever(
             self.llm,
             self._wiki,
@@ -104,6 +101,10 @@ class Mycelium:
                 ),
                 candidate_limit=self.config.retrieval.candidate_limit,
             ),
+        )
+        self.consolidator = ConsolidationProcess(
+            self.llm, self._wiki, self._log_store, self.config, self.artifacts,
+            self.retriever.claim_index,
         )
         self.pipeline = MemoryPipeline(
             self.encoder,

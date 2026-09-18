@@ -160,7 +160,7 @@ class LanceClaimIndex:
         async with self._lock:
             digest = await self.embedder.identity()
             embedding_identity = f"{self.embedder.model}@{digest}"
-            kinds = ("claims", "entities", "placements")
+            kinds = ("claims",)
             revision = (
                 embedding_identity,
                 tuple(self.artifacts.db.revision(kind) for kind in kinds),
@@ -175,13 +175,7 @@ class LanceClaimIndex:
                         kind: self.artifacts.db.changed_ids(kind, previous)
                         for kind, previous in zip(kinds, self._revision[1])
                     }
-                    affected = changed["claims"] | changed["placements"]
-                    for entity_id in changed["entities"]:
-                        affected.update(
-                            self.artifacts.db.ids(
-                                "placements", "owner_entity_id", entity_id
-                            )
-                        )
+                    affected = changed["claims"]
                     if affected:
                         records = self._claim_records(affected, embedding_identity=embedding_identity)
                         await self._synchronize(records, affected, digest=digest)
@@ -229,23 +223,16 @@ class LanceClaimIndex:
                 continue
             if claim.status == "superseded":
                 tier = "superseded"
-            placement = self.artifacts.placement_for_claim(claim.claim_id)
-            entity = None
-            if placement and placement.owner_entity_id:
-                try:
-                    entity = self.artifacts.get_entity(placement.owner_entity_id)
-                except FileNotFoundError:
-                    entity = None
-            document = _search_document(claim, entity.title if entity else None)
+            document = _search_document(claim, None)
             record = {
                 "claim_id": claim.claim_id,
                 "document": document,
                 "claim_text": claim.text,
                 "memory_tier": tier,
-                "owner_entity_id": placement.owner_entity_id if placement else "",
-                "owner_title": entity.title if entity else "",
-                "page_slug": entity.slug if entity else "",
-                "section_key": placement.section_key if placement else "",
+                "owner_entity_id": "",
+                "owner_title": "",
+                "page_slug": "",
+                "section_key": "",
                 "embedding_model": embedding_identity,
             }
             record["content_hash"] = hashlib.sha256(

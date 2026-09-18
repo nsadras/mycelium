@@ -6,7 +6,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from benchmarks.experiments import compact_contract as contract
+from mycelium import memory_contract as contract
 from benchmarks.experiments.probe_support import fresh_run_root, write
 from benchmarks.shared.model_recording import RecordingClient
 from mycelium import Mycelium

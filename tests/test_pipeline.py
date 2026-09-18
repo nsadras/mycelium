@@ -18,14 +18,13 @@ from mycelium.pipeline import MemoryPipeline
 def build_pipeline(tmp_path):
     encoder = SimpleNamespace(
         ingest_source=AsyncMock(return_value=IngestionResult(status="captured")),
-        extract_pending=AsyncMock(return_value=["episode-retried"]),
     )
     retriever = SimpleNamespace(
         retrieve=AsyncMock(
             return_value=RetrievalResult((), MemoryEvidence(), "memory context")
         )
     )
-    consolidator = SimpleNamespace(run=AsyncMock(return_value=DreamReport(0, 0, 0)))
+    consolidator = SimpleNamespace(run=AsyncMock(return_value=(DreamReport(0, 0, 0), ["episode-retried"])))
     encoder.artifacts = SimpleNamespace(root=tmp_path / "artifacts", list_sources=Mock(return_value=[]))
     consolidator.materializer = SimpleNamespace(wiki=SimpleNamespace(wiki_dir=tmp_path / "wiki"))
     return MemoryPipeline(encoder, retriever, consolidator), {
@@ -59,7 +58,6 @@ async def test_pipeline_consolidation_reports_retried_extraction_ids(tmp_path):
 
     assert result.report == DreamReport(0, 0, 0)
     assert result.processed_episode_ids == ("episode-retried",)
-    services["encoder"].extract_pending.assert_awaited_once()
     services["consolidator"].run.assert_awaited_once_with(
-        dry_run=False, include_deferred=True, source_ids=set()
+        encoder=services["encoder"], dry_run=False, include_deferred=True, source_ids=set()
     )

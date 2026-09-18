@@ -5746,3 +5746,42 @@ remain separate gates.
   the reference mechanism on that check, not perfect semantic accuracy.
 - Continue into production lifecycle integration with the proven contract.
   Device checks remain user-owned; no app or Ollama service is started.
+
+### 2026-09-18 — Integrate two-pass Build and independent cited views
+
+- Replace the production identity/admission/placement/truth-pair/prose cascade with
+  the proven flat retention and presentation contracts. Exact request-local IDs
+  constrain generation and are revalidated at persistence. Normal small-source
+  Build needs one retain and one present request; no new verification stage or
+  retry allowance. Retain useful context without requiring sentence completeness.
+- Capture stays model-free and behind Build for search. Preserve exact source
+  text, roles, speakers and timestamps, with bounded whole-segment batching and
+  cross-turn context. Completed retention batches survive view failure. Failed,
+  cancelled and newly captured work remains visibly pending; a no-op Build does
+  not revisit deferred claims by default. Agent evidence reports incomplete Build.
+- Claims support multiple independent view items. Manual move/split/group edits
+  preserve other cited items, and split groups may share support. Natural headings
+  replace fixed section constraints. Manual and pending-review items survive
+  refresh; optimistic input validation rejects intervening edits before commit.
+- Correction and reconsolidation use staged canonical/view transactions; preserve
+  relative-date previews, exact submitted correction text and idempotent retries.
+  Retraction uses zero model calls and regenerates every affected destination.
+  Identity reviews reopen view work after completed extraction. No-page exclusions
+  apply only to reviewed evidence; exact manual bindings survive entity merges.
+- Remove displaced production modules, templates, experimental pipeline adapters,
+  stage-specific probes and their tests. Frozen run artifacts retain original code
+  and evidence. Preserve and adapt lifecycle, source integrity, cancellation,
+  recovery, retrieval, server and UI checks. Assignment replay is retired; frozen
+  evidence/view and frozen-store QA evaluation remain available. Historical audit
+  records stay inspectable but are not used as an alternate execution path.
+- Validation: 576 Python tests passed, four opt-in integrations deselected, 24.54s;
+  UI 24 tests passed, production build passed, ESLint and Ruff passed, whitespace
+  check clean. The full Python suite needs sandbox escalation for an in-process
+  FastAPI middleware test; the sandboxed hang did not reproduce when escalated.
+  Earlier incomplete test processes were cancelled under the user's authorization.
+- Update README and DESIGN to describe current production behavior and bounded
+  semantic acceptance. The last product gate remains a single 600-second /
+  18-request configured-model check: successive Builds, injected view failure and
+  retry, source-grounded answers, and a human correction. Record residual semantic
+  imperfections without launching another tuning cycle. Device checks remain
+  user-owned; no service has been started.

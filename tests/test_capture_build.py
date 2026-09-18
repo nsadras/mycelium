@@ -1,270 +1,156 @@
+"""Capture, resumable Build and failure visibility on the real production path."""
+
 import asyncio
-from types import SimpleNamespace
+import json
 from unittest.mock import AsyncMock
 
 import pytest
 
-from mycelium import Mycelium, SourceInput, ConsolidationRequest
-from mycelium.models import DreamReport
+from mycelium import Mycelium, SourceInput
+from mycelium import memory_contract
+from mycelium.budget import count_tokens
+from mycelium.operations import ConsolidationRequest
+from mycelium.retention import Retainer
+from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
+from tests.lifecycle_support import lifecycle_response
+
+
+def configure(memory, monkeypatch):
+    memory.llm.call_structured = AsyncMock(side_effect=lifecycle_response)
+    monkeypatch.setattr(memory.retriever.claim_index, 'search', AsyncMock(return_value=[]))
 
 
 @pytest.mark.asyncio
-async def test_extraction_batches_reserve_the_actual_generation_budget(tmp_path):
-    from mycelium.artifacts import SourceSegment
-    from mycelium.budget import require_request_budget
-    from mycelium.config import Config, LLMConfig
-    from mycelium.encoder import Encoder
-    from mycelium.artifacts import ArtifactStore
-    from mycelium.store import LogStore
+async def test_snapshot_leaves_concurrent_capture_pending(tmp_path, monkeypatch):
+    with Mycelium(tmp_path) as memory:
+        configure(memory, monkeypatch)
+        first = await memory.ingest_source(SourceInput('One retained statement.', 'first', idempotency_key='first'))
+        entered, resume = asyncio.Event(), asyncio.Event()
+        original = memory_contract.retain
 
-    config = Config(llm=LLMConfig(
-        context_window_tokens=24576, reasoning_enabled=False,
-    ))
-    artifacts = ArtifactStore(tmp_path / "artifacts")
-    llm = SimpleNamespace(call_structured=AsyncMock())
-    encoder = Encoder(llm, LogStore(tmp_path / "logs"), config, artifacts)
-    segments = tuple(
-        SourceSegment(f"input-{i:03d}", i, "A source observation. " * 250, "user", "user")
-        for i in range(16)
-    )
-    captured = await encoder.ingest_source(SourceInput(
-        "\n".join(s.content for s in segments), "batch-budget", segments=segments,
-    ))
-    accounted = []
+        async def retain(llm, payload):
+            entered.set()
+            await resume.wait()
+            return await original(llm, payload)
 
-    async def respond(system, user, schema, **kwargs):
-        # Validate the emitted request, including the schema envelope, against
-        # the same output allowance the real client will reserve, including at
-        # a smaller configured context window.
-        require_request_budget(
-            [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            context_window=config.llm.context_window_tokens,
-            output_tokens=kwargs["num_predict"],
-            schema=schema.model_json_schema(),
-        )
-        ids = schema.model_fields["segments"].annotation.model_fields
-        accounted.extend(ids)
-        return {"segments": {sid: None for sid in ids}}
-
-    llm.call_structured.side_effect = respond
-    assert await encoder.extract_pending() == list(captured.episode_ids)
-    source = artifacts.get_source(captured.source_ids[0])
-    assert sorted(accounted) == sorted(s.segment_id for s in source.segments)
-    assert llm.call_structured.await_count > 1
-    assert artifacts.coverage_report()["pending_extraction_segments"] == 0
+        monkeypatch.setattr(memory_contract, 'retain', retain)
+        task = asyncio.create_task(memory.consolidate())
+        await asyncio.wait_for(entered.wait(), 2)
+        second = await memory.ingest_source(SourceInput('A later statement.', 'second', idempotency_key='second'))
+        resume.set()
+        result = await task
+        assert result.processed_episode_ids == first.episode_ids
+        assert memory.artifacts.get_episode(second.episode_ids[0]).extraction_status != 'complete'
+        assert memory.artifacts.build_incomplete()
+        assert not (await memory.consolidate()).report.failures
+        assert len(memory.artifacts.list_claims()) == 2
+        repeated = await memory.ingest_source(SourceInput('A later statement.', 'second', idempotency_key='second'))
+        assert repeated.source_ids == second.source_ids
+        calls = memory.llm.call_structured.call_count
+        assert not (await memory.consolidate()).report.failures
+        assert memory.llm.call_structured.call_count == calls
 
 
 @pytest.mark.asyncio
-async def test_build_snapshot_leaves_concurrent_capture_pending_and_replays_safely(
-    tmp_path,
-):
-    memory = Mycelium(tmp_path / "store")
-    memory.encoder.llm = AsyncMock()
-    first = await memory.ingest_source(
-        SourceInput("USER: First input.", "one", idempotency_key="one")
-    )
-    assert first.status == "captured"
-    assert memory.artifacts.list_claims() == []
-    memory.encoder.llm.call_structured.assert_not_awaited()
-    entered, release = asyncio.Event(), asyncio.Event()
-
-    async def extract(source, episode):
-        entered.set()
-        await release.wait()
-        episode.extraction_status = "complete"
-        memory.artifacts.save_episode(episode)
-
-    memory.encoder._extract_claims = AsyncMock(side_effect=extract)
-    organizer = SimpleNamespace(run=AsyncMock(return_value=DreamReport(0, 0, 0)), materializer=memory.consolidator.materializer)
-    memory.pipeline.consolidator = organizer
-    async with asyncio.timeout(10), asyncio.TaskGroup() as tasks:
-        build = tasks.create_task(memory.consolidate(ConsolidationRequest()))
-        await entered.wait()
-        second = await memory.ingest_source(
-            SourceInput("USER: Later input.", "two", idempotency_key="two")
-        )
-        release.set()
-        await build
-    assert organizer.run.await_args.kwargs["source_ids"] == set(first.source_ids)
-    assert (
-        memory.artifacts.get_episode(second.episode_ids[0]).extraction_status
-        == "pending"
-    )
-    assert memory.consolidation_status().pending_sources == 1
-    await memory.consolidate(ConsolidationRequest())
-    assert memory.encoder._extract_claims.await_count == 2
-    await memory.consolidate(ConsolidationRequest())
-    assert memory.encoder._extract_claims.await_count == 2
-    assert memory.consolidation_status().pending_sources == 0
+async def test_cancelled_view_resumes_after_restart_without_reextracting(tmp_path, monkeypatch):
+    with Mycelium(tmp_path) as memory:
+        configure(memory, monkeypatch)
+        await memory.ingest_source(SourceInput('A durable statement.', 'source'))
+        original = memory_contract.present
+        monkeypatch.setattr(memory_contract, 'present', AsyncMock(side_effect=asyncio.CancelledError))
+        with pytest.raises(asyncio.CancelledError):
+            await memory.consolidate()
+        assert len(memory.artifacts.list_claims()) == 1
+        assert memory.artifacts.list_episodes()[0].extraction_status == 'complete'
+        assert memory.artifacts.list_dream_runs()[-1].status == 'cancelled'
+        evidence = RetrievedContextBuilder(memory.wiki, memory.artifacts).build([], budget_tokens=2000)
+        assert evidence.build_incomplete
+        assert 'Build Memory is incomplete' in render_memory_evidence(evidence)
+    with Mycelium(tmp_path) as restarted:
+        configure(restarted, monkeypatch)
+        monkeypatch.setattr(memory_contract, 'present', original)
+        assert not (await restarted.consolidate()).report.failures
+        assert [call.kwargs['debug_label'] for call in restarted.llm.call_structured.call_args_list] == ['memory-presentation']
+        assert not restarted.artifacts.build_incomplete()
 
 
 @pytest.mark.asyncio
-async def test_capture_and_restart_do_not_call_extractor(tmp_path):
-    path = tmp_path / "store"
-    source = SourceInput("USER: A durable input.", "one", idempotency_key="one")
-    first = Mycelium(path)
-    first.encoder.llm = AsyncMock()
-    initial = await first.ingest_source(source)
-    restart = Mycelium(path)
-    restart.encoder.llm = AsyncMock()
-    repeated = await restart.ingest_source(source)
-    assert repeated.source_ids == initial.source_ids
-    assert len(restart.artifacts.list_sources()) == 1
-    assert restart.artifacts.list_claims() == []
-    restart.encoder.llm.call_structured.assert_not_awaited()
+async def test_invalid_retention_never_partially_persists_and_can_retry(tmp_path, monkeypatch):
+    with Mycelium(tmp_path) as memory:
+        configure(memory, monkeypatch)
+        await memory.ingest_source(SourceInput('A durable statement.', 'source'))
+        original = memory_contract.retain
 
+        async def invalid(llm, payload):
+            result = await original(llm, payload)
+            result['memories'][0]['segment_ids'] = ['missing-reference']
+            return result
 
-def test_only_build_routes_exist():
-    from server.api.memory_lifecycle import router
-
-    paths = {route.path for route in router.routes}
-    assert "/build" in paths
-    assert "/build/status" in paths
-    assert not any("flush" in path or "run-if-ready" in path for path in paths)
+        monkeypatch.setattr(memory_contract, 'retain', invalid)
+        result = await memory.consolidate()
+        assert result.report.failures and result.report.pending_source_ids
+        assert memory.artifacts.list_claims() == []
+        assert len(memory.artifacts.list_entities()) == 1
+        monkeypatch.setattr(memory_contract, 'retain', original)
+        assert not (await memory.consolidate()).report.failures
+        assert len(memory.artifacts.list_claims()) == 1
 
 
 @pytest.mark.asyncio
-async def test_combined_batch_replays_validated_output_after_interrupted_claim_write(tmp_path, monkeypatch):
-    memory = Mycelium(tmp_path / "store")
-    captured = await memory.ingest_source(SourceInput("USER: Two assertions.", "chat"))
-    source = memory.artifacts.get_source(captured.source_ids[0])
-    segment_id = source.segments[0].segment_id
-    response = {"segments": {segment_id: {"claims": [
-            {'temporal_status': 'unknown', 'text': text, 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': [segment_id], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'times': [], 'inference_basis': None}}
-            for text in ("The user prefers tea.", "The user avoids coffee.")
-        ]}}}
-    model = AsyncMock(return_value=response)
-    memory.encoder.llm = SimpleNamespace(call_structured=model)
-    save_claim = memory.artifacts.save_claim
-    writes = 0
+async def test_source_chunks_preserve_text_and_metadata_and_bound_requests(tmp_path, monkeypatch):
+    text = ('A long source with punctuation.  \n' * 8000)
+    with Mycelium(tmp_path) as memory:
+        configure(memory, monkeypatch)
+        result = await memory.ingest_source(SourceInput(text, 'source', segments=({
+            'segment_id': '', 'index': 0, 'speaker': 'Ari', 'role': 'user', 'content': text,
+            'timestamp': '2035-02-03T10:00:00Z', 'metadata': {'external_id': 'turn-12'}},)))
+        source = memory.artifacts.get_source(result.source_ids[0])
+        assert ''.join(s.content for s in source.segments) == text
+        assert len(source.segments) > 1
+        assert all(s.role == 'user' and s.metadata['external_id'] == 'turn-12' for s in source.segments)
+        sizes = []
 
-    def interrupted_save(claim):
-        nonlocal writes
-        writes += 1
-        if writes == 2:
-            raise OSError("Interrupted second claim write")
-        save_claim(claim)
+        async def retain(llm, payload):
+            sizes.append(count_tokens(json.dumps(payload['segments'])))
+            return {'subjects': [], 'memories': [], 'changes': []}
 
-    monkeypatch.setattr(memory.artifacts, "save_claim", interrupted_save)
-    assert await memory.encoder.extract_pending() == []
-    episode = memory.artifacts.list_episodes()[0]
-    assert episode.extraction_batches[0].status == "failed"
-    assert episode.extraction_batches[0].response is not None
-    assert episode.extraction_batches[0].response["segments"][segment_id]["claims"][0]["facets"] == {
-        "times": [], "inference_basis": None,
-    }
-    assert len(memory.artifacts.list_claims()) == 1
-    published = memory.artifacts.list_claims()[0]
-    published.status = "superseded"  # A user correction between publication and retry.
-    save_claim(published)
-    restarted = Mycelium(tmp_path / "store")
-    restarted.encoder.llm = AsyncMock()
-    assert await restarted.encoder.extract_pending() == [episode.episode_id]
-    restarted.encoder.llm.call_structured.assert_not_awaited()
-    assert model.await_count == 1
-    assert len(restarted.artifacts.list_claims()) == 2
-    assert restarted.artifacts.get_claim(published.claim_id).status == "superseded"
-    complete = restarted.artifacts.list_episodes()[0]
-    assert complete.extraction_batches[0].response is None
-    assert len(complete.claim_ids) == 2
-    assert set(complete.segment_dispositions[0].claim_ids) == set(complete.claim_ids)
+        monkeypatch.setattr(memory_contract, 'retain', retain)
+        assert not (await memory.consolidate()).report.failures
+        assert max(sizes) <= memory.config.llm.context_window_tokens // 4
+        assert len(sizes) > 1
+        assert len(memory.artifacts.list_episodes()[0].segment_dispositions) == len(source.segments)
+        memory.llm.call_structured.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_cross_turn_context_citations_keep_original_source_identity(tmp_path):
-    memory = Mycelium(tmp_path / "store")
-    previous = await memory.ingest_source(
-        SourceInput("ASSISTANT: Would you lead the workshop?", "chat")
-    )
-    current = await memory.ingest_source(
-        SourceInput(
-            "USER: Yes, I will.",
-            "chat",
-            metadata={"context_source_ids": list(previous.source_ids)},
-        )
-    )
-    prior_segment = (
-        memory.artifacts.get_source(previous.source_ids[0]).segments[0].segment_id
-    )
-    new_segment = (
-        memory.artifacts.get_source(current.source_ids[0]).segments[0].segment_id
-    )
-
-    async def response(_system, _user, output_type, **kwargs):
-        return {"segments": {new_segment: {"claims": [
-                {'temporal_status': 'unknown', 'text': 'The user will lead the workshop.', 'about': [{'entity': 'user', 'role': 'subject'}], 'segment_ids': [new_segment], 'context_segment_ids': [prior_segment], 'claim_type': 'unknown', 'evidence_modality': 'unknown', 'facets': {'times': [], 'inference_basis': None}}
-            ]}}}
-
-    memory.encoder.llm = SimpleNamespace(
-        call_structured=AsyncMock(side_effect=response)
-    )
-    await memory.encoder.extract_pending(set(current.source_ids))
-    assert memory.encoder.llm.call_structured.await_args.kwargs["think"] is True
-    claim = memory.artifacts.list_claims()[0]
-    assert {(p.source_id, tuple(p.segment_ids)) for p in claim.provenance} == {
-        (current.source_ids[0], (new_segment,)),
-        (previous.source_ids[0], (prior_segment,)),
-    }
-    assert (
-        memory.artifacts.get_episode(previous.episode_ids[0]).extraction_status
-        == "pending"
-    )
+async def test_system_metadata_never_enters_retention_and_dry_run_is_read_only(tmp_path, monkeypatch):
+    with Mycelium(tmp_path) as memory:
+        configure(memory, monkeypatch)
+        await memory.ingest_source(SourceInput('internal scaffolding', 'source', segments=({
+            'segment_id': '', 'index': 0, 'role': 'system', 'content': 'internal scaffolding'},)))
+        before = memory.db.evidence_revision()
+        assert not (await memory.consolidate(ConsolidationRequest(dry_run=True))).report.failures
+        assert memory.db.evidence_revision() == before
+        assert memory.artifacts.list_dream_runs() == []
+        assert not (await memory.consolidate()).report.failures
+        memory.llm.call_structured.assert_not_called()
+        assert memory.artifacts.list_episodes()[0].segment_dispositions[0].disposition == 'source_only'
 
 
 @pytest.mark.asyncio
-async def test_meeting_admission_survives_summary_failure_and_freezes_review(tmp_path):
-    from engram import EngramConfig, EngramService, EngramStore
-    from engram.models import MeetingSummary, TranscriptSegment
-
-    config = EngramConfig(
-        store_path=tmp_path / "meetings", audio_dir=tmp_path / "audio"
-    )
-    config.ensure_dirs()
-    store = EngramStore(config.db_path)
-    meeting = store.create_meeting("Notes")
-    store.replace_segments(
-        meeting.id,
-        [
-            TranscriptSegment(
-                id=None,
-                meeting_id=meeting.id,
-                segment_index=0,
-                start_seconds=0,
-                end_seconds=3,
-                text="The review is on Thursday.",
-                speaker="Nora",
-            )
-        ],
-    )
-    store.update_meeting(meeting.id, status="reviewing")
-    memory = Mycelium(tmp_path / "memory")
-    memory.encoder.llm = AsyncMock()
-    summarizer = SimpleNamespace(
-        summarize=AsyncMock(side_effect=RuntimeError("offline"))
-    )
-    service = EngramService(
-        config, store, lambda: memory, summarizer_factory=lambda: summarizer
-    )
-
-    result = await service.finalize_meeting(meeting.id)
-
-    assert result.status == "completed"
-    assert result.error is None
-    assert result.warnings[0].stage == "summary"
-    assert "offline" in result.warnings[0].message
-    assert result.warnings[0].resolved_at is None
-    assert len(memory.artifacts.list_sources()) == 1
-    assert memory.artifacts.list_claims() == []
-    memory.encoder.llm.call_structured.assert_not_awaited()
-    with pytest.raises(ValueError, match="after source admission"):
-        await service.update_speaker_names(meeting.id, {"Nora": "Someone else"})
-    with pytest.raises(ValueError, match="after source admission"):
-        await service.update_transcript(meeting.id, {})
-    summarizer.summarize.side_effect = None
-    summarizer.summarize.return_value = MeetingSummary("Review on Thursday.")
-    retried = await service.finalize_meeting(meeting.id)
-    assert retried.summary is not None
-    assert retried.error is None
-    assert retried.warnings[0].id == result.warnings[0].id
-    assert retried.warnings[0].resolved_at is not None
-    assert len(memory.artifacts.list_sources()) == 1
+async def test_context_citations_preserve_original_source_and_speaker(tmp_path, monkeypatch):
+    with Mycelium(tmp_path) as memory:
+        configure(memory, monkeypatch)
+        first = await memory.ingest_source(SourceInput('An earlier request.', 's1', segments=({
+            'segment_id': '', 'index': 0, 'role': 'assistant', 'speaker': 'Assistant', 'content': 'An earlier request.'},)))
+        second = await memory.ingest_source(SourceInput('I accept that.', 's2', metadata={'context_source_ids': list(first.source_ids)}, segments=({
+            'segment_id': '', 'index': 0, 'role': 'user', 'speaker': 'You', 'content': 'I accept that.'},)))
+        source = memory.artifacts.get_source(second.source_ids[0])
+        retainer = Retainer(memory.llm, memory.artifacts, memory.config)
+        payload = await retainer.input(source, source.segments, 'b', prior_ids=[])
+        value = lifecycle_response('', json.dumps(payload), memory_contract.retention_model(payload), debug_label='memory-retention')
+        value['memories'][0]['segment_ids'].append(payload['context_segments'][0]['id'])
+        with memory.db.transaction():
+            ids = retainer.persist(source, 'b', payload, value)
+        claim = memory.artifacts.get_claim(ids[0])
+        assert {(p.source_id, p.speaker) for p in claim.provenance} == {(first.source_ids[0], 'Assistant'), (second.source_ids[0], 'You')}

@@ -52,11 +52,7 @@ def coverage_report(store) -> dict[str, Any]:
         for proposal in store.list_reconsolidation_proposals(status="pending")
         for cid in proposal.incoming_claim_ids
     }
-    placed = active_ids & {
-        placement.claim_id
-        for placement in store.list_placements()
-        if placement.status == "placed" and placement.owner_entity_id
-    }
+    placed = {c.claim_id for c in claims if c.status == "active" and c.dream_disposition == "routed"}
     all_segments = {
         (source.source_id, segment.segment_id)
         for source in sources for segment in source.segments
@@ -111,16 +107,7 @@ def coverage_report(store) -> dict[str, Any]:
             sid for _, sid in all_segments - claimed_segments - source_only_segments - pending_segments
         ),
         "pending_extraction_segment_ids": sorted(sid for _, sid in all_segments & pending_segments),
-        "unplaced_claim_ids": sorted(
-            (
-                claim.claim_id
-                for claim in claims
-                if not (
-                    (placement := store.placement_for_claim(claim.claim_id))
-                    and placement.owner_entity_id
-                )
-            )
-        ),
+        "unplaced_claim_ids": sorted(active_ids - represented),
         "unresolved_provenance_ids": sorted({sid for _, sid in unresolved}),
         "unresolved_citations": [
             {"source_id": source_id, "segment_id": segment_id}
@@ -333,17 +320,16 @@ def artifact_integrity(mem) -> dict:
         "pages_unclassified": sorted(
             (page.slug for page in wiki_pages if page.page_type is None)
         ),
-        "pages_with_repeated_claims": sorted(
+        "pages_with_repeated_items": sorted(
             (
-                f"{page.slug}:{claim_id}"
+                f"{page.slug}:{fact_id}"
                 for page in wiki_pages
-                for claim_id, count in Counter(
+                for fact_id, count in Counter(
                     (
-                        claim_id
+                        item["fact_id"]
                         for section in page.sections
                         for item in section.get("items", [])
-                        if item.get("kind") == "fact"
-                        for claim_id in item.get("claim_ids", [])
+                        if item.get("kind") == "fact" and item.get("fact_id")
                     )
                 ).items()
                 if count > 1

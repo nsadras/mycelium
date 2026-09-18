@@ -7,9 +7,9 @@ from mycelium.temporal_contract import TimeAnnotation, CanonicalTime, resolve_an
 
 
 def test_calendar_date_syntax_is_exposed_to_structured_decoding():
-    from mycelium.structured_outputs import extraction_output_model
+    from mycelium.structured_outputs import ReplacementMetadata
 
-    schema = extraction_output_model(["s1"]).model_json_schema()
+    schema = ReplacementMetadata.model_json_schema()
     absolute = schema["$defs"]["AbsoluteInterval"]["properties"]
     for key in ("start", "end"):
         assert absolute[key]["pattern"] == r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
@@ -254,123 +254,8 @@ def test_time_anchors_preserve_message_dates_and_unknowns():
     }
 
 
-def test_pipeline_retains_multiple_targets_with_independent_cited_anchors(tmp_path):
-    from mycelium import Mycelium
-    from mycelium.artifacts import SourceDocument, SourceSegment
-    from mycelium.claim_index import ClaimSearchHit
-    from mycelium.retrieval_context import (
-        RetrievedContextBuilder,
-        render_memory_evidence,
-    )
-    from tests.extraction_support import time_details
-
-    old = SourceDocument(
-        "s-old",
-        "agent_conversation",
-        "session",
-        "2026-08-31",
-        "2026-08-31",
-        [],
-        [
-            SourceSegment(
-                "old",
-                0,
-                "The delivery is in three days.",
-                timestamp="2026-06-10T23:55:00-07:00",
-            )
-        ],
-    )
-    new = SourceDocument(
-        "s-new",
-        "agent_conversation",
-        "session",
-        "2026-08-31",
-        "2026-08-31",
-        [],
-        [
-            SourceSegment(
-                "new",
-                0,
-                "Yes, provided payment arrives tomorrow.",
-                timestamp="2026-06-11T08:00:00-07:00",
-            )
-        ],
-    )
-    event = time_details(
-        "old",
-        "in three days",
-        {"kind": "day_offset", "days": 3},
-        target="Niko delivers the sculpture",
-    )
-    condition = time_details(
-        "new",
-        "tomorrow",
-        {"kind": "day_offset", "days": 1},
-        role="condition_time",
-        target="Payment arrives",
-    )
-    event["times"].extend(condition["times"])
-    raw = {
-        "claims": [
-            {
-                "text": "Niko will deliver the sculpture in three days, provided payment arrives tomorrow.",
-                "segment_ids": ["new"],
-                "context_segment_ids": ["old"],
-                "about": [{"entity": "Niko", "role": "subject"}],
-                "facets": event,
-                "claim_type": "commitment",
-                "evidence_modality": "speech",
-                "temporal_status": "future",
-            }
-        ]
-    }
-    with Mycelium(tmp_path, memory_profile="none") as mem:
-        mem.artifacts.save_source(old)
-        mem.artifacts.save_source(new)
-        claim = mem.encoder._build_extracted_claims(
-            new, raw, "batch", context_sources=[old]
-        )[0]
-        mem.artifacts.save_claim(claim)
-        times = mem.artifacts.get_claim(claim.claim_id).facets["temporal"]
-        assert [(t["role"], t["start"], t["evidence_segment_id"]) for t in times] == [
-            ("event_time", "2026-06-13", "old"),
-            ("condition_time", "2026-06-12", "new"),
-        ]
-        hit = ClaimSearchHit(
-            claim.claim_id, claim.text, "short_term", None, None, None, None, None
-        )
-        evidence = RetrievedContextBuilder(mem.wiki, mem.artifacts).build(
-            [hit], budget_tokens=3000
-        )
-        assert len(evidence.records[0].temporal) == 2
-        context = render_memory_evidence(evidence)
-        assert "Niko delivers the sculpture" in context
-        assert "Payment arrives" in context
-        assert "2026-06-13" in context and "2026-06-12" in context
 
 
-def test_time_schema_requires_exact_cited_evidence_for_every_annotation():
-    from mycelium.structured_outputs import extraction_output_model
-    from tests.extraction_support import extraction_response, time_details
-
-    schema = extraction_output_model(["new"], ["old"])
-    claim = {
-        "text": "A declaration.",
-        "about": [{"entity": "Niko", "role": "subject"}],
-        "segment_ids": ["new"],
-        "context_segment_ids": [],
-        "claim_type": "event",
-        "temporal_status": "future",
-        "evidence_modality": "speech",
-        "facets": time_details("old", "in two days", {"kind": "day_offset", "days": 2}),
-    }
-    with pytest.raises(ValidationError, match="cited evidence"):
-        schema.model_validate(extraction_response([claim]))
-    claim["context_segment_ids"] = ["old"]
-    assert schema.model_validate(extraction_response([claim]))
-    del claim["facets"]["times"][0]["evidence_segment_id"]
-    with pytest.raises(ValidationError, match="evidence_segment_id"):
-        schema.model_validate(extraction_response([claim]))
 
 
 def test_schema_two_rejects_old_store_without_changing_database(tmp_path):

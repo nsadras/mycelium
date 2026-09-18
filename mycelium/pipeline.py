@@ -42,12 +42,8 @@ class MemoryPipeline:
             source_ids = {
                 source.source_id for source in self.encoder.artifacts.list_sources()
             }
-            completed = (
-                await self.encoder.extract_pending(source_ids)
-                if not request.dry_run
-                else []
-            )
-            report = await self.consolidator.run(
+            report, completed = await self.consolidator.run(
+                encoder=self.encoder,
                 dry_run=request.dry_run,
                 include_deferred=request.include_deferred,
                 source_ids=source_ids,

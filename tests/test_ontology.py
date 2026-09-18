@@ -12,10 +12,6 @@ from mycelium.ontology import (
     default_section,
     ontology_response,
 )
-from mycelium.structured_outputs import (
-    ExtractedClaimOutput,
-)
-from mycelium.subject_discovery import subject_discovery_model
 from server.api.memory_artifacts import get_ontology
 
 
@@ -34,18 +30,6 @@ def test_ontology_registry_is_internally_complete() -> None:
             assert definition.project_role_section in keys
 
 
-def test_structured_model_contracts_derive_from_the_ontology() -> None:
-    claim_schema = ExtractedClaimOutput.model_json_schema()
-    identity_definitions = subject_discovery_model(["C001"], {}, {}).model_json_schema()["$defs"]
-    identity_types = set()
-    for definition in identity_definitions.values():
-        field = definition["properties"].get("entity_type")
-        if field is None:
-            continue
-        identity_types.update(field.get("enum", [field["const"]] if "const" in field else []))
-
-    assert set(claim_schema["properties"]["claim_type"]["enum"]) == set(CLAIM_TYPES)
-    assert identity_types == set(ENTITY_TYPES) - {"you"}
 
 
 def test_declared_default_section_rules_are_centralized() -> None:

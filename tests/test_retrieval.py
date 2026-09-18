@@ -276,18 +276,9 @@ def test_exact_budget_retains_sources_and_smaller_budget_retains_interpretation(
 
 def test_retrieval_page_references_only_describe_real_pages(compact_claim):
     builder, hit, entity = compact_claim
-    builder.artifacts.save_placement(
-        ClaimPlacement(
-            hit.claim_id,
-            entity.entity_id,
-            "interests_views",
-            [],
-            "placed",
-            "Reviewed ownership",
-            "2026-09-01",
-            "2026-09-01",
-        )
-    )
+    from mycelium.artifacts import ConsolidatedFact
+    builder.artifacts.save_consolidated_fact(ConsolidatedFact("view", hit.claim_text, [hit.claim_id], entity.entity_id,
+        "Interests", "current", [], "model", .8, "Cited view", "2026-09-01", "2026-09-01"))
     evidence = builder.build([hit, hit], budget_tokens=2000)
     assert len(evidence.records) == 1
     assert builder.page_references(evidence) == ()

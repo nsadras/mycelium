@@ -1,6 +1,4 @@
-"""Explicit neutral decisions for lifecycle mechanics; native probes prove semantics."""
-
-from tests.discovery_support import discovery_response
+"""Neutral model decisions for lifecycle mechanics; bounded native runs assess meaning."""
 
 import json
 
@@ -8,106 +6,20 @@ import json
 def lifecycle_response(_system, user, schema, **kwargs):
     stage = kwargs.get("debug_label")
     if stage == "memory-correction":
-        return {
-            "about": [{"entity": "user", "role": "subject"}],
-            "claim_type": "preference",
-            "predicate": None,
-            "temporal_status": "atemporal",
-            "facets": {"times": [], "inference_basis": None},
-        }
-    if stage == "dream-subject-discovery":
-        return discovery_response(
-            {
-                "subjects": [
-                    {
-                        "entity_type": "person",
-                        "title": "You",
-                        "description": "The statement concerns the user.",
-                        "supporting_evidence": ["C001"],
-                        "alternate_names": [],
-                    }
-                ]
-            }
-        )
-    if stage == "dream-subject-identity":
-        return {
-            "decision": {
-                "resolution": "existing",
-                "entity_id": "you",
-                "preferred_name_update": None,
-                "reason": "The statement concerns the user.",
-                "aliases": [],
-            }
-        }
-    if stage == "dream-source-attribution":
-        return {
-            "attributions": {
-                a: {
-                    "you": {
-                        "assertions": ["Explicit fixture assertion"],
-                        "relation_to_claim": "described",
-                    }
-                }
-                for a in schema.model_fields["attributions"].annotation.model_fields
-            }
-        }
-    if stage == "dream-claim-routing":
-        return {
-            "decisions": {
-                a: {
-                    "primary_subject": "you",
-                    "primary_reason": "User preference.",
-                    "pages": {"you": "preferences_working_style"},
-                    "uncertainty": None,
-                    "prominence": "briefing",
-                }
-                for a in schema.model_fields["decisions"].annotation.model_fields
-            }
-        }
-    if stage == "dream-fact-candidate-selection":
-        return {
-            "decisions": {
-                a: {"candidate_fact_ids": [], "reason": "Independent fixture claim."}
-                for a in schema.model_fields["decisions"].annotation.model_fields
-            }
-        }
-    if stage == "dream-truth-candidates":
-        return unrelated_truth_candidates(schema)
-    if stage == "dream-fact-grouping":
-        claims = json.loads(
-            user.split("CANONICAL STORED CLAIMS\n", 1)[1].split(
-                "\n\nALLOWED SECTIONS", 1
-            )[0]
-        )
-        return {
-            "groups": [
-                {
-                    "member_claim_aliases": [a],
-                    "memory_scope": "An independent fixture statement.",
-                    "state": "current",
-                    "section_key": "preferences_working_style",
-                    "prominence": "briefing",
-                }
-                for a in claims
-            ]
-        }
-    raise AssertionError(f"Unexpected lifecycle model call: {stage}")
-
-
-def unrelated_truth_candidates(schema):
-    return {
-        "decisions": {
-            a: {
-                "candidates": {
-                    target: "unrelated"
-                    for target in field.annotation.model_fields[
-                        "candidates"
-                    ].annotation.model_fields
-                },
-                "reason": "Independent fixture statements.",
-            }
-            for a, field in schema.model_fields[
-                "decisions"
-            ].annotation.model_fields.items()
-        }
-    }
+        return {"about": [{"entity": "user", "role": "subject"}], "claim_type": "preference",
+                "predicate": None, "temporal_status": "atemporal",
+                "facets": {"times": [], "inference_basis": None}}
+    payload = json.loads(user)
+    if stage == "memory-retention":
+        sid = payload["existing_subjects"][0]["id"] if payload["existing_subjects"] else payload["new_subject_ids"][0]
+        value = {"subjects": [{"id": sid, "title": "You", "entity_type": "you", "review_required": False}],
+                 "memories": [{"id": f"m{i}", "text": s["text"], "segment_ids": [s["id"]], "subject_ids": [sid]}
+                              for i, s in enumerate(payload["segments"])], "changes": []}
+    elif stage == "memory-presentation":
+        protected = {cid for f in payload["existing_items"] if f["protected"] for cid in f["memory_ids"]}
+        value = {"items": [{"owner_id": payload["affected_subject_ids"][0], "heading": "Preferences",
+                           "text": m["text"], "memory_ids": [m["id"]], "linked_subject_ids": [], "state": "current"}
+                          for m in payload["memories"] if m["id"] not in protected]}
+    else:
+        raise AssertionError(f"Unexpected lifecycle model call: {stage}")
+    return schema.model_validate(value).model_dump()

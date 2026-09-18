@@ -1,4 +1,3 @@
-from tests.extraction_support import time_details
 from tests.session_support import configure_sessions, read_sessions, seed_sessions
 import asyncio
 
@@ -34,39 +33,8 @@ class DeterministicProductionModel:
         return ChatResponse("I will keep that deadline in mind.")
 
     async def call_structured(self, _system, user, output_type, **_kwargs):
-        if "segments" in output_type.model_fields:
-            segment_ids = list(
-                output_type.model_fields["segments"].annotation.model_fields
-            )
-            segment_id = segment_ids[0]
-            from tests.extraction_support import extraction_response
-
-            return extraction_response(
-                [
-                    {
-                        "text": "The user will send the Cedar brief tomorrow.",
-                        "claim_type": "commitment",
-                        "predicate": None,
-                        "evidence_modality": "speech",
-                        "temporal_status": "future",
-                        "about": [{"entity": "user", "role": "subject"}],
-                        "segment_ids": [segment_id],
-                        "facets": time_details(segment_id, "tomorrow", {"kind":"day_offset", "days":1}),
-                    }
-                ],
-                segment_ids[1:],
-            )
-        if _kwargs.get("debug_label") in {
-            "memory-correction",
-            "dream-subject-discovery",
-            "dream-subject-identity",
-            "dream-claim-routing",
-            "dream-source-attribution",
-            "dream-fact-grouping",
-            "dream-fact-candidate-selection",
-        }:
+        if _kwargs.get("debug_label") in {"memory-correction", "memory-retention", "memory-presentation"}:
             from tests.lifecycle_support import lifecycle_response
-
             return lifecycle_response(_system, user, output_type, **_kwargs)
         from typing import get_args
 
@@ -84,7 +52,7 @@ class ArtifactBackedTestIndex:
         self.embedder = type("Embedder", (), {"model": "test-embedding"})()
         self.candidate_limit = 20
 
-    async def search(self, _query):
+    async def search(self, _query, **kwargs):
         return [
             ClaimSearchHit(
                 claim.claim_id,
@@ -117,9 +85,10 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     memory.encoder.llm = fake
     memory.retriever.llm = fake
     memory.retriever.claim_index = ArtifactBackedTestIndex(memory.artifacts)
-    memory.consolidator.llm = fake
-    memory.consolidator.fact_resolver.llm = fake
-    memory.consolidator.router.llm = fake
+    memory.consolidator.retainer.llm = fake
+    memory.consolidator.views.llm = fake
+    memory.consolidator.retainer.claim_index = memory.retriever.claim_index
+    memory.consolidator.views.claim_index = memory.retriever.claim_index
     monkeypatch.setattr(runtime, "get_mem", lambda: memory)
     monkeypatch.setattr(sessions, "get_mem", lambda: memory)
     monkeypatch.setattr(memory_curation, "get_mem", lambda: memory)
@@ -167,7 +136,7 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
     assert (
         await memory.retrieve_context(RetrievalRequest("Cedar"))
     ).evidence.records == ()
-    await memory.encoder.extract_pending()
+    assert not (await memory.consolidate()).report.failures
     assert count_message_tokens(fake.messages[0]) <= memory.config.context_budget_tokens
     assert len(fake.messages[0]) < len(record["transcript"]) + 2
     assert fake.messages[0][-1]["content"].endswith(
@@ -183,17 +152,15 @@ async def test_production_session_lifecycle_acceptance(tmp_path, monkeypatch):
         for episode in memory.artifacts.list_episodes()
     ]
     claim = active_claims[0]
-    temporal = claim.facets["temporal"][0]
-    assert temporal["anchor"] == "2026-08-31T23:55:00+00:00"
-    assert temporal["start"] == "2026-09-01"
-    assert temporal["end"] == "2026-09-01"
+    source = memory.artifacts.get_source(claim.provenance[0].source_id)
+    assert any(s.timestamp == "2026-08-31T23:55:00+00:00" for s in source.segments)
     assert len(memory.artifacts.list_ingestion_operations()) == 1
 
     fake.context_disposition = "include"
     recalled = await memory.retrieve_context(
         RetrievalRequest(query="When will the Cedar brief be sent?")
     )
-    assert recalled.page_references == ()
+    assert recalled.page_references
     assert claim.text in [record.statement for record in recalled.evidence.records]
 
     fake.context_disposition = "exclude"

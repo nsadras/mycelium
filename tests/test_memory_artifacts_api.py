@@ -16,7 +16,6 @@ from mycelium.artifacts import (
 )
 from mycelium.core import Mycelium
 from mycelium.artifact_integrity import artifact_integrity
-from mycelium.facts import FactResolutionResult
 from mycelium.models import LogEntry, WikiPage
 from server.api import memory_artifacts, memory_curation
 from server.api.memory_contracts import (
@@ -59,19 +58,19 @@ def test_integrity_allows_shared_claims_but_not_repetition_on_one_page(tmp_path)
                 sections=[
                     {
                         "key": "profile",
-                        "items": [{"kind": "fact", "claim_ids": ["shared"]}],
+                        "items": [{"kind": "fact", "fact_id": "shared-view", "claim_ids": ["shared"]}],
                     }
                 ],
             )
         )
-    assert artifact_integrity(mem)["issues"]["pages_with_repeated_claims"] == []
+    assert artifact_integrity(mem)["issues"]["pages_with_repeated_items"] == []
     page = mem.wiki.get("first")
     page.sections.append(
-        {"key": "timeline", "items": [{"kind": "fact", "claim_ids": ["shared"]}]}
+        {"key": "timeline", "items": [{"kind": "fact", "fact_id": "shared-view", "claim_ids": ["shared"]}]}
     )
     mem.wiki.save(page)
-    assert artifact_integrity(mem)["issues"]["pages_with_repeated_claims"] == [
-        "first:shared"
+    assert artifact_integrity(mem)["issues"]["pages_with_repeated_items"] == [
+        "first:shared-view"
     ]
 
 
@@ -181,11 +180,8 @@ def artifact_memory(tmp_path, monkeypatch):
     mem.artifacts.save_consolidated_fact(stored_fact)
     from tests.lifecycle_support import lifecycle_response
 
-    mem.consolidator.fact_resolver.llm = AsyncMock(context_window_tokens=32768)
-    mem.consolidator.fact_resolver.llm.call_structured.side_effect = lifecycle_response
-    mem.consolidator.fact_resolver.resolve = AsyncMock(
-        return_value=FactResolutionResult(facts=[stored_fact])
-    )
+    mem.consolidator.views.llm = AsyncMock(context_window_tokens=32768)
+    mem.consolidator.views.llm.call_structured.side_effect = lifecycle_response
     mem.wiki.save(
         WikiPage(
             slug="archived-page",
@@ -287,8 +283,8 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
         "wiki_pages": 1,
     }
     assert overview["projection"] == {
-        "page_assignments": 2,
-        "assigned_claims": 2,
+        "page_assignments": 1,
+        "assigned_claims": 1,
         "multi_page_claims": 0,
         "average_pages_per_claim": 1.0,
         "max_pages_per_claim": 1,
@@ -322,10 +318,7 @@ async def test_artifact_inspection_endpoints_expose_complete_store(artifact_memo
     assert fact["claims"][0]["claim_id"] == "claim-test"
     assert fact["owner"]["entity_id"] == "you"
     assert entity["facts"][0]["fact_id"] == "fact-tea-preference"
-    assert {item["claim_id"] for item in entity["placements"]} == {
-        "claim-old",
-        "claim-test",
-    }
+    assert set(entity["claim_ids"]) == {"claim-test"}
     assert proposals[0]["proposal_id"] == "recon-test"
     assert organization_proposals[0]["proposal_id"] == "organization-test"
     assert overview["reconsolidation_proposals"] == {"pending": 1}
@@ -385,9 +378,6 @@ async def test_review_proposal_endpoint_returns_404(artifact_memory):
 
 @pytest.mark.asyncio
 async def test_correct_claim_endpoint_creates_replacement_artifacts(artifact_memory):
-    artifact_memory.consolidator.fact_resolver.resolve = AsyncMock(
-        return_value=FactResolutionResult(deleted_fact_ids={"fact-tea-preference"})
-    )
     response = await memory_curation.correct_claim(
         "claim-test",
         ClaimCorrectionRequest(
@@ -406,9 +396,6 @@ async def test_correct_claim_endpoint_creates_replacement_artifacts(artifact_mem
 
 @pytest.mark.asyncio
 async def test_retract_source_endpoint_marks_source_and_claims(artifact_memory):
-    artifact_memory.consolidator.fact_resolver.resolve = AsyncMock(
-        return_value=FactResolutionResult(deleted_fact_ids={"fact-tea-preference"})
-    )
     response = await memory_curation.retract_source(
         "source-test",
         SourceRetractionRequest(reason="The imported chat was not authentic."),

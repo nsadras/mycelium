@@ -41,6 +41,10 @@ def test_queue_counts_pending_without_counting_placed_claims(tmp_path):
         updated_at=now.isoformat(),
     ))
 
+    assert queue.status().pending_claims == 2  # Review can reopen already displayed evidence.
+    recent = artifacts.get_claim("recent")
+    recent.dream_disposition = "routed"
+    artifacts.save_claim(recent)
     assert queue.status().pending_claims == 1
 
 

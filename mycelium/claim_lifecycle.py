@@ -17,7 +17,9 @@ from mycelium.artifacts import (
     SourceDocument,
     SourceSegment,
 )
-from mycelium.facts import FactResolutionResult, FactResolver
+from mycelium.views import ViewOrganizer
+from mycelium.retention import Retainer
+from mycelium import memory_contract
 from mycelium.materialization import PageMaterializer
 from mycelium.reconsolidation import add_claim_link
 from mycelium.lifecycle_transaction import LifecycleTransaction, mutation_lock
@@ -33,8 +35,6 @@ from mycelium.correction_review import (
     review_is_current,
     preview as correction_preview,
 )
-from mycelium.consolidation import ClaimRouter, placement_from_route
-from mycelium.consolidation_models import ClaimEvidence
 
 
 class ClaimLifecycleConflictError(RuntimeError):
@@ -56,11 +56,11 @@ class ClaimLifecycleService:
         self,
         artifacts: ArtifactStore,
         materializer: PageMaterializer,
-        resolver: FactResolver,
+        views: ViewOrganizer,
     ) -> None:
         self.artifacts = artifacts
         self.materializer = materializer
-        self.resolver = resolver
+        self.views = views
 
     async def correct_claim(
         self,
@@ -124,7 +124,7 @@ class ClaimLifecycleService:
                     self.materializer.config,
                 )
                 service = ClaimLifecycleService(
-                    artifacts, materializer, FactResolver(self.resolver.llm, artifacts, self.resolver.config)
+                    artifacts, materializer, ViewOrganizer(self.views.llm, artifacts, materializer, self.views.config)
                 )
                 action = (
                     service._correct_claim
@@ -180,7 +180,7 @@ class ClaimLifecycleService:
             if time_references is not None:
                 raise ValueError("Time choices require a saved correction preview")
             metadata = ReplacementMetadata.model_validate(
-                await self.resolver.llm.call_structured(
+                await self.views.llm.call_structured(
                     render_prompt("memory/correction.system.jinja"),
                     json.dumps(
                         {
@@ -298,41 +298,18 @@ class ClaimLifecycleService:
                 extraction_status="complete",
             )
         )
+        affected_entity_ids = self.artifacts.entities_for_claims({claim_id})
+        context_ids = {claim_id} | {cid for fact in self.artifacts.facts_for_claim(claim_id) for cid in fact.member_claim_ids}
+        retainer = Retainer(self.views.llm, self.artifacts, self.views.config)
+        payload = await retainer.input(source, source.segments, f"correction-{short_id}", prior_ids=sorted(context_ids))
+        retained = await memory_contract.retain(self.views.llm, payload)
         target.status = "superseded"
         self.artifacts.save_claim(target)
-        self.artifacts.save_claim(replacement)
-
-        affected_entity_ids: set[str] = set()
-        placement = self.artifacts.placement_for_claim(claim_id)
-        if placement and placement.owner_entity_id:
-            affected_entity_ids.add(placement.owner_entity_id)
-        routing = await ClaimRouter(self.resolver.llm, self.artifacts, self.materializer.config).route(
-            [ClaimEvidence(replacement, source)],
-            dream_run_id=f"correction-{short_id}",
-        )
-        if routing.failures:
-            raise ClaimLifecycleConflictError(routing.failures[0].reason)
-        for entity in routing.new_entities:
-            self.artifacts.save_entity(entity)
-        for decision in routing.entity_decisions:
-            self.artifacts.save_entity_resolution_decision(decision)
-        self.artifacts.replace_automatic_entity_references(
-            [route.claim_id for route in routing.routes],
-            routing.entity_references,
-            dream_run_id=f"correction-{short_id}",
-        )
-        for route in routing.routes:
-            self.artifacts.save_placement(placement_from_route(route))
-            replacement.dream_disposition = "routed" if route.placed else "deferred"
-            replacement.dream_disposition_reason = route.reason
-            if route.owner_entity_id:
-                affected_entity_ids.add(route.owner_entity_id)
-        self.artifacts.save_claim(replacement)
+        retainer.persist(source, f"correction-{short_id}", payload, retained, replacement=replacement)
         reconsider = self._invalidate_reviews({claim_id}, affected_entity_ids)
-        pages = await self._rebuild(
-            affected_entity_ids,
-            incoming_claim_ids={replacement_id, *reconsider},
-            operation_id=f"correction-{short_id}",
+        pages = await self.views.refresh(
+            {claim_id, replacement_id, *reconsider}, context_ids=context_ids,
+            entity_ids=affected_entity_ids, run_id=f"correction-{short_id}",
         )
         result = ClaimLifecycleResult(
             claim_ids=[replacement_id],
@@ -362,12 +339,7 @@ class ClaimLifecycleService:
         affected_claims = self.artifacts.claims_for_sources(
             [source_id], active_only=False
         )
-        affected_entity_ids = {
-            placement.owner_entity_id
-            for claim in affected_claims
-            if (placement := self.artifacts.placement_for_claim(claim.claim_id))
-            and placement.owner_entity_id
-        }
+        affected_entity_ids = self.artifacts.entities_for_claims({c.claim_id for c in affected_claims})
         retracted_claim_ids: list[str] = []
         for claim in affected_claims:
             if claim.status != "active":
@@ -392,11 +364,11 @@ class ClaimLifecycleService:
         reconsider = self._invalidate_reviews(
             set(retracted_claim_ids), affected_entity_ids
         )
-        pages = await self._rebuild(
-            {value for value in affected_entity_ids if value},
-            incoming_claim_ids=reconsider,
-            operation_id=f"retraction-{source_id}",
-        )
+        for cid in reconsider:
+            claim = self.artifacts.get_claim(cid)
+            claim.dream_disposition = "pending"
+            self.artifacts.save_claim(claim)
+        pages = self.materializer.regenerate(affected_entity_ids)
         return ClaimLifecycleResult(
             claim_ids=sorted(retracted_claim_ids),
             source_ids=[source_id],
@@ -427,32 +399,3 @@ class ClaimLifecycleService:
                 if self.artifacts.get_claim(cid).status == "active"
             )
         return reconsider
-
-    async def _rebuild(
-        self,
-        entity_ids: set[str],
-        *,
-        operation_id: str,
-        incoming_claim_ids: set[str] | None = None,
-    ):
-        resolution = await self.resolver.resolve(
-            [],
-            affected_entity_ids=entity_ids,
-            incoming_claim_ids=incoming_claim_ids or set(),
-            dream_run_id=operation_id,
-        )
-        self._persist_resolution(resolution)
-        affected = entity_ids | {eid for proposal in resolution.proposals for eid in proposal.affected_entity_ids}
-        return self.materializer.regenerate(affected)
-
-    def _persist_resolution(self, resolution: FactResolutionResult) -> None:
-        if resolution.failures:
-            raise ClaimLifecycleConflictError(resolution.failures[0].reason)
-        for proposal in resolution.proposals:
-            self.artifacts.save_reconsolidation_proposal(proposal)
-        for placement in resolution.placements:
-            self.artifacts.save_placement(placement)
-        for fact_id in resolution.deleted_fact_ids:
-            self.artifacts.delete_consolidated_fact(fact_id)
-        for fact in resolution.facts:
-            self.artifacts.save_consolidated_fact(fact)

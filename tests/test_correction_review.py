@@ -73,7 +73,7 @@ def setup_review(tmp_path, *, timed=True):
             value["facets"] = deepcopy(details)
         return value
 
-    service.resolver.llm.call_structured.side_effect = response
+    service.views.llm.call_structured.side_effect = response
     return artifacts, wiki, service, original, first, second
 
 
@@ -86,9 +86,9 @@ async def test_relative_correction_requires_review_and_reuses_metadata(tmp_path,
     assert artifacts.get_claim(original.claim_id).status == "active"
     assert len(artifacts.list_claims()) == 1
     assert len(artifacts.list_sources()) == 2
-    calls = service.resolver.llm.call_structured.call_count
+    calls = service.views.llm.call_structured.call_count
     assert await service.correct_claim(original.claim_id, TEXT) == review
-    assert service.resolver.llm.call_structured.call_count == calls
+    assert service.views.llm.call_structured.call_count == calls
     prefix = "T" if timed else "E"
     choices = {"0": prefix + "001", "1": prefix + "002"}
     result = await service.correct_claim(
@@ -114,11 +114,11 @@ async def test_relative_correction_requires_review_and_reuses_metadata(tmp_path,
     }
     metadata_calls = [
         c
-        for c in service.resolver.llm.call_structured.call_args_list
+        for c in service.views.llm.call_structured.call_args_list
         if c.kwargs.get("debug_label") == "memory-correction"
     ]
     assert len(metadata_calls) == 1
-    service.resolver.llm.call_structured.reset_mock()
+    service.views.llm.call_structured.reset_mock()
     assert (
         await service.correct_claim(
             original.claim_id, TEXT, draft_id=review.draft_id, time_references=choices
@@ -126,7 +126,7 @@ async def test_relative_correction_requires_review_and_reuses_metadata(tmp_path,
         == result
     )
     assert await service.correct_claim(original.claim_id, TEXT) == result
-    service.resolver.llm.call_structured.assert_not_called()
+    service.views.llm.call_structured.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -285,7 +285,7 @@ async def test_weekday_correction_waits_for_exact_reference_choice(tmp_path, mea
         if kwargs.get('debug_label') == 'memory-correction':
             result['facets'] = details
         return result
-    service.resolver.llm.call_structured.side_effect = response
+    service.views.llm.call_structured.side_effect = response
     text = 'The user will deliver the sculpture next Monday.'
     review = await service.correct_claim(original.claim_id, text)
     assert isinstance(review, CorrectionPreview)
@@ -297,6 +297,6 @@ async def test_weekday_correction_waits_for_exact_reference_choice(tmp_path, mea
     stored = artifacts.get_claim(result.claim_ids[0]).facets['temporal'][0]
     assert stored['start'] == expected and stored['anchor_segment_id'] == first
     assert stored['reference_reason'] == 'User selected the stored reference date'
-    calls = service.resolver.llm.call_structured.call_count
+    calls = service.views.llm.call_structured.call_count
     assert await service.correct_claim(original.claim_id, text, draft_id=review.draft_id, time_references={'0': 'T001'}) == result
-    assert service.resolver.llm.call_structured.call_count == calls
+    assert service.views.llm.call_structured.call_count == calls

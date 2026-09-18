@@ -5,7 +5,7 @@ import pytest
 
 from mycelium import Mycelium
 from mycelium.artifacts import (
-    ClaimPlacement,
+    ClaimEntityReference,
     ClaimProvenance,
     ConsolidatedFact,
     SourceSegment,
@@ -27,19 +27,13 @@ from mycelium.operations import (
 from tests.test_audit_remediation import seed
 
 
-def place(artifacts, claim, owner):
-    artifacts.save_placement(
-        ClaimPlacement(
-            claim.claim_id,
-            owner.entity_id,
-            "interests_views",
-            [],
-            "placed",
-            "Reviewed ownership",
-            "2026-01-01",
-            "2026-01-01",
-        )
-    )
+def place(artifacts, claim, owner, *, with_view=False):
+    artifacts.save_entity_reference(ClaimEntityReference("ref-" + claim.claim_id, claim.claim_id,
+        "subject", owner.title, owner.entity_id, 1.0, "Fixture", "extraction", "test", "active", "2026-01-01"))
+    if not with_view:
+        return
+    artifacts.save_consolidated_fact(ConsolidatedFact("owned-view", claim.text, [claim.claim_id], owner.entity_id,
+        "Interests", "current", [], "manual", 1.0, "Reviewed view", "2026-01-01", "2026-01-01"))
 
 
 @pytest.mark.asyncio
@@ -51,7 +45,7 @@ async def test_owner_move_reselects_using_canonical_metadata(
         artifacts, claim, hit = seed(tmp_path)
         first = artifacts.create_entity("person", "First owner")
         second = artifacts.create_entity("person", "Second owner")
-        place(artifacts, claim, first)
+        place(artifacts, claim, first, with_view=True)
         # The search index can keep returning an older projection after the mutation.
         stale_hit = replace(
             hit, owner_title="Index label", owner_entity_id=first.entity_id
@@ -60,11 +54,11 @@ async def test_owner_move_reselects_using_canonical_metadata(
         seen = []
 
         async def select(self, query, candidates):
-            seen.append(candidates[0].title)
+            seen.append(candidates[0].content)
             if len(seen) == 1:
-                place(artifacts, claim, second)
+                place(artifacts, claim, second, with_view=True)
             elif change_again:
-                place(artifacts, claim, first)
+                place(artifacts, claim, first, with_view=True)
             return AssistantContextSelection((candidates[0].candidate_id,), {})
 
         monkeypatch.setattr(AssistantContextSelector, "select_with_trace", select)
@@ -74,8 +68,7 @@ async def test_owner_move_reselects_using_canonical_metadata(
         else:
             result = await memory.retrieve_context(RetrievalRequest("Preferences?"))
             assert result.evidence.records[0].subject_name == second.title
-            assert result.trace["candidates"][0]["owner_entity_id"] == second.entity_id
-        assert seen == [first.title, second.title]
+        assert len(seen) == 2 and first.title in seen[0] and second.title in seen[1]
         assert memory.retriever.claim_index.search.await_count == 2
 
 
@@ -247,7 +240,7 @@ async def test_failed_tool_refreshes_retracted_records_and_excerpts(tmp_path):
         )
         artifacts.save_claim(replace(claim, status="retracted"))
         result = await toolset.run("memory_sources", {"claim_ids": ["unseen"]})
-        assert toolset.workspace.evidence == MemoryEvidence()
+        assert not toolset.workspace.evidence.records and not toolset.workspace.evidence.sources
         assert claim.text not in result.model_result
         assert result.metadata["workspace_operation"]["status"] == "failed"
 
@@ -289,4 +282,4 @@ async def test_broken_provenance_clears_stale_workspace_with_explicit_error(tmp_
         result = await toolset.run("memory_sources", {"claim_ids": ["unseen"]})
         assert "evidence_integrity" in result.result
         assert "already shown" in result.result
-        assert toolset.workspace.evidence == MemoryEvidence()
+        assert not toolset.workspace.evidence.records and not toolset.workspace.evidence.sources

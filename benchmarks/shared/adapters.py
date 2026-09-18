@@ -313,7 +313,6 @@ class MyceliumMemorySystem:
         context_budget_tokens: int | None = None,
         dream_policy: str = "per-batch",
         replay_store: Path | None = None,
-        replay_assignments: bool = False,
         frozen_store: Path | None = None,
         include_retrieval_context: bool = False,
         memory_profile: Literal["user", "none"] = "none",
@@ -333,7 +332,6 @@ class MyceliumMemorySystem:
         self.context_budget_tokens = self.config.context_budget_tokens
         self.dream_policy = dream_policy
         self.replay_store = replay_store
-        self.replay_assignments = replay_assignments
         self.frozen_store = frozen_store
         self.include_retrieval_context = include_retrieval_context
         self.memory_profile = memory_profile
@@ -359,15 +357,6 @@ class MyceliumMemorySystem:
             config=self.config,
             memory_profile=self.memory_profile,
         )
-        if self.replay_assignments:
-            replay_store = self._require_replay_store()
-            fixture = ArtifactStore(replay_store / "artifacts")
-            for proposal in fixture.list_reconsolidation_proposals():
-                self.mem.artifacts.save_reconsolidation_proposal(
-                    copy.deepcopy(proposal)
-                )
-            for entity in fixture.list_entities():
-                self.mem.artifacts.save_entity(copy.deepcopy(entity))
         self._encoded_batches = 0
         self._dream_runs = 0
         self._memory_construction_seconds = 0.0
@@ -390,11 +379,7 @@ class MyceliumMemorySystem:
         )
         start = time.perf_counter()
         if self.replay_store is not None:
-            replayed_claims = self._replay_session(mem, session_id)
-            if self.replay_assignments:
-                await self._materialize_replayed_assignments(
-                    mem, replayed_claims, session_id=session_id
-                )
+            self._replay_session(mem, session_id)
         else:
             transcript = format_messages_for_memory(messages, metadata)
             await mem.ingest_source(
@@ -432,7 +417,7 @@ class MyceliumMemorySystem:
                 )
             )
         self._encoded_batches += 1
-        if self.dream_policy == "per-batch" and not self.replay_assignments:
+        if self.dream_policy == "per-batch":
             try:
                 result = await mem.consolidate(ConsolidationRequest())
                 self._record_dream_report(result.report, session_id=session_id)
@@ -591,7 +576,7 @@ class MyceliumMemorySystem:
         if (
             self.dream_policy == "per-case"
             and self.mem is not None
-            and not self.replay_assignments
+
         ):
             start = time.perf_counter()
             try:
@@ -679,10 +664,10 @@ class MyceliumMemorySystem:
                 claim.dream_run_id = None
                 claim.dream_disposition_at = None
                 mem.artifacts.save_claim(claim)
-                if self.replay_assignments:
-                    placement = fixture_artifacts.placement_for_claim(claim.claim_id)
-                    if placement:
-                        mem.artifacts.save_placement(copy.deepcopy(placement))
+                for ref in fixture_artifacts.list_entity_references(claim_id=claim.claim_id, status="active"):
+                    if ref.entity_id:
+                        mem.artifacts.save_entity(copy.deepcopy(fixture_artifacts.get_entity(ref.entity_id)))
+                    mem.artifacts.save_entity_reference(copy.deepcopy(ref))
                 replayed_claims.append(claim)
             if not source.raw_log_entry_id:
                 raise ValueError(
@@ -692,54 +677,6 @@ class MyceliumMemorySystem:
             entry.consolidated = False
             mem.log_store.append(entry)
         return replayed_claims
-
-    async def _materialize_replayed_assignments(
-        self,
-        mem: Mycelium,
-        claims: list[MemoryClaim],
-        *,
-        session_id: str,
-    ) -> None:
-        # Assignment replay bypasses model synthesis, not content projection. Render
-        # each frozen canonical statement once while preserving its saved section.
-        for claim in claims:
-            placement = mem.artifacts.placement_for_claim(claim.claim_id)
-            if (
-                claim.status != "active"
-                or placement is None
-                or placement.status != "placed"
-            ):
-                continue
-            if mem.artifacts.facts_for_claim(claim.claim_id):
-                continue
-            owner = mem.artifacts.get_entity(placement.owner_entity_id)
-            fact, _ = mem.consolidator.fact_resolver._direct_projection(
-                owner, claim, placement
-            )
-            fact.section_key = placement.section_key
-            mem.artifacts.save_consolidated_fact(fact)
-        owner_ids = {
-            placement.owner_entity_id
-            for claim in claims
-            if (placement := mem.artifacts.placement_for_claim(claim.claim_id))
-            and placement.owner_entity_id
-        }
-        mem.consolidator.materializer.regenerate(owner_ids)
-
-        eligible = [claim for claim in claims if claim.status == "active"]
-        if eligible and all(
-            (placement := mem.artifacts.placement_for_claim(claim.claim_id)) is not None
-            and placement.status in {"placed", "unassigned"}
-            for claim in eligible
-        ):
-            raw_ids = {
-                provenance.raw_log_entry_id
-                for claim in eligible
-                for provenance in claim.provenance
-                if provenance.raw_log_entry_id
-            }
-            mem.log_store.mark_consolidated(sorted(raw_ids))
-
 
 class FullWikiMemorySystem(MyceliumMemorySystem):
     name = "full_wiki"
@@ -787,7 +724,6 @@ def build_memory_system(
     context_budget_tokens: int | None,
     dream_policy: str,
     replay_store: Path | None = None,
-    replay_assignments: bool = False,
     frozen_store: Path | None = None,
     include_retrieval_context: bool = False,
 ) -> MemorySystem:
@@ -798,8 +734,6 @@ def build_memory_system(
         raise ValueError("--replay-store is only supported by mycelium and full_wiki")
     if replay_store is not None and not replay_store.is_dir():
         raise ValueError(f"Replay store does not exist: {replay_store}")
-    if replay_assignments and replay_store is None:
-        raise ValueError("--replay-assignments requires --replay-store")
     if frozen_store is not None and replay_store is not None:
         raise ValueError("--frozen-store and --replay-store are mutually exclusive")
     if frozen_store is not None and not frozen_store.is_dir():
@@ -825,7 +759,6 @@ def build_memory_system(
             config=config,
             dream_policy=dream_policy,
             replay_store=replay_store,
-            replay_assignments=replay_assignments,
             frozen_store=frozen_store,
             include_retrieval_context=include_retrieval_context,
         )
@@ -840,7 +773,6 @@ def build_memory_system(
             config=config,
             dream_policy=dream_policy,
             replay_store=replay_store,
-            replay_assignments=replay_assignments,
             frozen_store=frozen_store,
             include_retrieval_context=include_retrieval_context,
         )

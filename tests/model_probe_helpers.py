@@ -5,34 +5,6 @@ import json
 from pydantic import BaseModel, ConfigDict
 
 from mycelium import SourceInput
-from mycelium.fact_groups import (
-    FactText, fact_groups_model, fact_groups_prompt, fact_text_prompt,
-)
-
-
-async def grouped_statements(memory, owner, canonical, sections, path):
-    """Exercise current grouping/rendering contracts without mandating a layout."""
-    system, user = fact_groups_prompt(owner, json.dumps(canonical), sections)
-    schema = fact_groups_model(canonical, ["profile", "history"])
-    result = schema.model_validate(await memory.llm.call_structured(
-        system, user, schema, num_predict=4096, debug_label="grouping-probe",
-    )).model_dump()
-    path.write_text(json.dumps(result, indent=2))
-    statements = []
-    for group in result["groups"]:
-        members = [canonical[alias] for alias in group["member_claim_aliases"]]
-        if len(members) == 1:
-            statements.append(members[0]["text"])
-        else:
-            system, user = fact_text_prompt(owner, json.dumps(members))
-            response = FactText.model_validate(await memory.llm.call_structured(
-                system, user, FactText, num_predict=1024, debug_label="fact-text-probe",
-            ))
-            statements.append(response.text)
-    path.with_name("statements.json").write_text(json.dumps(statements, indent=2))
-    return statements
-
-
 class MeaningVerdict(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_supported: bool

@@ -142,9 +142,12 @@ unbuilt sources remain browsable and await Build Memory. There is no Flush contr
 
 ### How memory works
 
-Build Memory uses a stable snapshot of captured sources, resumes unfinished extraction, then runs the current
-organizer. New arrivals remain pending for the next build. Saved transcripts are durable retry inputs; repeated
-capture does not duplicate source records. A failed meeting summary does not prevent source admission.
+Build Memory uses a stable snapshot of captured sources. A retention pass keeps useful statements with exact
+source citations and subjects; a presentation pass turns them into readable, cited wiki items. The normal small
+Build uses two model calls. Large sources use bounded batches; failed requests can require retries.
+New arrivals remain pending for the next Build. Successful retention survives a failed view update, and retrying
+resumes unfinished work. Retrieval reports when a Build is incomplete. Saved transcripts remain available even
+when some details are not selected as memories.
 
 The wiki distinguishes people, organizations, ongoing projects, recurring series, individual events, artifacts,
 places, and abstract topics. A meeting, tool, or deliverable can remain part of its larger context without creating
@@ -314,16 +317,15 @@ inspection (including on failure, up to the stage reached). Your live store is u
 `tests/fixtures/chat_memory_replay.json` contains personal conversation text saved with permission; review it
 before publishing or sharing the repository.
 
-Additional focused real-model probes and capture/build/retrieval replays:
+Focused structural tests cover capture/build recovery, shared evidence, manual view edits, correction-date review,
+and source retraction:
 
 ```bash
-MYCELIUM_RUN_EXTRACTION_REPLAYS=1 .venv/bin/pytest -q -s tests/test_extraction_replays.py
+.venv/bin/pytest -q tests/test_capture_build.py tests/test_memory_build.py tests/test_view_lifecycle.py tests/test_claim_lifecycle.py tests/test_correction_review.py
 ```
 
-These cover source-only conversation, unaccepted assistant suggestions, cross-turn acceptance/refusal with
-original-context citations, and facts embedded in questions versus purely informational questions.
-Exact accounting and provenance are checked deterministically; an evaluation-only
-model judge checks meaning without requiring exact output wording. The judge is not an independent quality oracle.
+These checks establish lifecycle mechanics. Configured-model runs and source review establish whether the
+resulting memory is useful; ordinary omissions do not require a perfect benchmark score before moving on.
 
 ## License
 

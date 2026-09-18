@@ -369,7 +369,8 @@ export interface MemoryClaimArtifact {
   slot?: string | null;
   facets: Record<string, unknown>;
   links: Record<string, string>[];
-  placement?: ClaimPlacementArtifact | null;
+  view_count?: number;
+  identity_review_ids?: string[];
   claim_type: string;
   predicate?: string | null;
   evidence_modality: string;
@@ -392,7 +393,8 @@ export interface MemoryClaimArtifactSummary {
   claim_type: string;
   evidence_modality: string;
   dream_disposition: string;
-  placement?: ClaimPlacementArtifact | null;
+  view_count?: number;
+  identity_review_ids?: string[];
 }
 
 export interface ClaimScopeDecisionArtifact {
@@ -486,7 +488,7 @@ export interface ConsolidatedFactDetail extends ConsolidatedFactArtifact {
 }
 
 export interface EntityArtifactDetail extends EntityRecord {
-  placements: ClaimPlacementArtifact[];
+  claim_ids: string[];
   facts: ConsolidatedFactArtifact[];
   encounters: Record<string, unknown>[];
   resolution_decisions: EntityResolutionDecisionArtifact[];

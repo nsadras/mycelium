@@ -4,15 +4,15 @@ This document describes how Mycelium is organized and how information moves thro
 
 ## System overview
 
-Build Memory extracts statements and accounts for source segments in one structured response per batch.
-The model writes claims first, then explicit `source_only` reasons for the uncited remainder. Code derives
-`claimed` dispositions from exact citations; the model does not classify cited segments a second time.
-Citations and the source-only remainder must form a disjoint, complete partition. Omissions fail visibly and
-remain retryable, never implicitly source-only. Earlier conversational context can resolve references,
-but its original segment IDs must be cited separately and it is not re-extracted as new evidence.
-An extraction batch has one pending/failed/complete status. Validated model output is saved temporarily before
-claim writes, reused after write interruption, and discarded once the completed batch is durably recorded.
-Identity organization and cumulative fact synthesis remain separate downstream stages.
+Build Memory uses two semantic passes for a small source: retain useful evidence, then organize cited views.
+Retention returns subjects, statements with exact source-segment citations, and proposed changes to prior memory.
+Presentation returns independent items with a subject, natural heading, text, and exact statement citations.
+One statement can support several distinct items or pages. Claims retain their evidence independently of views.
+
+The model selects useful context rather than accounting for every sentence. Unselected text remains in the
+original source. Code validates exact IDs and structural invariants, never repairs meaning with keyword rules.
+Completed retention batches survive a later view failure. Capture, reference validation, persistence, page
+rendering, and source retraction do not require semantic model stages of their own.
 
 Mycelium is made of three primary layers:
 
@@ -34,8 +34,11 @@ mycelium/
 │   ├── retrieval.py    # Read-only memory retrieval orchestration
 │   ├── claim_index.py  # Rebuildable LanceDB hybrid claim index
 │   ├── retrieval_context.py # Budgeted claim/fact/source context rendering
-│   ├── encoder.py      # Transcript-to-source/episode/claim encoding
-│   ├── dream.py        # Consolidation preparation, execution, and commit
+│   ├── encoder.py      # Durable capture and source segmentation
+│   ├── retention.py    # Bounded source-to-evidence retention and recovery
+│   ├── memory_contract.py # Two flat structured model contracts
+│   ├── views.py        # Cited view refresh with concurrent-edit protection
+│   ├── dream.py        # Build orchestration, checkpoints, and status
 │   ├── reconsolidation.py # Evidence-triggered proposal analysis and review
 │   ├── materialization.py # Deterministic claim-to-wiki projection
 │   ├── ollama.py       # Adapter around the official Ollama SDK
@@ -67,7 +70,7 @@ ConsolidationRequest -> consolidate()      -> ConsolidationResult
 ```
 
 The FastAPI server, Engram, benchmarks, examples, and direct Python integrations all use these same operations.
-Lower layers implement one concern each: `Encoder` persists sources and extracts claims, `MemoryRetriever` selects
+Lower layers implement one concern each: `Encoder` persists sources, `Retainer` extracts claims, `MemoryRetriever` selects
 read-only assistant context, `ConsolidationProcess` coordinates semantic consolidation, and repository/materializer
 classes persist canonical artifacts and generated views.
 
@@ -140,8 +143,8 @@ transcript in chronological order. Tools bound their own output by admitting onl
 agent runtime never slices a serialized tool result. Persisted tool events retain the incremental raw result for
 auditing, while the model receives the full current workspace after each memory operation.
 
-The tool-specific extraction policy for web observations keeps source-grounded project facts while ignoring transport
-metadata, failures, and page furniture.
+Retention receives source kind and speaker roles, so tool observations and assistant suggestions remain
+attributable to their actual sources rather than becoming implicit user commitments.
 
 ### 3. Automatic source capture and explicit extraction
 
@@ -154,141 +157,76 @@ Capture writes a raw log, SourceDocument, EpisodeManifest, and IngestionOperatio
 Library ingest_source has the same capture-only contract. Reviewed meeting transcripts are admitted before optional
 summary generation; a failed summary is retryable without recapturing or reopening the retained source for edits.
 
-Build Memory snapshots source IDs, extracts unfinished batches, and runs the existing organizer on that snapshot.
-New sources arriving during the build remain pending. The library serializes builds; web capture recovery happens
-under per-session locks before the build snapshot. Existing extraction stages and persisted batch recovery remain.
-Extracted sentences preserve source commitment level, negation, conditions, and reported attribution. Tentative
-possibilities are durable memories, not definite plans; explicit commitments are not weakened into possibilities.
-Categories and confidence scores do not substitute for these qualifiers in the readable statement.
+Build Memory snapshots source IDs and processes unfinished retention and presentation for that snapshot.
+New sources remain pending. A store-wide mutation lock serializes Build and lifecycle edits; web capture recovery
+uses per-session locks before the snapshot. Whole source segments form bounded retention batches, and oversized
+turns are split without changing their text. Batch results and completion checkpoints commit together.
+A failed or cancelled batch stays retryable; no-op Builds make no model calls.
 
-Web turn sources point to up to four preceding captured turns for extraction context rather than duplicating their
-text. Earlier context is capped at one quarter of the model context window using complete source groups. Coverage
-classifies only new segments; extracted statements can separately cite exact context segment IDs. These citations
-are persisted against their original sources. Earlier context is not re-extracted as new evidence occurrences.
-This preserves bounded cross-turn interpretation; it does not promise unlimited conversation context.
+Web turn sources can point to preceding turns for interpretation. Retention includes bounded original context
+segments and their exact IDs. Each new statement must cite at least one new-source segment; it may also cite
+context against its original source. Source roles, speakers, occurrence times, and segment timestamps survive
+capture. The prompt preserves conditional and relative wording rather than inventing unsupported calendar dates.
 
-Memory search still discovers extracted statements, not unbuilt transcripts or rendered wiki pages.
-Source inspection follows citations. The UI distinguishes captured sources awaiting a build from built memories.
+Search discovers retained statements, including those without a page. Unbuilt transcripts stay inspectable but
+are not searched as memory. Evidence supplied to agents warns when source extraction or view updates are pending.
+This is a status warning, not a guarantee that an answer will mention every missing detail.
 
 ### 4. Build Memory organization
 
-The dream process converts source-grounded claims into semantic wiki pages:
-
 ```mermaid
 flowchart TD
-    A[Unconsolidated source-grounded claims] --> B[Compile typed source retention]
-    B --> C[Discover source subjects and resolve grounded identities]
-    C --> D[Assess independent page usefulness]
-    D --> F[Select eligible pages and sections for each statement]
-    F --> K{New entity materialized?}
-    K -->|yes| L[Re-plan explicit persisted scope neighborhood]
-    K -->|no| M[Use initial scope]
-    L --> M
-    M --> N[Compare truth changes across active claims]
-    N --> O[Create review proposals for unsafe changes]
-    O --> P[Group canonical claims and render bounded facts]
-    P --> Q[Persist scope, identity, references, cohorts, and Dream audit]
-    Q --> R[Mark completed logs consolidated]
+    A[Captured source snapshot] --> B[Retain useful statements and subjects]
+    B --> C[Atomically save evidence and pending change proposals]
+    C --> D[Present related evidence as cited view items]
+    D --> E[Atomically replace supplied generated items]
+    E --> F[Render pages and publish projections]
+    D -->|failure| G[Keep evidence searchable and views pending]
+    G --> D
 ```
 
-Important behavior:
+- `memory_contract.py` declares two flat responses. Retention selects subjects, statements, and changes;
+  presentation selects items. Exact request-local subject, citation, change-target, and view IDs constrain
+  structured generation. Persistence validates the same contract again. Unknown references are rejected.
+- Learned claim retrieval supplies bounded prior context. There is no full identity-planning cascade, separate
+  page-admission call, fixed heading ontology, truth-pair matrix, or per-item prose call. A new subject can receive
+  a page from one useful conversation. Namesakes and uncertain identity matches remain model judgments with
+  inspectable evidence and optional review.
+- Retention does not deactivate earlier claims. Suggested supersessions or contradictions become pending human
+  reviews. Both sides remain available. Existing items that cite pending evidence are protected during refresh.
+- A view item owns its heading and destinations; a claim has no exclusive page or item membership. Different
+  items can cite the same evidence. A linked destination intentionally displays that item's complete text.
+  Presentation can return no item for retained evidence; that evidence remains searchable as `deferred`.
+- Refresh selects bounded related claims and the existing items they support. It replaces only supplied,
+  unprotected generated items. Other items and manually edited items survive. An optimistic database snapshot
+  rejects publication if the inputs changed during the model call, preventing a concurrent manual edit from
+  being overwritten. It does not silently repeat semantic work.
+- Manual move/split/group operations edit views and preserve their source citations. Split groups may share
+  evidence. Identity review binds exact reviewed evidence; choosing no page excludes only that evidence on that
+  subject's page. Other useful evidence can still support a page. These decisions reopen pending view work even
+  when extraction of the original source is complete.
+- The deterministic materializer projects active, fully supported items with source footnotes, review markers,
+  and natural headings. Distinct items sharing citations remain visible. Unsupported generated items disappear;
+  manual records remain inspectable. Empty non-You pages disappear while subject records remain available.
+  `_index.md` and the You map are rebuilt from current materialized pages.
+- A failed view refresh preserves committed evidence and prior views, reports pending work, and retries only
+  the unfinished work. Publication uses the SQLite outbox, so file recovery does not rerun models. Build audits
+  record completion, failures, pending sources, and proposal IDs.
+- Work is bounded by source/claim batches and retrieved context. Expanding selected existing items to all their
+  supporting claims can still produce an oversized request in an unusually dense store; it fails visibly rather
+  than dropping citations. The two-call small-source path is not a promise of constant cost at every store size.
 
-- Routing uses exact batch-local alias accounting and fails closed on malformed output.
-- Source-grounded claims are the canonical memory. Consolidated facts are current presentation artifacts only:
-  obsolete facts are deleted when claims are regrouped or superseded, while the underlying claims and their
-  relationship history remain durable.
-- Assistant/system conversation claims and extraction-rejected segments remain source history under closed,
-  provenance-linked retention reasons rather than masquerading as deferred or canonical memory.
-- `source_only` is not a model-authored scope outcome: every admitted claim is placed or explicitly deferred.
-- Subject discovery first inventories source referents and types without exposing the identity registry or
-  prior review metadata. A separate structured assignment binds reviewed identity occurrences to those subjects.
-  Every external speaker has a required assignment to a returned person subject; speaker assignments are distinct
-  from supporting claims. Identity matching receives participant-role context for the cited sources, including
-  the exact canonical user binding even when a discovered mention lacks a direct speaker assignment.
-  Explicit source user roles and accepted human reviews then constrain exact canonical identity IDs. Remaining
-  subjects receive registry candidates across inferred types, at most 24 each, and a structured existing/new/review-required
-  decision. Declared speakers remain restricted to people. Inferred types and page publication state stay outside
-  the identity-matching prompt; neither establishes whether two mentions denote the same subject.
-  Matching retains canonical types and establishes the
-  preferred source-backed title; discovery labels cannot overwrite that decision. Candidate retrieval uses model embeddings with changed-document and query reuse; it never uses
-  lexical identity rules. These stages preserve cited claim/participant evidence for inspection. Candidate
-  limits bound individual matching requests, not the cost of reading the full identity history.
-- Truth comparison receives the current build's successful identity-reference replacements before publication.
-  Empty replacements clear stale automatic context, failed/unprocessed scopes retain prior context, and manual
-  reviews survive. Preparing this view does not write references; the Dream commit publishes the same decisions.
-- Fact grouping uses local claim IDs to select membership. Text-only rendering receives the ordered canonical
-  records without those temporary aliases, retaining all statement and temporal fields.
-- Page usefulness is independent of identity confidence. A known identity can exist without a page; the persisted
-  state is still named `provisional`, but there is no maturity threshold or continuity verifier. Pages without
-  selected statements are not manufactured from participant encounters. External speakers who only report facts about
-  others may remain source participants without becoming memory identities.
-  A separate structured admission decision requires a type-specific positive basis and cited claims before a
-  provisional subject becomes eligible for placement. Previously materialized subjects remain eligible. Only
-  subjects resolved from the source enter the placement domain; You is not an implicit destination for every claim.
-  Attribution first lists what each statement asserts about each resolved subject, then distinguishes described,
-  reporting-only and unrelated entities. A described decision requires nonempty asserted content; other relations
-  require an empty list. These explanations remain attached to the source-backed work unit and do not create new
-  canonical claims. Meaning still comes from the model; schema validation checks coverage, domains and consistency.
-- Uncertain identities remain reviewable proposals and defer affected routing. Existing registry IDs/types and
-  explicit human identity decisions cannot be overridden by the planner. Historical audit record readers and
-  manual organization APIs remain; retired maturity-assessment storage, contracts, and UI have been removed.
-  Review proposals retain exact candidate identity IDs and source evidence across reloads; pending-review context
-  includes those candidates and the explanation, not just a proposed title.
-- One subsequent placement response selects one or more useful page/section destinations for each claim among
-  admitted subjects. A page-ID-keyed object makes one explicit decision per eligible page: a type-valid
-  section or `not_selected`, with a reason. One statement may appear on several pages but has only one chosen
-  section on each page. Select destinations before the primary owner; the owner must be one of the selected pages.
-  Routing records the decisions' reasons, but only selected destinations enter persisted placements. The primary owner
-  remains an internal synthesis grouping, not an exclusive display destination. `ClaimPlacement.page_sections`
-  records the chosen views; the source statement is stored once.
-  Claims without a suitable page remain searchable independently of the wiki. Completed identity plans are
-  reconsidered against the current registry on later runs; failed routing reuses its saved plan and exact allocated
-  IDs, avoiding duplicate identities after a partial commit. Old-cascade caches are not reused by the new contract.
-- Unusually large claim sets are split into bounded work units. Global truth-change review precedes owner-scoped
-  presentation. Cumulative presentation selects relevant prior facts, then groups their canonical members and
-  at most twelve new claims. Each group declares one to twelve exact members, section, state, prominence, and
-  rationale. Code validates complete, nonduplicated membership. Singleton text copies the canonical display
-  statement; each multi-claim group receives a separate prose call constrained to its members and temporal records.
-  Stable local aliases allow unchanged group prose to be reused even when neighboring groups change. Successful
-  structured responses are durably keyed by the actual request, schema, settings, and model weight digest.
-  There is no separate model verification or repair stage for prose, so semantic coverage still requires evaluation.
-  Manually edited facts retain their exact text and evidence membership while those members remain active and
-  correctly owned. New claims cannot be silently added to unchanged manual prose.
-  Pending reviews protect whole existing facts from regrouping; newly arriving sides remain separately visible.
-  Both sides retain their canonical evidence. Presentation cannot resolve a truth-change review.
-  Existing fact-ID reuse, selected-view projection, and commit recovery remain. Scope-neighborhood revision is
-  triggered only by actual identity creation or first materialization, not routine updates to existing identities.
-  Bounded groups and request reuse do not bound the first-build scan of active claims or prior owner facts;
-  growing-store cost remains an acceptance concern.
-  Additions preserve successful batches when another batch fails; only failed claim IDs remain retryable. Changes
-  to existing placements retain owner-scoped atomicity. Pending proposals created by earlier batches protect
-  accepted facts in later batches of the same build, before anything is persisted.
-  Placement batches target at most 32 claim/page decisions while retaining every eligible page (a registry larger
-  than 32 still receives one complete row). Routing failures keep their source logs pending rather than reporting
-  them consolidated.
-  Truth review requires evidence of incompatible values for the same particular state/event or an actual
-  replacement. A shared topic, newer recording time, or another independent plan is insufficient. Genuine
-  changes create review proposals without automatically mutating accepted statements.
-- General selected placements replace the special person/project projection rule. Incidental mentions do not
-  automatically receive a copy. Shared views retain the same claim IDs and provenance; if only part of a synthesized
-  group was selected for a page, that view renders only the selected canonical statements, not unrelated group text.
-  Removing a destination or retracting a claim regenerates affected pages. Empty non-You pages are removed, while
-  their subject identities remain available for future placements. Reading pages does not create extra stored facts.
-- Claim entity references preserve extracted surface mentions and stable subject, object, context, and owner IDs.
-- Scope revision uses persisted source/cohort/entity-reference neighborhoods, never token or alias overlap.
-- `_index.md` is rebuilt deterministically from materialized pages.
-- Dream records source outcomes, claim dispositions, proposal IDs, and failures.
+### 5. Corrections, retraction, and reconsolidation
 
-### 5. Reconsolidation
+A pending change proposal keeps both claims active. Approval or rejection updates exact canonical links/status
+and refreshes affected views inside a staged lifecycle transaction. Presentation cannot resolve a truth review.
+Failure rolls back the canonical and view change together; repeated identical submissions reuse the result.
 
-New source-grounded claims are compared with active canonical claims across page owners, including unplaced
-statements and other claims from the same batch. Candidate requests contain at most twelve incoming and twelve
-candidate records, with exact decisions for each eligible pair; total candidate work still grows with the store.
-Selected pairs receive a separate comparison grounded in cited source segments, temporal records, and identity
-bindings. No-change decisions preserve both claims; contradictions and directional supersessions become durable
-review proposals. Exact previously reviewed pairs are not proposed again.
-
-A pending proposal is the lability window: both claims remain active and generated pages display a pending marker. Approval updates canonical claim links or status and immediately invokes the same deterministic materializer used by Dream. Rejection preserves both claims as unrelated. Pages are never rewritten from a query or from model-authored correction prose.
+A human correction preserves the exact submitted statement, obtains correction metadata, and retains its subject
+references before refreshing affected views. Relative dates require an explicit saved date preview before the
+correction applies. Retraction withdraws the selected source without a model call. Claims with surviving source
+support remain active; claims without support become inactive, and all affected views regenerate. Manual items
+remain inspectable even when their withdrawn support prevents them from appearing in a page.
 
 ## Web sessions and direct library sessions
 
@@ -304,17 +242,15 @@ The backend does not schedule memory builds. POST /api/memory/build captures any
 the library's explicit consolidate operation. GET /api/memory/build/status exposes pending-source and statement
 counts, not age or size readiness thresholds. Flush and run-if-ready endpoints have been removed.
 
-The UI exposes Build Memory, proposal review, and development resets. The model declares separate time entries with
-verbatim wording, action/state targets, event/deadline/condition roles and exact citation IDs. Calendar arithmetic
-resolves declared offsets/periods; it never interprets prose. Vague or unsupported dates stay unresolved. Relative
-dates use supporting segment timestamps; source occurrence time is eligible only when no segment in that source has
-a timestamp. Schema 2 requires fresh stores.
+The UI exposes Build Memory, source/claim inspection, view editing, identity and truth review, and development
+resets. Source and segment timestamps are preserved. Ordinary retained statements keep relative wording and source
+time rather than attaching model-guessed calendar precision. Schema 2 requires fresh stores.
 
-Relative-date corrections create durable previews and require explicit reference choices before application. The
-reviewed metadata, submission time and cited reference provenance persist across retries, with claim/source
-fingerprints rejecting stale drafts. Absolute/no-relative-time corrections apply directly. Corrections rebuild
-affected memory independently of a build. Internal Dream artifact names still describe
-the retained organizer and audit records; this increment does not redesign those semantic stages.
+Corrections use structured temporal metadata. Relative-date corrections create durable previews and require exact
+reference choices before application. Calendar arithmetic resolves reviewed offsets/periods without interpreting
+prose. Reviewed metadata, submission time, and citation provenance survive retries; fingerprints reject stale
+drafts. Absolute/no-relative-time corrections apply directly. Internal Dream audit names remain storage vocabulary;
+they do not imply that the retired semantic stages still execute.
 
 ## Architecture authority and validation
 
@@ -332,8 +268,10 @@ cd ui && npm run lint && npm run build
 git diff --check
 ```
 
-Semantic milestones must additionally run their named behavioral fixture protocol, including required transfer
-fixtures and repeated trials. Unit tests with mocked model outputs establish mechanics, not semantic acceptance.
+Semantic milestones need a declared, bounded configured-model check and inspection of sources, evidence, views,
+and answers. Unit tests with mocked outputs establish mechanics, not meaning. Benchmarks are guideposts: choose
+acceptance around coherent, useful memory and practical local cost, not complete coverage or perfect organization.
+Fix recurring misleading behavior and structural failures; record ordinary omissions without extending the run.
 
 ### Semantic LLM development workflow
 
@@ -346,12 +284,13 @@ Prompt, ontology, and model-labor changes follow a direct-first workflow:
 3. Integrate only the smallest mechanism that worked directly. Exact evidence aliases, schema values, and registry
    IDs belong in structured contracts; human-language meaning remains a model decision with cited evidence.
 4. Run focused contract and pipeline tests, then exercise the integrated path with the real configured model.
-5. For downstream semantic work, replay frozen extraction artifacts so extraction variance does not obscure entity,
-   admission, ownership, or projection changes. Inspect persisted decisions and failure reasons as well as scores.
-6. Treat timeouts, connectivity failures, and malformed contracts as invalid semantic evidence. Rerun after the
-   environmental or structural problem is resolved.
-7. Record direct probes, in-situ run paths, results, and remaining failures in `DEVLOG.md`. A candidate reaches
-   acceptance only after the fixture's required repeated primary and transfer trials pass.
+5. Freeze inputs, configuration, limits, and comparison scope before a bounded check. Reuse frozen evidence when
+   evaluating view or retrieval changes, and state limits when pipeline versions or completed work differ.
+6. Record timeouts, transport errors, and malformed contracts separately from semantic mistakes. Do not treat an
+   incomplete run as a successful comparison or extend its budget to chase a clean score.
+7. Record direct probes, in-situ paths, cost, source review, validation, and residual failures in `DEVLOG.md`.
+   Each extra stage, schema field, retry, or rule needs a concrete product benefit. End the tranche at its declared
+   gate and move to product use; ordinary omissions and reasonable identity errors do not block all other work.
 
 The host Ollama service is normally `http://localhost:11434`. Sandboxed agents must verify it through a read-only
 `/api/tags` request with network escalation and use the same escalation for probes and benchmarks. They must not
@@ -643,19 +582,15 @@ uv run python -m benchmarks daily-driver run \
   --config-path mycelium.toml
 ```
 
-This replay copies only source, episode, claim, and raw-log evidence, then reruns identity, admission, ownership,
-reconsolidation, materialization, retrieval, and evaluation. Projection-only work may instead replay assignments;
-retrieval-only work may use an exact frozen store. See the
-[fixture guide](benchmarks/suites/daily_driver/fixtures/daily_driver_v1/README.md) for those modes, three-trial primary acceptance, and
-the paraphrased and unrelated-domain transfer fixtures.
+This replay copies frozen source/claim evidence and exact subject references, then regenerates views, retrieval,
+and evaluation. Retrieval-only work can use an exact frozen store. Retired assignment replay is no longer a
+supported mode. See the [fixture guide](benchmarks/suites/daily_driver/fixtures/daily_driver_v1/README.md) for
+historical protocols; their thresholds do not supersede the current bounded milestone plan.
 
-The current page-structure milestone accepts page admission, stable identity separation, entity relationships,
-claim ownership, and coherent page organization. Correction, retraction, retrieval, and answering are separate
-milestones. Their dimensions and probes remain in Daily Driver reports so regressions stay visible, but only entries
-under a fixture's active `gates` are hard safety blockers; `deferred_gates` name later acceptance checks. Passing
-the diagnostic thresholds does not establish acceptance: lexical associations can misidentify claims and entities.
-Reports require source review and do not infer release readiness. The `daily-driver review` command exports exact
-source-linked candidates, complete wiki snapshots, and successive-state changes for that review.
+Reports remain diagnostic. Lexical associations can misidentify claims and subjects, so passing thresholds does
+not establish useful memory. Review complete source-linked artifacts and successive-state changes, distinguish
+retention from presentation/retrieval/answering errors, and report compute including failed attempts. A bounded
+product check should include recovery and an ordinary human edit before handing off device testing.
 
 ## Development
 

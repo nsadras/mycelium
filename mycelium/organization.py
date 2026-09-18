@@ -5,13 +5,11 @@ from __future__ import annotations
 from mycelium.database import atomic_curation
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import cast
 from mycelium.artifacts import (
     ArtifactStore,
     ClaimEntityReference,
-    ClaimPlacement,
     ClaimScopeDecision,
     ConsolidatedFact,
     EntityRecord,
@@ -23,8 +21,6 @@ from mycelium.ontology import (
     ENTITY_TYPES,
     SUBJECT_PAGE_STATES,
     SUBJECT_PERSISTED_SCOPES,
-    default_section,
-    section_keys,
 )
 from mycelium.store import WikiStore
 from mycelium.projection import display_claim_text
@@ -83,35 +79,11 @@ class EntityCurationService:
         entity.aliases = list(aliases if aliases is not None else entity.aliases)
         if title and _normalized(title) != _normalized(old_title):
             entity.aliases.append(old_title)
-        type_changed = bool(entity_type and entity_type != entity.entity_type)
         if entity_type:
             entity.entity_type = entity_type
         entity.updated_at = _now()
         entity.__post_init__()
         self.artifacts.save_entity(entity)
-        if type_changed:
-            for placement in self.artifacts.placements_for_entity(entity_id):
-                claim = self.artifacts.get_claim(placement.claim_id)
-                placement.section_key = default_section(
-                    entity.entity_type, claim.claim_type, claim.predicate
-                )
-                placement.reason = (
-                    "Section remapped after a manual entity type correction."
-                )
-                placement.updated_at = _now()
-                self.artifacts.save_placement(placement)
-            for fact in self.artifacts.list_consolidated_facts(
-                owner_entity_id=entity_id
-            ):
-                representative = self.artifacts.get_claim(fact.member_claim_ids[0])
-                fact.section_key = default_section(
-                    entity.entity_type,
-                    representative.claim_type,
-                    representative.predicate,
-                )
-                fact.reason = "Section remapped after a manual entity type correction."
-                fact.updated_at = _now()
-                self.artifacts.save_consolidated_fact(fact)
         if old_slug != entity.slug:
             self.wiki.delete(old_slug)
         pages = self.materializer.regenerate({entity_id, "you"})
@@ -151,129 +123,34 @@ class EntityCurationService:
         reason: str = "Manual wiki organization",
         origin: str = "manual",
     ) -> CurationResult | None:
-        old = self.artifacts.placement_for_claim(claim_id)
-        affected = (
-            {old.owner_entity_id, *old.linked_entity_ids}
-            if old and old.owner_entity_id
-            else set()
-        )
-        now = _now()
-        if owner_entity_id is None:
-            placement = ClaimPlacement(
-                claim_id,
-                None,
-                None,
-                [],
-                "deferred",
-                reason,
-                old.created_at if old else now,
-                now,
-            )
-        else:
-            placement = ClaimPlacement(
-                claim_id,
-                owner_entity_id,
-                section_key,
-                list(
-                    linked_entity_ids
-                    if linked_entity_ids is not None
-                    else old.linked_entity_ids
-                    if old
-                    else []
-                ),
-                "placed",
-                reason,
-                old.created_at if old else now,
-                now,
-                old.relationship_kind if old else None,
-                page_sections=dict(page_sections or {owner_entity_id: section_key}),
-            )
-            affected.update({owner_entity_id, *placement.linked_entity_ids})
-        self.artifacts.save_placement(placement)
+        """An explicit claim assignment adds a view; existing items are independent."""
         claim = self.artifacts.get_claim(claim_id)
-        claim.dream_disposition = "routed" if owner_entity_id else "deferred"
-        claim.dream_disposition_reason = reason
-        claim.dream_run_id = None
-        claim.dream_disposition_at = now
-        self.artifacts.save_claim(claim)
-        self.artifacts.save_scope_decision(
-            ClaimScopeDecision(
-                decision_id=f"scope-{uuid.uuid4().hex[:12]}",
-                claim_id=claim_id,
-                owner_entity_id=owner_entity_id,
-                section_key=section_key,
-                linked_entity_ids=list(placement.linked_entity_ids),
-                supporting_claim_ids=[claim_id],
-                confidence=1.0,
-                reason=reason,
-                origin=origin,
-                dream_run_id=None,
-                status="active",
-                created_at=now,
-            )
-        )
-        containing = self.artifacts.facts_for_claim(claim_id)
-        if containing:
-            for fact in containing:
-                self.artifacts.delete_consolidated_fact(fact.fact_id)
-                for remaining_id in (
-                    value for value in fact.member_claim_ids if value != claim_id
-                ):
-                    remaining = self.artifacts.get_claim(remaining_id)
-                    remaining_placement = self.artifacts.get_placement(remaining_id)
-                    self.artifacts.save_consolidated_fact(
-                        ConsolidatedFact(
-                            fact_id=f"fact-{uuid.uuid4().hex[:12]}",
-                            text=display_claim_text(remaining),
-                            member_claim_ids=[remaining_id],
-                            owner_entity_id=cast(
-                                str, remaining_placement.owner_entity_id
-                            ),
-                            section_key=cast(str, remaining_placement.section_key),
-                            state="current",
-                            linked_entity_ids=list(
-                                remaining_placement.linked_entity_ids
-                            ),
-                            synthesis_origin="claim",
-                            confidence=remaining.confidence,
-                            reason="Separated after manual claim-level curation.",
-                            created_at=now,
-                            updated_at=now,
-                        )
-                    )
-        if owner_entity_id is not None:
-            self.artifacts.save_consolidated_fact(
-                ConsolidatedFact(
-                    fact_id=containing[0].fact_id
-                    if len(containing) == 1 and len(containing[0].member_claim_ids) == 1
-                    else f"fact-{uuid.uuid4().hex[:12]}",
-                    text=display_claim_text(claim),
-                    member_claim_ids=[claim_id],
-                    owner_entity_id=owner_entity_id,
-                    section_key=cast(str, section_key),
-                    state="current",
-                    linked_entity_ids=list(placement.linked_entity_ids),
-                    synthesis_origin="claim",
-                    confidence=claim.confidence,
-                    reason="Manual claim-level curation.",
-                    created_at=containing[0].created_at if containing else now,
-                    updated_at=now,
-                )
-            )
-        pages = self.materializer.regenerate({value for value in affected if value})
+        if claim.status != "active":
+            raise ValueError("Only active evidence can be added to a view")
         if owner_entity_id is None:
+            if self.artifacts.facts_for_claim(claim_id):
+                raise ValueError("Edit the cited view items to change their destinations")
+            claim.dream_disposition = "deferred"
+            claim.dream_disposition_reason = reason
+            self.artifacts.save_claim(claim)
             return None
+        now = _now()
+        destinations = page_sections or {owner_entity_id: section_key}
+        if not section_key or any(not heading for heading in destinations.values()):
+            raise ValueError("Each view item requires a heading")
+        for eid, heading in destinations.items():
+            self.artifacts.save_consolidated_fact(ConsolidatedFact(
+                f"fact-{uuid.uuid4().hex[:12]}", display_claim_text(claim), [claim_id],
+                eid, heading, "current", list(linked_entity_ids or []), "manual", 1.0,
+                reason, now, now, manual_text=True))
+        claim.dream_disposition = "routed"
+        claim.dream_disposition_reason, claim.dream_disposition_at = reason, now
+        self.artifacts.save_claim(claim)
+        pages = self.materializer.regenerate({*destinations, *(linked_entity_ids or [])})
         return self._result(self.artifacts.get_entity(owner_entity_id), pages, [])
 
     @atomic_curation
     def merge(self, source_entity_id: str, target_entity_id: str) -> CurationResult:
-        if any(
-            (
-                commit.status in {"prepared", "applying"}
-                for commit in self.artifacts.list_dream_commits()
-            )
-        ):
-            raise ValueError("Recover the pending Dream commit before merging entities")
         source = self.artifacts.get_entity(source_entity_id)
         target = self.artifacts.get_entity(target_entity_id)
         if (
@@ -288,46 +165,10 @@ class EntityCurationService:
             not (source.entity_type == "person" and target.entity_id == "you")
         ):
             raise ValueError("Entities must have the same type to merge")
-        for placement in self.artifacts.list_placements():
-            changed = False
-            if source_entity_id in placement.page_sections:
-                section = placement.page_sections.pop(source_entity_id)
-                if section not in section_keys(target.entity_type):
-                    claim = self.artifacts.get_claim(placement.claim_id)
-                    section = default_section(
-                        target.entity_type, claim.claim_type, claim.predicate
-                    )
-                placement.page_sections.setdefault(target_entity_id, section)
-                changed = True
-            if placement.owner_entity_id == source_entity_id:
-                placement.owner_entity_id = target_entity_id
-                claim = self.artifacts.get_claim(placement.claim_id)
-                allowed = set(section_keys(target.entity_type))
-                if placement.section_key not in allowed:
-                    placement.section_key = default_section(
-                        target.entity_type, claim.claim_type, claim.predicate
-                    )
-                changed = True
-            if source_entity_id in placement.linked_entity_ids:
-                placement.linked_entity_ids = [
-                    target_entity_id if value == source_entity_id else value
-                    for value in placement.linked_entity_ids
-                ]
-                changed = True
-            if changed:
-                placement.updated_at = _now()
-                placement.__post_init__()
-                self.artifacts.save_placement(placement)
         for fact in self.artifacts.list_consolidated_facts():
             changed = False
             if fact.owner_entity_id == source_entity_id:
                 fact.owner_entity_id = target_entity_id
-                representative = self.artifacts.get_claim(fact.member_claim_ids[0])
-                fact.section_key = default_section(
-                    target.entity_type,
-                    representative.claim_type,
-                    representative.predicate,
-                )
                 changed = True
             if source_entity_id in fact.linked_entity_ids:
                 fact.linked_entity_ids = [
@@ -379,6 +220,7 @@ class EntityCurationService:
                     dream_run_id=reference.dream_run_id,
                     status="active",
                     created_at=now,
+                    identity_decision_id=reference.identity_decision_id,
                 )
             )
         for decision in self.artifacts.list_entity_resolution_decisions():
@@ -508,25 +350,31 @@ class EntityCurationService:
     ) -> CurationResult:
         source = self.artifacts.get_entity(source_entity_id)
         selected = set(claim_ids)
-        owned = {
-            placement.claim_id
-            for placement in self.artifacts.placements_for_entity(source_entity_id)
-        }
+        owned = {c.claim_id for c in self.artifacts.claims_for_entity(source_entity_id)}
         if not selected or not selected <= owned:
-            raise ValueError(
-                "Split claims must be a nonempty subset owned by the source entity"
-            )
+            raise ValueError("Split claims must cite the source identity")
+        facts = [f for f in self.artifacts.list_consolidated_facts()
+                 if source_entity_id in {f.owner_entity_id, *f.linked_entity_ids}
+                 and set(f.member_claim_ids) & selected]
+        if any(not set(f.member_claim_ids) <= selected for f in facts):
+            raise ValueError("Split mixed view items first, so their destinations can be reviewed explicitly")
         entity = self.artifacts.create_entity(entity_type, title, aliases=aliases)
-        for claim_id in selected:
-            placement = self.artifacts.get_placement(claim_id)
-            claim = self.artifacts.get_claim(claim_id)
-            self.move_claim(
-                claim_id,
-                entity.entity_id,
-                default_section(entity.entity_type, claim.claim_type, claim.predicate),
-                linked_entity_ids=list(placement.linked_entity_ids),
-                reason="Manual entity split",
-            )
+        now = _now()
+        for ref in self.artifacts.list_entity_references(entity_id=source_entity_id, status="active"):
+            if ref.claim_id not in selected:
+                continue
+            successor = replace(ref, reference_id=f"ref-{uuid.uuid4().hex[:12]}", entity_id=entity.entity_id,
+                                origin="manual", reason="Manual identity split", created_at=now)
+            ref.status, ref.superseded_by_reference_id = "superseded", successor.reference_id
+            self.artifacts.save_entity_reference(ref)
+            self.artifacts.save_entity_reference(successor)
+        for fact in facts:
+            if fact.owner_entity_id == source_entity_id:
+                fact.owner_entity_id = entity.entity_id
+            fact.linked_entity_ids = [entity.entity_id if x == source_entity_id else x for x in fact.linked_entity_ids]
+            fact.manual_text, fact.synthesis_origin, fact.updated_at = True, "manual", now
+            fact.__post_init__()
+            self.artifacts.save_consolidated_fact(fact)
         pages = self.materializer.regenerate(
             {source.entity_id, entity.entity_id, "you"}
         )
@@ -563,39 +411,11 @@ class FactCurationService:
         fact = self.artifacts.get_consolidated_fact(fact_id)
         old_ids = {fact.owner_entity_id, *fact.linked_entity_ids}
         now = _now()
-        for claim_id in fact.member_claim_ids:
-            old = self.artifacts.get_placement(claim_id)
-            placement = ClaimPlacement(
-                claim_id=claim_id,
-                owner_entity_id=owner_entity_id,
-                section_key=section_key,
-                linked_entity_ids=list(linked_entity_ids),
-                status="placed",
-                reason=reason,
-                created_at=old.created_at,
-                updated_at=now,
-            )
-            self.artifacts.save_placement(placement)
-            self.artifacts.save_scope_decision(
-                ClaimScopeDecision(
-                    decision_id=f"scope-{uuid.uuid4().hex[:12]}",
-                    claim_id=claim_id,
-                    owner_entity_id=owner_entity_id,
-                    section_key=section_key,
-                    linked_entity_ids=list(linked_entity_ids),
-                    supporting_claim_ids=list(fact.member_claim_ids),
-                    confidence=1.0,
-                    reason=reason,
-                    origin="manual",
-                    dream_run_id=None,
-                    status="active",
-                    created_at=now,
-                )
-            )
         fact.owner_entity_id = owner_entity_id
         fact.section_key = section_key
         fact.linked_entity_ids = list(linked_entity_ids)
         fact.synthesis_origin = "manual"
+        fact.manual_text = True
         fact.reason = reason
         fact.updated_at = now
         fact.__post_init__()
@@ -662,11 +482,11 @@ class FactCurationService:
         ]
         if (
             len(groups) < 2
-            or len(member_ids) != len(set(member_ids))
+            or any(not ids for ids, _ in parsed_groups)
             or set(member_ids) != set(source.member_claim_ids)
         ):
             raise ValueError(
-                "Split groups must partition the source fact's claims exactly"
+                "Split items must cite only the original evidence and together cover it; citations may be shared"
             )
         now = _now()
         created = []
@@ -776,6 +596,7 @@ class IdentityReviewService:
                 "Only identity decisions requiring review may be adjudicated"
             )
         now = _now()
+        original_entity_id = record.entity_id
         record.reviewer_note = reviewer_note
         record.reviewed_at = now
         if action == "reject":
@@ -806,7 +627,7 @@ class IdentityReviewService:
             record.proposed_parent_entity_id = selected_parent
             record.review_state = "accepted"
             if entity is not None:
-                self._save_identity_references(record, entity.entity_id, now)
+                self._save_identity_references(record, entity.entity_id, now, original_entity_id)
         else:
             raise ValueError("Identity review action must be approve or reject")
         self.artifacts.save_entity_resolution_decision(record)
@@ -861,6 +682,8 @@ class IdentityReviewService:
     ) -> None:
         if entity_type not in set(ENTITY_TYPES) - {"you"}:
             raise ValueError("Identity review requires a discoverable entity type")
+        if scope is None and page_state is None and parent_entity_id is None:
+            return
         if scope not in SUBJECT_PERSISTED_SCOPES:
             raise ValueError("Identity review requires an explicit scope")
         if page_state not in SUBJECT_PAGE_STATES:
@@ -896,16 +719,16 @@ class IdentityReviewService:
             )
 
     def _save_identity_references(
-        self, record: EntityResolutionDecision, entity_id: str, now: str
+        self, record: EntityResolutionDecision, entity_id: str, now: str, original_entity_id: str | None
     ) -> None:
         for claim_id in record.supporting_claim_ids:
             reference_id = f"ref-{uuid.uuid4().hex[:12]}"
             for prior in self.artifacts.list_entity_references(
                 claim_id=claim_id, status="active"
             ):
-                if prior.role != "identity_subject" or prior.origin != "manual":
-                    continue
-                if prior.identity_decision_id != record.decision_id:
+                same_review = prior.role == "identity_subject" and prior.origin == "manual" and prior.identity_decision_id == record.decision_id
+                superseded_subject = prior.origin != "manual" and prior.entity_id == original_entity_id
+                if not (same_review or superseded_subject):
                     continue
                 prior.status = "superseded"
                 prior.superseded_by_reference_id = reference_id

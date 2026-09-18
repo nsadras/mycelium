@@ -81,7 +81,6 @@ async def run_locomo(
                 "memory_profile",
                 "replay_store",
                 "frozen_store",
-                "replay_assignments",
             )
         },
         "effective_config": effective_configuration(system),
@@ -327,7 +326,7 @@ async def run_locomo_wiki_baseline(
     """Fresh, sequential build snapshots for human wiki review; no QA or gold input."""
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ValueError("Wiki baseline requires a fresh output directory")
-    if system.replay_store or system.frozen_store or system.replay_assignments:
+    if system.replay_store or system.frozen_store:
         raise ValueError(
             "Wiki baseline must build from source, not derived replay artifacts"
         )

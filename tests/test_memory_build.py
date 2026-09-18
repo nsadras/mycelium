@@ -1,9 +1,8 @@
-"""Mechanical checks for the isolated comparison, not evidence of model quality."""
+"""Structural regression checks for the production evidence/view boundary."""
 
 import pytest
 
-from benchmarks.experiments import compact_contract as contract
-from benchmarks.experiments.compact_pipeline import CompactPipeline
+from mycelium import memory_contract as contract
 from mycelium import Mycelium
 from mycelium.operations import SourceInput
 
@@ -35,24 +34,24 @@ async def test_compact_capture_publication_failure_and_retry(tmp_path, monkeypat
     monkeypatch.setattr(contract, "retain", retain)
     monkeypatch.setattr(contract, "present", present)
     with Mycelium(tmp_path, memory_profile="none") as memory:
-        pipeline = CompactPipeline(memory)
+        pipeline = memory.pipeline
         monkeypatch.setattr(memory.retriever.claim_index, "search", no_search)
         await pipeline.ingest_source(SourceInput("Rowan visited a museum.", "s", occurred_at="2032-01-02"))
         assert memory.artifacts.list_claims() == []
-        regenerate = pipeline.materializer.regenerate
+        regenerate = memory.consolidator.materializer.regenerate
 
         def fail_after_staging(ids):
             regenerate(ids)
             raise OSError("injected publication preparation failure")
 
-        monkeypatch.setattr(pipeline.materializer, "regenerate", fail_after_staging)
+        monkeypatch.setattr(memory.consolidator.materializer, "regenerate", fail_after_staging)
         failed = await pipeline.consolidate()
         assert failed.report.failures
         assert len(memory.artifacts.list_claims()) == 1
         assert memory.wiki.list_all() == []
         assert memory.artifacts.list_consolidated_facts() == []
         assert memory.artifacts.list_placements() == []
-        monkeypatch.setattr(pipeline.materializer, "regenerate", regenerate)
+        monkeypatch.setattr(memory.consolidator.materializer, "regenerate", regenerate)
         successful = await pipeline.consolidate()
         assert not successful.report.failures
         assert calls == {"retain": 1, "present": 2}
@@ -66,7 +65,7 @@ async def test_compact_capture_publication_failure_and_retry(tmp_path, monkeypat
         old_claim = memory.artifacts.list_claims()[0]
         old_fact = memory.artifacts.list_consolidated_facts()[0]
         old_fact.manual_text = True
-        pipeline.artifacts.save_consolidated_fact(old_fact)
+        memory.artifacts.save_consolidated_fact(old_fact)
         prior_page = memory.wiki.list_all()[0]
 
         async def existing_search(*args, **kwargs):
@@ -75,11 +74,11 @@ async def test_compact_capture_publication_failure_and_retry(tmp_path, monkeypat
 
         monkeypatch.setattr(memory.retriever.claim_index, "search", existing_search)
         await pipeline.ingest_source(SourceInput("Rowan visited a gallery.", "s2", occurred_at="2032-01-03"))
-        monkeypatch.setattr(pipeline.materializer, "regenerate", fail_after_staging)
+        monkeypatch.setattr(memory.consolidator.materializer, "regenerate", fail_after_staging)
         assert (await pipeline.consolidate()).report.failures
         assert memory.wiki.list_all()[0] == prior_page
         assert memory.artifacts.list_consolidated_facts() == [old_fact]
-        monkeypatch.setattr(pipeline.materializer, "regenerate", regenerate)
+        monkeypatch.setattr(memory.consolidator.materializer, "regenerate", regenerate)
         assert not (await pipeline.consolidate()).report.failures
         assert calls == {"retain": 2, "present": 4}
         assert memory.artifacts.get_consolidated_fact(old_fact.fact_id) == old_fact
@@ -93,8 +92,7 @@ def test_compact_review_and_citation_boundaries():
     item = {"owner_id": "person", "heading": "Plans", "text": "A source-backed plan.",
             "memory_ids": ["c1"], "linked_subject_ids": [], "state": "current"}
     contract.presentation_model(payload).model_validate({"items": [item]})
-    for changed in ({"protected_memory_ids": ["c1"]},
-                    {"page_exclusions": [{"memory_id": "c1", "subject_id": "person"}]},
+    for changed in ({"page_exclusions": [{"memory_id": "c1", "subject_id": "person"}]},
                     {"memories": []}):
         with pytest.raises(ValueError):
             contract.presentation_model({**payload, **changed}).model_validate({"items": [item]})
@@ -163,7 +161,7 @@ async def test_shared_evidence_keeps_distinct_items_and_owners(tmp_path, monkeyp
     monkeypatch.setattr(contract, "retain", retain)
     monkeypatch.setattr(contract, "present", present)
     with Mycelium(tmp_path, memory_profile="none") as memory:
-        pipeline = CompactPipeline(memory)
+        pipeline = memory.pipeline
         monkeypatch.setattr(memory.retriever.claim_index, "search", no_search)
         await pipeline.ingest_source(SourceInput("Rowan keeps the receipts; Sasha brings the tools.", "s"))
         assert not (await pipeline.consolidate()).report.failures
@@ -179,20 +177,17 @@ async def test_shared_evidence_keeps_distinct_items_and_owners(tmp_path, monkeyp
             assert item["text"] == fact.text
             assert item["canonical_owner_entity_ids"] == [fact.owner_entity_id]
             assert item["sources"][0]["segment_ids"] == claim.provenance[0].segment_ids
-            assert page.source_log_entries == [claim.provenance[0].source_id]
+            assert page.source_log_entries == [claim.provenance[0].raw_log_entry_id]
 
         # Refreshing A with the same evidence cannot erase B's distinct item.
         a, b = facts
         b.manual_text = True
-        pipeline.artifacts.save_consolidated_fact(b)
-        episode = memory.artifacts.list_episodes()[0]
-        source = memory.artifacts.get_source(episode.source_id)
-        state = {"subject_ids": [a.owner_entity_id], "claim_ids": [], "identity_reviews": {}}
-        payload = pipeline._view_input(state)
+        memory.artifacts.save_consolidated_fact(b)
+        payload = memory.consolidator.views.input({claim.claim_id}, [], {a.owner_entity_id})
         view = {"items": [{"owner_id": a.owner_entity_id, "heading": "Records", "text": "Stores receipts.",
                             "memory_ids": [claim.claim_id], "linked_subject_ids": [], "state": "current"}]}
         contract.presentation_model(payload).model_validate(view)
-        pipeline._save_view("refresh", state, view, source, episode)
+        memory.consolidator.views.persist(payload, view, {claim.claim_id}, "refresh")
         assert memory.artifacts.get_consolidated_fact(b.fact_id) == b
         assert len(memory.artifacts.list_consolidated_facts()) == 2
         assert len(memory.artifacts.list_claims()) == 1
@@ -200,6 +195,6 @@ async def test_shared_evidence_keeps_distinct_items_and_owners(tmp_path, monkeyp
         # All presentations disappear when their canonical support is inactive.
         # This checks the renderer, not the application's retraction API.
         claim.status = "retracted"
-        pipeline.artifacts.save_claim(claim)
-        pipeline.materializer.regenerate({a.owner_entity_id})
+        memory.artifacts.save_claim(claim)
+        memory.consolidator.materializer.regenerate({a.owner_entity_id})
         assert memory.wiki.list_all() == []

@@ -27,6 +27,7 @@ def test_render_memory_context_is_empty_without_renderable_pages():
 def test_render_memory_context_deduplicates_shared_roles_and_includes_sources():
     shared_role = {
         "kind": "fact",
+        "fact_id": "shared-view",
         "text": "Priya leads pilot evaluation.",
         "claim_ids": ["claim-role"],
         "relationship_kind": "project_role",

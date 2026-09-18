@@ -1,37 +1,24 @@
 import datetime
 import hashlib
 import json
-import re
 from typing import Any, List
 import uuid
-from dataclasses import asdict, replace
+from dataclasses import asdict
 
-from mycelium.budget import count_tokens, require_request_budget, ContextBudgetError
+from mycelium.batching import split_text_by_tokens
 from mycelium.models import LogEntry
 from mycelium.operations import IngestionResult, SourceInput
 from mycelium.store import LogStore
 from mycelium.ollama import OllamaClient
-from mycelium.temporal import source_time_anchors
 from mycelium.config import Config
-from mycelium import prompts
-from mycelium.structured_outputs import extraction_output_model, extraction_records
 from mycelium.artifacts import (
     ArtifactStore,
-    ClaimProvenance,
     EpisodeManifest,
-    ExtractionBatchState,
-    ExtractionSegmentDisposition,
     IngestionOperation,
-    MemoryClaim,
     SourceDocument,
     SourceSegment,
-    normalize_temporal_facets,
     segment_transcript,
 )
-
-
-# Ceiling for the existing per-segment contract; leave room for source and schema.
-EXTRACTION_OUTPUT_TOKENS = 16384
 
 
 class Encoder:
@@ -308,21 +295,18 @@ class Encoder:
                 for item in segments
             ]
         )
-        split_turns = source_type in {"multi_party_conversation", "meeting_transcript"}
         expanded: list[SourceSegment] = []
         for source_index, segment in enumerate(base):
-            parts = (
-                self._sentence_parts(segment.content)
-                if split_turns
-                else [segment.content]
-            )
+            # Mechanical token boundaries preserve complete original text and role
+            # metadata. Sentence-level exhaustive extraction is no longer a stage.
+            parts = split_text_by_tokens(segment.content, max(256, self.config.llm.context_window_tokens // 16)) or [""]
             for part_index, part in enumerate(parts):
                 metadata = dict(segment.metadata)
                 if len(parts) > 1:
                     metadata.update(
                         {
                             "parent_segment_index": source_index,
-                            "sentence_index": part_index,
+                            "chunk_index": part_index,
                         }
                     )
                 expanded.append(
@@ -344,367 +328,3 @@ class Encoder:
             segment.segment_id = f"{source_id}#seg-{index + 1:04d}"
             normalized.append(segment)
         return normalized
-
-    @staticmethod
-    def _sentence_parts(content: str) -> list[str]:
-        """Split prose turns for fact coverage while preserving non-prose lines."""
-        parts: list[str] = []
-        for raw_line in content.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            if re.match(r"^(?:image caption|image url):", line, re.IGNORECASE):
-                parts.append(line)
-                continue
-            sentences = re.split(
-                r"(?<=[.!?])\s+(?=(?:[\"'(]*[A-Z0-9]))",
-                line,
-            )
-            parts.extend(sentence.strip() for sentence in sentences if sentence.strip())
-        return parts or [content.strip()]
-
-    async def extract_pending(self, source_ids: set[str] | None = None) -> list[str]:
-        """Extract unfinished sources in the explicit build snapshot."""
-        completed: list[str] = []
-        sources = {source.source_id: source for source in self.artifacts.list_sources()}
-        for episode in self.artifacts.list_episodes():
-            if source_ids is not None and episode.source_id not in source_ids:
-                continue
-            if episode.extraction_status == "complete":
-                continue
-            source = sources.get(episode.source_id)
-            if source is None or source.status != "active":
-                continue
-            await self._extract_claims(source, episode)
-            self._sync_ingestion_operation(episode)
-            if episode.extraction_status == "complete":
-                completed.append(episode.episode_id)
-        return completed
-
-    async def _extract_claims(
-        self, source: SourceDocument, episode: EpisodeManifest
-    ) -> None:
-        try:
-            output_reserve = min(
-                EXTRACTION_OUTPUT_TOKENS, self.config.llm.context_window_tokens // 4
-            )
-            context_sources = [
-                self.artifacts.get_source(source_id)
-                for source_id in source.metadata.get("context_source_ids", [])
-            ]
-            # Bound earlier context independently; never truncate a cited segment.
-            time_by_id = source_time_anchors([source, *context_sources])
-            selected_context = []
-            context_tokens = 0
-            for prior in reversed(context_sources):
-                cost = count_tokens(self._render_segments(prior.segments, time_by_id))
-                if (
-                    prior.status == "active"
-                    and context_tokens + cost
-                    <= self.config.llm.context_window_tokens // 4
-                ):
-                    selected_context.insert(0, prior)
-                    context_tokens += cost
-            context_sources = selected_context
-            context_segments = [
-                seg for prior in context_sources for seg in prior.segments
-            ]
-            claim_ids: list[str] = list(episode.claim_ids)
-            dispositions = {
-                item.segment_id: item for item in episode.segment_dispositions
-            }
-            extraction_errors: list[str] = []
-
-            def request_for(batch):
-                start = next(
-                    i
-                    for i, seg in enumerate(source.segments)
-                    if seg.segment_id == batch[0].segment_id
-                )
-                # Complete adjacent segments resolve replies across extraction boundaries.
-                neighbors = []
-                context_limit = self.config.llm.context_window_tokens // 4
-                for segment in reversed(source.segments[:start]):
-                    trial = [segment, *neighbors]
-                    if count_tokens(self._render_segments(trial, time_by_id)) > context_limit:
-                        break
-                    neighbors = trial
-                # The adjacent same-source context has priority over older sources.
-                supplied_context = list(neighbors)
-                for segment in reversed(context_segments):
-                    trial = [segment, *supplied_context]
-                    if count_tokens(self._render_segments(trial, time_by_id)) > context_limit:
-                        break
-                    supplied_context = trial
-                schema = extraction_output_model(
-                    [seg.segment_id for seg in batch],
-                    [seg.segment_id for seg in supplied_context],
-                )
-                system, user = prompts.claim_extraction_prompt(
-                    source.source_type,
-                    source.source_id,
-                    list(source.participants),
-                    self._render_claim_segments(batch, time_by_id),
-                    context=self._render_segments(supplied_context, time_by_id),
-                )
-                return system, user, schema, neighbors, bool(supplied_context)
-
-            def fits(batch):
-                system, user, schema, _, think = request_for(batch)
-                output_tokens = (
-                    max(output_reserve, self.config.llm.reasoning_output_tokens)
-                    if think and self.config.llm.reasoning_enabled
-                    else output_reserve
-                )
-                try:
-                    require_request_budget(
-                        [
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user},
-                        ],
-                        context_window=self.config.llm.context_window_tokens,
-                        output_tokens=output_tokens,
-                        schema=schema.model_json_schema(),
-                    )
-                    return True
-                except ContextBudgetError:
-                    return False
-
-            if not episode.extraction_batches:
-                batches = self._segment_batches(source.segments, fits=fits)
-                episode.extraction_batches = [
-                    ExtractionBatchState(
-                        batch_id=f"{episode.episode_id}-batch-{batch_index}",
-                        batch_index=batch_index,
-                        segment_ids=[segment.segment_id for segment in batch],
-                    )
-                    for batch_index, batch in enumerate(batches, start=1)
-                ]
-                self.artifacts.save_episode(episode)
-            segments_by_id = {seg.segment_id: seg for seg in source.segments}
-            # Persisted segment boundaries are the resume contract, even if budgets change.
-            for state in episode.extraction_batches:
-                batch_index = state.batch_index
-                batch = [segments_by_id[sid] for sid in state.segment_ids]
-                if state.status == "complete":
-                    continue
-                state.attempt_count += 1
-                state.last_error = None
-                batch_ids = {segment.segment_id for segment in batch}
-                try:
-                    system, user, claim_model, neighbors, think = request_for(batch)
-                    if state.response is None:
-                        response = await self.llm.call_structured(
-                            system,
-                            user,
-                            claim_model,
-                            num_predict=output_reserve,
-                            think=think,
-                            debug_label=f"claim-extraction-{source.source_id}-batch-{batch_index}",
-                        )
-                    else:
-                        response = state.response
-                    response = claim_model.model_validate(response).model_dump()
-                    records = extraction_records(response)
-                    staged_claims = self._build_extracted_claims(
-                        source,
-                        records,
-                        state.batch_id,
-                        context_sources=[
-                            *context_sources,
-                            replace(source, segments=neighbors),
-                        ],
-                    )
-                    # Persist validated output before publishing claims so a write
-                    # interruption replays the same decision without a new model call.
-                    state.response = response
-                    self.artifacts.save_episode(episode)
-                    for claim in staged_claims:
-                        # Stable batch IDs make publication insert-only. Retrying
-                        # must not overwrite a user correction to a published claim.
-                        try:
-                            self.artifacts.get_claim(claim.claim_id)
-                        except FileNotFoundError:
-                            self.artifacts.save_claim(claim)
-                        claim_ids.append(claim.claim_id)
-                    source_only = {
-                        item["segment_id"]: item["reason"]
-                        for item in records["source_only"]
-                    }
-                    for segment_id in batch_ids:
-                        supporting_ids = [
-                            claim.claim_id
-                            for claim in staged_claims
-                            if segment_id in claim.provenance[0].segment_ids
-                        ]
-                        dispositions[segment_id] = ExtractionSegmentDisposition(
-                            segment_id=segment_id,
-                            disposition="claimed" if supporting_ids else "source_only",
-                            reason=(
-                                "Cited by extracted statements."
-                                if supporting_ids
-                                else source_only[segment_id]
-                            ),
-                            claim_ids=supporting_ids,
-                        )
-                    state.status = "complete"
-                    state.last_error = None
-                except Exception as exc:
-                    state.status = "failed"
-                    state.last_error = str(exc)
-                    extraction_errors.append(f"batch {batch_index}: {exc}")
-                finally:
-                    episode.claim_ids = list(dict.fromkeys(claim_ids))
-                    episode.segment_dispositions = [
-                        dispositions[segment_id] for segment_id in sorted(dispositions)
-                    ]
-                    self.artifacts.save_episode(episode)
-
-            episode.claim_ids = list(dict.fromkeys(claim_ids))
-            for state in episode.extraction_batches:
-                if state.status == "complete":
-                    state.response = None
-            terminal_batches = {
-                state.batch_id
-                for state in episode.extraction_batches
-                if state.status == "complete"
-            }
-            incomplete = len(terminal_batches) != len(episode.extraction_batches)
-            episode.segment_dispositions = [
-                dispositions[segment_id] for segment_id in sorted(dispositions)
-            ]
-            episode.extraction_status = "partial" if incomplete else "complete"
-            if incomplete:
-                persisted_errors = [
-                    f"batch {state.batch_index}: {state.last_error}"
-                    for state in episode.extraction_batches
-                    if state.last_error
-                ]
-                episode.extraction_error = (
-                    "; ".join(extraction_errors or persisted_errors)
-                    or "Extraction has retryable incomplete batches"
-                )
-            else:
-                episode.extraction_error = None
-        except Exception as exc:
-            episode.extraction_status = "failed"
-            episode.extraction_error = str(exc)
-        self.artifacts.save_episode(episode)
-
-    @staticmethod
-    def _render_segments(segments: list[SourceSegment], time_by_id: dict | None = None) -> str:
-        return "\n\n".join(
-            f"[{segment.segment_id}] speaker={segment.speaker or 'unknown'}; role={segment.role or 'unknown'}; "
-            f"message_time={segment.timestamp or (time_by_id or {}).get(segment.segment_id) or 'unknown'}\n{segment.content}"
-            for segment in segments
-        )
-
-    @staticmethod
-    def _render_claim_segments(segments: list[SourceSegment], time_by_id: dict | None = None) -> str:
-        return Encoder._render_segments(segments, time_by_id)
-
-    @staticmethod
-    def _segment_batches(
-        segments: list[SourceSegment],
-        batch_size: int = 48,
-        *,
-        fits=None,
-    ) -> list[list[SourceSegment]]:
-        batches = []
-        current = []
-        for segment in segments:
-            trial = [*current, segment]
-            if current and (len(trial) > batch_size or (fits and not fits(trial))):
-                batches.append(current)
-                current = []
-            current.append(segment)
-            if fits and not fits(current):
-                raise ContextBudgetError(
-                    "A complete source segment exceeds the extraction budget"
-                )
-        if current:
-            batches.append(current)
-        return batches
-
-    def _build_extracted_claims(
-        self,
-        source: SourceDocument,
-        response: dict[str, Any],
-        batch_id: str,
-        *,
-        context_sources: list[SourceDocument] | None = None,
-    ) -> list[MemoryClaim]:
-        """Build a validated batch before any claim in it is persisted."""
-        claims: list[MemoryClaim] = []
-        time_by_id = source_time_anchors([source, *(context_sources or [])])
-        for claim_index, raw in enumerate(response["claims"], start=1):
-            claim_text = str(raw["text"]).strip()
-            segment_ids = list(dict.fromkeys(raw["segment_ids"]))
-            source_speakers = list(
-                dict.fromkeys(
-                    segment.speaker
-                    for segment in source.segments
-                    if segment.segment_id in segment_ids and segment.speaker
-                )
-            )
-            about = list(raw["about"])
-            raw_modality = (
-                str(raw.get("evidence_modality") or "unknown").strip().lower()
-            )
-            facets = dict(raw.get("facets", {}) or {})
-            # The model declares an inference by supplying its evidence basis.
-            is_inferred = facets.get("inference_basis") is not None
-            cited_context_ids = set(raw.get('context_segment_ids', []))
-            for annotation in facets.get('times', []):
-                if annotation['evidence_segment_id'] not in {*segment_ids, *cited_context_ids}:
-                    raise ValueError("A time anchor must be one of the claim's cited evidence segments")
-            context_provenance = []
-            for prior in context_sources or []:
-                cited = [
-                    seg.segment_id
-                    for seg in prior.segments
-                    if seg.segment_id in cited_context_ids
-                ]
-                if cited:
-                    context_provenance.append(
-                        ClaimProvenance(
-                            source_id=prior.source_id,
-                            segment_ids=cited,
-                            raw_log_entry_id=prior.raw_log_entry_id,
-                            evidence_type="explicit",
-                        )
-                    )
-            claims.append(
-                MemoryClaim(
-                    claim_id=(
-                        "claim-"
-                        + hashlib.sha256(
-                            f"{source.source_id}:{batch_id}:{claim_index}".encode(
-                                "utf-8"
-                            )
-                        ).hexdigest()[:16]
-                    ),
-                    text=claim_text,
-                    about=about,
-                    provenance=[
-                        ClaimProvenance(
-                            source_id=source.source_id,
-                            segment_ids=segment_ids,
-                            raw_log_entry_id=source.raw_log_entry_id,
-                            speaker=source_speakers[0]
-                            if len(source_speakers) == 1
-                            else None,
-                            evidence_type="inferred" if is_inferred else "explicit",
-                        ),
-                        *context_provenance,
-                    ],
-                    recorded_at=source.recorded_at,
-                    confidence=0.8,
-                    facets=normalize_temporal_facets(facets, time_by_id),
-                    claim_type=str(raw.get("claim_type") or "unknown"),
-                    predicate=str(raw["predicate"]) if raw.get("predicate") else None,
-                    evidence_modality=raw_modality,
-                    temporal_status=str(raw.get("temporal_status") or "unknown"),
-                )
-            )
-        return claims

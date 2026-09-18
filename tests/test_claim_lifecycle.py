@@ -5,7 +5,8 @@ import pytest
 
 from mycelium.artifacts import (
     ArtifactStore,
-    ClaimPlacement,
+    ClaimEntityReference,
+    EntityResolutionDecision,
     ClaimProvenance,
     ConsolidatedFact,
     EpisodeManifest,
@@ -19,7 +20,7 @@ from mycelium.claim_lifecycle import (
     ClaimLifecycleService,
 )
 from mycelium.config import Config
-from mycelium.facts import FactResolver
+from mycelium.views import ViewOrganizer
 from mycelium.materialization import PageMaterializer
 from mycelium.store import WikiStore
 
@@ -38,7 +39,7 @@ def setup_service(tmp_path):
         artifacts,
         wiki,
         ClaimLifecycleService(
-            artifacts, materializer, FactResolver(llm, artifacts, Config())
+            artifacts, materializer, ViewOrganizer(llm, artifacts, materializer, Config())
         ),
     )
 
@@ -91,16 +92,12 @@ def add_claim(
         dream_disposition="routed",
     )
     artifacts.save_claim(claim)
-    artifacts.save_placement(ClaimPlacement(
-        claim_id=claim_id,
-        owner_entity_id="you",
-        section_key="preferences_working_style",
-        linked_entity_ids=[],
-        status="placed",
-        reason="fixture",
-        created_at=NOW,
-        updated_at=NOW,
-    ))
+    artifacts.save_entity_reference(ClaimEntityReference(
+        f"ref-{claim_id}", claim_id, "subject", "You", "you", 1.0, "fixture", "extraction", "fixture", "active", NOW))
+    for episode in artifacts.list_episodes():
+        if episode.source_id in {p.source_id for p in provenance}:
+            episode.claim_ids = list(dict.fromkeys([*episode.claim_ids, claim_id]))
+            artifacts.save_episode(episode)
     if with_fact:
         artifacts.save_consolidated_fact(ConsolidatedFact(
             fact_id=f"fact-{claim_id}",
@@ -150,7 +147,7 @@ async def test_claim_correction_creates_explicit_evidence_and_rebuilds_projectio
     assert artifacts.get_episode(
         corrected_source.source_id.replace("source-", "episode-", 1)
     ).claim_ids == [replacement.claim_id]
-    assert artifacts.placement_for_claim(replacement.claim_id).owner_entity_id == "you"
+    assert artifacts.list_entity_references(claim_id=replacement.claim_id, status="active")[0].entity_id == "you"
     facts = artifacts.facts_for_claim(replacement.claim_id)
     assert len(facts) == 1
     assert facts[0].text == replacement.text
@@ -195,7 +192,7 @@ async def test_source_retraction_removes_claim_fact_and_page_projection(tmp_path
     assert source.retraction_reason == "The transcript was imported in error."
     assert artifacts.get_claim(claim.claim_id).status == "retracted"
     assert result.claim_ids == [claim.claim_id]
-    assert artifacts.facts_for_claim(claim.claim_id) == []
+    assert len(artifacts.facts_for_claim(claim.claim_id)) == 1  # Stored view remains inspectable; projection hides it.
     assert claim.text not in wiki.get("you").content
 
 
@@ -244,18 +241,18 @@ async def test_correction_failure_is_isolated_and_retry_is_idempotent(tmp_path):
     claim = add_claim(artifacts, "original", [ClaimProvenance("original", [segment])], with_fact=True)
     service.materializer.regenerate({"you"})
     before = wiki.get("you").content
-    service.resolver.llm.call_structured.side_effect = RuntimeError("model unavailable")
+    service.views.llm.call_structured.side_effect = RuntimeError("model unavailable")
     with pytest.raises(RuntimeError, match="model unavailable"):
         await service.correct_claim(claim.claim_id, "The user prefers afternoon meetings.")
     assert artifacts.get_claim(claim.claim_id).status == "active"
     assert len(artifacts.list_claims()) == 1
     assert wiki.get("you").content == before
-    service.resolver.llm.call_structured.side_effect = lifecycle_response
+    service.views.llm.call_structured.side_effect = lifecycle_response
     result = await service.correct_claim(claim.claim_id, "The user prefers afternoon meetings.")
-    service.resolver.llm.call_structured.reset_mock()
+    service.views.llm.call_structured.reset_mock()
     retry = await service.correct_claim(claim.claim_id, "The user prefers afternoon meetings.")
     assert retry == result
-    service.resolver.llm.call_structured.assert_not_called()
+    service.views.llm.call_structured.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -281,20 +278,20 @@ def test_supporting_detail_and_uncertainty_remain_cited_and_retrievable(tmp_path
     artifacts, wiki, service = setup_service(tmp_path)
     segment = add_source(artifacts, "source")
     claim = add_claim(artifacts, "detail", [ClaimProvenance("source", [segment])], with_fact=True)
-    placement = artifacts.placement_for_claim(claim.claim_id)
-    placement.uncertainty = "The preference is tentative."
-    artifacts.save_placement(placement)
+    artifacts.save_entity_resolution_decision(EntityResolutionDecision(
+        "identity-review", "entity_creation", "you", "person", "Tentative person", ["source"],
+        [claim.claim_id], [segment], .5, "Identity uncertain", "review_required", "test", NOW))
     fact = artifacts.facts_for_claim(claim.claim_id)[0]
     fact.prominence = "detail"
     artifacts.save_consolidated_fact(fact)
     service.materializer.regenerate({"you"})
     content = wiki.get("you").content
     assert "<details>" in content and "Supporting detail" in content
-    assert claim.text in content and placement.uncertainty in content
+    assert claim.text in content and "identity uncertain" in content
     builder = RetrievedContextBuilder(wiki, artifacts)
-    evidence = builder._memory_evidence([ClaimSearchHit(claim.claim_id, claim.text, "wiki", "you", "You", "you", placement.section_key, 1)])
+    evidence = builder._memory_evidence([ClaimSearchHit(claim.claim_id, claim.text, "wiki", "you", "You", "you", "Preferences", 1)])
     rendered = render_memory_evidence(evidence)
-    assert claim.text in rendered and placement.uncertainty in rendered
+    assert claim.text in rendered and "Identity unresolved" in rendered
 
 
 def test_source_inspection_carries_superseded_status_and_replacement(tmp_path):

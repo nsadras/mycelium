@@ -1,4 +1,4 @@
-"""Experimental source-led retention and view contracts; no production wiring."""
+"""Flat source retention and cited view contracts with exact request-local IDs."""
 
 import json
 from typing import Literal
@@ -24,6 +24,8 @@ metadata, not a requirement to make a page. Reuse a supplied existing subject ID
 the evidence identifies the same subject across topics. Keep distinct namesakes
 separate. Mark unresolved identity review_required and choose a new subject ID.
 Do not rename a supplied identity without explicit evidence of a name change.
+When supplied, canonical You identifies the participant with role=user. Other
+speakers and people mentioned by the user are separate subjects.
 
 Propose a change only when new evidence contradicts or replaces a specific prior
 memory about the same thing. Different historical events and tentative ideas
@@ -39,14 +41,15 @@ Use source-derived headings and combine related statements when useful. Preserve
 important context, conditions and uncertainty. Distinguish history from current
 plans. Pending changes are unresolved accounts, not approved replacements.
 
-You are refreshing the generated items owned by the affected subjects. Existing
-items are supplied for continuity; include the context worth keeping. Protected
-manual items and items involved in pending review are kept unchanged: do not
-rewrite their protected memories. Omitted memories remain searchable; every
+You are refreshing only the supplied generated items and adding useful new
+items for the affected subjects. Other existing items stay unchanged. Keep useful
+context from the supplied items. Protected items stay unchanged: do not repeat
+them. Distinct new items may still cite their evidence. Omitted memories remain searchable; every
 memory need not appear on a page. Distinct items may cite the same memory when
 it supports each statement. Use linked_subject_ids when the same item belongs on
 several pages. An incidental subject need not have a page. Never invent facts or
-resolve identity by name alone.
+resolve identity by name alone. Respect page_exclusions: the named evidence
+must not support an item on that subject's page.
 """
 
 
@@ -89,6 +92,11 @@ def unique_ids(records):
 
 
 def retention_model(payload):
+    if not payload["segments"]:
+        return create_model("EmptyRetention", __base__=Retention,
+            subjects=(list[Subject], Field(max_length=0)),
+            memories=(list[Memory], Field(max_length=0)),
+            changes=(list[Change], Field(max_length=0)))
     segments = {s["id"] for s in payload["segments"]}
     context = {s["id"] for s in payload.get("context_segments", [])}
     prior = {m["id"] for m in payload.get("prior_memories", [])}
@@ -145,12 +153,11 @@ def presentation_model(payload):
     subjects = {s["id"] for s in payload["subjects"]}
     affected = set(payload["affected_subject_ids"])
     memories = {m["id"] for m in payload["memories"]}
-    protected = set(payload.get("protected_memory_ids", []))
     excluded = {(r["memory_id"], r["subject_id"]) for r in payload.get("page_exclusions", [])}
-    if affected and memories - protected:
+    if affected and memories:
         item = create_model("ViewSelection", __base__=ViewItem,
             owner_id=(Literal.__getitem__(tuple(sorted(affected))), ...),
-            memory_ids=(list[Literal.__getitem__(tuple(sorted(memories - protected)))], Field(min_length=1)),
+            memory_ids=(list[Literal.__getitem__(tuple(sorted(memories)))], Field(min_length=1)),
             linked_subject_ids=(list[Literal.__getitem__(tuple(sorted(subjects)))], ...))
         base = create_model("PresentationFields", __base__=Presentation, items=(list[item], ...))
     else:
@@ -165,8 +172,6 @@ def presentation_model(payload):
                     raise ValueError("View endpoints must be supplied subjects and owner affected")
                 if not set(item.memory_ids) <= memories:
                     raise ValueError("View citations must reference supplied memories")
-                if set(item.memory_ids) & protected:
-                    raise ValueError("Protected memory cannot be rewritten")
                 if any((mid, eid) in excluded for mid in item.memory_ids for eid in endpoints):
                     raise ValueError("This evidence has an explicit no-page decision for that subject")
             return self
@@ -177,12 +182,12 @@ def presentation_model(payload):
 async def retain(llm, payload):
     return await llm.call_structured(
         RETAIN, json.dumps(payload, ensure_ascii=False), retention_model(payload),
-        num_predict=8192, debug_label="compact-retention",
+        num_predict=8192, debug_label="memory-retention",
     )
 
 
 async def present(llm, payload):
     return await llm.call_structured(
         PRESENT, json.dumps(payload, ensure_ascii=False), presentation_model(payload),
-        num_predict=8192, debug_label="compact-presentation",
+        num_predict=8192, debug_label="memory-presentation",
     )

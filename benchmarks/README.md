@@ -89,7 +89,7 @@ builds after ingestion and its session snapshots reflect that difference.
 
 Use `--questions-per-category N` for a balanced diagnostic QA panel.
 `--replay-store <case-store>` reuses extraction artifacts;
-`--replay-assignments` additionally preserves assignments. For exact-store QA:
+Replay carries retained claims and their subject references into a new view Build. For exact-store QA:
 
 ```bash
 .venv/bin/python -m benchmarks locomo \

@@ -217,7 +217,7 @@ export default function MemoryInspector({ refreshKey = 0, target = null }: { ref
               {activeTab === 'claims' && filteredClaims.map((claim) => (
                 <button key={claim.claim_id} onClick={() => setSelectedClaimId(claim.claim_id)} className={`w-full rounded-lg p-3 text-left ${selectedClaimId === claim.claim_id ? 'bg-indigo-100 text-indigo-900' : 'hover:bg-white'}`}>
                   <div className="line-clamp-2 text-sm font-semibold">{claim.text}</div>
-                  <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span>{humanize(claim.dream_disposition)}</span><span>{claim.placement?.status ?? 'short term'}</span></div>
+                  <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span>{humanize(claim.dream_disposition)}</span><span>{`${claim.view_count ?? 0} views`}</span></div>
                 </button>
               ))}
               {activeTab === 'facts' && filteredFacts.map((fact) => (

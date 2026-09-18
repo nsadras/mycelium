@@ -1,6 +1,6 @@
 # Consolidated audit implementation plan
 
-**Updated:** 2026-09-17. **Reviewed production baseline:** `01ac86d`.
+**Updated:** 2026-09-18. **Current implementation checkpoint:** `6e21c72` (two-pass Build plus correction ordering fix).
 
 This is the authoritative forward priority list. It incorporates the
 [regrouping audit](mycelium-audit-2026-09-16-regroup.md) and the useful methods
@@ -28,14 +28,23 @@ durability, inspectable references and user control over corrections.
    Fix practical blockers; leave lesser quality limitations visible for use-driven
    prioritization. Another full benchmark is not a prerequisite to move forward.
 
-**Bounded experiment checkpoint:** `ac8a6bd` adds native experimental retention and
-views; `2ddb536` separates item ownership from shared evidence per user direction.
-The revised successful Builds take 114.49s, 63.57s and 47.52s. The third sequence
-source fails citation validation; the control exhausts 60 calls without finishing
-its first Build. The experiment is terminal and remains outside application wiring.
-Next: constrain exact citation selection, then integrate corrections/reviews/manual
-edits through the new evidence/view boundary and remove displaced stages. Do not
-add per-error semantic stages. See the [source review and acceptance criteria](compact_encoding_result_2026_09_17.md).
+**Current implementation checkpoint (2026-09-18):** `0bc6c95` proves exact-ID selection;
+`6c97904` integrates two-pass retention/presentation and shared cited views through
+production lifecycle and UI services; `6e21c72` fixes the correction transaction
+ordering exposed by the native check. Old main Build stages are removed. Final
+validation: 577 Python tests, 24 UI tests, lint/build/Ruff and whitespace checks pass.
+The bounded production check and continuation use 334.27 seconds / 14 generation
+requests, including failed work, within the original 600 seconds / 18 requests.
+All required lifecycle actions complete after that mechanical fix; semantic flaws
+remain documented. See [source review, cost and comparison limits](compact_product_result_2026_09_18.md).
+
+**Next:** user-owned [device checks](audit_device_acceptance_2026_09_17.md) and ordinary
+use. Do not schedule another perfection-driven benchmark pass. If observed view
+churn, repeated protected items or inflated retrieval context recur, first narrow
+regeneration/context scope and preserve independent citations. Recurring misleading
+commitments or ineffective human corrections outrank isolated omissions and headings.
+The earlier incomplete control does not establish matched quality or a measured
+competitor speedup.
 
 The frozen full sample-3 stress run was intentionally stopped during session 16
 after 15 snapshots and 13.64 hours, with no QA. Its organization backlog and high
@@ -44,7 +53,7 @@ covers sessions 1–8; later counts do not establish later semantic quality. Ear
 per-feature gates and failure labels below remain historical evidence, not a new
 requirement for 100% semantic accuracy before proceeding.
 
-**Current state:** E1 and focused C1–C3 fixes are implemented. E2 completed both
+**Historical state before compact integration:** E1 and focused C1–C3 fixes are implemented. E2 completed both
 comparison arms and source review. S1 bounded truth discovery, S2 dependency
 maintenance, and measured date/name/attribution fixes are implemented. Longitudinal
 replay completed with residual quality failures. The frozen four-session held-out

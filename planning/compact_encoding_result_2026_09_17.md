@@ -1,11 +1,46 @@
 # Compact encoding: bounded experiment result
 
-**Decision: keep the shared-evidence mechanism; do not switch the application yet.**
-The two-pass approach produces useful memory at practical local cost. A malformed
-citation still rejects an entire source's retention, and production editing/review
-services still assume exclusive claim ownership. Those are the next integration
-problems. Ordinary omissions and imperfect summaries are not a reason to add
-another semantic stage or resume an open-ended benchmark campaign.
+## Implementation follow-through — 2026-09-18
+
+- **Reference contract complete — `0bc6c95`.** Exact citation, subject, change-target,
+  and view IDs constrain generation. The bounded configured-model reference check
+  passed all three requests without retries (101.17 server seconds). Invalid
+  references remain rejected; no lexical repair or additional semantic stage.
+- **Production integration complete — `6c97904`.** Build now retains evidence and
+  presents independent cited views. Shared support works through editing, date
+  review, correction, retraction and identity review. Displaced production stages,
+  templates, probes and their dedicated tests are removed. Capture remains behind
+  Build for search, retries preserve retained evidence, and agent evidence reports
+  incomplete work. README and DESIGN describe the current architecture.
+- **Bounded product check complete after one mechanical fix — `6e21c72`.**
+  Successive Builds, injected publication failure/recovery, a simulated human
+  correction and two answers used 334.27 seconds / 14 generation requests,
+  including failed work, within 600 seconds / 18 requests. The correction first
+  exposed a transaction-order bug; the original run stays recorded as incomplete,
+  and the continuation used only its remaining allowance. No semantic variant or
+  full rerun followed. See the [full product result](compact_product_result_2026_09_18.md).
+
+Final validation: **577 Python tests passed**, four opt-in integrations excluded;
+**24 UI tests passed**; UI lint/build, Ruff and whitespace checks passed.
+
+**Next: user-owned device checks and ordinary use.** Artifacts are useful with
+residual namesake confusion, overstatements, repeated pending-review items and
+unnecessary view refresh work. Record those limits rather than chasing a perfect
+benchmark. A recurring cost/clutter problem should first lead to less regeneration,
+not an extra semantic stage. The [device checklist](audit_device_acceptance_2026_09_17.md)
+remains unverified.
+
+The experiment below is a historical record. Its application-adoption caveats
+were resolved by the reference and lifecycle integration above; its semantic
+observations and unmatched-comparison limits remain evidence, not new targets.
+
+## Original experiment decision
+
+The two-pass approach produces useful memory at practical local cost. The original
+experiment stopped before adoption because a malformed citation could reject a
+source and the editing/review services still assumed exclusive claim ownership.
+Ordinary omissions and imperfect summaries did not justify another semantic stage
+or an open-ended benchmark campaign.
 
 ## What changed
 
@@ -118,7 +153,7 @@ focused mechanical tests cover shared ownership, protected items, rollback/retry
 and rendering after support becomes inactive. These checks do not establish
 semantic completeness or application lifecycle safety.
 
-## Next work, in order
+## Original next work and acceptance criteria
 
 1. **Make reference selection reliable without changing semantic labor.** Bind
    citation fields to exact request-local IDs in the structured schema; use an
@@ -144,5 +179,5 @@ semantic completeness or application lifecycle safety.
    user. Defer small wording, name and organization errors to real use; a perfect
    benchmark or a completed full stress run is not the target.
 
-This closes the planned experiment. The integration gates remain open because of
-the concrete reference and lifecycle gaps, not because memory must be perfect.
+The experiment closed with these integration gates. See the follow-through status
+at the top for their current disposition; perfect memory is not an acceptance condition.

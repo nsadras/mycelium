@@ -5810,3 +5810,44 @@ remain separate gates.
   using the remaining 333.024 seconds / nine requests of the original allowance.
   Record both code versions and the failed work. This is a repaired structural
   check, not an uninterrupted frozen pass or a new semantic comparison.
+
+### 2026-09-18 — Close bounded product check and hand off device validation
+
+- `benchmark_runs/compact-product-resume-20260918T022442Z-2484c84d` resumes only the
+  unfinished correction, final answer and no-op Build from the original run's
+  read-only snapshot. Correction completes in 37.127s / three requests, preserving
+  exact submitted text, superseding its target and refreshing affected views.
+  Final answer takes 29.739s / two requests; no-op Build takes 0.009s / zero calls.
+- Original plus continuation: 334.271s / 14 generation requests, including injected
+  publication failure, failed correction and recovery, within 600s / 18 requests.
+  Total 159,222 input / 20,457 output tokens, 319.802 server seconds, zero transport
+  failures and zero structured-output retries. Twenty embedding requests take
+  11.76s, including copied-store index rebuilding. Execution totals exclude time
+  spent implementing/testing the mechanical fix between the two runs.
+- Joined per-call/phase evidence is saved as review-evidence.json in both runs.
+  Final snapshot has 167 claims (166 active), 24 pages, no pending Build and clean
+  structural integrity. All 143 seed claims retain canonical text, provenance,
+  status, facets and links. Original failed correction leaves claims, sources,
+  entities, consolidated facts and wiki records equal to the recovery snapshot.
+- Source review finds useful coverage of project purpose, constraints, budget,
+  equipment and changed plans. Retention conflates two namesakes and strengthens
+  a possible demonstration into a commitment. Presentation misstates an insurance
+  deadline as confirmation, over-shares context and repeats protected items with
+  new IDs. Exact correction text survives, but its provisional qualifier is not
+  consistently visible in generated prose. Integrity checks do not prove meaning.
+- Pending-view QA correctly answers from newer retained claims; incomplete status
+  is present in agent evidence, though the answer does not repeat it. Final QA is
+  useful but inherits the demonstration overstatement and omits an available
+  insurance deadline. These distinguish retention, presentation and answer errors.
+  Twenty of the first presentation's 27 items rewrite seed-only evidence; final
+  context admission uses about 50k input tokens. Record unnecessary regeneration
+  and context growth as follow-up candidates, not reasons for another model stage.
+- Final regression suite: 577 passed, four opt-in integrations deselected, 25.72s.
+  Prior 24 UI tests, lint/build and focused checks remain applicable. Ruff and
+  whitespace checks pass. No native job remains active; no service was started.
+- Close the three-step follow-through in the original result and consolidated
+  plan. Detailed result: planning/compact_product_result_2026_09_18.md. The first
+  run remains incomplete and the repair changes code version; repeated known
+  inputs, fault injection and an unfinished earlier control prevent causal speedup
+  or matched-quality claims. Move to user-owned device checks and ordinary use.
+  Do not begin another tuning cycle for individual omissions or headings.

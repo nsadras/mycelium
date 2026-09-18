@@ -95,7 +95,14 @@ def retention_model(payload):
     existing = {s["id"] for s in payload.get("existing_subjects", [])}
     allowed = tuple(sorted(existing | set(payload["new_subject_ids"])))
     subject = create_model("SubjectSelection", __base__=Subject, id=(Literal.__getitem__(allowed), ...))
-    base = create_model("RetentionFields", __base__=Retention, subjects=(list[subject], ...))
+    memory = create_model("MemorySelection", __base__=Memory,
+        segment_ids=(list[Literal.__getitem__(tuple(sorted(segments | context)))], Field(min_length=1)),
+        subject_ids=(list[Literal.__getitem__(allowed)], ...))
+    change = (create_model("ChangeSelection", __base__=Change,
+                          earlier_id=(Literal.__getitem__(tuple(sorted(prior))), ...)) if prior else Change)
+    base = create_model("RetentionFields", __base__=Retention, subjects=(list[subject], ...),
+                        memories=(list[memory], ...),
+                        changes=(list[change], Field(max_length=None if prior else 0)))
 
     class ScopedRetention(base):
         @model_validator(mode="after")
@@ -140,8 +147,16 @@ def presentation_model(payload):
     memories = {m["id"] for m in payload["memories"]}
     protected = set(payload.get("protected_memory_ids", []))
     excluded = {(r["memory_id"], r["subject_id"]) for r in payload.get("page_exclusions", [])}
+    if affected and memories - protected:
+        item = create_model("ViewSelection", __base__=ViewItem,
+            owner_id=(Literal.__getitem__(tuple(sorted(affected))), ...),
+            memory_ids=(list[Literal.__getitem__(tuple(sorted(memories - protected)))], Field(min_length=1)),
+            linked_subject_ids=(list[Literal.__getitem__(tuple(sorted(subjects)))], ...))
+        base = create_model("PresentationFields", __base__=Presentation, items=(list[item], ...))
+    else:
+        base = create_model("EmptyPresentation", __base__=Presentation, items=(list[ViewItem], Field(max_length=0)))
 
-    class ScopedPresentation(Presentation):
+    class ScopedPresentation(base):
         @model_validator(mode="after")
         def references(self):
             for item in self.items:

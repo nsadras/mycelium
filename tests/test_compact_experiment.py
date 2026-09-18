@@ -111,6 +111,33 @@ def test_compact_identity_uses_declared_ids_only():
             model.model_validate({"subjects": [{**row, **change}], "memories": [], "changes": []})
 
 
+def test_generation_schema_scopes_citations_before_decoding():
+    payload = {"segments": [{"id": "source-a#seg-0041"}, {"id": "source-a#seg-0042"}],
+               "context_segments": [{"id": "source-b#seg-0001"}],
+               "existing_subjects": [], "new_subject_ids": ["person"], "prior_memories": []}
+    model = contract.retention_model(payload)
+    schema = model.model_json_schema()
+    assert schema["$defs"]["MemorySelection"]["properties"]["segment_ids"]["items"]["enum"] == [
+        "source-a#seg-0041", "source-a#seg-0042", "source-b#seg-0001"]
+    value = {"subjects": [{"id": "person", "title": "Rowan", "entity_type": "person", "review_required": False}],
+             "memories": [{"id": "m", "text": "A supported statement.", "subject_ids": ["person"],
+                           "segment_ids": ["source-a#seg-0041", "source-b#seg-0001"]}], "changes": []}
+    model.model_validate(value)
+    value["memories"][0]["segment_ids"] = ["source-a#seg-00041"]
+    with pytest.raises(ValueError):
+        model.model_validate(value)
+    view_model = contract.presentation_model({"subjects": [{"id": "person"}],
+        "affected_subject_ids": ["person"], "memories": [{"id": "m"}]})
+    view_schema = view_model.model_json_schema()
+    assert view_schema["$defs"]["ViewSelection"]["properties"]["memory_ids"]["items"]["const"] == "m"
+    item = {"owner_id": "person", "heading": "Context", "text": "A supported statement.",
+            "memory_ids": ["m"], "linked_subject_ids": [], "state": "current"}
+    view_model.model_validate({"items": [item]})
+    item["memory_ids"] = ["invented"]
+    with pytest.raises(ValueError):
+        view_model.model_validate({"items": [item]})
+
+
 @pytest.mark.asyncio
 async def test_shared_evidence_keeps_distinct_items_and_owners(tmp_path, monkeypatch):
     async def no_search(*args, **kwargs):

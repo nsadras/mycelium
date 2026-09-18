@@ -5725,3 +5725,24 @@ remain separate gates.
   and claim these guarantees are preserved. The latest applicable mechanical
   result remains four focused tests passed, Ruff clean, and whitespace checks
   clean; no production code or UI changed in this tranche.
+
+### 2026-09-18 — Constrain citation selection before lifecycle integration
+
+- User authorized the three next steps in `planning/compact_encoding_result_2026_09_17.md`.
+  Scope citation, subject-reference, prior-change and view-endpoint fields to the
+  exact IDs supplied in the request's JSON schema. Unknown citations remain
+  rejected; no spelling repair, new semantic field, added stage or retry increase.
+- Five structural tests pass in 0.24s, including assertions on the actual schema
+  sent to the model and rejection of malformed references. An initial test used
+  an unavailable JSON-schema package; replace it with existing Pydantic and schema
+  checks rather than add a dependency. Ruff passes.
+- `benchmark_runs/compact-references-20260918T012106Z-bd295b3b`: one frozen check,
+  capped at 300s / 12 attempts, uses a neutral conditional-plan example followed
+  by native retention/publication of the previously failed source from a copied
+  snapshot. All three requests succeed first attempt: 36,273 input / 6,478 output
+  tokens, 101.174 server seconds. The original source is unchanged; generated
+  canonical citations are valid. Saved configuration, model digest, code, raw
+  requests, outputs and final snapshot accompany the result. This establishes
+  the reference mechanism on that check, not perfect semantic accuracy.
+- Continue into production lifecycle integration with the proven contract.
+  Device checks remain user-owned; no app or Ollama service is started.

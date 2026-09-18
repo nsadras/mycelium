@@ -5785,3 +5785,28 @@ remain separate gates.
   retry, source-grounded answers, and a human correction. Record residual semantic
   imperfections without launching another tuning cycle. Device checks remain
   user-owned; no service has been started.
+
+### 2026-09-18 — Native correction exposed and fixed a transaction-order bug
+
+- `benchmark_runs/compact-product-20260918T021618Z-9b18cef0` completed the first
+  Build (108.29s / two requests), retained the second source before an injected
+  publication failure (98.22s / two requests), answered from its retained evidence,
+  and recovered views (36.62s / one request) without extracting again. Source and
+  view references pass integrity checks, and pending work is exposed to retrieval.
+- The correction then failed: retention correctly proposed replacing its target,
+  but correction had already marked that target superseded before validating the
+  retention response. The lifecycle transaction rolled back; the original claim,
+  views and correction input remain available. No source or accepted edit was lost.
+- A neutral regression test reproduces the exact ordering failure with a legal
+  model change proposal. Validate/persist the replacement before superseding the
+  old claim, inside the same staged transaction. Keep stale-evidence guards and
+  omit redundant model proposals for an explicit human replacement. No prompt,
+  schema, model stage, retry allowance or semantic rule changed. All 33 affected
+  correction/date-review/reconsolidation/shared-view tests pass (2.46s); Ruff and
+  whitespace checks pass.
+- The original bounded check ended incomplete at 266.976s / nine requests,
+  including the failed correction, with no transport or structured-output retry.
+  Resume only correction, final answer and no-op Build from its final snapshot,
+  using the remaining 333.024 seconds / nine requests of the original allowance.
+  Record both code versions and the failed work. This is a repaired structural
+  check, not an uninterrupted frozen pass or a new semantic comparison.

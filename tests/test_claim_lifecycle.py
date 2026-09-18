@@ -117,14 +117,25 @@ def add_claim(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model_proposes_replacement", [False, True])
 async def test_claim_correction_creates_explicit_evidence_and_rebuilds_projection(
-    tmp_path,
+    tmp_path, model_proposes_replacement,
 ):
     artifacts, wiki, service = setup_service(tmp_path)
     segment_id = add_source(artifacts, "source-original")
     original = add_claim(artifacts, "claim-original", [ClaimProvenance(
         source_id="source-original", segment_ids=[segment_id], speaker="user"
     )])
+
+    def response(system, user, schema, **kwargs):
+        value = lifecycle_response(system, user, schema, **kwargs)
+        if model_proposes_replacement and kwargs.get("debug_label") == "memory-retention":
+            value["changes"] = [{"earlier_id": original.claim_id,
+                "later_id": value["memories"][0]["id"], "relation": "supersedes",
+                "reason": "The reviewed correction replaces the original statement."}]
+        return schema.model_validate(value).model_dump()
+
+    service.views.llm.call_structured.side_effect = response
 
     result = await service.correct_claim(
         original.claim_id,
@@ -138,6 +149,7 @@ async def test_claim_correction_creates_explicit_evidence_and_rebuilds_projectio
     assert replacement.status == "active"
     assert replacement.text == "The user prefers afternoon meetings."
     assert replacement.confidence == 1.0
+    assert not artifacts.list_reconsolidation_proposals()
     assert {"relation": "supersedes", "target": original.claim_id} in replacement.links
     assert replacement.provenance[0].source_id == corrected_source.source_id
     assert corrected_source.source_type == "manual_correction"

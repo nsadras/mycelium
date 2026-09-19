@@ -404,17 +404,11 @@ history. Interrupted diarization returns the existing transcript to review;
 interrupted finalization keeps its durable edit lock and can retry unchanged.
 SQLite foreign keys prevent late segment writes from orphaning deleted meetings.
 
-Install the optional dependencies with:
+Speech processing is part of the standard project dependencies. Install it with
+the rest of the application:
 
 ```bash
-uv sync --group engram
-```
-
-If the speech stack has resolution problems with Python 3.13, create the environment with Python 3.11:
-
-```bash
-uv python install 3.11
-uv sync --python 3.11 --group engram
+uv sync
 ```
 
 By default, `device = "auto"` and `compute_type = "auto"` select CUDA/`float16` when a CUDA-visible NVIDIA GPU is available, and CPU/`int8` otherwise. The path can be forced in `mycelium.toml`:

@@ -5851,3 +5851,22 @@ remain separate gates.
   inputs, fault injection and an unfinished earlier control prevent causal speedup
   or matched-quality claims. Move to user-owned device checks and ordinary use.
   Do not begin another tuning cycle for individual omissions or headings.
+
+### 2026-09-19 — Include audio dependencies in the normal installation
+
+- User reports useful chat/wiki behavior on two small conversations, then encounters
+  a missing faster-whisper error during audio processing. The virtual environment
+  lacked the optional Engram dependency group, including both speech libraries.
+- Per user direction, move faster-whisper, NumPy, pyannote.audio, Torch and WhisperX
+  into normal project dependencies and remove the Engram group. Plain `uv sync`
+  now installs speech support; the existing launcher needs no additional flag.
+  Regenerate lockfile metadata without upgrading package versions. Update README,
+  DESIGN and import-error instructions to use the same installation command.
+- Install the locked packages into the existing environment. A normal locked sync
+  dry run reports no changes, and `uv pip check` finds no dependency conflicts.
+  Both transcription and speaker-detection imports succeed on Python 3.13.11.
+- Validation: 29 existing Engram processing/recovery/summary tests pass in 3.04s;
+  Ruff and whitespace checks pass. The configured cached large-v3 Whisper model
+  on host CUDA transcribes two timestamped segments from a 15-second existing AMI
+  test clip in 11.60s. Temporary clip removed; this checks transcription, not a full
+  speaker-detection or browser-upload run. No server was started or restarted.

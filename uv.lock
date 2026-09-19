@@ -1687,16 +1687,21 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "faster-whisper" },
     { name = "jinja2" },
     { name = "lancedb" },
+    { name = "numpy" },
     { name = "ollama" },
+    { name = "pyannote-audio" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "python-frontmatter" },
     { name = "python-multipart" },
     { name = "pyyaml" },
     { name = "tiktoken" },
+    { name = "torch" },
     { name = "uvicorn" },
+    { name = "whisperx" },
 ]
 
 [package.dev-dependencies]
@@ -1714,27 +1719,25 @@ dev = [
     { name = "pytest-mock" },
     { name = "ruff" },
 ]
-engram = [
-    { name = "faster-whisper" },
-    { name = "numpy" },
-    { name = "pyannote-audio" },
-    { name = "torch" },
-    { name = "whisperx" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.136.1" },
+    { name = "faster-whisper", specifier = ">=1.2.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "lancedb", specifier = ">=0.38.0" },
+    { name = "numpy", specifier = ">=2.0" },
     { name = "ollama", specifier = ">=0.6.2" },
+    { name = "pyannote-audio", specifier = ">=4.0.5" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "python-frontmatter", specifier = ">=1.1" },
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "tiktoken", specifier = ">=0.7" },
+    { name = "torch", specifier = ">=2.4" },
     { name = "uvicorn", specifier = ">=0.46.0" },
+    { name = "whisperx", specifier = ">=3.8.6" },
 ]
 
 [package.metadata.requires-dev]
@@ -1751,13 +1754,6 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "pytest-mock", specifier = ">=3.12" },
     { name = "ruff", specifier = ">=0.15.12" },
-]
-engram = [
-    { name = "faster-whisper", specifier = ">=1.2.1" },
-    { name = "numpy", specifier = ">=2.0" },
-    { name = "pyannote-audio", specifier = ">=4.0.5" },
-    { name = "torch", specifier = ">=2.4" },
-    { name = "whisperx", specifier = ">=3.8.6" },
 ]
 
 [[package]]

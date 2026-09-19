@@ -172,11 +172,8 @@ Tool calls and the result seen by the model are visible in the chat and retained
 
 ### Meeting memory with Engram
 
-Engram is optional. Install its speech-processing dependencies separately:
-
-```bash
-uv sync --group engram
-```
+Engram's transcription and speaker-detection dependencies are included in the
+standard `uv sync` installation. No separate installation flag is needed.
 
 For speaker diarization, accept the terms for `pyannote/speaker-diarization-community-1` on Hugging Face and provide a token:
 

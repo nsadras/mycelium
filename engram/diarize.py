@@ -13,7 +13,10 @@ class WhisperXDiarizer:
             import whisperx
             from whisperx.diarize import DiarizationPipeline
         except ImportError as exc:
-            raise RuntimeError("WhisperX is not installed. Install Engram diarization dependencies.") from exc
+            raise RuntimeError(
+                f"Speaker detection dependencies could not be imported: {exc}. "
+                "Run `uv sync` and restart the backend."
+            ) from exc
 
         device = self.config.resolved_whisper_device()
         audio = whisperx.load_audio(audio_path)

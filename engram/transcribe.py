@@ -20,7 +20,10 @@ class FasterWhisperTranscriber:
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:
-            raise RuntimeError("faster-whisper is not installed. Install Engram speech dependencies.") from exc
+            raise RuntimeError(
+                f"Speech transcription dependencies could not be imported: {exc}. "
+                "Run `uv sync` and restart the backend."
+            ) from exc
 
         device = config.resolved_whisper_device()
         compute_type = config.resolved_whisper_compute_type(device)

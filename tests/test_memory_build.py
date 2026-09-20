@@ -43,6 +43,9 @@ async def test_reviewed_speaker_reaches_retention_and_shared_project_views(tmp_p
         person, project = subjects["Rowan"], subjects["Bench Ledger"]
         memory = payload["memories"][0]
         assert set(memory["subject_ids"]) == {person, project}
+        assert memory["provenance"][0]["speaker"] == "Rowan"
+        assert memory["provenance"][0]["source_type"] == "meeting_transcript"
+        assert memory["provenance"][0]["role"] is None
         assert set(payload["affected_subject_ids"]) == {person, project}
         if calls["present"] == 2:
             existing = {item["owner_id"]: item for item in payload["existing_items"]}

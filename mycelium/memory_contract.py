@@ -6,6 +6,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
 
 from mycelium.ontology import ENTITY_TYPES
+from mycelium.memory_inputs import compact_presentation, compact_retention
+from mycelium.telemetry import trace_operation
 
 
 RETAIN = """Retain useful memory from the new source and the supplied prior memory.
@@ -18,8 +20,9 @@ wording with its source timestamp; do not invent a precise calendar date.
 Return flat lists of subjects, memories, and change proposals. Every ID in a
 memory's subject_ids must have a corresponding entry in subjects, including
 reused existing identities. Each memory must
-cite the source segments that support it, including antecedents needed to
-understand a reply. Use short local IDs for new memories. For each subject choose
+cite at least one new segment, plus any context segments needed to understand it.
+Context and prior memories help interpretation; do not extract them as new memories.
+Leave a person's identity unspecified when the evidence does not establish it. Use short local IDs for new memories. For each subject choose
 its supplied existing ID or one of new_subject_ids to create a new identity. Subjects
 can be people, projects or other useful areas of memory; entity_type is display
 metadata, not a requirement to make a page. Reuse a supplied existing subject ID when
@@ -186,14 +189,24 @@ def presentation_model(payload):
 
 
 async def retain(llm, payload):
-    return await llm.call_structured(
-        RETAIN, json.dumps(payload, ensure_ascii=False), retention_model(payload),
-        num_predict=8192, debug_label="memory-retention",
-    )
+    request, ids = compact_retention(payload)
+    model = retention_model(request)
+    with trace_operation("memory-retention", request_ids=ids.reverse):
+        result = await llm.call_structured(
+            RETAIN, json.dumps(request, ensure_ascii=False), model,
+            num_predict=8192, debug_label="memory-retention",
+        )
+    result = ids.retention(model.model_validate(result).model_dump())
+    return retention_model(payload).model_validate(result).model_dump()
 
 
 async def present(llm, payload):
-    return await llm.call_structured(
-        PRESENT, json.dumps(payload, ensure_ascii=False), presentation_model(payload),
-        num_predict=8192, debug_label="memory-presentation",
-    )
+    request, ids = compact_presentation(payload)
+    model = presentation_model(request)
+    with trace_operation("memory-presentation", request_ids=ids.reverse):
+        result = await llm.call_structured(
+            PRESENT, json.dumps(request, ensure_ascii=False), model,
+            num_predict=8192, debug_label="memory-presentation",
+        )
+    result = ids.presentation(model.model_validate(result).model_dump())
+    return presentation_model(payload).model_validate(result).model_dump()

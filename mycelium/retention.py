@@ -26,12 +26,18 @@ def now_iso():
 
 
 def memory_record(artifacts, claim):
-    cited_source_segments(artifacts, claim)
     refs = artifacts.list_entity_references(claim_id=claim.claim_id, status="active")
+    provenance = []
+    for _, source, segments in cited_source_segments(artifacts, claim):
+        for segment in segments:
+            row = {"speaker": segment.speaker, "role": segment.role,
+                   "source_type": source.source_type,
+                   "source_time": segment.timestamp or source.occurred_at}
+            if row not in provenance:
+                provenance.append(row)
     return {"id": claim.claim_id, "text": claim.text,
             "subject_ids": sorted({r.entity_id for r in refs if r.entity_id}),
-            "source_time": [artifacts.get_source(p.source_id).occurred_at for p in claim.provenance],
-            "segment_ids": [sid for p in claim.provenance for sid in p.segment_ids],
+            "provenance": provenance,
             "revisions": claim.links, "temporal": claim.facets.get("temporal", [])}
 
 
@@ -53,22 +59,33 @@ class Retainer:
                  "source_id": source.source_id, "source_time": s.timestamp or source.occurred_at,
                  "metadata": s.metadata} for s in segments if s.role != "system"]
 
-    async def input(self, source, batch, identifier, *, prior_ids=None):
+    async def input(self, source, batch, identifier, *, prior_ids=None, recent_claim_ids=()):
         if prior_ids is None:
             if self.claim_index is None:
                 raise ValueError("Retention requires retrieved or explicit prior context")
-            prior_ids = await related_claim_ids(self.claim_index, "\n".join(s.content for s in batch))
-        prior = [self.artifacts.get_claim(cid) for cid in dict.fromkeys(prior_ids)]
-        prior = [c for c in prior if c.status == "active" and c.dream_disposition != "excluded_source_policy"]
+            text = "\n".join(f"{s.speaker or s.role}: {s.content}" if s.speaker or s.role else s.content
+                             for s in batch if s.role != "system")
+            prior_ids = await related_claim_ids(self.claim_index, text)
+        # Preserve a bounded amount of the current source's established context
+        # even when its new topic retrieves different evidence. IDs only select
+        # context; the model still decides whether any identity is the same.
+        prior_ids = dict.fromkeys([*reversed(list(recent_claim_ids)[-12:]), *prior_ids])
+        prior = [self.artifacts.get_claim(cid) for cid in prior_ids]
+        prior = [c for c in prior if c.status == "active" and c.dream_disposition != "excluded_source_policy"][:48]
         entity_ids = self.artifacts.entities_for_claims({c.claim_id for c in prior})
         if any(e.entity_id == "you" for e in self.artifacts.list_entities(status="active")):
             entity_ids.add("you")
         subjects = [self.artifacts.get_entity(eid) for eid in sorted(entity_ids)]
         context = []
-        for sid in source.metadata.get("context_source_ids", []):
+        for sid in dict.fromkeys(source.metadata.get("context_source_ids", [])):
+            if sid == source.source_id:
+                continue
             old = self.artifacts.get_source(sid)
             if old.status == "active":
                 context.extend(self.segments(old, old.segments))
+        if batch:
+            start = next(i for i, segment in enumerate(source.segments) if segment.segment_id == batch[0].segment_id)
+            context.extend(self.segments(source, source.segments[:start]))
         selected, used = [], 0
         for row in reversed(context):
             size = count_tokens(json.dumps(row))
@@ -80,7 +97,8 @@ class Retainer:
                 "participants": source.participants, "metadata": source.metadata,
                 "segments": self.segments(source, batch), "context_segments": selected,
                 "prior_memories": [memory_record(self.artifacts, c) for c in prior],
-                "existing_subjects": [{"id": e.entity_id, "title": e.title, "entity_type": e.entity_type}
+                "existing_subjects": [{"id": e.entity_id, "title": e.title, "entity_type": e.entity_type,
+                                       "aliases": e.aliases}
                                       for e in subjects if e.status == "active"],
                 "new_subject_ids": [stable_id("subject", identifier, i) for i in range(32)]}
 
@@ -163,7 +181,8 @@ class Retainer:
             try:
                 segments = [by_id[sid] for sid in batch.segment_ids]
                 payload = await self.input(source, segments, batch.batch_id,
-                                           prior_ids=None if self.segments(source, segments) else [])
+                                           prior_ids=None if self.segments(source, segments) else [],
+                                           recent_claim_ids=episode.claim_ids)
                 result = (await contract.retain(self.llm, payload) if payload["segments"]
                           else {"subjects": [], "memories": [], "changes": []})
                 trial = deepcopy(episode)

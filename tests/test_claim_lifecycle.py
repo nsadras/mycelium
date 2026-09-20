@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock
 from tests.lifecycle_support import lifecycle_response
 
@@ -130,7 +131,7 @@ async def test_claim_correction_creates_explicit_evidence_and_rebuilds_projectio
     def response(system, user, schema, **kwargs):
         value = lifecycle_response(system, user, schema, **kwargs)
         if model_proposes_replacement and kwargs.get("debug_label") == "memory-retention":
-            value["changes"] = [{"earlier_id": original.claim_id,
+            value["changes"] = [{"earlier_id": json.loads(user)["prior_memories"][0]["id"],
                 "later_id": value["memories"][0]["id"], "relation": "supersedes",
                 "reason": "The reviewed correction replaces the original statement."}]
         return schema.model_validate(value).model_dump()

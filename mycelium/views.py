@@ -29,7 +29,9 @@ class ViewOrganizer:
         proposals = self.artifacts.list_reconsolidation_proposals(status="pending")
         pending = {cid for p in proposals for cid in [*p.incoming_claim_ids, *p.target_claim_ids]}
         exclusions, _ = reviewed_page_exclusions(self.artifacts, claims)
-        return {"subjects": [{"id": eid, "title": entities[eid].title} for eid in sorted(affected)],
+        return {"subjects": [{"id": eid, "title": entities[eid].title,
+                              "entity_type": entities[eid].entity_type, "aliases": entities[eid].aliases}
+                             for eid in sorted(affected)],
                 "affected_subject_ids": sorted(affected),
                 "memories": [memory_record(self.artifacts, claims[cid]) for cid in sorted(claims)],
                 "existing_items": [{"id": f.fact_id, "text": f.text, "owner_id": f.owner_entity_id,

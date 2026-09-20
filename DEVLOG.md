@@ -6023,3 +6023,70 @@ remain separate gates.
   recording pair. The study does not cover namesakes, cross-recording identity reuse,
   full-meeting quality or failure frequency. Production code, prompts, tests and the
   live store remain unchanged. No app service was started or stopped.
+
+### 2026-09-20 — Carry source context between memory stages with compact references
+
+- User authorizes improving information passed between stages. Keep the existing
+  retention/presentation split and add no generation stage, output schema field,
+  identity ontology, semantic heuristic or speaker-to-subject override. Product
+  invariants: context selection preserves exact source order and declared IDs;
+  request compaction changes references, never text, identity or ownership.
+- Retention now receives preceding segments from the same source within the
+  existing context budget, plus up to 12 recent claims from completed batches
+  within the 48-prior-memory bound. This survives resumed Builds without relying
+  on topical retrieval. Retrieval queries include supplied speaker/role labels.
+  Stored aliases accompany candidate subjects; presentation also receives types.
+- Prior-memory and presentation records carry deduplicated speaker, role, source
+  type and timestamp provenance resolved from exact citations. Replace the old
+  lists of segment IDs/timestamps in model memory records; canonical evidence
+  remains intact. Short request-local references replace long IDs in both model
+  calls. Decode and validate before persistence; preserve literal text and arbitrary
+  metadata, shared-page links, no-page reviews and change-proposal endpoints.
+  Diagnostic traces retain the request-to-canonical-ID mapping outside the prompt.
+- Direct configured-model evidence: `benchmark_runs/memory-context-20260920/`.
+  Host Gemma `gemma4:12b`, digest
+  `4eb23ef187e2c5462566d6a1d3bbbc2f1346d0b4327cbb66d58fffbcc9b2b05c`;
+  production sampling and output schema, initially unchanged prompts. Six neutral
+  retention pairs cover own work, reporting, missing antecedents, batch context,
+  namesakes and an alias across topics. Control and candidate preserve distinct
+  namesakes and reuse the known alias. Candidate own-work output omits draft and
+  review context. Third-party candidate text distinguishes actors, but an undeclared
+  You reference fails validation; control incorrectly includes You. The initial
+  context-boundary candidate resolves Hana but emits a context-only memory, also
+  rejected by validation. Both failed samples are preserved, with no retries.
+- One documented adjustment to the initial one-candidate plan: use two reserved
+  calls for a general clarification of the existing new-evidence/uncertain-identity
+  contract, leaving two calls for an integrated Build. The boundary probe then
+  retains a supported new plan with its antecedent and citations. Missing-antecedent
+  attribution remains wrong: control, candidate and clarification all identify the
+  unresolved third person as the known speaker; candidate/clarification also confuse
+  a speaker statement with You. The first candidate also re-extracts an unrelated
+  prior fact with an incorrect citation. This does not establish general identity
+  accuracy or reliable uncertainty handling. Stop semantic tuning at the fixed cap.
+- Paired frozen 100-segment recording, before that clarification: control 2 calls,
+  20,313 input / 1,842 output tokens, 30.33 server seconds; candidate 2 calls,
+  6,729 input / 1,949 output tokens, 26.90 seconds (66.87% fewer input tokens).
+  Candidate selects Hari and project pages, with repetition across pages, broad
+  citations and some ambiguity between planned and existing automation. Control
+  omits Hari's identity. These are single stochastic samples, not speed or quality
+  guarantees; neutral capture IDs differ, while the recording source is matched.
+- Final in-situ production Build: `benchmark_runs/memory-context-20260920/in-situ/`.
+  2 calls, 6,499 input / 1,323 output tokens, 26.49 server seconds. Four coherent
+  statements name Hari, but no person identity/page is selected: the earlier
+  person-page success does not repeat. Repeating Build makes zero model calls.
+  Total experiment: exactly 20 generation requests, 69,244 input / 8,569 output
+  tokens, 153.55 server seconds, zero transport failures or automatic retries,
+  two structured-validation failures. `review.json` records outputs and limits.
+- Adopt the smaller requests and richer handoff for their concrete information
+  and compute benefits, not as a completed identity-resolution fix. Full-recording
+  behavior and native multi-batch continuity remain unmeasured. Recent-claim
+  continuity, restart behavior and exact citation preservation have structural
+  pipeline tests. No extra probing, automatic attribution repair, live-store
+  rebuild, or service operation is performed.
+- Validation: 38 focused evidence/view/correction/reconsolidation checks pass;
+  all 582 non-integration tests pass (4 integration tests deselected), plus Ruff
+  and whitespace checks. The sandboxed full suite stalls at the existing ASGI
+  host/origin test; interrupt that test run and verify it passes in 1.05 seconds
+  outside isolation, then complete the suite there in 24.29 seconds. The correction
+  mock now selects its prior-memory ID from the supplied request rather than using
+  a durable ID that the model no longer sees. User-owned guidance edits are retained.

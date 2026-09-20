@@ -15,7 +15,9 @@ conditions, uncertainty, and the difference between an idea and an adopted plan.
 An assistant's suggestion is not a user's decision. Preserve relative-time
 wording with its source timestamp; do not invent a precise calendar date.
 
-Return flat lists of subjects, memories, and change proposals. Each memory must
+Return flat lists of subjects, memories, and change proposals. Every ID in a
+memory's subject_ids must have a corresponding entry in subjects, including
+reused existing identities. Each memory must
 cite the source segments that support it, including antecedents needed to
 understand a reply. Use short local IDs for new memories. For each subject choose
 its supplied existing ID or one of new_subject_ids to create a new identity. Subjects
@@ -24,8 +26,13 @@ metadata, not a requirement to make a page. Reuse a supplied existing subject ID
 the evidence identifies the same subject across topics. Keep distinct namesakes
 separate. Mark unresolved identity review_required and choose a new subject ID.
 Do not rename a supplied identity without explicit evidence of a name change.
-When supplied, canonical You identifies the participant with role=user. Other
-speakers and people mentioned by the user are separate subjects.
+When supplied, canonical You identifies the participant with role=user. A meeting
+speaker is You only when the source explicitly identifies them as the account owner.
+Supplied speaker names are identity evidence even when absent from the spoken text.
+For retained memories about a speaker's own work, plans or experiences, represent
+that person as a subject and include their ID in subject_ids. Include the project
+or other subject too when the memory concerns both. Distinguish the speaker from
+people they quote or discuss; reporting a project does not establish involvement.
 
 Propose a change only when new evidence contradicts or replaces a specific prior
 memory about the same thing. Different historical events and tentative ideas
@@ -40,6 +47,11 @@ text, cited memory IDs, and any other subjects whose pages should share it.
 Use source-derived headings and combine related statements when useful. Preserve
 important context, conditions and uncertainty. Distinguish history from current
 plans. Pending changes are unresolved accounts, not approved replacements.
+When retained evidence gives useful independent context about both a person and
+their project, organize content on both pages: summarize the person's involvement
+on their page and keep project details on the project's page. Preserve who is doing
+what in the text. Use concise shared items to link the related subjects; keep
+detailed items on the project page.
 
 You are refreshing only the supplied generated items and adding useful new
 items for the affected subjects. Other existing items stay unchanged. Keep useful

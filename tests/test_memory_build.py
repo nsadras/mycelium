@@ -8,6 +8,74 @@ from mycelium.operations import SourceInput
 
 
 @pytest.mark.asyncio
+async def test_reviewed_speaker_reaches_retention_and_shared_project_views(tmp_path, monkeypatch):
+    """Check the handoff and citations; native probes assess the model's attribution."""
+    from engram.memory_adapter import encode_meeting_into_memory
+    from engram.store import EngramStore
+
+    store = EngramStore(tmp_path / "engram.sqlite")
+    meeting = store.create_meeting("Workshop planning")
+    segment = store.add_segment(meeting.id, start_seconds=0, end_seconds=8,
+        speaker="SPEAKER_00", text="I built Bench Ledger to track workshop tool loans.")
+    store.save_speaker_names(meeting.id, {"SPEAKER_00": "Rowan"})
+    calls = {"retain": 0, "present": 0}
+
+    async def no_search(*args, **kwargs):
+        return []
+
+    async def retain(llm, payload):
+        calls["retain"] += 1
+        assert payload["source_type"] == "meeting_transcript"
+        assert payload["participants"] == ["Rowan"]
+        assert [(s["speaker"], s["text"]) for s in payload["segments"]] == [("Rowan", segment.text)]
+        assert {s["id"] for s in payload["existing_subjects"]} == {"you"}
+        person, project = payload["new_subject_ids"][:2]
+        return {"subjects": [
+            {"id": person, "title": "Rowan", "entity_type": "person", "review_required": False},
+            {"id": project, "title": "Bench Ledger", "entity_type": "project", "review_required": False}],
+            "memories": [{"id": "m", "text": "Rowan built Bench Ledger to track workshop tool loans.",
+                "segment_ids": [payload["segments"][0]["id"]], "subject_ids": [person, project]}],
+            "changes": []}
+
+    async def present(llm, payload):
+        calls["present"] += 1
+        subjects = {s["title"]: s["id"] for s in payload["subjects"]}
+        person, project = subjects["Rowan"], subjects["Bench Ledger"]
+        memory = payload["memories"][0]
+        assert set(memory["subject_ids"]) == {person, project}
+        assert set(payload["affected_subject_ids"]) == {person, project}
+        return {"items": [
+            {"owner_id": person, "heading": "Projects", "text": "Rowan built Bench Ledger.",
+             "memory_ids": [memory["id"]], "linked_subject_ids": [project], "state": "current"},
+            {"owner_id": project, "heading": "Purpose", "text": "Tracks workshop tool loans.",
+             "memory_ids": [memory["id"]], "linked_subject_ids": [], "state": "current"}]}
+
+    monkeypatch.setattr(contract, "retain", retain)
+    monkeypatch.setattr(contract, "present", present)
+    with Mycelium(tmp_path / "memory") as memory:
+        monkeypatch.setattr(memory.retriever.claim_index, "search", no_search)
+        entry = await encode_meeting_into_memory(memory, store, meeting.id)
+        assert memory.artifacts.list_claims() == []
+        assert not (await memory.pipeline.consolidate()).report.failures
+        claim, = memory.artifacts.list_claims()
+        person = next(e for e in memory.artifacts.list_entities() if e.title == "Rowan")
+        project = next(e for e in memory.artifacts.list_entities() if e.title == "Bench Ledger")
+        assert memory.artifacts.entities_for_claims({claim.claim_id}) == {person.entity_id, project.entity_id}
+        assert claim.provenance[0].speaker == "Rowan"
+        pages = {p.entity_id: p for p in memory.wiki.list_all()}
+        for eid in (person.entity_id, project.entity_id):
+            page = pages[eid]
+            assert page.source_log_entries == [entry.entry_id]
+            assert "Rowan" in page.content
+            for section in page.sections:
+                for item in section["items"]:
+                    assert item["sources"][0]["segment_ids"] == claim.provenance[0].segment_ids
+        assert [edge.target for edge in pages[person.entity_id].related] == [project.slug]
+        assert [edge.target for edge in pages[project.entity_id].related] == [person.slug]
+        assert calls == {"retain": 1, "present": 1}
+
+
+@pytest.mark.asyncio
 async def test_compact_capture_publication_failure_and_retry(tmp_path, monkeypatch):
     calls = {"retain": 0, "present": 0}
 

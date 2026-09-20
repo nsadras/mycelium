@@ -5977,3 +5977,49 @@ remain separate gates.
   Ruff and whitespace checks pass. The live store and existing meeting remain
   unchanged. No services were started or stopped; the long-recording overflow
   remains a separate issue.
+
+### 2026-09-20 — Test explicit speaker candidates; reject input-only adoption
+
+- User asks whether a reviewed speaker identity can help retention without making
+  the speaker the subject of everything they discuss. Test one input-only variant:
+  append a provisional person identity with an opaque ID to existing_subjects.
+  Preserve the current production prompts, output schemas and sampling settings.
+  Do not force any claim reference, page, ownership or identity merge. The presence
+  of a seeded entity alone is not a success criterion; inspect statements and their
+  subject references. All work uses isolated stores and a previously frozen excerpt.
+- Evidence: `benchmark_runs/speaker-candidates-20260920/`. Run four neutral paired
+  retention checks, followed by paired retention/presentation on the recording's
+  first 100 segments. Verify that each pair differs only in the added candidate
+  and the corresponding allowed schema ID. Retention inputs, system prompts and
+  model options otherwise match; alternate control/candidate order in neutral cases.
+- Own work: both versions correctly associate Lena with her walking guide; the
+  candidate reuses her supplied identity. Third-party report: both identify Priya
+  as restoring the sailboat; the candidate additionally records Morgan as reporter.
+  That is an extra association, not an ownership error. Mixed ownership: both keep
+  Lena's repair notebook separate from Ravi's catalog, and preserve that Lena offered
+  feedback while Ravi makes the design decisions.
+- Missing antecedent exposes the user's feared failure. Speaker Morgan says,
+  "He is making a volunteer rota for the food pantry." The control leaves the
+  creator unnamed, though it invents a team-member description. With Morgan supplied
+  as an existing identity, retention instead states that Morgan is creating the
+  rota and assigns his ID to that memory. No evidence resolves "he" to Morgan.
+  All output validates structurally, so the schema does not catch this semantic error.
+- Recording: both runs create useful Hari/person and project pages in this sample.
+  Candidate reuses the supplied Hari ID in all four retained statements, but does
+  not establish an incremental page-admission benefit over this control. Control:
+  2 requests, 45.31 server seconds, 21,580 input / 2,965 output tokens, 3 memories.
+  Candidate: 2 requests, 70.86 server seconds, 23,368 input / 4,634 output tokens,
+  4 memories; one memory emits 85 segment citations. Both presentations still
+  strengthen planned automation into current capabilities. These are single
+  stochastic samples, not reliable estimates of quality or speed differences.
+- Decision: do not integrate this candidate-pool change. A known speaker helped
+  identity reuse but also accompanied unsupported resolution of a third-person
+  reference. Distinguishing reporting from subject ownership remains necessary;
+  supplying an identity alone has not proved sufficient. Stop at the planned
+  12 requests: 74,037 input / 11,203 output tokens, 190.13 server seconds, no transport
+  failures or structured-output retries. Save scripts, prompts, inputs, responses,
+  rendered artifacts and review.json; perform no corrective tuning or extra repeats.
+- Limits: neutral checks assess retention only; presentation is checked only on the
+  recording pair. The study does not cover namesakes, cross-recording identity reuse,
+  full-meeting quality or failure frequency. Production code, prompts, tests and the
+  live store remain unchanged. No app service was started or stopped.

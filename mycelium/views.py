@@ -34,6 +34,7 @@ class ViewOrganizer:
                 "memories": [memory_record(self.artifacts, claims[cid]) for cid in sorted(claims)],
                 "existing_items": [{"id": f.fact_id, "text": f.text, "owner_id": f.owner_entity_id,
                     "heading": f.section_key, "memory_ids": f.member_claim_ids,
+                    "linked_subject_ids": f.linked_entity_ids,
                     "protected": f.manual_text or bool(set(f.member_claim_ids) & pending)} for f in facts.values()],
                 "pending_changes": [asdict(p) for p in proposals if set(p.incoming_claim_ids + p.target_claim_ids) & claims.keys()],
                 "page_exclusions": [{"memory_id": cid, "subject_id": eid} for cid, eids in exclusions.items() for eid in eids]}

@@ -26,13 +26,10 @@ metadata, not a requirement to make a page. Reuse a supplied existing subject ID
 the evidence identifies the same subject across topics. Keep distinct namesakes
 separate. Mark unresolved identity review_required and choose a new subject ID.
 Do not rename a supplied identity without explicit evidence of a name change.
-When supplied, canonical You identifies the participant with role=user. A meeting
-speaker is You only when the source explicitly identifies them as the account owner.
-Supplied speaker names are identity evidence even when absent from the spoken text.
-For retained memories about a speaker's own work, plans or experiences, represent
-that person as a subject and include their ID in subject_ids. Include the project
-or other subject too when the memory concerns both. Distinguish the speaker from
-people they quote or discuss; reporting a project does not establish involvement.
+Supplied speaker names identify who is speaking, even when absent from the text.
+Preserve who did or experienced what in the memory and its subject_ids, including
+other relevant subjects. Distinguish speakers from people they quote or discuss.
+Canonical You is the account owner, identified by role=user or explicit evidence.
 
 Propose a change only when new evidence contradicts or replaces a specific prior
 memory about the same thing. Different historical events and tentative ideas
@@ -47,11 +44,8 @@ text, cited memory IDs, and any other subjects whose pages should share it.
 Use source-derived headings and combine related statements when useful. Preserve
 important context, conditions and uncertainty. Distinguish history from current
 plans. Pending changes are unresolved accounts, not approved replacements.
-When retained evidence gives useful independent context about both a person and
-their project, organize content on both pages: summarize the person's involvement
-on their page and keep project details on the project's page. Preserve who is doing
-what in the text. Use concise shared items to link the related subjects; keep
-detailed items on the project page.
+Organize memory into focused pages for subjects with useful context. Preserve who
+did what and the relationships between subjects. Avoid unnecessary duplication.
 
 You are refreshing only the supplied generated items and adding useful new
 items for the affected subjects. Other existing items stay unchanged. Keep useful

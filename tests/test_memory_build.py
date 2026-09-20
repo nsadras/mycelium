@@ -44,6 +44,10 @@ async def test_reviewed_speaker_reaches_retention_and_shared_project_views(tmp_p
         memory = payload["memories"][0]
         assert set(memory["subject_ids"]) == {person, project}
         assert set(payload["affected_subject_ids"]) == {person, project}
+        if calls["present"] == 2:
+            existing = {item["owner_id"]: item for item in payload["existing_items"]}
+            assert existing[person]["linked_subject_ids"] == [project]
+            assert existing[project]["linked_subject_ids"] == []
         return {"items": [
             {"owner_id": person, "heading": "Projects", "text": "Rowan built Bench Ledger.",
              "memory_ids": [memory["id"]], "linked_subject_ids": [project], "state": "current"},
@@ -58,6 +62,11 @@ async def test_reviewed_speaker_reaches_retention_and_shared_project_views(tmp_p
         assert memory.artifacts.list_claims() == []
         assert not (await memory.pipeline.consolidate()).report.failures
         claim, = memory.artifacts.list_claims()
+        assert calls == {"retain": 1, "present": 1}
+        # A subsequent view refresh must see where existing items are shared.
+        claim.dream_disposition = "pending"
+        memory.artifacts.save_claim(claim)
+        assert not (await memory.pipeline.consolidate()).report.failures
         person = next(e for e in memory.artifacts.list_entities() if e.title == "Rowan")
         project = next(e for e in memory.artifacts.list_entities() if e.title == "Bench Ledger")
         assert memory.artifacts.entities_for_claims({claim.claim_id}) == {person.entity_id, project.entity_id}
@@ -72,7 +81,7 @@ async def test_reviewed_speaker_reaches_retention_and_shared_project_views(tmp_p
                     assert item["sources"][0]["segment_ids"] == claim.provenance[0].segment_ids
         assert [edge.target for edge in pages[person.entity_id].related] == [project.slug]
         assert [edge.target for edge in pages[project.entity_id].related] == [person.slug]
-        assert calls == {"retain": 1, "present": 1}
+        assert calls == {"retain": 1, "present": 2}
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,7 @@
 import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator, model_validator
 
 from mycelium.ontology import ENTITY_TYPES
 from mycelium.memory_inputs import compact_presentation, compact_retention
@@ -76,6 +76,14 @@ class Subject(Record):
     entity_type: Literal.__getitem__(ENTITY_TYPES)
     participant_ids: list[str]
 
+    @field_validator("title")
+    @classmethod
+    def nonempty_title(cls, value):
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("Subject title must not be blank")
+        return value
+
 
 class Memory(Record):
     id: str = Field(min_length=1)
@@ -102,6 +110,15 @@ def unique_ids(records):
     if len(ids) != len(set(ids)):
         raise ValueError("Local record IDs must be unique")
     return set(ids)
+
+
+def subject_type_error(subject, existing):
+    previous = existing.get(subject["id"])
+    if previous and subject["entity_type"] != previous["entity_type"]:
+        return "An existing subject's type cannot change during retention"
+    if subject["entity_type"] == "you" and (not previous or previous["entity_type"] != "you"):
+        return "Only the supplied account owner may have type 'you'"
+    return None
 
 
 def retention_model(payload):
@@ -137,6 +154,9 @@ def retention_model(payload):
                      **{s['id']: s.get('entity_type') for s in existing.values()}}
             seen = set()
             for s in self.subjects:
+                reason = subject_type_error(s.model_dump(), existing)
+                if reason:
+                    raise ValueError(reason)
                 for pid in s.participant_ids:
                     if pid in seen or pid not in participants:
                         raise ValueError('Participant bindings must be unique and supplied')

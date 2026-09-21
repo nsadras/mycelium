@@ -8,7 +8,7 @@ from mycelium.ollama import StructuredOutputError
 
 
 def retention(payload, response):
-    from mycelium.memory_contract import Subject, Memory, Change, retention_model
+    from mycelium.memory_contract import Subject, Memory, Change, retention_model, subject_type_error
 
     fields = {"subjects": Subject, "memories": Memory, "changes": Change}
     if not isinstance(response, dict) or response.keys() != fields.keys() or any(
@@ -41,18 +41,19 @@ def retention(payload, response):
     prior = {m["id"] for m in payload.get("prior_memories", [])}
     subjects = []
     for index, row in rows("subjects"):
-        if row["id"] not in allowed:
-            reject("subjects", index, row, "Subject ID was not supplied")
+        reason = "Subject ID was not supplied" if row["id"] not in allowed else subject_type_error(row, existing)
+        if reason:
+            reject("subjects", index, row, reason)
         else:
             subjects.append((index, row))
-    assignments = Counter(pid for _, row in subjects for pid in row["participant_ids"])
+    # An illegal project binding must not invalidate a valid person's binding.
+    # Count conflicts only among structurally eligible assignments.
     for index, row in subjects:
         kept = []
         for pid in row["participant_ids"]:
             participant = participants.get(pid)
             entity_type = existing.get(row["id"], row)["entity_type"]
             reason = ("Participant ID was not supplied" if participant is None else
-                      "Conflicting participant bindings" if assignments[pid] != 1 else
                       "A participant can only bind to a person" if entity_type not in {"person", "you"} else
                       "Established participant binding cannot change" if participant.get("subject_id") not in {None, row["id"]} else None)
             if reason:
@@ -60,6 +61,13 @@ def retention(payload, response):
             else:
                 kept.append(pid)
         row["participant_ids"] = kept
+    assignments = Counter(pid for _, row in subjects for pid in row["participant_ids"])
+    for index, row in subjects:
+        for pid in row["participant_ids"]:
+            if assignments[pid] > 1:
+                reject("participant_bindings", index, {"subject_id": row["id"], "participant_id": pid},
+                       "Conflicting participant bindings")
+        row["participant_ids"] = [pid for pid in row["participant_ids"] if assignments[pid] == 1]
     output = {"subjects": [row for _, row in subjects], "memories": [], "changes": []}
     subjects = {row["id"] for row in output["subjects"]} | existing.keys()
     for index, row in rows("memories"):

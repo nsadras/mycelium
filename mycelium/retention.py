@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections import defaultdict
 from datetime import datetime, timezone
+from itertools import zip_longest
 
 from mycelium import memory_contract as contract
 from mycelium.artifacts import (
@@ -51,10 +52,11 @@ def memory_record(artifacts, claim):
 
 async def related_claim_ids(index, text):
     """Learned candidate retrieval; this does not decide identity or truth."""
-    ids = []
+    rankings = []
     for chunk in split_text_by_tokens(text, 1200):
-        ids.extend(hit.claim_id for hit in await index.search(chunk, limit=24))
-    return list(dict.fromkeys(ids))[:48]
+        rankings.append([hit.claim_id for hit in await index.search(chunk, limit=24)])
+    return list(dict.fromkeys(cid for rank in zip_longest(*rankings)
+                              for cid in rank if cid is not None))[:48]
 
 
 class Retainer:
@@ -271,12 +273,12 @@ class Retainer:
             for episode in members:
                 next(b for b in episode.extraction_batches if b.batch_id == identifier).attempt_count += 1
             unit = UnitOfWork(self.artifacts.db)
+            checkpoints = {}
             try:
                 reader = Retainer(self.llm, ArtifactStore(self.artifacts.root, db=unit), self.config, self.claim_index)
+                checkpoints = {e.episode_id: reader.artifacts.get_episode(e.episode_id) for e in episodes}
                 current = [reader.artifacts.get_source(s.source_id) for s in sources]
                 earlier = [reader.artifacts.get_source(s.source_id) for s in context_sources]
-                for episode in episodes:
-                    reader.artifacts.get_episode(episode.episode_id)
                 segments = [s for source in current for s in source.segments if s.segment_id in segment_ids]
                 payload = await reader.input(current[0], segments, identifier, sources=current, context_sources=earlier,
                     prior_ids=None if any(s.role != "system" for s in segments) else [],
@@ -304,17 +306,29 @@ class Retainer:
                     **{k: v for k, v in rejection.items() if k not in {"record", "request_ids", "request_citations"}}}
                     for rejection in result.get("_rejections", []))
             except (Exception, asyncio.CancelledError) as exc:
-                for episode in members:
-                    batch = next(b for b in episode.extraction_batches if b.batch_id == identifier)
-                    batch.status, batch.last_error = "failed", f"{type(exc).__name__}: {exc}"
-                    errors.append({**failure("retention", episode.source_id, exc), "batch_id": identifier})
-                    self._finish(next(s for s in sources if s.source_id == episode.source_id), episode, encoder)
+                with self.artifacts.db.transaction():
+                    for episode in members:
+                        fresh = self.artifacts.get_episode(episode.episode_id)
+                        checkpoint = checkpoints.get(episode.episode_id)
+                        before = next((b for b in checkpoint.extraction_batches if b.batch_id == identifier), None) if checkpoint else None
+                        batch = next((b for b in fresh.extraction_batches if b.batch_id == identifier), None)
+                        # Never fail a competing completion or a newer attempt.
+                        # Merge into current state, preserving other batch results.
+                        if batch is not None and batch == before and batch.status != "complete":
+                            batch.attempt_count += 1
+                            batch.status, batch.last_error = "failed", f"{type(exc).__name__}: {exc}"
+                            self._finish(self.artifacts.get_source(fresh.source_id), fresh, encoder)
+                        episode.__dict__.update(fresh.__dict__)
+                        errors.append({**failure("retention", episode.source_id, exc), "batch_id": identifier})
                 if isinstance(exc, asyncio.CancelledError):
                     raise
             finally:
                 unit.close()
-        for source, episode in zip(sources, episodes):
-            self._finish(source, episode, encoder)
+        with self.artifacts.db.transaction():
+            for episode in episodes:
+                fresh = self.artifacts.get_episode(episode.episode_id)
+                self._finish(self.artifacts.get_source(fresh.source_id), fresh, encoder)
+                episode.__dict__.update(fresh.__dict__)
         return context_ids, errors, warnings
 
     def _finish(self, source, episode, encoder):

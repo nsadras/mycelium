@@ -6229,3 +6229,47 @@ remain separate gates.
   follow focused fixes; a final focused check covers cancellation classification.
   Existing bundle-size warning remains. No services started/stopped, no extra
   native repeats, no changes to user-owned guidance or notes. Stop semantic tuning.
+
+## 2026-09-20 — Bounded speaker-attribution investigation; candidate rejected
+
+- User explicitly reopened the missing-person question for a bounded investigation.
+  Freeze [plan](planning/speaker_attribution_plan_2026_09_20.md), baseline `55cf5df`,
+  four own/other-project × short/long transcripts and an unseen mixed-ownership
+  transcript before calls. [Results](planning/speaker_attribution_result_2026_09_20.md)
+  and `benchmark_runs/speaker-attribution-20260920/review.json` preserve requests,
+  inputs, outputs, timings, assessments and completion state.
+- Use configured host Gemma, same digest/options as the preceding tranche, one
+  attempt per direct case. All inputs fit without context omission. Actual prompts
+  match frozen production-generated payloads; baseline/candidate schemas have the
+  same fields, types and constraints. No audio generation, LLM judge or fallback model.
+- Both short baselines retain the correct speaker and project owner. Own-long keeps
+  the speaker but emits 25 memories and a 400-segment citation list, costing 7,089
+  output tokens / 110.29 seconds. Other-long writes a correct statement naming Leena
+  as lab technician/reviewer but points its subject ID at builder Omar and omits
+  Leena's declaration. This is an observable output inconsistency with the correct
+  name and evidence already present, not a dropped speaker-name input.
+- Test one contract revision in isolation: memories before subjects, with a short
+  prompt instruction specifying that order. Hypothesis: declarations can follow the
+  selected evidence. No new fields, validators or model calls. It regresses own-short
+  and both long cases; own-long's single memory references an undeclared identity
+  and is rejected. Reject the candidate. Never modify the production prompt/schema.
+- Skip the unseen pair after the candidate fails acceptance. Use the reserved two
+  production calls on the unchanged baseline and frozen 884-segment recording.
+  All source text and reviewed names arrive intact. Six retained statements include
+  "Hari's content strategy" and "Hari's goal", but raw output declares six technical/
+  project subjects and no Hari identity. No person is lost during admission or
+  persistence. Pages inherit that omission and an overstatement of complete automation.
+  Build completes in 43.17 seconds, with no warnings; no-op Build uses zero calls.
+- Close at 10/12 generation requests: 167,889 input / 13,736 output tokens, 249.80
+  server / 249.83 client seconds, no transport failures, output exhaustion, automatic
+  retries or embedding calls. First baseline includes 8.30 seconds loading. Single
+  stochastic samples, clearer synthetic speech, stronger ownership wording and
+  shorter synthetic inputs limit causal/general claims. No unseen generalization,
+  follow-on quality, retrieval/QA or large-store result is implied.
+- Preserve current implementation. The investigation narrows the observed defect to
+  structured identity selection/assignment despite correct naming in prose, but
+  establishes no validated fix or general error rate. Use existing explicit review
+  for concrete mistakes; reopen only for recurring harm across ordinary use. No
+  production code changed, so no application tests were rerun. Verify recorded inputs,
+  schemas, source preservation and no-op behavior. No services or live store changes;
+  user-owned guidance and notes remain untouched. No further native calls in this study.

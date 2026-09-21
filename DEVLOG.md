@@ -6273,3 +6273,39 @@ remain separate gates.
   production code changed, so no application tests were rerun. Verify recorded inputs,
   schemas, source preservation and no-op behavior. No services or live store changes;
   user-owned guidance and notes remain untouched. No further native calls in this study.
+
+## 2026-09-21 — Relationship-reference clarification tested and rejected
+
+- User requests verification of preserving meaningful relationships without
+  mandating a project owner. Freeze a [new bounded plan](planning/relationship_reference_plan_2026_09_20.md)
+  and one general prompt addition, keeping all schemas, field order, validators,
+  model options and generation stages unchanged. Candidate exists only in the
+  isolated probe process. [Results and causal limits](planning/relationship_reference_result_2026_09_21.md).
+- Evidence: `benchmark_runs/relationship-reference-20260920/`. Run four fresh
+  baseline/candidate pairs: short own-project, short third-party project, unknown
+  owner, and the previous longer third-party input. Verify exact frozen input,
+  schema, IDs, model digest and configured options for all eight native requests.
+- Short own-project candidate retains the speaker but names the project without
+  declaring/referencing it. Third-party candidate improves some joint references
+  but still omits the project reference from the speaker's feedback statement.
+  Both unknown-owner outputs omit the project, limiting that counterexample.
+- Long candidate exhausts 8,192 output tokens after 130.09 seconds; one complete
+  fragment lists 498 citations. Its subject declarations omit the speaker. Preserve
+  the incomplete response as diagnostics only. No repair, partial-JSON admission,
+  retry, or production integration. The unchanged long baseline also varies from
+  nine memories in the previous study to one now; single samples do not establish
+  prompt causality or reliability rates.
+- Input overhead measurement: 3,214 source words / 643 small segments; cl100k
+  estimates about 4,200 text tokens, 20,920 serialized-segment tokens and 3,433
+  schema tokens. Native input is about 28,300 Gemma tokens. Mechanical overhead is
+  observable; its role in identity omissions remains a hypothesis. Missing metadata
+  and input truncation are ruled out for the checked requests.
+- Close at 8/12 calls, 72,696 input / 10,910 output tokens, 188.47 server / 188.49
+  client seconds. Seven usable responses, one output-capacity failure; no transport
+  failures, automatic retries or embedding calls. First load is 8.10 seconds.
+  Skip the reserved pair and recording Build; no new page-quality claim.
+- Preserve production and live data. Record ordinary attribution limitations and
+  recommend reducing source/citation bookkeeping as a possible future bounded
+  experiment, not adding compulsory owners or more prompt clauses. Source review,
+  provenance checks, probe Ruff and whitespace checks pass. No application tests
+  were rerun because no production code changed. User-owned edits remain untouched.

@@ -1,4 +1,7 @@
-"""Authoritative entity, claim, and wiki-section ontology."""
+"""Entity/claim types and optional section choices for human curation.
+
+Build Memory generates natural headings; this registry does not route evidence.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +31,6 @@ class SectionDefinition:
     key: str
     title: str
     description: str
-    managed: bool = False
 
 
 @dataclass(frozen=True)
@@ -38,22 +40,13 @@ class EntityTypeDefinition:
     plural_label: str
     description: str
     sections: tuple[SectionDefinition, ...]
-    default_sections: tuple[tuple[str, str], ...]
-    project_role_section: str | None = None
     discoverable: bool = True
 
     def section_keys(self) -> tuple[str, ...]:
         return tuple(section.key for section in self.sections)
 
-    def section_pairs(self) -> tuple[tuple[str, str], ...]:
-        return tuple((section.key, section.title) for section in self.sections)
 
-    def defaults(self) -> dict[str, str]:
-        return dict(self.default_sections)
-
-
-# Persisted human-review choices. Model admission uses page_admission.py; the
-# retired continuity/maturity ontology no longer defines that decision.
+# Persisted human-review choices; model presentation chooses useful cited views.
 SUBJECT_PERSISTED_SCOPES = (
     "independent",
     "component",
@@ -64,10 +57,8 @@ SUBJECT_PERSISTED_SCOPES = (
 SUBJECT_PAGE_STATES = ("materialized", "provisional", "no_page")
 
 
-def _section(
-    key: str, title: str, description: str, *, managed: bool = False
-) -> SectionDefinition:
-    return SectionDefinition(key, title, description, managed)
+def _section(key: str, title: str, description: str) -> SectionDefinition:
+    return SectionDefinition(key, title, description)
 
 
 ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
@@ -102,30 +93,13 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "memory_map",
                 "Memory Map",
                 "orientation links to important memory areas",
-                managed=True,
             ),
             _section(
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
-                managed=True,
             ),
         ),
-        (
-            ("identity", "profile"),
-            ("state", "current_context"),
-            ("preference", "preferences_working_style"),
-            ("belief", "preferences_working_style"),
-            ("plan", "priorities_plans"),
-            ("commitment", "priorities_plans"),
-            ("decision", "priorities_plans"),
-            ("relationship", "important_relationships"),
-            ("event", "current_context"),
-            ("interaction", "important_relationships"),
-            ("observation", "current_context"),
-            ("unknown", "current_context"),
-        ),
-        project_role_section="priorities_plans",
         discoverable=False,
     ),
     EntityTypeDefinition(
@@ -171,24 +145,8 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
-                managed=True,
             ),
         ),
-        (
-            ("identity", "overview"),
-            ("state", "current_status"),
-            ("preference", "requirements_constraints"),
-            ("belief", "requirements_constraints"),
-            ("plan", "next_steps_deadlines"),
-            ("commitment", "next_steps_deadlines"),
-            ("decision", "decisions"),
-            ("relationship", "people_organizations"),
-            ("event", "timeline"),
-            ("interaction", "timeline"),
-            ("observation", "overview"),
-            ("unknown", "overview"),
-        ),
-        project_role_section="people_organizations",
     ),
     EntityTypeDefinition(
         "series",
@@ -225,22 +183,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
-                managed=True,
             ),
-        ),
-        (
-            ("identity", "overview"),
-            ("state", "current_context"),
-            ("preference", "current_context"),
-            ("belief", "current_context"),
-            ("plan", "schedule_pattern"),
-            ("commitment", "schedule_pattern"),
-            ("decision", "current_context"),
-            ("relationship", "participants"),
-            ("event", "occurrences"),
-            ("interaction", "occurrences"),
-            ("observation", "overview"),
-            ("unknown", "overview"),
         ),
     ),
     EntityTypeDefinition(
@@ -287,24 +230,8 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
-                managed=True,
             ),
         ),
-        (
-            ("identity", "profile"),
-            ("state", "current_context"),
-            ("preference", "interests_views"),
-            ("belief", "interests_views"),
-            ("plan", "goals_plans"),
-            ("commitment", "goals_plans"),
-            ("decision", "goals_plans"),
-            ("relationship", "relationship_to_you"),
-            ("event", "timeline"),
-            ("interaction", "timeline"),
-            ("observation", "current_context"),
-            ("unknown", "current_context"),
-        ),
-        project_role_section="shared_projects",
     ),
     EntityTypeDefinition(
         "artifact",
@@ -342,22 +269,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
-                managed=True,
             ),
-        ),
-        (
-            ("identity", "overview"),
-            ("state", "current_state"),
-            ("preference", "requirements_constraints"),
-            ("belief", "requirements_constraints"),
-            ("plan", "current_state"),
-            ("commitment", "current_state"),
-            ("decision", "decisions"),
-            ("relationship", "related_projects"),
-            ("event", "timeline"),
-            ("interaction", "timeline"),
-            ("observation", "overview"),
-            ("unknown", "overview"),
         ),
     ),
     EntityTypeDefinition(
@@ -396,22 +308,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
-                managed=True,
             ),
-        ),
-        (
-            ("identity", "why_it_matters"),
-            ("state", "current_understanding"),
-            ("preference", "preferences_positions"),
-            ("belief", "preferences_positions"),
-            ("plan", "why_it_matters"),
-            ("commitment", "why_it_matters"),
-            ("decision", "current_understanding"),
-            ("relationship", "related_projects"),
-            ("event", "timeline"),
-            ("interaction", "timeline"),
-            ("observation", "current_understanding"),
-            ("unknown", "current_understanding"),
         ),
     ),
     EntityTypeDefinition(
@@ -445,22 +342,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
-                managed=True,
             ),
-        ),
-        (
-            ("identity", "overview"),
-            ("state", "current_context"),
-            ("preference", "current_context"),
-            ("belief", "current_context"),
-            ("plan", "current_context"),
-            ("commitment", "current_context"),
-            ("decision", "current_context"),
-            ("relationship", "relationship_to_you"),
-            ("event", "timeline"),
-            ("interaction", "timeline"),
-            ("observation", "current_context"),
-            ("unknown", "current_context"),
         ),
     ),
     EntityTypeDefinition(
@@ -497,22 +379,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
-                managed=True,
             ),
-        ),
-        (
-            ("identity", "overview"),
-            ("state", "current_context"),
-            ("preference", "why_it_matters"),
-            ("belief", "why_it_matters"),
-            ("plan", "current_context"),
-            ("commitment", "current_context"),
-            ("decision", "current_context"),
-            ("relationship", "associated_people_projects"),
-            ("event", "visits_events"),
-            ("interaction", "visits_events"),
-            ("observation", "current_context"),
-            ("unknown", "current_context"),
         ),
     ),
     EntityTypeDefinition(
@@ -542,22 +409,7 @@ ENTITY_ONTOLOGY: tuple[EntityTypeDefinition, ...] = (
                 "needs_review",
                 "Needs Review",
                 "unresolved or ambiguous memory requiring review",
-                managed=True,
             ),
-        ),
-        (
-            ("identity", "summary"),
-            ("state", "what_happened"),
-            ("preference", "evidence"),
-            ("belief", "evidence"),
-            ("plan", "follow_ups"),
-            ("commitment", "follow_ups"),
-            ("decision", "outcomes_decisions"),
-            ("relationship", "participants"),
-            ("event", "what_happened"),
-            ("interaction", "what_happened"),
-            ("observation", "evidence"),
-            ("unknown", "summary"),
         ),
     ),
 )
@@ -571,55 +423,11 @@ DISCOVERABLE_ENTITY_TYPES = tuple(
 DiscoverableEntityType = Literal.__getitem__(DISCOVERABLE_ENTITY_TYPES)
 
 
-def entity_type_definition(entity_type: str) -> EntityTypeDefinition:
+def section_keys(entity_type: str) -> tuple[str, ...]:
     try:
-        return ENTITY_TYPES_BY_KEY[entity_type]
+        return ENTITY_TYPES_BY_KEY[entity_type].section_keys()
     except KeyError as exc:
         raise ValueError(f"Unsupported entity type: {entity_type}") from exc
-
-
-def section_keys(entity_type: str) -> tuple[str, ...]:
-    return entity_type_definition(entity_type).section_keys()
-
-
-def routing_section_keys(entity_type: str) -> tuple[str, ...]:
-    """Content choices exclude sections owned by navigation or review state."""
-    return tuple(
-        section.key
-        for section in entity_type_definition(entity_type).sections
-        if not section.managed
-    )
-
-
-def section_pairs(entity_type: str) -> tuple[tuple[str, str], ...]:
-    return entity_type_definition(entity_type).section_pairs()
-
-
-def project_role_section(entity_type: str) -> str:
-    section = entity_type_definition(entity_type).project_role_section
-    if section is None:
-        raise ValueError(f"Project roles cannot render on {entity_type} entities")
-    return section
-
-
-def default_section(
-    entity_type: str,
-    claim_type: str,
-    predicate: str | None,
-) -> str:
-    definition = entity_type_definition(entity_type)
-    if (
-        claim_type == "relationship"
-        and predicate == "project_role"
-        and definition.project_role_section is not None
-    ):
-        return project_role_section(entity_type)
-    try:
-        return definition.defaults()[claim_type]
-    except KeyError as exc:
-        raise ValueError(
-            f"Unsupported claim type {claim_type!r} for {entity_type}"
-        ) from exc
 
 
 def ontology_response() -> dict:
@@ -640,8 +448,6 @@ def ontology_response() -> dict:
                     }
                     for section in definition.sections
                 ],
-                "default_sections": dict(definition.default_sections),
-                "project_role_section": definition.project_role_section,
             }
             for definition in ENTITY_ONTOLOGY
         ],

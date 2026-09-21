@@ -8,7 +8,7 @@ vi.mock('../lib/api', () => ({ default: { get: vi.fn(), patch: vi.fn(), post: vi
 
 const page = (id: string): WikiPage => ({ slug: id, title: `Page ${id}`, entity_id: id, entity_status: 'active', page_type: 'person', tags: [], aliases: [], version: 1, content: `Content ${id}` });
 const entity = (id: string): EntityRecord => ({ entity_id: id, title: `Page ${id}`, slug: id, entity_type: 'person', status: 'active', materialization_state: 'materialized', aliases: [], created_at: '2026-01-01', updated_at: '2026-01-01' });
-const ontology: MemoryOntology = { claim_types: [], entity_types: [{ key: 'person', label: 'Person', plural_label: 'People', description: 'A person', discoverable: true, sections: [], default_sections: {} }] };
+const ontology: MemoryOntology = { claim_types: [], entity_types: [{ key: 'person', label: 'Person', plural_label: 'People', description: 'A person', discoverable: true, sections: [] }] };
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

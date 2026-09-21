@@ -1,3 +1,4 @@
+import asyncio
 import json
 from unittest.mock import AsyncMock
 
@@ -6,6 +7,7 @@ from ollama import ChatResponse, ResponseError
 from pydantic import BaseModel
 
 from benchmarks.shared.model_recording import RecordingClient
+from benchmarks.experiments.compact_probe import BudgetClient, metrics
 from mycelium.ollama import OllamaClient
 
 
@@ -49,3 +51,42 @@ async def test_native_recordings_link_failed_and_successful_attempts_to_timing_r
     calls = [json.loads(line) for line in (tmp_path / "calls.jsonl").read_text().splitlines()]
     assert {(r["trace"]["llm_call_id"], r["trace"]["llm_attempt"]) for r in requests} == {
         (r["call_id"], r["attempt"]) for r in calls}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deadline", [False, True])
+async def test_cancelled_calls_are_not_transport_failures_or_complete_usage(tmp_path, deadline):
+    started = asyncio.Event()
+    async def pending(**kwargs):
+        started.set()
+        await asyncio.Event().wait()
+    recorder = RecordingClient(AsyncMock(chat=AsyncMock(side_effect=pending)), tmp_path / "requests")
+    if deadline:
+        with pytest.raises(TimeoutError):
+            await BudgetClient(recorder, .01, 1).chat(model="test")
+    else:
+        task = asyncio.create_task(recorder.chat(model="test"))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    recorded, = [json.loads(p.read_text()) for p in (tmp_path / "requests").glob("*.json")]
+    assert recorded["status"] == "cancelled"
+    assert recorded["cancellation_reason"] == ("deadline" if deadline else "cancelled")
+    result = metrics(tmp_path)
+    assert result["transport_failures"] == result["unfinished_requests"] == 0
+    assert result["cancelled_requests"] == 1
+    assert result["deadline_cancellations"] == int(deadline)
+    assert not result["usage_complete"]
+    assert result["client_seconds"] >= 0
+
+
+def test_unfinished_recording_and_missing_usage_remain_visible(tmp_path):
+    root = tmp_path / "requests"
+    root.mkdir()
+    (root / "aborted.json").write_text(json.dumps({"status": "running"}))
+    result = metrics(tmp_path)
+    assert result["unfinished_requests"] == 1 and not result["usage_complete"]
+    assert result["transport_failures"] == 0
+    (root / "aborted.json").write_text(json.dumps({"status": "complete", "response": {}}))
+    assert not metrics(tmp_path)["usage_complete"]

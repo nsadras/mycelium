@@ -132,8 +132,6 @@ export interface EntityTypeOntology {
   description: string;
   discoverable: boolean;
   sections: OntologySection[];
-  default_sections: Record<string, string>;
-  project_role_section?: string | null;
 }
 
 export interface MemoryOntology {

@@ -9,7 +9,6 @@ from mycelium.ontology import (
     ENTITY_TYPES,
     ClaimType,
     DiscoverableEntityType,
-    default_section,
     ontology_response,
 )
 from server.api.memory_artifacts import get_ontology
@@ -24,26 +23,6 @@ def test_ontology_registry_is_internally_complete() -> None:
     for definition in ENTITY_ONTOLOGY:
         keys = definition.section_keys()
         assert len(keys) == len(set(keys))
-        assert set(definition.defaults()) == set(CLAIM_TYPES)
-        assert set(definition.defaults().values()) <= set(keys)
-        if definition.project_role_section is not None:
-            assert definition.project_role_section in keys
-
-
-
-
-def test_declared_default_section_rules_are_centralized() -> None:
-    assert default_section("artifact", "state", None) == "current_state"
-    assert default_section("project", "state", None) == "current_status"
-    assert default_section("you", "observation", None) == "current_context"
-    assert (
-        default_section("person", "relationship", "project_role") == "shared_projects"
-    )
-
-    assert (
-        default_section("artifact", "relationship", "project_role")
-        == "related_projects"
-    )
 
 
 @pytest.mark.asyncio

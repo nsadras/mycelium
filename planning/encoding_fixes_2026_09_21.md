@@ -73,3 +73,8 @@ stable unrelated pages, stop encoding work and move on to retrieval.
 - Integrated validation: **622 Python tests passed**, four native integration
   tests deselected; Ruff and whitespace checks passed. Ontology UI type cleanup
   also passes the frontend build and four WikiExplorer tests.
+- F complete: unused routing/default-section scaffolding and stale documentation
+  removed; cancellation, deadline and incomplete-usage diagnostics validated.
+- All bounded work is closed. See [results and remaining limits](encoding_fixes_result_2026_09_21.md).
+  The next product focus is retrieval; native identity counterexample coverage
+  and some retention quality remain explicitly imperfect.

@@ -59,15 +59,22 @@ class BudgetClient:
         if self.calls >= self.limit or remaining <= 0:
             raise BudgetExceeded("Fixed experiment budget exhausted")
         self.calls += 1
-        async with asyncio.timeout(remaining):
-            return await self.client.chat(**request)
+        with trace_operation("budgeted-inference", experiment_deadline_at=time.time() + remaining):
+            async with asyncio.timeout(remaining):
+                return await self.client.chat(**request)
 
 
 def metrics(root):
     records = [json.loads(p.read_text()) for p in root.rglob("requests/*.json")]
     responses = [r["response"] for r in records if "response" in r]
     return {
-        "attempts": len(records), "transport_failures": sum(r["status"] != "complete" for r in records),
+        "attempts": len(records), "transport_failures": sum(r["status"] == "failed" for r in records),
+        "cancelled_requests": sum(r["status"] == "cancelled" for r in records),
+        "deadline_cancellations": sum(r.get("cancellation_reason") == "deadline" for r in records),
+        "unfinished_requests": sum(r["status"] == "running" for r in records),
+        "usage_complete": len(responses) == len(records) and all(
+            all(r.get(key) is not None for key in ("prompt_eval_count", "eval_count", "total_duration"))
+            for r in responses),
         "input_tokens": sum(r.get("prompt_eval_count", 0) for r in responses),
         "output_tokens": sum(r.get("eval_count", 0) for r in responses),
         "server_seconds": sum(r.get("total_duration", 0) for r in responses) / 1e9,

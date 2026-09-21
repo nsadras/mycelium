@@ -1,5 +1,6 @@
 """Capture unchanged native inference requests for benchmark inspection."""
 
+import asyncio
 import copy
 import json
 import time
@@ -36,6 +37,11 @@ class RecordingClient:
             response = await self.client.chat(**request)
             record.update(status="complete", response=response.model_dump(mode="json", exclude_none=True))
             return response
+        except asyncio.CancelledError as exc:
+            deadline = record["trace"].get("experiment_deadline_at")
+            record.update(status="cancelled", error=f"{type(exc).__name__}: {exc}",
+                          cancellation_reason="deadline" if deadline is not None and time.time() >= deadline else "cancelled")
+            raise
         except BaseException as exc:
             record.update(status="failed", error=f"{type(exc).__name__}: {exc}")
             raise

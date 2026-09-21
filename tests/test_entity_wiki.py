@@ -22,7 +22,6 @@ from mycelium.config import Config
 from mycelium.materialization import PageMaterializer
 from mycelium.organization import EntityCurationService, FactCurationService
 from mycelium.store import WikiStore
-from mycelium.ontology import default_section
 
 
 def claim(
@@ -378,7 +377,7 @@ def test_merge_redirects_every_live_entity_reference_and_preserves_history(
     target = you if merge_into_user else artifacts.create_entity("person", "Ava")
     item = claim("claim-merge", "Ava coordinates the launch.")
     other = claim("claim-other", "The launch begins next week.")
-    section = default_section("person", item.claim_type, item.predicate)
+    section = "profile"
     place(artifacts, item, source, section)
     artifacts.save_claim(other)
     artifacts.save_entity_reference(
@@ -534,7 +533,7 @@ def test_manual_curation_rejects_inactive_entity_endpoints(tmp_path):
         EntityCurationService(artifacts, wiki, materializer).move_claim(
             item.claim_id,
             archived.entity_id,
-            default_section("project", item.claim_type, item.predicate),
+            "objective",
         )
     assert artifacts.placement_for_claim(item.claim_id) is None
     assert artifacts.get_entity(project.entity_id).status == "active"
@@ -587,7 +586,6 @@ def test_new_ontology_types_materialize_in_their_own_sections(
     artifacts, wiki, materializer, _, _ = setup_store(tmp_path)
     entity = artifacts.create_entity(entity_type, f"Test {entity_type.title()}")
     item = claim(f"claim-{entity_type}", "The subject has useful memory.", claim_type)
-    assert default_section(entity_type, item.claim_type, item.predicate) == section
     place(artifacts, item, entity, section)
     materializer.regenerate({entity.entity_id})
     page = wiki.get(entity.slug)

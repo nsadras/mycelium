@@ -14,6 +14,7 @@ def failure(stage, source_id, error):
                 "cancelled" if isinstance(error, CancelledError) else
                 "input_capacity" if isinstance(error, ContextBudgetError) else
                 "transport" if isinstance(error, (RequestError, ResponseError, TimeoutException)) else
+                "timeout" if isinstance(error, TimeoutError) else
                 "pipeline")
     return {"stage": stage, "source_id": source_id, "category": category,
             "reason": f"{type(error).__name__}: {error}"}

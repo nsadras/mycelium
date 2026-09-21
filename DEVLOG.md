@@ -1,5 +1,39 @@
 # Development Log
 
+## 2026-09-21 — Close bounded encoding audit fixes
+
+- Fix identity admission so illegal project bindings cannot invalidate eligible
+  person bindings; align blank-title, existing-type and singleton-You checks.
+  Interleave prior candidates across source chunks before truncation. Preserve
+  completed checkpoints and claim membership when a stale attempt fails.
+- Restrict writable views through exact incoming subjects, changed support and
+  endpoints. Retrieved context alone cannot authorize rewriting old items.
+  Pass declared/bound people as optional choices; ignore unused existing-subject
+  redeclarations when recording new identity evidence.
+- Adopt one tested presentation simplification: select/group/link retained text,
+  removing generated prose from the response. Three frozen pairs used six calls;
+  candidate output 1,101 versus 1,812 tokens and preserves the planned chat feature
+  that baseline made current. Pages are longer and sometimes repetitive; no
+  cleanup pass or semantic retries added.
+- Native own/third-party pair: four calls, 15.78 model seconds, no failures.
+  Own-project builder/reviewer roles correct; third-party project omitted, making
+  that attribution counterexample inconclusive. Close without another tuning run.
+- Three seeded successive Builds: six calls, 88.38 seconds overall, zero-call
+  no-op. All 143 seed claims and 62 seed items unchanged. A final offline replay
+  removes five irrelevant old people from scope and preserves all seed entity
+  pages byte-for-byte. Retention still misses useful context and misstates an
+  insurance quote; pages sometimes retain old plans or omit useful new details.
+- Remove unused routing/default-section helpers, mappings and API/UI fields.
+  Benchmark records distinguish cancellations/deadlines from transport failures
+  and expose incomplete usage totals. Keep used human curation/review structures.
+- Validation: 622 Python tests passed, four native integration tests deselected;
+  Ruff/whitespace checks, frontend build and four wiki UI tests passed. All 16
+  bounded native calls finished first attempt, 149.48 client seconds total.
+  Existing bundle-size warning remains. No app services or live stores changed.
+- [Detailed results, comparisons and stopping decision](planning/encoding_fixes_result_2026_09_21.md).
+  Freeze this encoding tranche and focus on retrieval next; incomplete native
+  identity evidence and ordinary semantic defects remain recorded, not new gates.
+
 ## 2026-09-10 — Repair structural model contracts and replay five sessions
 
 - Prioritized extraction, synthesis, and review reliability before repeated-review scheduling. Seven neutral Gemma 4 12B probes passed before initial integration; all requests/schemas/responses are saved under `benchmark_runs/contract-reliability-20260910/`.

@@ -88,6 +88,38 @@ def test_binding_contract_scopes_participants_without_redeclaring_existing_subje
 
 
 @pytest.mark.asyncio
+async def test_unreferenced_people_reach_views_without_becoming_implicit_claim_subjects(tmp_path):
+    with Mycelium(tmp_path) as memory:
+        captured = await memory.ingest_source(SourceInput("I reviewed the project Morgan built.", "meeting",
+            source_type="meeting_transcript", segments=(SourceSegment("", 0,
+                "I reviewed the project Morgan built.", speaker="Sam", participant_id="speaker-0"),)))
+        source = memory.artifacts.get_source(captured.source_ids[0])
+        retainer = memory.consolidator.retainer
+        payload = await retainer.input(source, source.segments, "batch", prior_ids=[])
+        unrelated = memory.artifacts.create_entity("person", "Previously known person")
+        payload["existing_subjects"].append({"id": unrelated.entity_id, "title": unrelated.title, "entity_type": "person"})
+        speaker, builder, project = payload["new_subject_ids"][:3]
+        result = {"subjects": [
+            {"id": speaker, "title": "Sam", "entity_type": "person", "participant_ids": [payload["participants"][0]["id"]]},
+            {"id": builder, "title": "Morgan", "entity_type": "person", "participant_ids": []},
+            {"id": project, "title": "The project", "entity_type": "project", "participant_ids": []},
+            {"id": unrelated.entity_id, "title": unrelated.title, "entity_type": "person", "participant_ids": []}],
+            "memories": [{"id": "m", "text": "Sam reviewed Morgan's project.", "subject_ids": [project],
+                          "segment_ids": [source.segments[0].segment_id]}], "changes": []}
+        with memory.db.transaction():
+            cids = retainer.persist(source, "batch", payload, result)
+        view = memory.consolidator.views.input(cids, [], ())
+        assert set(view["affected_subject_ids"]) == {speaker, builder, project}
+        assert not memory.artifacts.list_entity_resolution_decisions(entity_id=unrelated.entity_id)
+        assert view["memories"][0]["subject_ids"] == [project]
+        assert view["memories"][0]["provenance"][0]["speaker_subject_id"] == speaker
+        assert len(memory.artifacts.list_entity_references(claim_id=cids[0])) == 1
+        # Optional choices do not create pages or require the model to use them.
+        memory.consolidator.views.persist(view, {"items": []}, cids, "optional")
+        assert not memory.artifacts.list_consolidated_facts()
+
+
+@pytest.mark.asyncio
 async def test_retention_rejects_a_stale_binding_snapshot(tmp_path, monkeypatch):
     with Mycelium(tmp_path) as memory:
         monkeypatch.setattr(memory.retriever.claim_index, "search", AsyncMock(return_value=[]))
@@ -140,7 +172,7 @@ async def test_accepted_correction_updates_wording_refs_and_resumable_views(tmp_
     async def present(llm, payload):
         assert fact.fact_id in {f["id"] for f in payload["existing_items"]}
         assert person.entity_id in payload["affected_subject_ids"]
-        return {"items": [{"owner_id": target.entity_id, "heading": "Preparation", "text": corrected,
+        return {"items": [{"owner_id": target.entity_id, "heading": "Preparation",
             "memory_ids": [replacement.claim_id], "linked_subject_ids": [], "state": "current"}]}
     monkeypatch.setattr(memory_contract, "present", present)
     # A resumed Build need only supply the pending replacement; its exact link

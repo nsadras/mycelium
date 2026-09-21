@@ -54,3 +54,22 @@ stable unrelated pages, stop encoding work and move on to retrieval.
 - The sandboxed test invocation stalled in a local index operation; it was
   interrupted and the same suite passed outside the sandbox in 7.29 seconds.
   This was test-environment behavior, not an Ollama performance finding.
+- A/C view scope and handoff implemented. Unrelated candidates are read-only;
+  selected items retain complete support and protected edits. Unused existing
+  subject redeclarations no longer manufacture source/identity associations.
+- B adopted after all six planned comparison calls: presentation selects/groups
+  retained text instead of generating new prose. Candidate output tokens were
+  1,101 versus 1,812; it preserved the planned chat feature that baseline made
+  current. Longer pages and imperfect sharing remain explicit tradeoffs.
+- C native pair completed in four calls. Own-project roles are correct. The
+  third-party sample omitted the project entirely, so attribution confirmation
+  for that sample is inconclusive. No repair rerun.
+- Three successive native Builds completed in six calls / 88.38 seconds overall,
+  with zero-call no-op. All 143 seed claims and 62 seed view items remain identical.
+  Four structural warnings, zero failures/retries. Retention omissions and one
+  misleading insurance statement remain; whole-artifact review is documented in
+  the result report. Final handoff correction replayed all recorded decisions
+  offline without inference and removed five irrelevant old people from scope.
+- Integrated validation: **622 Python tests passed**, four native integration
+  tests deselected; Ruff and whitespace checks passed. Ontology UI type cleanup
+  also passes the frontend build and four WikiExplorer tests.

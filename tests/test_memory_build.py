@@ -53,9 +53,9 @@ async def test_reviewed_speaker_reaches_retention_and_shared_project_views(tmp_p
             assert existing[person]["linked_subject_ids"] == [project]
             assert existing[project]["linked_subject_ids"] == []
         return {"items": [
-            {"owner_id": person, "heading": "Projects", "text": "Rowan built Bench Ledger.",
+            {"owner_id": person, "heading": "Projects",
              "memory_ids": [memory["id"]], "linked_subject_ids": [project], "state": "current"},
-            {"owner_id": project, "heading": "Purpose", "text": "Tracks workshop tool loans.",
+            {"owner_id": project, "heading": "Purpose",
              "memory_ids": [memory["id"]], "linked_subject_ids": [], "state": "current"}]}
 
     monkeypatch.setattr(contract, "retain", retain)
@@ -109,7 +109,7 @@ async def test_compact_capture_publication_failure_and_retry(tmp_path, monkeypat
         old_ids = {cid for item in payload["existing_items"] for cid in item["memory_ids"]}
         fresh = next(m for m in payload["memories"] if m["id"] not in old_ids)
         return {"items": [{"owner_id": payload["affected_subject_ids"][0], "heading": "Museum visits",
-                "text": fresh["text"], "memory_ids": [fresh["id"]],
+                 "memory_ids": [fresh["id"]],
                 "linked_subject_ids": [], "state": "history"}]}
 
     monkeypatch.setattr(contract, "retain", retain)
@@ -170,7 +170,7 @@ async def test_compact_capture_publication_failure_and_retry(tmp_path, monkeypat
 def test_compact_review_and_citation_boundaries():
     payload = {"subjects": [{"id": "person"}], "affected_subject_ids": ["person"],
                "memories": [{"id": "c1"}], "protected_memory_ids": [], "page_exclusions": []}
-    item = {"owner_id": "person", "heading": "Plans", "text": "A source-backed plan.",
+    item = {"owner_id": "person", "heading": "Plans",
             "memory_ids": ["c1"], "linked_subject_ids": [], "state": "current"}
     contract.presentation_model(payload).model_validate({"items": [item]})
     for changed in ({"page_exclusions": [{"memory_id": "c1", "subject_id": "person"}]},
@@ -180,7 +180,7 @@ def test_compact_review_and_citation_boundaries():
 
 
 def test_compact_identity_uses_declared_ids_only():
-    payload = {"segments": [{"id": "s"}], "existing_subjects": [{"id": "person"}],
+    payload = {"segments": [{"id": "s"}], "existing_subjects": [{"id": "person", "entity_type": "person"}],
                "new_subject_ids": ["new"], "prior_memories": []}
     row = {"id": "person", "title": "Rowan", "entity_type": "person", "participant_ids": []}
     model = contract.retention_model(payload)
@@ -209,7 +209,7 @@ def test_generation_schema_scopes_citations_before_decoding():
         "affected_subject_ids": ["person"], "memories": [{"id": "m"}]})
     view_schema = view_model.model_json_schema()
     assert view_schema["$defs"]["ViewSelection"]["properties"]["memory_ids"]["items"]["const"] == "m"
-    item = {"owner_id": "person", "heading": "Context", "text": "A supported statement.",
+    item = {"owner_id": "person", "heading": "Context",
             "memory_ids": ["m"], "linked_subject_ids": [], "state": "current"}
     view_model.model_validate({"items": [item]})
     item["memory_ids"] = ["invented"]
@@ -233,10 +233,9 @@ async def test_shared_evidence_keeps_distinct_items_and_owners(tmp_path, monkeyp
     async def present(llm, payload):
         a, b = payload["affected_subject_ids"]
         cid = payload["memories"][0]["id"]
-        items = [{"owner_id": sid, "heading": heading, "text": text, "memory_ids": [cid],
+        items = [{"owner_id": sid, "heading": heading, "memory_ids": [cid],
                   "linked_subject_ids": [], "state": "current"}
-                 for sid, heading, text in [(a, "Records", "Keeps the receipts."),
-                                           (b, "Equipment", "Brings the tools.")]]
+                 for sid, heading in [(a, "Records"), (b, "Equipment")]]
         return contract.presentation_model(payload).model_validate({"items": items}).model_dump()
 
     monkeypatch.setattr(contract, "retain", retain)
@@ -265,7 +264,7 @@ async def test_shared_evidence_keeps_distinct_items_and_owners(tmp_path, monkeyp
         b.manual_text = True
         memory.artifacts.save_consolidated_fact(b)
         payload = memory.consolidator.views.input({claim.claim_id}, [], {a.owner_entity_id})
-        view = {"items": [{"owner_id": a.owner_entity_id, "heading": "Records", "text": "Stores receipts.",
+        view = {"items": [{"owner_id": a.owner_entity_id, "heading": "Records",
                             "memory_ids": [claim.claim_id], "linked_subject_ids": [], "state": "current"}]}
         contract.presentation_model(payload).model_validate(view)
         memory.consolidator.views.persist(payload, view, {claim.claim_id}, "refresh")

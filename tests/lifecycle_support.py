@@ -18,7 +18,7 @@ def lifecycle_response(_system, user, schema, **kwargs):
     elif stage == "memory-presentation":
         protected = {cid for f in payload["existing_items"] if f["protected"] for cid in f["memory_ids"]}
         value = {"items": [{"owner_id": payload["affected_subject_ids"][0], "heading": "Preferences",
-                           "text": m["text"], "memory_ids": [m["id"]], "linked_subject_ids": [], "state": "current"}
+                            "memory_ids": [m["id"]], "linked_subject_ids": [], "state": "current"}
                           for m in payload["memories"] if m["id"] not in protected]}
     else:
         raise AssertionError(f"Unexpected lifecycle model call: {stage}")

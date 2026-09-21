@@ -85,7 +85,7 @@ async def test_presentation_round_trip_preserves_shared_items_and_no_page_review
         assert data["existing_items"][0]["protected"]
         assert data["pending_changes"][0]["incoming_claim_ids"] == [cid]
         assert data["pending_changes"][0]["affected_entity_ids"] == [a]
-        item = {"owner_id": a, "heading": "Work", "text": "The literal label is claim-one.",
+        item = {"owner_id": a, "heading": "Work",
                 "memory_ids": [cid], "linked_subject_ids": [b], "state": "current"}
         return schema.model_validate({"items": [item]}).model_dump()
 
@@ -95,7 +95,7 @@ async def test_presentation_round_trip_preserves_shared_items_and_no_page_review
     assert result["items"][0]["owner_id"] == "subject-a"
     assert result["items"][0]["linked_subject_ids"] == ["subject-b"]
     assert result["items"][0]["memory_ids"] == ["claim-one"]
-    assert result["items"][0]["text"] == "The literal label is claim-one."
+    assert "text" not in result["items"][0]
     payload["page_exclusions"] = [{"memory_id": "claim-one", "subject_id": "subject-b"}]
     with pytest.raises(ValidationError, match="no-page"):
         await contract.present(llm, payload)
@@ -168,7 +168,7 @@ async def test_resumed_batches_keep_prior_identity_and_adjacent_context(tmp_path
                 assert data["subjects"][0]["aliases"] == ["Sana Patel"]
                 assert all(m["provenance"][0]["speaker"] == "Kai" for m in data["memories"])
                 output = {"items": [{"owner_id": data["affected_subject_ids"][0], "heading": "Map",
-                    "text": "Sana is developing the orchard map.", "memory_ids": [m["id"] for m in data["memories"]],
+                     "memory_ids": [m["id"] for m in data["memories"]],
                     "linked_subject_ids": [], "state": "current"}]}
             return output if isinstance(schema, dict) else schema.model_validate(output).model_dump()
 

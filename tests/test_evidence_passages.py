@@ -117,7 +117,7 @@ async def test_build_expands_passages_before_persistence_and_keeps_diagnostic_ma
                     {'id': 'invalid', 'text': 'A structurally invalid citation.', 'subject_ids': [], 'segment_ids': ['missing']},
                 ], 'changes': []}
             return {'items': [{'owner_id': data['affected_subject_ids'][0], 'heading': 'Plan review',
-                'text': data['memories'][0]['text'], 'memory_ids': [data['memories'][0]['id']],
+                 'memory_ids': [data['memories'][0]['id']],
                 'linked_subject_ids': [], 'state': 'current'}]}
 
         memory.llm.call_structured = AsyncMock(side_effect=respond)

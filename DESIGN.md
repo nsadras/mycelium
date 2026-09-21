@@ -6,7 +6,8 @@ This document describes how Mycelium is organized and how information moves thro
 
 Build Memory uses two semantic passes for a small source: retain useful evidence, then organize cited views.
 Retention returns subjects, statements with exact source-segment citations, and proposed changes to prior memory.
-Presentation returns independent items with a subject, natural heading, text, and exact statement citations.
+Presentation selects and groups statements under natural headings with page destinations.
+Generated items display the selected retained text; presentation does not paraphrase it again.
 One statement can support several distinct items or pages. Claims retain their evidence independently of views.
 
 The model selects useful context rather than accounting for every sentence. Unselected text remains in the
@@ -188,16 +189,25 @@ flowchart TD
 - `memory_contract.py` declares two flat responses. Retention selects subjects, statements, and changes;
   presentation selects items. Exact request-local subject, citation, change-target, and view IDs constrain
   structured generation. Persistence validates the same contract again. Unknown references are rejected.
-- Learned claim retrieval supplies bounded prior context. There is no full identity-planning cascade, separate
+- Learned claim retrieval interleaves per-chunk rankings into bounded prior context, so earlier chunks cannot
+  exhaust the shortlist before later chunks are considered. There is no full identity-planning cascade, separate
   page-admission call, fixed heading ontology, truth-pair matrix, or per-item prose call. A new subject can receive
   a page from one useful conversation. Namesakes and uncertain identity matches remain model judgments with
   inspectable evidence and optional review.
+- Admission rejects ineligible participant bindings before counting conflicts between eligible people.
+  Relevant declared people and exact speaker bindings reach presentation as optional choices; speakers are
+  not automatically subjects of the statements they supply, and no person or project page is mandatory.
 - Retention does not deactivate earlier claims. Suggested supersessions or contradictions become pending human
   reviews. Both sides remain available. Existing items that cite pending evidence are protected during refresh.
 - A view item owns its heading and destinations; a claim has no exclusive page or item membership. Different
   items can cite the same evidence. A linked destination intentionally displays that item's complete text.
+  Generated text joins selected statements in the model's order, deduplicating exact repeated IDs within the
+  item. Human text edits remain protected. This preserves qualifications at the cost of sometimes longer
+  or repetitive pages; selection can still omit useful context or choose an imperfect heading/destination.
   Presentation can return no item for retained evidence; that evidence remains searchable as `deferred`.
-- Refresh selects bounded related claims and the existing items they support. It replaces only supplied,
+- Refresh authorizes existing items through incoming subjects, exact changed claims, and support/endpoint
+  links. Similarity alone supplies read-only context, which cannot become view support or authorize writing
+  another subject's page. Selected shared items retain their complete support. It replaces only supplied,
   unprotected generated items. Other items and manually edited items survive. An optimistic database snapshot
   rejects publication if the inputs changed during the model call, preventing a concurrent manual edit from
   being overwritten. It does not silently repeat semantic work.
@@ -212,6 +222,8 @@ flowchart TD
 - A failed view refresh preserves committed evidence and prior views, reports pending work, and retries only
   the unfinished work. Publication uses the SQLite outbox, so file recovery does not rerun models. Build audits
   record completion, failures, pending sources, and proposal IDs.
+- Failed retention updates only its unchanged batch checkpoint and finalizes from current stored episodes.
+  A competing completed batch and its claim membership survive optimistic conflicts.
 - Work is bounded by source/claim batches and retrieved context. Expanding selected existing items to all their
   supporting claims can still produce an oversized request in an unusually dense store; it fails visibly rather
   than dropping citations. The two-call small-source path is not a promise of constant cost at every store size.

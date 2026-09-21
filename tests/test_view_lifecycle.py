@@ -115,3 +115,61 @@ def test_identity_binding_changes_only_reviewed_subject_reference(tmp_path):
     merged = EntityCurationService(artifacts, wiki, service.materializer).merge(other.entity_id, person.entity_id)
     assert merged.entity.entity_id == person.entity_id
     assert all(r.identity_decision_id == 'identity' for r in artifacts.list_entity_references(status='active') if r.role == 'identity_subject')
+
+
+def test_related_context_cannot_rewrite_or_reuse_unrelated_seed_items(tmp_path):
+    artifacts, wiki, service, seed, person, fact = views_fixture(tmp_path)
+    before = artifacts.list_consolidated_facts()
+    page_before = wiki.get(person.slug).content
+    sid = add_source(artifacts, 'independent-source')
+    incoming = add_claim(artifacts, 'independent', [ClaimProvenance('independent-source', [sid])])
+    project = artifacts.create_entity('project', 'A separate project')
+    for ref in artifacts.list_entity_references(claim_id=incoming.claim_id):
+        ref.entity_id = project.entity_id
+        artifacts.save_entity_reference(ref)
+    payload = service.views.input({incoming.claim_id}, [seed.claim_id], ())
+    assert payload['existing_items'] == []
+    assert {m['id'] for m in payload['context_memories']} == {seed.claim_id}
+    assert payload['affected_subject_ids'] == [project.entity_id]
+    bad = {'items': [{'owner_id': project.entity_id, 'heading': 'Context',
+                     'memory_ids': [seed.claim_id], 'linked_subject_ids': [], 'state': 'current'}]}
+    with pytest.raises(ValueError):
+        memory_contract.presentation_model(payload).model_validate(bad)
+    service.views.persist(payload, {'items': []}, {incoming.claim_id}, 'independent-build')
+    assert artifacts.list_consolidated_facts() == before
+    assert wiki.get(person.slug).content == page_before
+    assert artifacts.get_claim(seed.claim_id) == seed
+
+
+def test_related_update_keeps_complete_shared_support_and_protected_items(tmp_path):
+    artifacts, wiki, service, seed, person, fact = views_fixture(tmp_path)
+    sid = add_source(artifacts, 'follow-on-source')
+    extra = add_claim(artifacts, 'extra-support', [ClaimProvenance('follow-on-source', [sid])])
+    incoming = add_claim(artifacts, 'new-context', [ClaimProvenance('follow-on-source', [sid])])
+    for claim, text in [(seed, 'The delivery is planned only if the inspection passes.'),
+                        (extra, 'The inspection date is still tentative.'),
+                        (incoming, 'An alternate venue is an idea, not an agreed change.')]:
+        claim.text = text
+        artifacts.save_claim(claim)
+    artifacts.save_entity_reference(ClaimEntityReference('update-ref', incoming.claim_id, 'subject', person.title,
+        person.entity_id, .8, 'Cited subject', 'extraction', 'update', 'active', NOW))
+    shared = artifacts.create_entity('project', 'Shared work')
+    fact.member_claim_ids.append(extra.claim_id)
+    fact.linked_entity_ids = [shared.entity_id]
+    artifacts.save_consolidated_fact(fact)
+    manual = artifacts.get_consolidated_fact('fact-statement')
+    manual.manual_text = True
+    artifacts.save_consolidated_fact(manual)
+    payload = service.views.input({incoming.claim_id}, [seed.claim_id], ())
+    assert {m['id'] for m in payload['memories']} == {seed.claim_id, extra.claim_id, incoming.claim_id}
+    assert shared.entity_id in payload['affected_subject_ids']
+    assert next(i for i in payload['existing_items'] if i['id'] == manual.fact_id)['protected']
+    view = {'items': [{'owner_id': person.entity_id, 'heading': 'Working agreements',
+        'memory_ids': [seed.claim_id, extra.claim_id, incoming.claim_id],
+        'linked_subject_ids': [shared.entity_id], 'state': 'current'}]}
+    service.views.persist(payload, view, {incoming.claim_id}, 'follow-on-build')
+    assert artifacts.get_consolidated_fact(manual.fact_id) == manual
+    refreshed, = [f for f in artifacts.list_consolidated_facts() if f.fact_id != manual.fact_id]
+    assert set(refreshed.member_claim_ids) == {seed.claim_id, extra.claim_id, incoming.claim_id}
+    assert refreshed.linked_entity_ids == [shared.entity_id]
+    assert refreshed.text == " ".join(c.text for c in [seed, extra, incoming])

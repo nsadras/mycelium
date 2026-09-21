@@ -173,7 +173,11 @@ class Retainer:
             self.artifacts.save_entity(entity)
         for claim in claims:
             self.artifacts.save_claim(claim)
-        used = {sid for row in result["memories"] for sid in row["subject_ids"]} | declarations.keys()
+        # Redeclaring an unused existing identity supplies no new identity
+        # evidence. Do not fabricate a source association from that row alone.
+        used = {sid for row in result["memories"] for sid in row["subject_ids"]} | {
+            sid for sid, declaration in declarations.items()
+            if sid in payload["new_subject_ids"] or declaration["participant_ids"]}
         decisions = {}
         for sid in sorted(used):
             subject = subjects[sid]

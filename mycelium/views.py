@@ -15,30 +15,51 @@ class ViewOrganizer:
         self.config, self.claim_index = config, claim_index
 
     def input(self, incoming_ids, context_ids, entity_ids):
-        candidates = set(incoming_ids) | set(sorted(context_ids)[:48])
+        incoming_ids = set(incoming_ids)
+        context_ids = set(list(dict.fromkeys(sorted(context_ids) if isinstance(context_ids, set) else context_ids))[:48])
+        touched = set(incoming_ids)
         # A replacement must refresh items citing its predecessor, including a
         # resumed Build after the first presentation failed. These are exact links.
-        candidates.update(link["target"] for cid in incoming_ids
+        touched.update(link["target"] for cid in incoming_ids
                           for link in self.artifacts.get_claim(cid).links
                           if link["relation"] == "supersedes")
-        facts = {f.fact_id: f for cid in candidates for f in self.artifacts.facts_for_claim(cid)}
+        affected = set(entity_ids) | self.artifacts.entities_for_claims(incoming_ids)
+        proposals = self.artifacts.list_reconsolidation_proposals(status="pending")
+        touched.update(cid for p in proposals if incoming_ids.intersection(p.incoming_claim_ids)
+                       for cid in p.target_claim_ids)
+        # Similarity supplies context, not permission to rewrite another page.
+        # Only exact incoming subject/view endpoints or changed support authorize it.
+        facts = {f.fact_id: f for cid in touched | context_ids for f in self.artifacts.facts_for_claim(cid)
+                 if cid in touched or affected.intersection([f.owner_entity_id, *f.linked_entity_ids])}
         facts = {fid: f for fid, f in facts.items() if self.artifacts.get_entity(f.owner_entity_id).status == "active"}
-        mids = candidates | {cid for f in facts.values() for cid in f.member_claim_ids}
-        claims = {cid: self.artifacts.get_claim(cid) for cid in mids}
+        mids = touched | {cid for f in facts.values() for cid in f.member_claim_ids}
+        mids.update(cid for cid in context_ids if affected & self.artifacts.entities_for_claims({cid}))
+        claims = {cid: self.artifacts.get_claim(cid) for cid in mids | context_ids}
         claims = {cid: c for cid, c in claims.items()
                   if c.status == "active" and c.dream_disposition != "excluded_source_policy"}
-        affected = set(entity_ids) | self.artifacts.entities_for_claims(set(incoming_ids))
+        records = {cid: memory_record(self.artifacts, c) for cid, c in claims.items()}
         affected.update(eid for f in facts.values() for eid in [f.owner_entity_id, *f.linked_entity_ids])
         entities = {e.entity_id: e for e in self.artifacts.list_entities(status="active")}
+        # Speaker identity is optional presentation context, never a claim's
+        # implicit subject. Declarations without a claim reference remain choices.
+        affected.update(p["speaker_subject_id"] for cid in incoming_ids if cid in records
+                        for p in records[cid]["provenance"] if p.get("speaker_subject_id"))
+        source_ids = {p.source_id for cid in incoming_ids if cid in claims for p in claims[cid].provenance}
+        affected.update(d.entity_id for d in self.artifacts.list_entity_resolution_decisions()
+                        if d.entity_id in entities and entities[d.entity_id].entity_type in {"person", "you"}
+                        and d.review_state != "rejected" and source_ids.intersection(d.source_ids)
+                        and (not d.supporting_claim_ids or incoming_ids.intersection(d.supporting_claim_ids)))
         affected &= entities.keys()
-        proposals = self.artifacts.list_reconsolidation_proposals(status="pending")
+        subject_ids = affected | {sid for m in records.values() for sid in m["subject_ids"]}
+        subject_ids &= entities.keys()
         pending = {cid for p in proposals for cid in [*p.incoming_claim_ids, *p.target_claim_ids]}
         exclusions, _ = reviewed_page_exclusions(self.artifacts, claims)
         return {"subjects": [{"id": eid, "title": entities[eid].title,
                               "entity_type": entities[eid].entity_type, "aliases": entities[eid].aliases}
-                             for eid in sorted(affected)],
+                             for eid in sorted(subject_ids)],
                 "affected_subject_ids": sorted(affected),
-                "memories": [memory_record(self.artifacts, claims[cid]) for cid in sorted(claims)],
+                "memories": [records[cid] for cid in sorted(claims.keys() & mids)],
+                "context_memories": [records[cid] for cid in sorted(claims.keys() - mids)],
                 "existing_items": [{"id": f.fact_id, "text": f.text, "owner_id": f.owner_entity_id,
                     "heading": f.section_key, "memory_ids": f.member_claim_ids,
                     "linked_subject_ids": f.linked_entity_ids,
@@ -78,6 +99,7 @@ class ViewOrganizer:
         contract.presentation_model(payload).model_validate(view)
         now = now_iso()
         affected = set(payload["affected_subject_ids"])
+        texts = {m["id"]: m["text"] for m in payload["memories"]}
         with self.artifacts.db.transaction():
             for item in payload["existing_items"]:
                 if not item["protected"]:
@@ -86,7 +108,8 @@ class ViewOrganizer:
                     self.artifacts.delete_consolidated_fact(item["id"])
             for index, item in enumerate(view["items"]):
                 self.artifacts.save_consolidated_fact(ConsolidatedFact(
-                    f"{stable_id('view', run_id)}-{index:04d}", item["text"], item["memory_ids"], item["owner_id"],
+                    f"{stable_id('view', run_id)}-{index:04d}",
+                    " ".join(texts[mid] for mid in dict.fromkeys(item["memory_ids"])), item["memory_ids"], item["owner_id"],
                     item["heading"], item["state"], item["linked_subject_ids"], "model", .8,
                     "Source-backed view refresh", now, now))
                 affected.update([item["owner_id"], *item["linked_subject_ids"]])

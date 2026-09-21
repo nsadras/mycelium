@@ -152,7 +152,7 @@ async def test_resumed_batches_keep_prior_identity_and_adjacent_context(tmp_path
             seen.append(stage)
             if stage == "memory-retention":
                 position = len(seen)
-                assert [r["text"] for r in data["segments"]] == lines[position:]
+                assert [r["text"] for r in data["segments"]] == [" ".join(lines[position:])]
                 assert [r["text"] for r in data["context_segments"]] == lines[:position]
                 assert all(r["speaker"] == "Kai" for r in data["context_segments"])
                 assert data["prior_memories"]

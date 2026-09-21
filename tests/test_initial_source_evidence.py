@@ -51,6 +51,24 @@ def test_partial_source_budget_keeps_whole_cited_segments_without_neighbor_leaks
     assert inspected.sources == ()  # Context requires a retained cited anchor.
 
 
+def test_broad_passage_citations_do_not_crowd_the_record_out_of_its_budget(tmp_path):
+    artifacts, claim, hit = seed(tmp_path)
+    source = artifacts.get_source('s1')
+    source.segments = [SourceSegment(f's1#seg-{i + 1:04d}', i, 'A source fragment.') for i in range(400)]
+    artifacts.save_source(source)
+    segment_ids = [s.segment_id for s in source.segments]
+    artifacts.save_claim(replace(claim, provenance=[ClaimProvenance('s1', segment_ids)]))
+    builder = RetrievedContextBuilder(WikiStore(tmp_path / 'wiki'), artifacts)
+    result = builder.build([hit], budget_tokens=600)
+    assert result.records and result.sources and result.more_available
+    assert result.records[0].citations[0].segment_ids == tuple(segment_ids)
+    rendered = render_memory_evidence(result)
+    assert '`s1#seg-0001`–`s1#seg-0400`' in rendered
+    assert count_tokens(rendered) <= 600
+    supplied = {s.segment_id for s in result.sources[0].segments}
+    assert set(result.sources[0].citations[0].segment_ids) == supplied < set(segment_ids)
+
+
 def test_omitted_interpretations_do_not_leak_their_sources(tmp_path):
     artifacts, claim, hit = seed(tmp_path)
     source = artifacts.get_source("s1")

@@ -63,7 +63,7 @@ class Retainer:
 
     @staticmethod
     def segments(source, segments):
-        return [{"id": s.segment_id, "text": s.content, "speaker": s.speaker, "role": s.role,
+        return [{"id": s.segment_id, "index": s.index, "text": s.content, "speaker": s.speaker, "role": s.role,
                  "participant_id": identity_context.participant_id(source, s),
                  "source_id": source.source_id, "source_time": s.timestamp or source.occurred_at,
                  "metadata": s.metadata} for s in segments if s.role != "system"]
@@ -301,7 +301,7 @@ class Retainer:
                 for episode, trial in zip(members, trials):
                     episode.__dict__.update(trial.__dict__)
                 warnings.extend({"stage": "retention", "batch_id": identifier,
-                    **{k: v for k, v in rejection.items() if k not in {"record", "request_ids"}}}
+                    **{k: v for k, v in rejection.items() if k not in {"record", "request_ids", "request_citations"}}}
                     for rejection in result.get("_rejections", []))
             except (Exception, asyncio.CancelledError) as exc:
                 for episode in members:

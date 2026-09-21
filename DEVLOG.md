@@ -6309,3 +6309,53 @@ remain separate gates.
   experiment, not adding compulsory owners or more prompt clauses. Source review,
   provenance checks, probe Ruff and whitespace checks pass. No application tests
   were rerun because no production code changed. User-owned edits remain untouched.
+
+## 2026-09-21 — Reversible evidence passages and compact citation display
+
+- User authorizes trying simpler source/citation representation. Freeze the
+  [passage plan](planning/evidence_passages_plan_2026_09_21.md), baseline `108ba53`,
+  unchanged prompts/schema/model settings and one candidate. Evidence root:
+  `benchmark_runs/evidence-passages-20260921/`. [Results and limitations](planning/evidence_passages_result_2026_09_21.md).
+- Group consecutive original indices into passages of at most 1,200 characters,
+  preserving source, speaker/participant, role, time and metadata boundaries.
+  New and context evidence remain separate; missing indices/gaps never join.
+  Keep source wording intact and expand passage citations to exact original IDs
+  before validation/persistence. The production compaction module matches the
+  frozen candidate. Request budgeting and inference share the representation;
+  full passage membership is saved in diagnostics without enlarging summary warnings.
+- Four fresh direct pairs show substantial input savings and mixed quality. The
+  longer third-party candidate selects one useful overview versus 13 baseline
+  statements; do not equate that output saving with equal coverage. The reserved
+  mixed example preserves separate builders, personal teaching context and prototype
+  limitations that its baseline omits. Short third-party attribution remains correct;
+  short own-project person/project identity inconsistency persists.
+- Paired full-recording Builds preserve all 884 segments / 7,175 words and speaker
+  labels. Candidate uses 36 passages; retention input 40,882 → 11,983 native tokens
+  (70.7% lower). Both retain eight statements in two calls; request time 48.52 →
+  20.22 seconds, whole Build plus no-op 49.09 → 20.76 seconds. Baseline binds Hari
+  incorrectly to You and selects technical/project pages. Candidate binds Hari
+  correctly and creates his page, but no project identity/page. A job-market statement
+  misstates senior/junior hiring pressure; presentation turns a course-chat vision
+  into a current feature. Record these defects without further prompt tuning.
+- Offline review finds expanded citation display bloating Hari's markdown to
+  25,490 characters and crowding a retrieved view out of the 6,000-token evidence
+  budget. Share an exact canonical-ID range formatter across wiki and agent evidence
+  rendering. It never fills gaps or changes structured citations. Markdown preview
+  becomes 2,627 characters; real candidate source inspection now returns its view,
+  three supporting claims and 87 cited fragments in 5,978 tokens with an explicit
+  more-available flag. Both isolated stores pass artifact integrity checks.
+- Close at 12/12 generation calls, 104,663 input / 8,052 output tokens, 159.46 server
+  / 159.49 client seconds. All native calls finish on attempt one; no rejected rows,
+  failures, output exhaustion or retries. Both no-op Builds use zero calls. The first
+  small baseline includes 10.52 seconds loading; the recording pair is warm.
+- Adopt for directly measured representation efficiency, not as a proven identity
+  or coverage fix. Broader passage citations must not inflate fact-coverage claims.
+  Single stochastic samples and differing selected content limit causal speed/quality
+  claims. No native follow-on content Build, QA accuracy, large-store or device test.
+- Validation: 608 Python tests pass, four native integration tests deselected;
+  Ruff and whitespace checks pass. Focused regressions cover boundaries, source
+  immutability, exact citation expansion, persistence, diagnostics, resumed/no-op
+  Builds, citation gaps/escaping and preventing references from exhausting the
+  evidence budget. Exact native inputs/options/schema and persistence were replayed
+  offline. No further native calls, live data rebuild, service operations or edits
+  to user-owned guidance/notes. Frontend code is unchanged; UI checks were not rerun.

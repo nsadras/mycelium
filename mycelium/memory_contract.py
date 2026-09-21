@@ -205,7 +205,7 @@ async def retain(llm, payload):
     from mycelium.memory_admission import retention
     request, ids = compact_retention(payload)
     model = retention_model(request)
-    with trace_operation("memory-retention", request_ids=ids.reverse):
+    with trace_operation("memory-retention", request_ids=ids.reverse, request_citations=ids.citations):
         result = await llm.call_structured(
             RETAIN, json.dumps(request, ensure_ascii=False), model.model_json_schema(),
             num_predict=8192, debug_label="memory-retention", dump_success=True,
@@ -214,7 +214,8 @@ async def retain(llm, payload):
     result = retention_model(payload).model_validate(ids.retention(accepted)).model_dump()
     if rejected:
         # Diagnostic metadata is produced locally, outside the model's schema.
-        result["_rejections"] = [{**row, "request_ids": ids.reverse} for row in rejected]
+        result["_rejections"] = [{**row, "request_ids": ids.reverse,
+                                  "request_citations": ids.citations} for row in rejected]
     return result
 
 

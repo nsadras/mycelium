@@ -30,6 +30,7 @@ from mycelium.operations import (
     WikiPageReference,
 )
 from mycelium.store import WikiStore
+from mycelium.source_references import segment_references
 from mycelium.temporal import temporal_records
 
 
@@ -252,9 +253,7 @@ def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
         if record.citations:
             lines.append("Evidence references:")
             for citation in record.citations:
-                segments = ", ".join(
-                    f"`{_text(value)}`" for value in citation.segment_ids
-                )
+                segments = segment_references(citation.source_id, citation.segment_ids)
                 source_time = (
                     f"; conversation time: {_text(citation.source_time)}"
                     if citation.source_time
@@ -288,7 +287,7 @@ def _render_sources(sources: tuple[EvidenceSource, ...]) -> list[str]:
         )
         cited_claims_by_segment: dict[str, list[str]] = defaultdict(list)
         for citation in source.citations:
-            segments = ", ".join(f"`{_text(value)}`" for value in citation.segment_ids)
+            segments = segment_references(source.source_id, citation.segment_ids)
             lines.append(
                 f"- `{_text(citation.claim_id)}`: cited segments {segments or '(none)'}"
             )

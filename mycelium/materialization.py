@@ -15,6 +15,7 @@ from mycelium.models import Edge, UpdateLogEntry, WikiPage
 from mycelium.ontology import ENTITY_ONTOLOGY, PageType
 from mycelium.page_reviews import reviewed_page_exclusions
 from mycelium.store import WikiStore
+from mycelium.source_references import segment_references
 from mycelium.temporal import temporal_records
 
 INDEX_GROUPS = tuple((definition.key, definition.plural_label) for definition in ENTITY_ONTOLOGY)
@@ -82,7 +83,7 @@ def sections_markdown(
     if evidence_labels:
         lines.extend(["", "## Sources", ""])
         for (source_id, segment_ids), label in evidence_labels.items():
-            segments = " · ".join(f"`{segment_id}`" for segment_id in segment_ids)
+            segments = segment_references(source_id, segment_ids)
             suffix = f" · {segments}" if segments else ""
             lines.append(f"[^{label}]: `{source_id}`{suffix}")
     return "\n".join(lines).strip()

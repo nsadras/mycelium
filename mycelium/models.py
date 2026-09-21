@@ -60,3 +60,4 @@ class DreamReport:
     pending_source_ids: list[str] = field(default_factory=list)
     failures: list[dict[str, str]] = field(default_factory=list)
     reconsolidation_proposal_ids: list[str] = field(default_factory=list)
+    warnings: list[dict] = field(default_factory=list)

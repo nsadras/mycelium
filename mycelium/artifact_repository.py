@@ -58,6 +58,8 @@ KINDS = [
     "organization-proposals",
     "lifecycle-operations",
     "model-decisions",
+    "participant-bindings",
+    "identity-review-history",
 ]
 
 

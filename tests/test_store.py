@@ -387,11 +387,16 @@ def test_clear_memory_store_removes_artifacts_and_preserves_conversations(
         )
     )
 
+    myc.db.put("participant-bindings", "participant-1", {"entity_id": "you"})
+    myc.db.put("identity-review-history", "review-1", {"entity_id": "you"})
+
     counts = runtime.clear_memory_store()
 
     assert counts["artifact_sources_deleted"] == 1
     assert counts["artifact_episodes_deleted"] == 1
     assert counts["artifact_claims_deleted"] == 1
+    assert myc.db.ids("participant-bindings") == []
+    assert myc.db.ids("identity-review-history") == []
     assert myc.artifacts.list_sources() == []
     assert myc.artifacts.list_episodes() == []
     assert myc.artifacts.list_claims() == []

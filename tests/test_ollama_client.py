@@ -109,6 +109,9 @@ async def test_http_timeouts_use_bounded_retries(structured, timeout_type, recov
         assert caught.value is timeout
 
     assert client.client.chat.await_count == 2
+    if structured:
+        assert client._call_log[0]["metadata"]["failure_category"] == "transport"
+        assert [c["attempt"] for c in client._call_log] == [1, 2]
 
 
 class FakeSdkClient:
@@ -511,7 +514,7 @@ async def test_call_structured_accepts_pydantic_model():
 
 
 @pytest.mark.asyncio
-async def test_call_structured_retries_after_a_contract_error():
+async def test_call_structured_does_not_regenerate_after_a_contract_error():
     client = OllamaClient("http://localhost:11434", "test-model")
     fake_sdk = SequencedFakeSdkClient([
         '{"wrong": "value"}',
@@ -519,12 +522,11 @@ async def test_call_structured_retries_after_a_contract_error():
     ])
     client.client = fake_sdk
 
-    response = await client.call_structured(
-        "system prompt", "user prompt", AnswerOutput
-    )
-
-    assert response == {"answer": "yes"}
-    assert len(fake_sdk.chat_calls) == 2
+    from mycelium.ollama import StructuredOutputError
+    with pytest.raises(StructuredOutputError) as caught:
+        await client.call_structured("system prompt", "user prompt", AnswerOutput)
+    assert caught.value.category == "model_output_contract"
+    assert len(fake_sdk.chat_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -664,28 +666,40 @@ async def test_call_structured_final_error_preserves_contract_failure(monkeypatc
 
 @pytest.mark.asyncio
 async def test_timing_trace_persists_attempts_and_stage_without_prompt_content(
-    tmp_path,
+    tmp_path, monkeypatch,
 ):
+    monkeypatch.delenv("MYCELIUM_LLM_DEBUG_DIR", raising=False)
     class Result(BaseModel):
         value: int
 
     path = tmp_path / "diagnostics" / "llm-calls.jsonl"
     client = OllamaClient(url="http://localhost:11434", model="test", trace_path=path)
     client.client = SequencedFakeSdkClient(["{}", '{"value":2}'])
+    with pytest.raises(ValueError, match="contract"):
+        await client.call_structured("private system text", "private source text", Result,
+                                     debug_label="dream-fact-candidate-selection")
     result = await client.call_structured(
         "private system text",
         "private source text",
         Result,
         debug_label="dream-fact-candidate-selection",
+        dump_success=True,
     )
     assert result == {"value": 2}
     records = [json.loads(line) for line in path.read_text().splitlines()]
-    assert [r["attempt"] for r in records] == [1, 2]
+    assert [r["attempt"] for r in records] == [1, 1]
     assert [r["success"] for r in records] == [False, True]
-    assert len({r["call_id"] for r in records}) == 1
+    assert len({r["call_id"] for r in records}) == 2
+    assert records[0]["metadata"]["failure_category"] == "model_output_contract"
     assert all(r["stage"] == "dream-fact-candidate-selection" for r in records)
     assert all(r["metadata"]["eval_count"] == 5 for r in records)
     assert "private" not in path.read_text()
+    decision, = (path.parent / "decisions").glob("*.json")
+    saved = json.loads(decision.read_text())
+    assert saved["messages"][0]["content"] == "private system text"
+    assert saved["messages"][1]["content"] == output_contract("private source text", Result.model_json_schema())
+    assert saved["parsed"] == {"value": 2}
+    assert saved["metadata"]["validation_scope"] == "schema"
     restarted = OllamaClient(
         url="http://localhost:11434", model="test", trace_path=path
     )
@@ -767,7 +781,7 @@ async def test_reasoning_uses_configured_sampling_schema_and_output_reserve(mode
 
 
 @pytest.mark.asyncio
-async def test_reasoning_schema_validation_retries_without_switching_modes_or_replaying_thoughts():
+async def test_reasoning_schema_validation_stops_without_replaying_thoughts():
     class SequentialSdk:
         def __init__(self):
             self.calls = []
@@ -778,14 +792,12 @@ async def test_reasoning_schema_validation_retries_without_switching_modes_or_re
     client = OllamaClient('http://localhost:11434', 'test-model')
     sdk = SequentialSdk()
     client.client = sdk
-    assert await client.call_structured('system', 'evidence', AnswerOutput, think=True) == {'answer': 'yes'}
-    assert len(sdk.calls) == 2
+    from mycelium.ollama import StructuredOutputError
+    with pytest.raises(StructuredOutputError):
+        await client.call_structured('system', 'evidence', AnswerOutput, think=True)
+    assert len(sdk.calls) == 1
     assert all(c['think'] and c['format'] is None for c in sdk.calls)
-    retry = sdk.calls[1]['messages']
-    assert retry[:2] == sdk.calls[0]['messages']
-    assert retry[2] == {'role': 'assistant', 'content': '{"wrong":true}'}
-    assert 'ValidationError' in retry[3]['content']
-    assert 'private reasoning' not in json.dumps(retry)
+    assert 'private reasoning' not in json.dumps(sdk.calls[0])
 
 
 @pytest.mark.asyncio

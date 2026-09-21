@@ -22,4 +22,4 @@ def lifecycle_response(_system, user, schema, **kwargs):
                           for m in payload["memories"] if m["id"] not in protected]}
     else:
         raise AssertionError(f"Unexpected lifecycle model call: {stage}")
-    return schema.model_validate(value).model_dump()
+    return value if isinstance(schema, dict) else schema.model_validate(value).model_dump()

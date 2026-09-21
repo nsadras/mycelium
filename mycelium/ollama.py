@@ -25,6 +25,14 @@ LLM_DEBUG_DIR_ENV = "MYCELIUM_LLM_DEBUG_DIR"
 LLM_CALL_LOG_LIMIT = 100
 
 
+class StructuredOutputError(ValueError):
+    """A completed response failed its contract; another generation is not a retry."""
+
+    def __init__(self, message, *, category="model_output_contract"):
+        super().__init__(message)
+        self.category = category
+
+
 @dataclass
 class ToolEvent:
     tool_name: str
@@ -562,7 +570,7 @@ class OllamaClient:
         *,
         cache_store=None,
     ) -> Union[dict, list]:
-        """Reuse only validated results under the same complete inference contract."""
+        """Reuse validated results; max_retries bounds transport attempts only."""
         arguments = dict(max_retries=max_retries, num_predict=num_predict,
                          dump_success=dump_success, debug_label=debug_label, think=think)
         if cache_store is None:
@@ -680,6 +688,7 @@ class OllamaClient:
                     context_window_tokens=self.context_window_tokens,
                     thinking_chars=len(str(assistant_message.get("thinking", "") or "")),
                     content_chars=len(content),
+                    validation_scope="schema" if response_model is not None else "json",
                 )
                 latency_ms = int((time.perf_counter() - start_time) * 1000)
 
@@ -706,6 +715,8 @@ class OllamaClient:
                         )
                     return parsed
                 except (json.JSONDecodeError, ValidationError, ValueError) as parse_exc:
+                    metadata["failure_category"] = (
+                        "output_capacity" if metadata.get("done_reason") == "length" else "model_output_contract")
                     self._log_call(call_id, attempt + 1, system, user, content, latency_ms, False, metadata, stage=debug_label or "structured")
                     debug_dump_path = self._dump_structured_failure(
                         call_id=call_id,
@@ -721,38 +732,20 @@ class OllamaClient:
                         metadata=metadata,
                         error=parse_exc,
                     )
-                    if attempt == max_retries - 1 or metadata.get("done_reason") == "length":
-                        metadata_text = f"; metadata={metadata}" if metadata else ""
-                        debug_text = (
-                            f"; debug_dump={debug_dump_path}"
-                            if debug_dump_path
-                            else f"; debug_dump disabled, set {LLM_DEBUG_DIR_ENV}=.llm-debug"
-                        )
-                        raise ValueError(
-                            "Structured response did not satisfy its contract after "
-                            f"{attempt + 1} attempts; final_error="
-                            f"{type(parse_exc).__name__}: {parse_exc}"
-                            f"{metadata_text}{debug_text}"
-                        ) from parse_exc
-                    messages = [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                        {"role": "assistant", "content": content},
-                        {
-                            "role": "user",
-                            "content": (
-                                "The response did not satisfy the supplied structured "
-                                "output contract. Correct the response and return the "
-                                "complete JSON value only. Contract error: "
-                                f"{type(parse_exc).__name__}: {parse_exc}"
-                            ),
-                        },
-                    ]
-                    continue
+                    # Repeating a completed decision does not repair the input or
+                    # contract. Keep its evidence for inspection, without a repair prompt.
+                    debug_detail = (f"debug_dump={debug_dump_path}" if debug_dump_path else
+                                    f"debug_dump disabled, set {LLM_DEBUG_DIR_ENV}=.llm-debug")
+                    raise StructuredOutputError(
+                        f"Structured response did not satisfy its contract; "
+                        f"final_error={type(parse_exc).__name__}: {parse_exc}; metadata={metadata}; "
+                        f"{debug_detail}", category=metadata["failure_category"],
+                    ) from parse_exc
 
             except (RequestError, ResponseError, TimeoutException) as e:
                 latency_ms = int((time.perf_counter() - start_time) * 1000)
-                self._log_call(call_id, attempt + 1, system, user, str(e), latency_ms, False, stage=debug_label or "structured")
+                self._log_call(call_id, attempt + 1, system, user, str(e), latency_ms, False,
+                               {"failure_category": "transport"}, stage=debug_label or "structured")
                 if attempt == max_retries - 1 or (
                     isinstance(e, ResponseError) and e.status_code is not None
                     and 400 <= e.status_code < 500 and e.status_code not in {408, 429}
@@ -836,7 +829,7 @@ class OllamaClient:
         metadata: dict[str, Any],
         debug_label: str | None = None,
     ) -> str | None:
-        debug_dir = os.getenv(LLM_DEBUG_DIR_ENV)
+        debug_dir = os.getenv(LLM_DEBUG_DIR_ENV) or (str(self.trace_path.parent / "decisions") if self.trace_path else None)
         if not debug_dir:
             return None
 

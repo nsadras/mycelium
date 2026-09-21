@@ -294,6 +294,7 @@ def _dream_report_response(report) -> dict[str, Any]:
         "completed_source_ids": report.completed_source_ids,
         "pending_source_ids": report.pending_source_ids,
         "failures": report.failures,
+        "warnings": report.warnings,
         "reconsolidation_proposal_ids": report.reconsolidation_proposal_ids,
     }
 

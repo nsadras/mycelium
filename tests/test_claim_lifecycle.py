@@ -134,7 +134,7 @@ async def test_claim_correction_creates_explicit_evidence_and_rebuilds_projectio
             value["changes"] = [{"earlier_id": json.loads(user)["prior_memories"][0]["id"],
                 "later_id": value["memories"][0]["id"], "relation": "supersedes",
                 "reason": "The reviewed correction replaces the original statement."}]
-        return schema.model_validate(value).model_dump()
+        return value if isinstance(schema, dict) else schema.model_validate(value).model_dump()
 
     service.views.llm.call_structured.side_effect = response
 

@@ -41,7 +41,7 @@ def participants(artifacts, source):
             "you" if segment.role == "user" and owner is not None and owner.status == "active" else None)
         if entity_id and artifacts.get_entity(entity_id).status != "active":
             raise ValueError("Participant binding refers to an inactive identity; review it before Build")
-        rows[pid] = {"id": pid, "name": segment.speaker or segment.role, "role": segment.role,
+        rows[pid] = {"id": pid, "source_id": source.source_id, "name": segment.speaker or segment.role, "role": segment.role,
                      "subject_id": entity_id,
                      "binding_origin": fixed["origin"] if fixed else "user" if entity_id else None}
     return list(rows.values())

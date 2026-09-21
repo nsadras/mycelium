@@ -8,7 +8,7 @@ import pytest
 
 from mycelium import Mycelium, SourceInput
 from mycelium import memory_contract
-from mycelium.budget import count_tokens
+from mycelium.memory_budget import retention_size
 from mycelium.operations import ConsolidationRequest
 from mycelium.retention import Retainer
 from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
@@ -63,6 +63,7 @@ async def test_cancelled_view_resumes_after_restart_without_reextracting(tmp_pat
         assert len(memory.artifacts.list_claims()) == 1
         assert memory.artifacts.list_episodes()[0].extraction_status == 'complete'
         assert memory.artifacts.list_dream_runs()[-1].status == 'cancelled'
+        assert memory.artifacts.list_dream_runs()[-1].failures[-1]['category'] == 'cancelled'
         evidence = RetrievedContextBuilder(memory.wiki, memory.artifacts).build([], budget_tokens=2000)
         assert evidence.build_incomplete
         assert 'Build Memory is incomplete' in render_memory_evidence(evidence)
@@ -108,17 +109,21 @@ async def test_source_chunks_preserve_text_and_metadata_and_bound_requests(tmp_p
         assert ''.join(s.content for s in source.segments) == text
         assert len(source.segments) > 1
         assert all(s.role == 'user' and s.metadata['external_id'] == 'turn-12' for s in source.segments)
-        sizes = []
+        sizes, supplied = [], []
 
         async def retain(llm, payload):
-            sizes.append(count_tokens(json.dumps(payload['segments'])))
+            sizes.append(retention_size(payload))
+            supplied.extend(s["id"] for s in payload["segments"])
             return {'subjects': [], 'memories': [], 'changes': []}
 
         monkeypatch.setattr(memory_contract, 'retain', retain)
         assert not (await memory.consolidate()).report.failures
-        assert max(sizes) <= memory.config.llm.context_window_tokens // 4
+        assert max(sizes) <= memory.config.llm.context_window_tokens - 8192 - 2048
         assert len(sizes) > 1
-        assert len(memory.artifacts.list_episodes()[0].segment_dispositions) == len(source.segments)
+        assert supplied == [s.segment_id for s in source.segments]
+        episode = memory.artifacts.list_episodes()[0]
+        assert len(episode.segment_dispositions) == len(source.segments)
+        assert any(b.diagnostics["omitted"]["context_segment_ids"] for b in episode.extraction_batches)
         memory.llm.call_structured.assert_not_called()
 
 

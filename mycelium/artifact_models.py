@@ -586,6 +586,7 @@ class DreamRunAudit:
     claim_decisions: list[DreamClaimDecision] = field(default_factory=list)
     failures: list[dict[str, str]] = field(default_factory=list)
     reconsolidation_proposal_ids: list[str] = field(default_factory=list)
+    warnings: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -675,6 +676,7 @@ class ExtractionBatchState:
     attempt_count: int = 0
     last_error: str | None = None
     response: dict[str, Any] | None = None
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.segment_ids = list(dict.fromkeys(self.segment_ids))

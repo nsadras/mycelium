@@ -293,6 +293,7 @@ export default function MemoryInspector({ refreshKey = 0, target = null }: { ref
                   <div className="rounded-lg bg-slate-50 p-3"><strong>Participants:</strong> {selectedEpisode.participants.join(', ') || 'None'}</div>
                 </div>
                 {selectedEpisode.extraction_error && <div className="rounded-lg bg-rose-50 p-4 text-sm text-rose-700"><strong>Extraction error:</strong> {selectedEpisode.extraction_error}</div>}
+                <section><h3 className="mb-2 text-sm font-bold">Extraction batches</h3><div className="space-y-2">{selectedEpisode.extraction_batches.map((batch) => <details key={batch.batch_id} className="rounded-lg bg-slate-50 p-3 text-xs"><summary className="cursor-pointer font-mono">{batch.batch_id} · {batch.status} · {batch.attempt_count} attempt(s)</summary><JsonBlock value={{ diagnostics: batch.diagnostics, error: batch.last_error, response: batch.response }} /></details>)}</div></section>
                 <section><h3 className="mb-2 text-sm font-bold">Claims ({selectedEpisode.claim_ids.length})</h3><div className="flex flex-wrap gap-2">{selectedEpisode.claim_ids.map((claimId) => <button key={claimId} onClick={() => selectClaim(claimId)} className="rounded-md bg-indigo-50 px-2 py-1 font-mono text-xs text-indigo-700 hover:bg-indigo-100">{claimId}</button>)}</div></section>
                 <section><h3 className="mb-2 text-sm font-bold">Included segments ({selectedEpisode.segment_ids.length})</h3><div className="flex flex-wrap gap-2">{selectedEpisode.segment_ids.map((id) => <Badge key={id}>{id}</Badge>)}</div></section>
                 <section><h3 className="mb-2 text-sm font-bold">Segment dispositions ({selectedEpisode.segment_dispositions.length})</h3><div className="space-y-2">{selectedEpisode.segment_dispositions.map((item) => <div key={item.segment_id} className="rounded-lg bg-slate-50 p-3 text-xs"><div className="flex flex-wrap items-center gap-2"><Badge tone={item.disposition === 'claimed' ? 'green' : 'slate'}>{item.disposition}</Badge><span className="font-mono">{item.segment_id}</span></div>{item.claim_ids.length > 0 && <div className="mt-1 text-slate-600">Claims: {item.claim_ids.join(', ')}</div>}{item.reason && <div className="mt-1 text-slate-600">{item.reason}</div>}</div>)}</div></section>
@@ -377,6 +378,7 @@ export default function MemoryInspector({ refreshKey = 0, target = null }: { ref
                   </div>
                 </section>
                 {selectedDreamRun.failures.length > 0 && <section><h3 className="mb-2 text-sm font-bold">Failures</h3><JsonBlock value={selectedDreamRun.failures} /></section>}
+                {selectedDreamRun.warnings?.length > 0 && <section><h3 className="mb-2 text-sm font-bold">Rejected model records</h3><p className="mb-2 text-sm text-slate-600">Valid records were kept. See the episode batch response for rejected records and reference IDs.</p><JsonBlock value={selectedDreamRun.warnings} /></section>}
               </div>
             ) : <EmptyState>Select a Dream run.</EmptyState>)}
 

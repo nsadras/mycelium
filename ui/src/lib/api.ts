@@ -348,6 +348,14 @@ export interface EpisodeArtifact {
   }>;
   extraction_status: string;
   extraction_error?: string | null;
+  extraction_batches: Array<{
+    batch_id: string;
+    status: string;
+    attempt_count: number;
+    last_error?: string | null;
+    diagnostics: Record<string, unknown>;
+    response?: Record<string, unknown> | null;
+  }>;
 }
 
 export interface ClaimProvenanceArtifact {
@@ -529,6 +537,7 @@ export interface DreamRunArtifact {
   pages_updated: number;
   claim_decisions: DreamClaimDecisionArtifact[];
   failures: Record<string, string>[];
+  warnings: Record<string, unknown>[];
   reconsolidation_proposal_ids: string[];
 }
 

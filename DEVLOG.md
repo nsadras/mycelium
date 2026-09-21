@@ -6173,3 +6173,59 @@ remain separate gates.
   known sandbox index/ASGI stall; no extra native calls. Existing UI bundle-size
   warning remains. Live store and user-owned guidance edits are untouched; no app
   service is started or stopped. End semantic tuning and return to ordinary use.
+
+## 2026-09-20 — Whole-conversation Build and error attribution
+
+- Implement the approved [conversation Build plan](planning/conversation_build_plan_2026_09_20.md).
+  [Results and limitations](planning/conversation_build_result_2026_09_20.md) distinguish
+  pipeline, contract and semantic errors. Evidence root:
+  `benchmark_runs/conversation-build-20260920/`, including `review.json`, exact
+  requests, completion reports and successive source/claim/wiki snapshots.
+- Measure compacted full requests with prompt/schema and output reserve. Group
+  unprocessed chat captures by session; include completed conversation turns as
+  context with their source-specific participant roster and established bindings.
+  Preserve original source IDs, timestamps, citations and completed claims. Split
+  only when needed and record omitted optional context. Presentation batching now
+  measures its full request with the same selected context used for inference.
+- Admit independent valid retention records; expose rejected references/bindings
+  and dependent records. Keep strict persistence validation and atomic writes.
+  Remove automatic regeneration for completed invalid responses, keeping bounded
+  transient transport retries. Invalid presentation leaves existing views intact
+  and searchable retained evidence pending for a later Build.
+- Persist exact retention/presentation inputs and outputs under diagnostics, with
+  JSON/schema validation scope. Add failure categories, batch budgets, rejected-row
+  warnings and inspector batch details. Location of failure does not automatically
+  establish its semantic cause. Clear Memory now also removes participant bindings
+  and identity-review history, preventing references to deleted identities.
+- Initial direct combined-source and unresolved-reference probes validate before
+  integration, but show omissions and ambiguous wording. Initial full-recording run
+  uses two calls / 44.97 client seconds and rejects one project-speaker binding.
+  The prompt left the valid person-only rule implicit. Use one reserved neutral
+  counterexample to prove a short clarification before integrating it, then two
+  reserved calls on the frozen full recording. No schema expansion or new stage.
+- Final full recording: all 884 segments reach retention unchanged and in order;
+  estimated input 39,705 vs actual 40,884 tokens, with no context omissions. Two
+  calls / 37.90 client generation seconds, seven retained statements, six subject
+  pages plus You's map, no rejected records. Hari/person context remains omitted;
+  overlapping subjects and repetitive IaC views remain. Do not claim semantic
+  correctness from schema success. First recording run incorrectly presents some
+  future automation as existing; technology names initially suspicious from narrow
+  citations are supported elsewhere in the source, so classify that as citation
+  incompleteness rather than invention.
+- Grouped chat and successive Build each use two calls. Follow-on retains the new
+  prototype/correction/repair update and previous identity without re-extraction;
+  two context-only output records are rejected visibly. All four isolated Builds
+  complete and all four no-op Builds make zero calls. No live store is rebuilt.
+- Close the bounded experiment after 11/12 generation requests, 97,799 input /
+  5,041 output tokens, 118.54 server and 118.58 client seconds, no transport failures
+  or automatic regeneration. Follow-on embedding cost: five requests / five items /
+  113 tokens / 4.02 seconds. Old offline batching plans seven retention calls; this
+  verifies changed call planning, not a matched speed or quality ratio. The first
+  full run includes 8.06 seconds loading; final run is warm. Prior excerpt runs and
+  this full recording are unmatched. Retrieval/QA and large-store scaling remain
+  outside this experiment.
+- Validation: 594 Python tests pass (four native integration tests deselected),
+  27 UI tests pass, Ruff/ESLint/TypeScript/Vite/whitespace checks pass. Full tests
+  follow focused fixes; a final focused check covers cancellation classification.
+  Existing bundle-size warning remains. No services started/stopped, no extra
+  native repeats, no changes to user-owned guidance or notes. Stop semantic tuning.

@@ -46,13 +46,16 @@ class ViewOrganizer:
                 "pending_changes": [asdict(p) for p in proposals if set(p.incoming_claim_ids + p.target_claim_ids) & claims.keys()],
                 "page_exclusions": [{"memory_id": cid, "subject_id": eid} for cid, eids in exclusions.items() for eid in eids]}
 
+    async def related(self, incoming_ids):
+        if self.claim_index is None or not incoming_ids:
+            return []
+        text = "\n".join(self.artifacts.get_claim(cid).text for cid in sorted(incoming_ids))
+        return await related_claim_ids(self.claim_index, text)
+
     async def refresh(self, incoming_ids, *, entity_ids=(), context_ids=None, run_id):
         incoming_ids = set(incoming_ids)
         if context_ids is None:
-            context_ids = []
-            if self.claim_index is not None and incoming_ids:
-                text = "\n".join(self.artifacts.get_claim(cid).text for cid in sorted(incoming_ids))
-                context_ids = await related_claim_ids(self.claim_index, text)
+            context_ids = await self.related(incoming_ids)
         # Validate the exact model input again at commit, so an intervening user
         # edit cannot be overwritten. Lifecycle services already own a snapshot.
         unit = None if isinstance(self.artifacts.db, UnitOfWork) else UnitOfWork(self.artifacts.db)

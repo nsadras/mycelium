@@ -52,7 +52,7 @@ async def test_retention_round_trip_keeps_literal_text_and_exact_citations():
                                 "segment_ids": [segment["id"], data["context_segments"][0]["id"]]}],
                   "changes": [{"earlier_id": data["prior_memories"][0]["id"], "later_id": "m1",
                                "relation": "supersedes", "reason": literal}]}
-        return schema.model_validate(result).model_dump()
+        return result if isinstance(schema, dict) else schema.model_validate(result).model_dump()
 
     llm = AsyncMock()
     llm.call_structured.side_effect = respond
@@ -152,7 +152,7 @@ async def test_resumed_batches_keep_prior_identity_and_adjacent_context(tmp_path
             seen.append(stage)
             if stage == "memory-retention":
                 position = len(seen)
-                assert [r["text"] for r in data["segments"]] == [lines[position]]
+                assert [r["text"] for r in data["segments"]] == lines[position:]
                 assert [r["text"] for r in data["context_segments"]] == lines[:position]
                 assert all(r["speaker"] == "Kai" for r in data["context_segments"])
                 assert data["prior_memories"]
@@ -170,13 +170,13 @@ async def test_resumed_batches_keep_prior_identity_and_adjacent_context(tmp_path
                 output = {"items": [{"owner_id": data["affected_subject_ids"][0], "heading": "Map",
                     "text": "Sana is developing the orchard map.", "memory_ids": [m["id"] for m in data["memories"]],
                     "linked_subject_ids": [], "state": "current"}]}
-            return schema.model_validate(output).model_dump()
+            return output if isinstance(schema, dict) else schema.model_validate(output).model_dump()
 
         memory.llm.call_structured = AsyncMock(side_effect=respond)
         result = await memory.consolidate()
         assert not result.report.failures
-        assert seen == ["memory-retention", "memory-retention", "memory-presentation"]
-        assert len(memory.artifacts.list_claims()) == 3
+        assert seen == ["memory-retention", "memory-presentation"]
+        assert len(memory.artifacts.list_claims()) == 2
         assert memory.artifacts.get_episode(episode.episode_id).extraction_status == "complete"
         assert all(memory.artifacts.entities_for_claims({c.claim_id}) == {person} for c in memory.artifacts.list_claims())
         assert all(p.source_id == source.source_id and p.speaker == "Kai"
@@ -186,4 +186,4 @@ async def test_resumed_batches_keep_prior_identity_and_adjacent_context(tmp_path
         assert any("Kai:" in call.args[0] for call in search.call_args_list)
         assert any(call.args[0] == "Kai" for call in search.call_args_list)
         await memory.consolidate()
-        assert memory.llm.call_structured.await_count == 3
+        assert memory.llm.call_structured.await_count == 2

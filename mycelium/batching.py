@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Sequence
 from typing import TypeVar
 
-from mycelium.budget import count_tokens
+from mycelium.budget import ContextBudgetError, count_tokens
 
 DEFAULT_CONTEXT_WINDOW_TOKENS = 32768
 DEFAULT_SAFETY_TOKENS = 2048
@@ -68,7 +68,7 @@ def batch_items(
         else:
             current = candidate
         if count_tokens(render(current)) > max_tokens:
-            raise ValueError("a single item exceeds the prompt token budget")
+            raise ContextBudgetError("a single item exceeds the prompt token budget")
     if current:
         batches.append(current)
     return batches

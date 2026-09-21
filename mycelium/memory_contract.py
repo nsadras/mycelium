@@ -20,7 +20,9 @@ do not invent a precise calendar date.
 Return flat lists of subjects, memories, and changes. Subjects declares new
 identities using new_subject_ids, and existing identities you bind to participants.
 Each subject's participant_ids lists the participants it identifies; otherwise
-leave this list empty. Memories reference the people, projects, or other subjects
+leave this list empty. Only person and you subjects may have participant_ids; these identify who
+spoke, not the subjects they discussed.
+Memories reference the people, projects, or other subjects
 they concern, using supplied existing IDs or declared new IDs. Other existing
 identities need no redeclaration. A subject need not have a page. Use short local
 IDs for new memories.
@@ -200,15 +202,20 @@ def presentation_model(payload):
 
 
 async def retain(llm, payload):
+    from mycelium.memory_admission import retention
     request, ids = compact_retention(payload)
     model = retention_model(request)
     with trace_operation("memory-retention", request_ids=ids.reverse):
         result = await llm.call_structured(
-            RETAIN, json.dumps(request, ensure_ascii=False), model,
-            num_predict=8192, debug_label="memory-retention",
+            RETAIN, json.dumps(request, ensure_ascii=False), model.model_json_schema(),
+            num_predict=8192, debug_label="memory-retention", dump_success=True,
         )
-    result = ids.retention(model.model_validate(result).model_dump())
-    return retention_model(payload).model_validate(result).model_dump()
+    accepted, rejected = retention(request, result)
+    result = retention_model(payload).model_validate(ids.retention(accepted)).model_dump()
+    if rejected:
+        # Diagnostic metadata is produced locally, outside the model's schema.
+        result["_rejections"] = [{**row, "request_ids": ids.reverse} for row in rejected]
+    return result
 
 
 async def present(llm, payload):
@@ -217,7 +224,7 @@ async def present(llm, payload):
     with trace_operation("memory-presentation", request_ids=ids.reverse):
         result = await llm.call_structured(
             PRESENT, json.dumps(request, ensure_ascii=False), model,
-            num_predict=8192, debug_label="memory-presentation",
+            num_predict=8192, debug_label="memory-presentation", dump_success=True,
         )
     result = ids.presentation(model.model_validate(result).model_dump())
     return presentation_model(payload).model_validate(result).model_dump()

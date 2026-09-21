@@ -409,8 +409,9 @@ async def test_retract_source_endpoint_marks_source_and_claims(artifact_memory):
 async def test_identity_review_approves_reopens_and_reroutes(
     artifact_memory, monkeypatch
 ):
-    reroute = AsyncMock(return_value={"failures": [], "pages_created": 0})
-    monkeypatch.setattr(memory_curation, "run_consolidation", reroute)
+    from mycelium.materialization import MaterializationResult
+    reroute = AsyncMock(return_value=MaterializationResult())
+    monkeypatch.setattr(artifact_memory.consolidator.views, "refresh", reroute)
     response = await memory_curation.review_identity_decision(
         "identity-review-test",
         "approve",
@@ -434,3 +435,36 @@ async def test_identity_review_approves_reopens_and_reroutes(
         )
     )
     reroute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_identity_correction_survives_failed_view_refresh(artifact_memory, monkeypatch):
+    from mycelium import memory_contract
+
+    original = artifact_memory.artifacts.get_claim("claim-test")
+    refresh = artifact_memory.consolidator.views.refresh
+    monkeypatch.setattr(artifact_memory.consolidator.views, "refresh",
+                        AsyncMock(side_effect=RuntimeError("Presentation unavailable")))
+    response = await memory_curation.review_identity_decision(
+        "identity-review-test", "approve",
+        IdentityReviewRequest(claim_texts={"claim-test": "The Tea Journal records the user's tea preference."}),
+    )
+    assert response["reroute"] == {"status": "pending", "error": "RuntimeError: Presentation unavailable"}
+    assert response["decision"]["review_state"] == "accepted"
+    replacement_id, = response["decision"]["supporting_claim_ids"]
+    replacement = artifact_memory.artifacts.get_claim(replacement_id)
+    assert replacement.dream_disposition == "pending"
+    assert artifact_memory.artifacts.get_claim(original.claim_id).status == "superseded"
+    assert replacement_id in (await memory_artifacts.get_artifact_entity(response["decision"]["entity_id"]))["claim_ids"]
+    assert (await memory_artifacts.get_artifact_claim(replacement_id))["identity_review_ids"] == ["identity-review-test"]
+
+    monkeypatch.setattr(artifact_memory.consolidator.views, "refresh", refresh)
+    monkeypatch.setattr(artifact_memory.retriever.claim_index, "search", AsyncMock(return_value=[]))
+    retain = AsyncMock(side_effect=AssertionError("Completed evidence must not be re-extracted"))
+    monkeypatch.setattr(memory_contract, "retain", retain)
+    result = await artifact_memory.consolidate()
+    assert not result.report.failures
+    retain.assert_not_awaited()
+    assert artifact_memory.artifacts.get_claim(replacement_id).dream_disposition != "pending"
+    assert not artifact_memory.artifacts.facts_for_claim(original.claim_id)
+    assert artifact_memory.artifacts.get_entity_resolution_decision("identity-review-test").entity_id == response["decision"]["entity_id"]

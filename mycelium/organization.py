@@ -5,7 +5,7 @@ from __future__ import annotations
 from mycelium.database import atomic_curation
 import re
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from mycelium.artifacts import (
     ArtifactStore,
@@ -24,6 +24,7 @@ from mycelium.ontology import (
 )
 from mycelium.store import WikiStore
 from mycelium.projection import display_claim_text
+from mycelium import identity_context
 
 
 def _now() -> str:
@@ -237,6 +238,10 @@ class EntityCurationService:
                     (value for value in [decision.reviewer_note, note] if value)
                 )
                 self.artifacts.save_entity_resolution_decision(decision)
+        for pid in self.artifacts.db.ids("participant-bindings", "entity_id", source_id):
+            bound = self.artifacts.db.get("participant-bindings", pid)
+            identity_context.save_binding(self.artifacts, bound["source_id"], pid, target_id,
+                                          bound["decision_id"], origin="user")
         for encounter in self.artifacts.list_encounters(entity_id=source_id):
             encounter.entity_id = target_id
             self.artifacts.save_encounter(encounter)
@@ -589,13 +594,25 @@ class IdentityReviewService:
         scope: str | None = None,
         page_state: str | None = None,
         parent_entity_id: str | None = None,
+        claim_texts: dict[str, str] | None = None,
     ) -> EntityResolutionDecision:
         record = self.artifacts.get_entity_resolution_decision(decision_id)
-        if record.review_state != "review_required":
+        if record.review_state not in {"review_required", "accepted"}:
             raise ValueError(
-                "Only identity decisions requiring review may be adjudicated"
+                "Only current identity decisions may be corrected"
             )
+        if action == "reject" and record.review_state != "review_required":
+            raise ValueError("Correct an accepted identity by selecting its replacement")
+        if claim_texts and action != "approve":
+            raise ValueError("Statement wording requires an explicit identity selection")
+        if not (claim_texts or {}).keys() <= set(record.supporting_claim_ids):
+            raise ValueError("Wording changes must belong to the reviewed identity")
         now = _now()
+        history_id = f"identity-review-{uuid.uuid4().hex[:12]}"
+        self.artifacts.db.put("identity-review-history", history_id, {
+            "decision_id": decision_id, "before": asdict(record), "created_at": now,
+            "claim_texts": {cid: self.artifacts.get_claim(cid).text for cid in (claim_texts or {})},
+        })
         original_entity_id = record.entity_id
         record.reviewer_note = reviewer_note
         record.reviewed_at = now
@@ -620,17 +637,26 @@ class IdentityReviewService:
                 now,
             )
             record.entity_id = entity.entity_id if entity else None
-            record.proposed_entity_type = selected_type
-            record.proposed_title = selected_title
+            record.proposed_entity_type = entity.entity_type if entity else selected_type
+            record.proposed_title = entity.title if entity else selected_title
             record.proposed_scope = selected_scope
             record.proposed_page_state = selected_page_state
             record.proposed_parent_entity_id = selected_parent
             record.review_state = "accepted"
             if entity is not None:
                 self._save_identity_references(record, entity.entity_id, now, original_entity_id)
+                for pid in record.participant_ids:
+                    bound = identity_context.binding(self.artifacts, pid)
+                    if bound:
+                        identity_context.save_binding(self.artifacts, bound["source_id"], pid,
+                            entity.entity_id, record.decision_id, origin="user")
         else:
             raise ValueError("Identity review action must be approve or reject")
         self.artifacts.save_entity_resolution_decision(record)
+        if claim_texts:
+            from mycelium.claim_lifecycle import correct_identity_wording
+            correct_identity_wording(self.artifacts, record, claim_texts, now)
+            record = self.artifacts.get_entity_resolution_decision(decision_id)
         self._reopen_claims(record.supporting_claim_ids, decision_id, now)
         return record
 
@@ -656,8 +682,8 @@ class IdentityReviewService:
                 raise ValueError(
                     "Reviewed entity ID must match the selected entity type"
                 )
-            entity.title = title
-            entity.aliases = sorted({*entity.aliases, *aliases})
+            # Selecting an existing identity is not an entity rename. Its label
+            # is edited explicitly through EntityCurationService instead.
             if scope == "independent" and page_state == "materialized":
                 entity.materialization_state = "materialized"
             entity.updated_at = now
@@ -680,7 +706,7 @@ class IdentityReviewService:
         page_state: str | None,
         parent_entity_id: str | None,
     ) -> None:
-        if entity_type not in set(ENTITY_TYPES) - {"you"}:
+        if entity_type not in set(ENTITY_TYPES):
             raise ValueError("Identity review requires a discoverable entity type")
         if scope is None and page_state is None and parent_entity_id is None:
             return

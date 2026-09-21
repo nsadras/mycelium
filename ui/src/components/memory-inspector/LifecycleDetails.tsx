@@ -8,9 +8,11 @@ import type {
   EntityRecord,
   EntityResolutionDecisionArtifact,
   EntityTypeOntology,
+  IdentityReviewEdits,
   MemoryClaimArtifact,
   OrganizationProposalArtifact,
 } from '../../lib/api';
+import IdentityReviewForm from './IdentityReviewForm';
 import { Badge, EmptyState, JsonBlock } from './presentation';
 import { formatDate, percentage } from './utils';
 
@@ -50,7 +52,7 @@ export function ClaimDetail({ claim, selectSource, selectFact, selectIdentity, s
       <section className="rounded-xl border border-slate-200 p-4">
         <h3 className="mb-2 text-sm font-bold">Latest Dream decision</h3>
         <div className="text-sm text-slate-700">{claim.dream_disposition_reason ?? 'This claim has not been evaluated by Dream.'}</div>
-        {(claim.identity_review_ids ?? []).length > 0 && <div className="mt-3"><div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Unresolved identity blockers</div><div className="mt-2 flex flex-wrap gap-1">{claim.identity_review_ids!.map((id) => <button key={id} onClick={() => selectIdentity(id)} className="rounded-md bg-amber-100 px-2 py-1 font-mono text-xs text-amber-800 hover:bg-amber-200">{id}</button>)}</div></div>}
+        {(claim.identity_review_ids ?? []).length > 0 && <div className="mt-3"><div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Review identity assignments</div><div className="mt-2 flex flex-wrap gap-1">{claim.identity_review_ids!.map((id) => <button key={id} onClick={() => selectIdentity(id)} className="rounded-md bg-amber-100 px-2 py-1 font-mono text-xs text-amber-800 hover:bg-amber-200">{id}</button>)}</div></div>}
         <div className="mt-2 break-all font-mono text-xs text-slate-400">{claim.dream_run_id ?? 'No run'} · {formatDate(claim.dream_disposition_at)}</div>
       </section>
       <section className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
@@ -164,14 +166,14 @@ interface IdentityDetailProps {
   setReviewNote: (value: string) => void;
   selectClaim: (id: string) => void;
   selectEntity: (id: string) => void;
-  review: (decision: 'approve' | 'reject', overrides?: Record<string, string | null>) => Promise<void>;
+  review: (decision: 'approve' | 'reject', overrides?: IdentityReviewEdits) => Promise<void>;
 }
 
 export function IdentityDetail({ decision, entities, entityTypes, reviewNote, reviewing, setReviewNote, selectClaim, selectEntity, review }: IdentityDetailProps) {
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-5 md:p-8">
       <div>
-        <div className="flex flex-wrap gap-2"><Badge tone="indigo">{decision.proposed_entity_type}</Badge><Badge tone={decision.review_state === 'accepted' ? 'green' : decision.review_state === 'review_required' ? 'amber' : 'slate'}>{decision.review_state.replaceAll('_', ' ')}</Badge><Badge>{percentage(decision.confidence)}</Badge></div>
+        <div className="flex flex-wrap gap-2"><Badge tone="indigo">{decision.proposed_entity_type}</Badge><Badge tone={decision.reviewed_at ? 'green' : 'amber'}>{decision.reviewed_at ? 'User reviewed' : 'Model selected'}</Badge></div>
         <h2 className="mt-4 text-xl font-bold">{decision.proposed_title}</h2>
         <div className="mt-2 break-all font-mono text-xs text-slate-400">{decision.decision_id} · {formatDate(decision.created_at)}</div>
       </div>
@@ -185,25 +187,9 @@ export function IdentityDetail({ decision, entities, entityTypes, reviewNote, re
       <section><h3 className="mb-2 text-sm font-bold">Identity-defining claims</h3><div className="flex flex-wrap gap-2">{decision.identity_evidence_claim_ids.map((id) => <button key={id} onClick={() => selectClaim(id)} className="rounded-md bg-amber-50 px-3 py-2 font-mono text-xs text-amber-700">{id}</button>)}</div></section>
       <section><h3 className="mb-2 text-sm font-bold">All supporting canonical claims</h3><div className="flex flex-wrap gap-2">{decision.supporting_claim_ids.map((id) => <button key={id} onClick={() => selectClaim(id)} className="rounded-md bg-indigo-50 px-3 py-2 font-mono text-xs text-indigo-700">{id}</button>)}</div></section>
       {decision.reviewer_note && <section className="rounded-lg bg-slate-50 p-4 text-sm"><strong>Reviewer note:</strong> {decision.reviewer_note}</section>}
-      {decision.review_state === 'review_required' && <IdentityReviewForm key={decision.decision_id} decision={decision} entities={entities} entityTypes={entityTypes} reviewNote={reviewNote} reviewing={reviewing} setReviewNote={setReviewNote} review={review} />}
+      {decision.review_state !== 'rejected' && <IdentityReviewForm key={`${decision.decision_id}:${decision.reviewed_at ?? ''}`} decision={decision} entities={entities} entityTypes={entityTypes} reviewNote={reviewNote} reviewing={reviewing} setReviewNote={setReviewNote} review={review} />}
     </div>
   );
-}
-
-function IdentityReviewForm({ decision, entities, entityTypes, reviewNote, reviewing, setReviewNote, review }: Pick<IdentityDetailProps, 'decision' | 'entities' | 'entityTypes' | 'reviewNote' | 'reviewing' | 'setReviewNote' | 'review'>) {
-  const [entityId, setEntityId] = useState(decision.entity_id ?? '');
-  const [entityType, setEntityType] = useState(decision.proposed_entity_type);
-  const [title, setTitle] = useState(decision.proposed_title);
-  const [scope, setScope] = useState<string>(decision.proposed_scope ?? 'independent');
-  const [pageState, setPageState] = useState<string>(decision.proposed_page_state ?? 'provisional');
-  const [parentEntityId, setParentEntityId] = useState(decision.proposed_parent_entity_id ?? '');
-  const contained = scope === 'component' || scope === 'occurrence';
-  const noPage = contained || scope === 'context' || scope === 'standalone_event';
-  const matchingEntities = entities.filter((entity) => entity.status === 'active' && entity.entity_type === entityType);
-  const parentChoices = entities.filter((entity) => entity.status === 'active' && (entity.entity_type === 'project' || entity.entity_type === 'series'));
-  const changeScope = (value: typeof scope) => { setScope(value); setPageState(value === 'independent' ? (decision.proposed_page_state === 'materialized' ? 'materialized' : 'provisional') : 'no_page'); if (value !== 'component' && value !== 'occurrence') setParentEntityId(''); if (value === 'standalone_event' || value === 'occurrence') { setEntityType('event'); setEntityId(''); } };
-  const approve = () => review('approve', { entity_id: entityId || null, entity_type: entityType, title: title.trim(), scope, page_state: noPage ? 'no_page' : pageState, parent_entity_id: contained ? parentEntityId || null : null });
-  return <section className="rounded-xl border border-slate-200 p-4"><p className="text-sm text-slate-600">Choose the authoritative identity shape and page admission. Approval reopens the supporting claims and immediately reruns routing. A no-page choice applies only to these reviewed claims; other evidence can still support a page for this subject.</p><div className="mt-4 grid gap-3 md:grid-cols-2"><label className="text-xs font-semibold text-slate-700">Canonical identity<select value={entityId} onChange={(event) => setEntityId(event.target.value)} className="mt-1 w-full rounded-lg border-slate-200 text-sm"><option value="">Create a new canonical identity</option>{matchingEntities.map((entity) => <option key={entity.entity_id} value={entity.entity_id}>{entity.title} · {entity.materialization_state}</option>)}</select></label><label className="text-xs font-semibold text-slate-700">Title<input value={title} onChange={(event) => setTitle(event.target.value)} className="mt-1 w-full rounded-lg border-slate-200 text-sm" /></label><label className="text-xs font-semibold text-slate-700">Entity type<select value={entityType} onChange={(event) => { setEntityType(event.target.value); setEntityId(''); }} className="mt-1 w-full rounded-lg border-slate-200 text-sm">{entityTypes.filter((item) => item.discoverable).map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label><label className="text-xs font-semibold text-slate-700">Identity scope<select value={scope} onChange={(event) => changeScope(event.target.value)} className="mt-1 w-full rounded-lg border-slate-200 text-sm"><option value="independent">Independent identity</option><option value="component">Contained component</option><option value="occurrence">Project/series occurrence</option><option value="standalone_event">Standalone event</option><option value="context">Context only</option></select></label>{!noPage && <label className="text-xs font-semibold text-slate-700">Page admission<select value={pageState} onChange={(event) => setPageState(event.target.value)} className="mt-1 w-full rounded-lg border-slate-200 text-sm"><option value="materialized">Materialize page now</option><option value="provisional">Keep provisional</option></select></label>}{contained && <label className="text-xs font-semibold text-slate-700">Parent Project or Series<select value={parentEntityId} onChange={(event) => setParentEntityId(event.target.value)} className="mt-1 w-full rounded-lg border-slate-200 text-sm"><option value="">Select an exact parent</option>{parentChoices.map((entity) => <option key={entity.entity_id} value={entity.entity_id}>{entity.title}</option>)}</select></label>}</div><label className="mt-4 block text-sm font-bold" htmlFor="identity-review-note">Reviewer note</label><textarea id="identity-review-note" value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="Optional rationale for the audit record" className="mt-2 min-h-24 w-full rounded-lg border border-slate-200 p-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500" /><div className="mt-3 flex flex-wrap gap-2"><button disabled={reviewing !== null || !title.trim() || (contained && !parentEntityId)} onClick={() => void approve()} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"><ThumbsUp size={16} />{reviewing === 'approve' ? 'Applying and rerouting…' : 'Approve and reroute'}</button><button disabled={reviewing !== null} onClick={() => void review('reject')} className="flex items-center gap-2 rounded-lg border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-700 disabled:opacity-50"><ThumbsDown size={16} />{reviewing === 'reject' ? 'Rejecting and rerouting…' : 'Reject and reroute'}</button></div></section>;
 }
 
 interface OrganizationDetailProps {

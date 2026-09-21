@@ -17,6 +17,7 @@ class IdentityReviewRequest(BaseModel):
     scope: str | None = None
     page_state: str | None = None
     parent_entity_id: str | None = None
+    claim_texts: dict[str, str] = Field(default_factory=dict)
 
 
 class EntityUpdateRequest(BaseModel):

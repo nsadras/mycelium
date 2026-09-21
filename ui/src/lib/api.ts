@@ -450,6 +450,16 @@ export interface EntityResolutionDecisionArtifact {
   proposed_type_reason?: string | null;
   reviewer_note?: string | null;
   reviewed_at?: string | null;
+  participant_ids?: string[];
+}
+
+export interface IdentityReviewEdits {
+  entity_id: string;
+  entity_type: PageType;
+  title?: string;
+  scope?: string;
+  page_state?: string;
+  claim_texts: Record<string, string>;
 }
 
 export interface ConsolidatedFactArtifact {

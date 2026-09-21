@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 
 from mycelium.artifacts import (
@@ -47,6 +47,65 @@ class ClaimLifecycleResult:
     source_ids: list[str]
     pages_updated: list[str]
     pages_deleted: list[str]
+
+
+def correct_identity_wording(artifacts, decision, texts, now):
+    """Apply user-reviewed identity wording, retaining original time anchors.
+
+    This is an identity-only edit. Other factual/date corrections use correct_claim
+    and its date preview. No model decides the identity selected by the user.
+    The caller owns the transaction, including the identity reference changes.
+    """
+    if not texts.keys() <= set(decision.supporting_claim_ids):
+        raise ValueError("Wording changes must belong to the reviewed identity")
+    replacements = {}
+    for cid, text in texts.items():
+        target = artifacts.get_claim(cid)
+        text = text.strip()
+        if target.status != "active" or not text:
+            raise ValueError("Identity wording requires an active claim and nonempty text")
+        if text == target.text:
+            continue
+        suffix = uuid.uuid4().hex[:12]
+        source_id, claim_id = f"source-identity-{suffix}", f"claim-identity-{suffix}"
+        segment_id = source_id + "#seg-0001"
+        artifacts.save_source(SourceDocument(source_id, "manual_correction", f"identity-{decision.decision_id}",
+            now, now, ["user"], [SourceSegment(segment_id, 0, text, speaker="user", role="user")],
+            metadata={"identity_decision_id": decision.decision_id, "corrected_claim_id": cid,
+                      "correction_scope": "identity_only"}))
+        replacement = replace(target, claim_id=claim_id, text=text, about=[], recorded_at=now,
+            provenance=[ClaimProvenance(source_id, [segment_id], speaker="user"),
+                        *[replace(p, evidence_type="context") for p in target.provenance]],
+            links=[{"relation": "supersedes", "target": cid}], confidence=1.0,
+            dream_disposition="pending", dream_disposition_reason="Explicit identity correction",
+            dream_run_id=None, dream_disposition_at=now)
+        artifacts.save_claim(replacement)
+        for ref in artifacts.list_entity_references(claim_id=cid, status="active"):
+            artifacts.save_entity_reference(replace(ref, reference_id=f"ref-{uuid.uuid4().hex[:12]}",
+                                                   claim_id=claim_id, created_at=now))
+        add_claim_link(target, "superseded_by", claim_id)
+        target.status = "superseded"
+        artifacts.save_claim(target)
+        artifacts.save_episode(EpisodeManifest(f"episode-identity-{suffix}", source_id, "manual_correction",
+            now, ["user"], [segment_id], claim_ids=[claim_id], extraction_status="complete",
+            segment_dispositions=[ExtractionSegmentDisposition(segment_id, "claimed", [claim_id])],
+            extraction_batches=[ExtractionBatchState(f"batch-identity-{suffix}", 0, [segment_id], status="complete")]))
+        replacements[cid] = claim_id
+    for item in artifacts.list_entity_resolution_decisions():
+        if replacements.keys() & set(item.supporting_claim_ids):
+            item.supporting_claim_ids = [replacements.get(cid, cid) for cid in item.supporting_claim_ids]
+            item.identity_evidence_claim_ids = [replacements.get(cid, cid) for cid in item.identity_evidence_claim_ids]
+            # Keep both the original source and the user's correction inspectable.
+            claims = [artifacts.get_claim(cid) for cid in item.supporting_claim_ids]
+            item.source_ids = sorted({p.source_id for c in claims for p in c.provenance} | set(item.source_ids))
+            item.supporting_segment_ids = sorted({sid for c in claims for p in c.provenance for sid in p.segment_ids}
+                                                | set(item.supporting_segment_ids))
+            artifacts.save_entity_resolution_decision(item)
+    for proposal in artifacts.list_reconsolidation_proposals(status="pending"):
+        if replacements.keys() & set(proposal.incoming_claim_ids + proposal.target_claim_ids):
+            proposal.status = "stale"
+            proposal.application_error = "Identity wording changed referenced evidence"
+            artifacts.save_reconsolidation_proposal(proposal)
 
 
 class ClaimLifecycleService:

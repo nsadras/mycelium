@@ -320,6 +320,7 @@ class Encoder:
                         start_seconds=segment.start_seconds,
                         end_seconds=segment.end_seconds,
                         metadata=metadata,
+                        participant_id=segment.participant_id,
                     )
                 )
         normalized = []

@@ -19,14 +19,16 @@ from mycelium.telemetry import trace_metadata
 async def test_retention_round_trip_keeps_literal_text_and_exact_citations():
     source_id, segment_id = "source-0123456789abcdef", "source-0123456789abcdef#seg-0001"
     person, prior = "subject-0123456789abcdefabcd", "claim-0123456789abcdefabcd"
+    participant = "participant-source-scoped-0123456789"
     literal = f"The label is {person}; keep r0 unchanged."
     payload = {
         "occurred_at": "2032-06-01", "segments": [{"id": segment_id, "text": literal,
-            "speaker": "Ari", "role": "user", "source_id": source_id, "source_time": "2032-06-01",
+            "speaker": "Ari", "role": "user", "participant_id": participant, "source_id": source_id, "source_time": "2032-06-01",
             "metadata": {"engram_segment_id": "audio-12", "id": person, "note": literal}}],
         "context_segments": [{"id": "old#seg-1", "text": "Earlier context", "speaker": "Ari",
                               "source_id": "old", "source_time": "2031-01-01", "role": None}],
         "existing_subjects": [{"id": person, "title": person, "entity_type": "person", "aliases": [person]}],
+        "participants": [{"id": participant, "name": "Ari", "role": "user", "subject_id": person, "binding_origin": "user"}],
         "new_subject_ids": ["subject-new-0123456789abcdef"],
         "prior_memories": [{"id": prior, "text": literal, "subject_ids": [person]}],
     }
@@ -41,8 +43,11 @@ async def test_retention_round_trip_keeps_literal_text_and_exact_citations():
         assert data["context_segments"][0]["source_time"] == "2031-01-01"
         assert segment["metadata"] == {"id": person, "note": literal}
         subject = data["existing_subjects"][0]
+        pid = data["participants"][0]["id"]
+        assert pid == segment["participant_id"] and pid != participant
+        assert data["participants"][0]["subject_id"] == subject["id"]
         assert subject["id"] != person and subject["title"] == person and subject["aliases"] == [person]
-        result = {"subjects": [{**{k: subject[k] for k in ("id", "title", "entity_type")}, "review_required": False}],
+        result = {"subjects": [{**{k: subject[k] for k in ("id", "title", "entity_type")}, "participant_ids": [pid]}],
                   "memories": [{"id": "m1", "text": literal, "subject_ids": [subject["id"]],
                                 "segment_ids": [segment["id"], data["context_segments"][0]["id"]]}],
                   "changes": [{"earlier_id": data["prior_memories"][0]["id"], "later_id": "m1",
@@ -52,6 +57,7 @@ async def test_retention_round_trip_keeps_literal_text_and_exact_citations():
     llm = AsyncMock()
     llm.call_structured.side_effect = respond
     result = await contract.retain(llm, payload)
+    assert result["subjects"][0]["participant_ids"] == [participant]
     assert result["memories"] == [{"id": "m1", "text": literal, "subject_ids": [person],
                                    "segment_ids": [segment_id, "old#seg-1"]}]
     assert result["changes"][0] == {"earlier_id": prior, "later_id": "m1", "relation": "supersedes", "reason": literal}
@@ -124,7 +130,7 @@ async def test_resumed_batches_keep_prior_identity_and_adjacent_context(tmp_path
         retainer = memory.consolidator.retainer
         payload = await retainer.input(source, source.segments[:1], "first", prior_ids=[])
         person = payload["new_subject_ids"][0]
-        retained = {"subjects": [{"id": person, "title": "Sana", "entity_type": "person", "review_required": False}],
+        retained = {"subjects": [{"id": person, "title": "Sana", "entity_type": "person", "participant_ids": []}],
                     "memories": [{"id": "m1", "text": lines[0], "subject_ids": [person],
                                   "segment_ids": [source.segments[0].segment_id]}], "changes": []}
         with memory.db.transaction():
@@ -155,7 +161,7 @@ async def test_resumed_batches_keep_prior_identity_and_adjacent_context(tmp_path
                 prior = next(m for m in data["prior_memories"] if m["text"] == lines[0])
                 assert prior["provenance"] == [{"speaker": "Kai", "role": None,
                     "source_type": "meeting_transcript", "source_time": source.occurred_at}]
-                output = {"subjects": [{k: sana[k] for k in ("id", "title", "entity_type")} | {"review_required": False}],
+                output = {"subjects": [{k: sana[k] for k in ("id", "title", "entity_type")} | {"participant_ids": []}],
                     "memories": [{"id": "new", "text": lines[position], "subject_ids": [sana["id"]],
                                   "segment_ids": [data["segments"][0]["id"], data["context_segments"][0]["id"]]}], "changes": []}
             else:
@@ -177,6 +183,7 @@ async def test_resumed_batches_keep_prior_identity_and_adjacent_context(tmp_path
                    for c in memory.artifacts.list_claims() for p in c.provenance)
         assert all(sid.startswith(source.source_id + "#")
                    for c in memory.artifacts.list_claims() for p in c.provenance for sid in p.segment_ids)
-        assert all("Kai:" in call.args[0] for call in search.call_args_list)
+        assert any("Kai:" in call.args[0] for call in search.call_args_list)
+        assert any(call.args[0] == "Kai" for call in search.call_args_list)
         await memory.consolidate()
         assert memory.llm.call_structured.await_count == 3

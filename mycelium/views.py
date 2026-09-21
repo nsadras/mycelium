@@ -16,6 +16,11 @@ class ViewOrganizer:
 
     def input(self, incoming_ids, context_ids, entity_ids):
         candidates = set(incoming_ids) | set(sorted(context_ids)[:48])
+        # A replacement must refresh items citing its predecessor, including a
+        # resumed Build after the first presentation failed. These are exact links.
+        candidates.update(link["target"] for cid in incoming_ids
+                          for link in self.artifacts.get_claim(cid).links
+                          if link["relation"] == "supersedes")
         facts = {f.fact_id: f for cid in candidates for f in self.artifacts.facts_for_claim(cid)}
         facts = {fid: f for fid, f in facts.items() if self.artifacts.get_entity(f.owner_entity_id).status == "active"}
         mids = candidates | {cid for f in facts.values() for cid in f.member_claim_ids}

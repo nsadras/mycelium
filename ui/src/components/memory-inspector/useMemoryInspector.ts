@@ -13,6 +13,7 @@ import api, {
   type EntityArtifactDetail,
   type EntityRecord,
   type EntityResolutionDecisionArtifact,
+  type IdentityReviewEdits,
   type EpisodeArtifact,
   type EpisodeArtifactSummary,
   type MemoryClaimArtifact,
@@ -347,11 +348,12 @@ export function useMemoryInspector(refreshKey: number, initialTarget?: Inspector
       setReviewing(null);
     }
   };
-  const reviewIdentityDecision = async (decision: 'approve' | 'reject', overrides: Record<string, string | null> = {}) => {
+  const reviewIdentityDecision = async (decision: 'approve' | 'reject', overrides?: IdentityReviewEdits) => {
     if (!selectedIdentityDecisionId) return;
     setReviewing(decision);
     try {
-      await api.post(`/memory/identity-decisions/${encodeURIComponent(selectedIdentityDecisionId)}/${decision}`, { reviewer_note: reviewNote.trim() || null, ...overrides });
+      const response = await api.post<{ reroute: { status: string } }>(`/memory/identity-decisions/${encodeURIComponent(selectedIdentityDecisionId)}/${decision}`, { reviewer_note: reviewNote.trim() || null, ...overrides });
+      setError(response.data.reroute.status === 'pending' ? 'Identity correction saved. Build Memory will retry the page update.' : '');
       setReviewNote('');
       setReloadKey((value) => value + 1);
     } catch (reviewError) {

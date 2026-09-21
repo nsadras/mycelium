@@ -26,13 +26,14 @@ async def test_reviewed_speaker_reaches_retention_and_shared_project_views(tmp_p
     async def retain(llm, payload):
         calls["retain"] += 1
         assert payload["source_type"] == "meeting_transcript"
-        assert payload["participants"] == ["Rowan"]
+        assert [p["name"] for p in payload["participants"]] == ["Rowan"]
+        assert payload["participants"][0]["subject_id"] is None
         assert [(s["speaker"], s["text"]) for s in payload["segments"]] == [("Rowan", segment.text)]
         assert {s["id"] for s in payload["existing_subjects"]} == {"you"}
         person, project = payload["new_subject_ids"][:2]
         return {"subjects": [
-            {"id": person, "title": "Rowan", "entity_type": "person", "review_required": False},
-            {"id": project, "title": "Bench Ledger", "entity_type": "project", "review_required": False}],
+            {"id": person, "title": "Rowan", "entity_type": "person", "participant_ids": [payload["participants"][0]["id"]]},
+            {"id": project, "title": "Bench Ledger", "entity_type": "project", "participant_ids": []}],
             "memories": [{"id": "m", "text": "Rowan built Bench Ledger to track workshop tool loans.",
                 "segment_ids": [payload["segments"][0]["id"]], "subject_ids": [person, project]}],
             "changes": []}
@@ -98,7 +99,7 @@ async def test_compact_capture_publication_failure_and_retry(tmp_path, monkeypat
         calls["retain"] += 1
         sid = payload["existing_subjects"][0]["id"] if payload["existing_subjects"] else payload["new_subject_ids"][0]
         return {"subjects": [{"id": sid, "title": "Rowan",
-                             "entity_type": "person", "review_required": False}],
+                             "entity_type": "person", "participant_ids": []}],
                 "memories": [{"id": "m", "text": payload["segments"][0]["text"],
                               "subject_ids": [sid],
                               "segment_ids": [payload["segments"][0]["id"]]}], "changes": []}
@@ -181,10 +182,10 @@ def test_compact_review_and_citation_boundaries():
 def test_compact_identity_uses_declared_ids_only():
     payload = {"segments": [{"id": "s"}], "existing_subjects": [{"id": "person"}],
                "new_subject_ids": ["new"], "prior_memories": []}
-    row = {"id": "person", "title": "Rowan", "entity_type": "person", "review_required": False}
+    row = {"id": "person", "title": "Rowan", "entity_type": "person", "participant_ids": []}
     model = contract.retention_model(payload)
     model.model_validate({"subjects": [row], "memories": [], "changes": []})
-    for change in ({"id": "invented"}, {"review_required": True}):
+    for change in ({"id": "invented"}, {"participant_ids": ["invented"]}):
         with pytest.raises(ValueError):
             model.model_validate({"subjects": [{**row, **change}], "memories": [], "changes": []})
 
@@ -197,7 +198,7 @@ def test_generation_schema_scopes_citations_before_decoding():
     schema = model.model_json_schema()
     assert schema["$defs"]["MemorySelection"]["properties"]["segment_ids"]["items"]["enum"] == [
         "source-a#seg-0041", "source-a#seg-0042", "source-b#seg-0001"]
-    value = {"subjects": [{"id": "person", "title": "Rowan", "entity_type": "person", "review_required": False}],
+    value = {"subjects": [{"id": "person", "title": "Rowan", "entity_type": "person", "participant_ids": []}],
              "memories": [{"id": "m", "text": "A supported statement.", "subject_ids": ["person"],
                            "segment_ids": ["source-a#seg-0041", "source-b#seg-0001"]}], "changes": []}
     model.model_validate(value)
@@ -223,7 +224,7 @@ async def test_shared_evidence_keeps_distinct_items_and_owners(tmp_path, monkeyp
 
     async def retain(llm, payload):
         a, b = payload["new_subject_ids"][:2]
-        return {"subjects": [{"id": sid, "title": title, "entity_type": "person", "review_required": False}
+        return {"subjects": [{"id": sid, "title": title, "entity_type": "person", "participant_ids": []}
                              for sid, title in [(a, "Rowan"), (b, "Sasha")]],
                 "memories": [{"id": "m", "text": "Rowan keeps the receipts; Sasha brings the tools.",
                               "segment_ids": [payload["segments"][0]["id"]], "subject_ids": [a, b]}],

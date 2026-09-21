@@ -41,6 +41,7 @@ async def encode_meeting_into_memory(mem, store: EngramStore, meeting_id: str) -
             start_seconds=segment.start_seconds,
             end_seconds=segment.end_seconds,
             metadata={"engram_segment_id": segment.id},
+            participant_id=segment.speaker,
         )
         for segment in transcript_segments
     ]

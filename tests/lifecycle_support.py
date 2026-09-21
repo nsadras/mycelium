@@ -12,7 +12,7 @@ def lifecycle_response(_system, user, schema, **kwargs):
     payload = json.loads(user)
     if stage == "memory-retention":
         sid = payload["existing_subjects"][0]["id"] if payload["existing_subjects"] else payload["new_subject_ids"][0]
-        value = {"subjects": [{"id": sid, "title": "You", "entity_type": "you", "review_required": False}],
+        value = {"subjects": [{"id": sid, "title": "You", "entity_type": "you", "participant_ids": []}],
                  "memories": [{"id": f"m{i}", "text": s["text"], "segment_ids": [s["id"]], "subject_ids": [sid]}
                               for i, s in enumerate(payload["segments"])], "changes": []}
     elif stage == "memory-presentation":

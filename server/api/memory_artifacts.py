@@ -224,7 +224,8 @@ async def get_artifact_claim(claim_id: str):
         claim = artifacts.get_claim(claim_id)
         return {
             **asdict(claim),
-            "identity_review_ids": [d.decision_id for d in artifacts.list_entity_resolution_decisions(review_state="review_required") if claim_id in d.supporting_claim_ids],
+            "identity_review_ids": [d.decision_id for d in artifacts.list_entity_resolution_decisions()
+                                    if d.review_state in {"accepted", "review_required"} and claim_id in d.supporting_claim_ids],
             "facts": [asdict(fact) for fact in artifacts.facts_for_claim(claim_id)],
             "scope_decisions": [
                 asdict(item)

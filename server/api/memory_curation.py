@@ -29,7 +29,7 @@ from server.api.memory_contracts import (
     ProposalReviewRequest,
     SourceRetractionRequest,
 )
-from server.runtime import get_mem, run_consolidation
+from server.runtime import get_mem
 
 async def memory_mutation():
     mem = get_mem()
@@ -287,6 +287,7 @@ async def review_identity_decision(
 ):
     mem = get_mem()
     try:
+        previous = mem.artifacts.get_entity_resolution_decision(decision_id)
         record = IdentityReviewService(mem.artifacts).review(
             decision_id,
             action,
@@ -297,8 +298,19 @@ async def review_identity_decision(
             scope=req.scope,
             page_state=req.page_state,
             parent_entity_id=req.parent_entity_id,
+            claim_texts=req.claim_texts,
         )
-        reroute = await run_consolidation()
+        try:
+            pages = await mem.consolidator.views.refresh(
+                set(previous.supporting_claim_ids) | set(record.supporting_claim_ids),
+                context_ids=[], entity_ids={eid for eid in (previous.entity_id, record.entity_id) if eid},
+                run_id=f"identity-review-{decision_id}-{record.reviewed_at}")
+            reroute = {"status": "complete", "pages_updated": sorted(pages.created_slugs | pages.updated_slugs)}
+        except Exception as exc:
+            # The explicit review remains durable; pending claims allow a later
+            # Build to retry presentation without losing the user's correction.
+            reroute = {"status": "pending", "error": f"{type(exc).__name__}: {exc}"}
+        mem.db.publish()
         return {"decision": asdict(record), "reroute": reroute}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Identity decision not found") from exc

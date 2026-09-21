@@ -55,6 +55,7 @@ class SourceSegment:
     start_seconds: float | None = None
     end_seconds: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    participant_id: str | None = None
 
 
 @dataclass
@@ -296,6 +297,7 @@ class EntityResolutionDecision:
     reviewed_at: str | None = None
     identity_evidence_claim_ids: list[str] = field(default_factory=list)
     candidate_entity_ids: list[str] = field(default_factory=list)
+    participant_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.decision_type not in {"entity_creation", "participant_resolution"}:

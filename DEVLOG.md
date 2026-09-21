@@ -6090,3 +6090,86 @@ remain separate gates.
   outside isolation, then complete the suite there in 24.29 seconds. The correction
   mock now selects its prior-memory ID from the supplied request rather than using
   a durable ID that the model no longer sees. User-owned guidance edits are retained.
+
+### 2026-09-20 — Shared identity assignment, durable bindings and explicit corrections
+
+- Implement the approved [identity plan](planning/identity_assignment_plan_2026_09_20.md).
+  Preserve the agreed best-supported guess policy and one shared retention pass.
+  [Results and limitations](planning/identity_assignment_result_2026_09_20.md) record
+  the completed implementation and incomplete native comparison. Evidence root:
+  `benchmark_runs/identity-assignment-20260920/`, including `review.json`.
+- Freeze baseline `016ba80`, configured host Gemma digest/options, four development
+  cases, two held-out cases, and the familiar 100-segment recording excerpt. Use
+  exactly 24 direct generation requests and 20 integration requests. Total:
+  108,053 input / 13,800 output tokens, 231.54 server seconds and 233.93 client
+  generation seconds. One intentionally canceled response has no token/server
+  totals; there was no transport outage. Do not extend the 44-request ceiling.
+- Candidate A shares extraction and identity assignment. Initial separate binding
+  rows produced dangling references in two cases. Spend the one allowed adjustment
+  on `participant_ids` within subject declarations; remove compulsory redeclaration
+  of referenced existing identities and the model's `review_required` field. The
+  participant table supplies source-scoped IDs, reviewed names, roles, exact bindings
+  and binding origin. Existing candidates carry aliases and two cited facts.
+- A v2 validates on five of seven direct cases, including both held-out examples.
+  It separates the account owner from a quoted speaker, preserves a known binding
+  across a new topic, and does not force the unresolved third person onto the speaker
+  in the partial-conversation case. It omits useful reported work and some other
+  context; a context-only memory and a participant bound to a topic fail validation.
+  Baseline also validates on five of seven, failing its old existing-ID redeclaration
+  rule twice. These are small stochastic observations, not an accuracy estimate.
+- Test B with its own local extraction and batched canonical resolution, three
+  cases / six calls. It validates but does not recover omitted Hari/project-person
+  relationships; its partial-conversation output invents a colleague relationship.
+  No demonstrated benefit justifies another generation stage. Adopt A for reusable
+  bindings and simpler existing-ID references, without claiming general accuracy
+  superiority or adding a runtime resolver chain.
+- Integration allocation mistake: the control harness had a total ceiling but
+  did not enforce the planned seven-request per-variant allocation. Later Builds
+  retried unfinished old sources; the control consumed 18 calls, including eight
+  automatic retries and 12 validation failures, before cancellation during a view
+  call. Its preceding snapshots are partial. Keep those failures and explicitly
+  mark the planned matched multi-batch/follow-on/correction comparison incomplete.
+- Use only the two remaining requests for `integration/candidate/`: a complete
+  isolated production Build of the recording excerpt. Both calls validate on their
+  first attempt: 7,705 input / 1,192 output tokens, 23.12 server seconds, including
+  5.79 seconds model loading. Seven retained statements support four sections on
+  Hari's person page and a durable participant binding. No-op Build uses zero calls.
+  No project identity/page is selected; that omission starts in retention. The
+  page preserves incomplete automation as a goal but overgeneralizes some content
+  and cost wording and loses the specific personal certification requirement.
+- Final candidate's fresh store makes no embedding requests during Build; search
+  indexing is lazy. Partial control uses nine requests / 14 items / 1,992 tokens /
+  3.18 client seconds. These are unmatched workloads. The prior handoff run's two
+  calls and 26.49 seconds are likewise not a causal speed comparison: IDs, contract,
+  warm-up and stochastic output differ. Full 884-segment input, native candidate
+  successive Builds, correction latency, and large-store candidate cost remain
+  unmeasured. No retrieval/QA evaluation is implied by the encoding results.
+- Production persistence: preserve raw diarization keys and source-scoped speaker
+  identities; never resolve equal display names deterministically. Save claims,
+  decisions and participant bindings atomically. Reuse established exact bindings
+  even without redeclaration. An optimistic read snapshot rejects concurrent stale
+  work. User review and explicit entity merges redirect bindings. The bound speaker
+  remains distinct from the model-selected subjects of their statements.
+- Correction workflow now accepts ordinary model-selected identities. Existing
+  targets keep their names/aliases; users may create a distinct identity and edit
+  affected names/references in claim wording. Scope edits to selected evidence,
+  retain unrelated references, keep original source and review history, and save
+  exact replacements using supersession. Identity-only edits preserve original date
+  anchors; factual/date corrections keep the existing date-review workflow. There
+  is no model identity judgment for explicit user choices. Page refresh is scoped;
+  failure leaves the review durable and claims pending for a later Build. Exact
+  supersession links find old view items on retry without depending on embeddings.
+- Replace the identity confidence percentage with model-selected/user-reviewed
+  status. The UI exposes accepted assignments from claim details, supports explicit
+  new/existing identity selection and edited statement text, and reports saved
+  corrections whose page refresh is pending. No-page still applies only to the
+  reviewed evidence.
+- Validation: all 588 non-integration Python tests pass (four deselected), all 27
+  UI tests pass, plus Ruff, ESLint, TypeScript/Vite build and whitespace checks.
+  New checks exercise source isolation/restart, binding reuse after user review,
+  stale writes, compact-ID round trips, canonical-name preservation, temporal
+  anchors, superseded search history, transaction rollback and failed-refresh
+  recovery without re-extraction. Run Python checks outside isolation after the
+  known sandbox index/ASGI stall; no extra native calls. Existing UI bundle-size
+  warning remains. Live store and user-owned guidance edits are untouched; no app
+  service is started or stopped. End semantic tuning and return to ordinary use.

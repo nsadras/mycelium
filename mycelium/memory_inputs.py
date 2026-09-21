@@ -8,10 +8,10 @@ from copy import deepcopy
 
 
 SINGLE_IDS = {"id", "owner_id", "subject_id", "memory_id", "source_id",
-              "target_claim_id", "proposal_id"}
+              "target_claim_id", "proposal_id", "participant_id", "speaker_subject_id"}
 MULTIPLE_IDS = {"subject_ids", "segment_ids", "new_subject_ids", "memory_ids",
                 "linked_subject_ids", "affected_subject_ids", "incoming_claim_ids",
-                "target_claim_ids", "affected_entity_ids"}
+                "target_claim_ids", "affected_entity_ids", "participant_ids"}
 
 
 class RequestIds:
@@ -47,6 +47,7 @@ class RequestIds:
         result = deepcopy(value)
         for subject in result["subjects"]:
             subject["id"] = self.reverse[subject["id"]]
+            subject["participant_ids"] = [self.reverse[pid] for pid in subject["participant_ids"]]
         for memory in result["memories"]:
             for field in ("segment_ids", "subject_ids"):
                 memory[field] = [self.reverse[identifier] for identifier in memory[field]]

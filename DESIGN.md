@@ -102,7 +102,9 @@ subsequent searches omit claims already returned.
 
 The workspace is transient state owned by the runtime, not a model-managed notebook. Each successful memory operation
 merges complete typed records or sources by ID and revision and appends an inspectable operation entry. Source text,
-citations and interpretation status refresh after successful and failed tools. Newer revisions replace obsolete
+citations and interpretation status refresh after successful and failed tools. Refresh updates only source segments
+already inspected; explicit source reads discover additional excerpts and spend only their new evidence allowance.
+Newer revisions replace obsolete
 evidence; equal revisions merge exact citations. Eight recent operations are retained, and model-facing diagnostics
 fit the whole workspace budget. The newest memory
 tool message contains the one complete current workspace; the initial workspace is removed from the request and older
@@ -123,7 +125,8 @@ Retrieval is read-only. It never reinforces, destabilizes, or rewrites a page.
 
 Typed evidence is also the budgeted retrieval unit: complete records are fitted against their actual rendered
 envelope, and chat fits those same records against the complete prompt using the shared token estimator.
-Source excerpts retain whole segments, source status and exact claim links; omitted evidence sets `more_available`.
+Source excerpts retain whole segments, source status and exact claim links, including when only part of a source
+fits the final prompt. Repeated source reads advance through unseen segments. Omitted evidence sets `more_available`.
 Uncited neighboring dialogue requires a retained cited anchor and is expanded only on request.
 Synthetic `WikiPage` objects no longer participate in retrieval
 or chat admission. `RetrievalResult.page_references` and `Session.page_references` contain only navigation metadata

@@ -203,11 +203,12 @@ class MemoryRetriever:
         )
 
     def source_evidence(
-        self, claim_ids: list[str], *, budget_tokens: int
+        self, claim_ids: list[str], *, budget_tokens: int,
+        known_evidence: MemoryEvidence | None = None,
     ) -> MemoryEvidence:
         return RetrievedContextBuilder(
             self.context_builder.wiki, self.artifacts
-        ).source_evidence(claim_ids, budget_tokens=budget_tokens)
+        ).source_evidence(claim_ids, budget_tokens=budget_tokens, known_evidence=known_evidence)
 
     def refresh_evidence(
         self, evidence: MemoryEvidence, *, budget_tokens: int
@@ -241,7 +242,9 @@ class MemoryRetriever:
                     claim_id, claim.text, claim.status, None, None, None, None, None
                 )
             )
-        records = builder.build(hits, budget_tokens=budget_tokens)
+        # A refresh updates interpretation and previously inspected excerpts. It
+        # must not discover more source text or consume the exploration allowance.
+        records = builder._memory_evidence(hits)
         from mycelium.retrieval_context import fit_memory_evidence
 
         return fit_memory_evidence(

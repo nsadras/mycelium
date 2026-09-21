@@ -37,7 +37,7 @@ from mycelium.temporal import temporal_records
 def fit_memory_evidence(
     evidence: MemoryEvidence, fits: Callable[[MemoryEvidence], bool]
 ) -> MemoryEvidence:
-    """Admit complete records and source groups in order under the caller's budget."""
+    """Fit complete records and transcript segments inside the caller's envelope."""
     if fits(evidence):
         return evidence
     # Reserve the omission notice so adding it cannot overflow the budget.
@@ -52,7 +52,27 @@ def fit_memory_evidence(
         trial = replace(selected, sources=(*selected.sources, source))
         if fits(trial):
             selected = trial
+            continue
+        accepted = set()
+        partial = None
+        for segment in source.segments:
+            candidate = source_subset(source, accepted | {segment.segment_id})
+            if fits(replace(selected, sources=(*selected.sources, candidate))):
+                accepted.add(segment.segment_id)
+                partial = candidate
+        if partial is not None:
+            selected = replace(selected, sources=(*selected.sources, partial))
     return selected
+
+
+def source_subset(source: EvidenceSource, segment_ids: set[str]) -> EvidenceSource:
+    """Keep exact segment/citation associations when fitting a source excerpt."""
+    return replace(source,
+        segments=tuple(s for s in source.segments if s.segment_id in segment_ids),
+        citations=tuple(
+            replace(c, segment_ids=tuple(sid for sid in c.segment_ids if sid in segment_ids))
+            for c in source.citations if any(sid in segment_ids for sid in c.segment_ids)
+        ))
 
 
 def render_memory_evidence(evidence: MemoryEvidence) -> str:
@@ -408,9 +428,16 @@ class RetrievedContextBuilder:
         )
 
     def _with_sources(
-        self, evidence: MemoryEvidence, *, budget_tokens: int, include_context: bool
+        self, evidence: MemoryEvidence, *, budget_tokens: int, include_context: bool,
+        known_evidence: MemoryEvidence | None = None,
     ) -> MemoryEvidence:
+        from mycelium.memory_workspace import merge_memory_evidence
+
+        known_tokens = count_tokens(render_memory_evidence(known_evidence)) if known_evidence is not None else 0
+
         def fits(trial):
+            if known_evidence is not None:
+                return count_tokens(render_memory_evidence(merge_memory_evidence(known_evidence, trial))) - known_tokens <= budget_tokens
             return count_tokens(render_memory_evidence(trial)) <= budget_tokens
 
         # Retain canonical interpretation state before adding original wording.
@@ -420,9 +447,10 @@ class RetrievedContextBuilder:
         return fit_memory_evidence(
             self._structured_source_evidence(
                 claims,
-                budget_tokens=budget_tokens,
+                fits=fits,
                 base=evidence,
                 include_context=include_context,
+                known_evidence=known_evidence,
             ),
             fits,
         )
@@ -454,7 +482,8 @@ class RetrievedContextBuilder:
         return tuple(references)
 
     def source_evidence(
-        self, claim_ids: list[str], *, budget_tokens: int
+        self, claim_ids: list[str], *, budget_tokens: int,
+        known_evidence: MemoryEvidence | None = None,
     ) -> MemoryEvidence:
         """Return bounded structured source evidence for exact active claim IDs."""
         claims = {}
@@ -479,6 +508,7 @@ class RetrievedContextBuilder:
             records,
             budget_tokens=budget_tokens,
             include_context=True,
+            known_evidence=known_evidence,
         )
 
     def _memory_evidence(self, hits: list[ClaimSearchHit]) -> MemoryEvidence:
@@ -688,9 +718,10 @@ class RetrievedContextBuilder:
         self,
         claims: list[MemoryClaim],
         *,
-        budget_tokens: int,
+        fits: Callable[[MemoryEvidence], bool],
         base: MemoryEvidence,
         include_context: bool,
+        known_evidence: MemoryEvidence | None = None,
     ) -> MemoryEvidence:
         cited_by_source: dict[str, dict[str, set[str]]] = defaultdict(
             lambda: defaultdict(set)
@@ -701,6 +732,7 @@ class RetrievedContextBuilder:
                     provenance.segment_ids
                 )
 
+        known_sources = {s.source_id: s for s in known_evidence.sources} if known_evidence else {}
         available: list[EvidenceSource] = []
         for source_id, cited_by_claim in cited_by_source.items():
             try:
@@ -717,6 +749,10 @@ class RetrievedContextBuilder:
                 if include_context
                 else cited_ids
             )
+            if source_id in known_sources:
+                selected_ids -= {s.segment_id for s in known_sources[source_id].segments}
+            if not selected_ids:
+                continue
             available.append(
                 EvidenceSource(
                     revision=self.artifacts.db.evidence_revision(),
@@ -733,7 +769,7 @@ class RetrievedContextBuilder:
                 )
             )
         complete = replace(base, sources=tuple(available))
-        if count_tokens(render_memory_evidence(complete)) <= budget_tokens:
+        if fits(complete):
             return complete
 
         sources: list[EvidenceSource] = []
@@ -749,7 +785,7 @@ class RetrievedContextBuilder:
             accepted_ids: set[str] = set()
             accepted_source = None
             for segment in [*cited_segments, *context_segments]:
-                if segment.relationship == "context" and not accepted_ids:
+                if segment.relationship == "context" and not accepted_ids and source.source_id not in known_sources:
                     continue
                 trial_ids = {*accepted_ids, segment.segment_id}
                 trial_source = replace(
@@ -763,7 +799,7 @@ class RetrievedContextBuilder:
                 trial = replace(
                     base, sources=tuple([*sources, trial_source]), more_available=True
                 )
-                if count_tokens(render_memory_evidence(trial)) > budget_tokens:
+                if not fits(trial):
                     continue
                 accepted_ids.add(segment.segment_id)
                 accepted_source = trial_source

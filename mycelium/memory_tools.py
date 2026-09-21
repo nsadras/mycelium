@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from mycelium.budget import count_tokens
-from mycelium.memory_workspace import MemoryWorkspaceAccumulator
+from mycelium.memory_workspace import MemoryWorkspaceAccumulator, merge_memory_evidence
 from mycelium.memory_tool_contracts import MemorySearchArguments, MemorySourcesArguments
 from mycelium.ollama import ToolExecutionResult
 from mycelium.operations import (
@@ -21,6 +21,7 @@ from mycelium.retrieval_context import (
     render_memory_source_result,
     render_memory_tool_error,
     render_memory_workspace,
+    render_memory_evidence,
     fit_memory_evidence,
 )
 
@@ -37,7 +38,7 @@ MEMORY_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "shown in the initial evidence or memory_search results. Use this to inspect an "
                 "existing relevant or potentially related record when original wording, "
                 "attribution, chronology, or relationships could affect the response. For a fact, "
-                "pass its supporting claim IDs."
+                "pass its supporting claim IDs. Repeated reads advance through excerpts not already in the workspace."
             ),
             "parameters": MemorySourcesArguments.model_json_schema(),
         },
@@ -280,12 +281,20 @@ class MemoryToolset:
         if evidence_budget <= 0:
             raise ValueError("The memory evidence budget has been exhausted.")
         evidence = self.retriever.source_evidence(
-            permitted, budget_tokens=evidence_budget
+            permitted, budget_tokens=evidence_budget,
+            known_evidence=self.workspace.evidence,
         )
-        rendered_evidence = render_memory_source_result(
-            evidence, requested_claim_ids=permitted
-        )
-        used_tokens = count_tokens(rendered_evidence)
+        if not any(source.segments for source in evidence.sources):
+            raise ValueError(
+                "No additional source excerpts fit the remaining evidence budget."
+                if evidence.more_available else
+                "No additional source excerpts are available for these claims."
+            )
+        # Existing interpretation/citations are still carried by the workspace;
+        # reading a source should spend the allowance on newly admitted evidence.
+        used_tokens = max(0,
+            count_tokens(render_memory_evidence(merge_memory_evidence(self.workspace.evidence, evidence)))
+            - count_tokens(render_memory_evidence(self.workspace.evidence)))
         self.remaining_evidence_tokens = max(
             0, self.remaining_evidence_tokens - used_tokens
         )

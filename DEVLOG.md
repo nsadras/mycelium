@@ -1,5 +1,17 @@
 # Development Log
 
+## 2026-09-21 — Preserve source evidence within retrieval budgets
+
+- Refresh previously inspected excerpts without implicitly discovering more.
+  Repeated source reads advance through unseen segments and charge only newly
+  added evidence; final prompt fitting retains complete segments that fit.
+- Six boundary checks cover refresh, partial fitting, cumulative allowance,
+  repeated reads, context around an existing anchor and retraction. Isolated
+  regression suite: 627 passed, one skipped, four native tests deselected.
+- Recording replay: 87 initial segments grow to 185 with a 6,000-token additional
+  allowance; at the app budget, 390 grow to 484. No prior excerpts lost, no model
+  calls. R2–R4 remain in the [bounded retrieval plan](planning/retrieval_fixes_2026_09_21.md).
+
 ## 2026-09-21 — Close bounded encoding audit fixes
 
 - Fix identity admission so illegal project bindings cannot invalidate eligible

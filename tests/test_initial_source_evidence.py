@@ -94,7 +94,7 @@ def test_omitted_interpretations_do_not_leak_their_sources(tmp_path):
     assert result.more_available
 
 
-def test_refresh_adds_current_citations_to_old_claim_only_workspace(tmp_path):
+def test_refresh_updates_citations_without_discovering_uninspected_sources(tmp_path):
     with Mycelium(tmp_path, memory_profile="none") as memory:
         artifacts, claim, hit = seed(tmp_path)
         initial = memory.retriever.context_builder.build([hit], budget_tokens=2000)
@@ -117,6 +117,9 @@ def test_refresh_adds_current_citations_to_old_claim_only_workspace(tmp_path):
         for old in (initial, claim_only):
             refreshed = memory.retriever.refresh_evidence(old, budget_tokens=2000)
             assert refreshed.records[0].statement == "Nora prefers coffee."
-            assert {s.source_id for s in refreshed.sources} == {"s2"}
-            assert refreshed.sources[0].segments[0].segment_id == "new"
-            assert refreshed.sources[0].revision > initial.sources[0].revision
+            assert refreshed.records[0].citations[0].source_id == "s2"
+            assert refreshed.sources == ()
+            inspected = memory.retriever.source_evidence([claim.claim_id], budget_tokens=2000,
+                known_evidence=refreshed)
+            assert inspected.sources[0].segments[0].segment_id == "new"
+            assert inspected.sources[0].revision > initial.sources[0].revision

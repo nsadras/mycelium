@@ -147,6 +147,7 @@ def merge_memory_evidence(
                         for c in (*prior.canonical_claims, *record.canonical_claims)
                     }.values()
                 ),
+                subjects=tuple(dict.fromkeys((*prior.subjects, *record.subjects))),
                 citations=tuple(dict.fromkeys((*prior.citations, *record.citations))),
                 temporal=tuple(dict.fromkeys((*prior.temporal, *record.temporal))),
                 reviews=tuple(

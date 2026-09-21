@@ -38,14 +38,15 @@ def place(artifacts, claim, owner, *, with_view=False):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change_again", [False, True])
+@pytest.mark.parametrize("with_view", [False, True])
 async def test_owner_move_reselects_using_canonical_metadata(
-    tmp_path, monkeypatch, change_again
+    tmp_path, monkeypatch, change_again, with_view
 ):
     with Mycelium(tmp_path, memory_profile="none") as memory:
         artifacts, claim, hit = seed(tmp_path)
         first = artifacts.create_entity("person", "First owner")
         second = artifacts.create_entity("person", "Second owner")
-        place(artifacts, claim, first, with_view=True)
+        place(artifacts, claim, first, with_view=with_view)
         # The search index can keep returning an older projection after the mutation.
         stale_hit = replace(
             hit, owner_title="Index label", owner_entity_id=first.entity_id
@@ -56,9 +57,9 @@ async def test_owner_move_reselects_using_canonical_metadata(
         async def select(self, query, candidates):
             seen.append(candidates[0].content)
             if len(seen) == 1:
-                place(artifacts, claim, second, with_view=True)
+                place(artifacts, claim, second, with_view=with_view)
             elif change_again:
-                place(artifacts, claim, first, with_view=True)
+                place(artifacts, claim, first, with_view=with_view)
             return AssistantContextSelection((candidates[0].candidate_id,), {})
 
         monkeypatch.setattr(AssistantContextSelector, "select_with_trace", select)

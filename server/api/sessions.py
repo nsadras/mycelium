@@ -298,7 +298,8 @@ async def chat(session_id: str, req: ChatRequest):
             }
             for p in retrieval.page_references
             if p.entity_id
-            in {record.subject_entity_id for record in initial_evidence.records}
+            in {entity_id for record in initial_evidence.records
+                for entity_id in (record.subject_entity_id, *(s.entity_id for s in record.subjects))}
         ]
 
         async with get_meta_lock():

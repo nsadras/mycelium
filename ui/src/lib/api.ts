@@ -60,6 +60,7 @@ export interface MemoryEvidenceRecord {
   statement: string;
   subject_entity_id?: string | null;
   subject_name?: string | null;
+  subjects?: Array<{ entity_id: string; name: string; role: string; aliases: string[] }>;
   claim_ids: string[];
   state?: string | null;
 }

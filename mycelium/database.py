@@ -122,7 +122,7 @@ class MemoryDatabase:
         return row[0] if row else 0
 
     def evidence_revision(self):
-        return self.connection.execute("SELECT coalesce(sum(revision),0) FROM generations WHERE kind IN ('claims','sources','entities','placements','consolidated-facts','reconsolidation-proposals')").fetchone()[0]
+        return self.connection.execute("SELECT coalesce(sum(revision),0) FROM generations WHERE kind IN ('claims','sources','entities','placements','consolidated-facts','reconsolidation-proposals','entity-references','entity-resolution-decisions')").fetchone()[0]
 
     def get(self, kind, identifier):
         row = self.connection.execute(
@@ -334,7 +334,7 @@ class UnitOfWork:
         return value
 
     def evidence_revision(self):
-        return self.reader.execute("SELECT coalesce(sum(revision),0) FROM generations WHERE kind IN ('claims','sources','entities','placements','consolidated-facts','reconsolidation-proposals')").fetchone()[0]
+        return self.reader.execute("SELECT coalesce(sum(revision),0) FROM generations WHERE kind IN ('claims','sources','entities','placements','consolidated-facts','reconsolidation-proposals','entity-references','entity-resolution-decisions')").fetchone()[0]
 
     def ids(self, kind, field=None, value=None):
         self.revision(kind)

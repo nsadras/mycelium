@@ -43,3 +43,16 @@ it('shows the latest failure when detailed operation history was elided', async 
   await userEvent.click(screen.getByRole('button', { name: /Evidence workspace/ }));
   expect(screen.getByText('Latest memory operation failed')).toBeTruthy();
 });
+
+
+it('shows assigned identities and their distinct roles on an unpublished claim', async () => {
+  const next = structuredClone(workspace);
+  next.evidence.records[0].subjects = [
+    { entity_id: 'person-a', name: 'Rene', role: 'subject', aliases: ['R. Bell'] },
+    { entity_id: 'person-b', name: 'Rene', role: 'context', aliases: ['R. Hale'] },
+  ];
+  render(<EvidenceWorkspace workspace={next} />);
+  await userEvent.click(screen.getByRole('button', { name: /Evidence workspace/ }));
+  expect(screen.getByText('Rene · subject · also known as R. Bell')).toBeTruthy();
+  expect(screen.getByText('Rene · context · also known as R. Hale')).toBeTruthy();
+});

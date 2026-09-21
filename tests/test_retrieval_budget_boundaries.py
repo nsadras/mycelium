@@ -116,3 +116,16 @@ async def test_source_tool_adds_neighboring_dialogue_after_cited_line_is_shown(t
         assert final.sources[0].citations[0].segment_ids == ("recording#seg-0050",)
         refreshed = memory.retriever.refresh_evidence(final, budget_tokens=3000)
         assert refreshed.sources == final.sources
+
+
+def test_unchanged_refresh_does_not_expand_citation_links_to_other_shown_segments(tmp_path):
+    from mycelium.operations import EvidenceSourceCitation
+    with Mycelium(tmp_path, memory_profile="none") as memory:
+        claim = recording(memory)
+        initial = memory.retriever.source_evidence([claim.claim_id], budget_tokens=700)
+        source = initial.sources[0]
+        # The workspace may have inspected other segments through a different claim.
+        shown = replace(source, citations=(EvidenceSourceCitation(claim.claim_id, (source.segments[0].segment_id,)),))
+        refreshed = memory.retriever.context_builder.refresh_sources((shown,))[0]
+        assert refreshed.citations == shown.citations
+        assert {s.segment_id for s in refreshed.segments} == {s.segment_id for s in shown.segments}

@@ -8,7 +8,7 @@ export default function EvidenceWorkspace({ workspace }: { workspace: NonNullabl
   const groupedRecords = useMemo(() => {
     const groups = new Map<string, typeof workspace.evidence.records>();
     for (const record of workspace.evidence.records) {
-      const subject = record.subject_name || record.subject_entity_id || 'Unassigned';
+      const subject = record.subject_name || record.subject_entity_id || 'Other evidence';
       groups.set(subject, [...(groups.get(subject) ?? []), record]);
     }
     return Array.from(groups.entries());
@@ -77,6 +77,11 @@ export default function EvidenceWorkspace({ workspace }: { workspace: NonNullabl
                       {records.map(record => (
                         <div key={record.record_id}>
                           <div className="text-slate-700">{record.statement}</div>
+                          {record.subjects?.map(subject => (
+                            <div key={`${subject.entity_id}:${subject.role}`} className="text-[10px] text-slate-500">
+                              {subject.name} · {subject.role}{subject.aliases.length > 0 && ` · also known as ${subject.aliases.join(', ')}`}
+                            </div>
+                          ))}
                           <div className="font-mono text-[10px] text-slate-400">{record.record_type} · {record.record_id} · {record.state}</div>
                         </div>
                       ))}

@@ -32,6 +32,7 @@ from mycelium.operations import (
 from mycelium.store import WikiStore
 from mycelium.source_references import segment_references
 from mycelium.temporal import temporal_records
+from mycelium.retrieval_subjects import claim_subjects
 
 
 def fit_memory_evidence(
@@ -209,6 +210,9 @@ def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
             lines.append(f"Subject: {subject}")
         if record.state:
             lines.append(f"State: {_text(record.state)}")
+        for subject in record.subjects:
+            aliases = "; aliases: " + ", ".join(_text(a) for a in subject.aliases) if subject.aliases else ""
+            lines.append(f"Identity ({_text(subject.role)}): {_text(subject.name)} (`{_text(subject.entity_id)}`){aliases}")
         for qualification in record.uncertainty:
             lines.append(f"Uncertainty: {_text(qualification)}")
         for revision in record.revisions:
@@ -460,9 +464,9 @@ class RetrievedContextBuilder:
     ) -> tuple[WikiPageReference, ...]:
         references = []
         entity_ids = dict.fromkeys(
-            record.subject_entity_id
-            for record in evidence.records
-            if record.subject_entity_id is not None
+            entity_id for record in evidence.records
+            for entity_id in (record.subject_entity_id, *(s.entity_id for s in record.subjects))
+            if entity_id is not None
         )
         for entity_id in entity_ids:
             try:
@@ -643,7 +647,13 @@ class RetrievedContextBuilder:
                         source_time=self._source_time(provenance.source_id),
                     )
                 )
+        subjects = claim_subjects(self.artifacts, claim_ids[0]) if record_type == "claim" else ()
+        primary = {s.entity_id: s for s in subjects if s.role in {"subject", "identity_subject"}}
+        if len(primary) == 1:
+            subject = next(iter(primary.values()))
+            subject_entity_id, subject_name = subject.entity_id, subject.name
         return EvidenceRecord(
+            subjects=subjects,
             revision=self.artifacts.db.evidence_revision(),
             record_id=record_id,
             record_type=record_type,
@@ -837,7 +847,7 @@ class RetrievedContextBuilder:
                     for provenance in claim.provenance
                     if provenance.source_id == source.source_id
                     for sid in provenance.segment_ids
-                    if sid in available_ids
+                    if sid in available_ids and sid in citation.segment_ids
                 }
             citations = self._source_citations(cited_by_claim, available_ids)
             if not citations:

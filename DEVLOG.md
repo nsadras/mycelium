@@ -1,5 +1,23 @@
 # Development Log
 
+## 2026-09-21 — Ship retrieval safeguards; reject unsuccessful selection experiment
+
+- Direct claim evidence now carries existing assigned identities, aliases and
+  roles before a page exists. Reference-only changes invalidate evidence, and
+  the chat inspector and page links expose the current bindings. No new model call.
+- Source refresh preserves inspected citation links as well as excerpts. Recording
+  replay preserves all prior segments over repeated reads at both tested budgets.
+- Release candidate: 632 Python tests passed, one skipped, four native integration
+  tests deselected; nine focused UI tests and frontend build passed; Ruff clean.
+- Bounded comparison completed 20 generation attempts in 154.25 seconds of native
+  execution across two invocations. No model failures/retries or source mutations.
+  Shared selection used more input and missed available keyholder evidence;
+  identity-enriched indexing also displaced a useful claim. Neither experiment
+  was adopted. Preserve the shared candidate on local branch
+  `experiment/retrieval-shared-20260921` (`89d412b`).
+- R2, identity-aware indexing, and R4 remain open. See the
+  [results and next steps](planning/retrieval_fixes_result_2026_09_21.md).
+
 ## 2026-09-21 — Preserve source evidence within retrieval budgets
 
 - Refresh previously inspected excerpts without implicitly discovering more.

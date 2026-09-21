@@ -103,7 +103,7 @@ subsequent searches omit claims already returned.
 The workspace is transient state owned by the runtime, not a model-managed notebook. Each successful memory operation
 merges complete typed records or sources by ID and revision and appends an inspectable operation entry. Source text,
 citations and interpretation status refresh after successful and failed tools. Refresh updates only source segments
-already inspected; explicit source reads discover additional excerpts and spend only their new evidence allowance.
+and citation links already inspected; explicit source reads discover additional excerpts and spend only their new evidence allowance.
 Newer revisions replace obsolete
 evidence; equal revisions merge exact citations. Eight recent operations are retained, and model-facing diagnostics
 fit the whole workspace budget. The newest memory
@@ -120,6 +120,12 @@ fit after their complete interpretation records. The assistant can use `memory_s
 to expand the bounded structural conversation neighborhood. The transcript remains
 chronological, with cited lines marked in place. Retrieval traces preserve candidate rank, hybrid score, admission
 decision, selected claim IDs, and the claims that fit in the final budget.
+
+Direct claim records include their existing active entity bindings, canonical names, aliases and exact roles,
+even before a wiki page exists. Multiple bindings remain distinct; a context participant is not made an owner.
+Reference and identity-review revisions invalidate accumulated evidence. Real page links include the assigned
+identities that have materialized pages. Identity metadata is not yet included in search indexing: the tested
+projection changed ranking unfavorably and remains outside production.
 
 Retrieval is read-only. It never reinforces, destabilizes, or rewrites a page.
 

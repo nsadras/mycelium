@@ -77,6 +77,14 @@ class EvidenceReview:
 
 
 @dataclass(frozen=True)
+class EvidenceSubject:
+    entity_id: str
+    name: str
+    role: str
+    aliases: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class EvidenceRecord:
     record_id: str
     record_type: Literal["claim", "fact"]
@@ -92,6 +100,7 @@ class EvidenceRecord:
     uncertainty: tuple[str, ...] = ()
     revisions: tuple[dict[str, str], ...] = ()
     revision: int = 0
+    subjects: tuple[EvidenceSubject, ...] = ()
 
 
 @dataclass(frozen=True)

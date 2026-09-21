@@ -62,7 +62,16 @@ claim about end-to-end index recall.
   At the app allowance, 390 initial excerpts become 484, with no loss and 1,173
   additional tokens left. Zero model calls. Isolated full suite: 627 passed,
   one skipped, four native integration tests deselected. Adopted after this gate.
-- R2/R3 and native comparison: pending.
+- R3 evidence propagation adopted separately: existing names, aliases and exact
+  roles reach direct claim evidence, revision refresh, UI and real page links.
+  Identity-aware indexing failed the ordinary recall check and was not adopted.
+- R2/R4 candidate passed structural checks but failed the model adoption gate:
+  larger aggregate selection input and missing available keyholder evidence.
+  The final two attempts checked a mechanical handoff repair; that also failed
+  the quality/cost gate. Stop at 20 attempts. Keep the candidate off production.
+- Release gate: 632 Python tests passed, one skipped, four native integration
+  tests deselected; nine focused UI tests, frontend build, Ruff and final recording
+  replay passed. [Results, limitations and remaining priorities](retrieval_fixes_result_2026_09_21.md).
 
 The first full-suite attempt exposed the isolated filesystem copy's missing Git
 metadata, which benchmark-provenance tests require. The candidate now has its own

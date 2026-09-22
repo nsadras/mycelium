@@ -13,7 +13,8 @@ from mycelium.context_selection import (
     AssistantContextCandidate,
     AssistantContextSelector,
 )
-from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
+from mycelium.retrieval_context import RetrievedContextBuilder
+from mycelium.evidence_rendering import render_memory_evidence
 
 
 async def main():

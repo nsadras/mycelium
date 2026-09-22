@@ -11,7 +11,8 @@ from mycelium import memory_contract
 from mycelium.memory_budget import retention_size
 from mycelium.operations import ConsolidationRequest
 from mycelium.retention import Retainer
-from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
+from mycelium.retrieval_context import RetrievedContextBuilder
+from mycelium.evidence_rendering import render_memory_evidence
 from tests.lifecycle_support import lifecycle_response
 
 

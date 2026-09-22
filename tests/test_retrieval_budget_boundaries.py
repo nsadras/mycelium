@@ -8,7 +8,8 @@ from mycelium.budget import count_tokens
 from mycelium.claim_index import ClaimSearchHit
 from mycelium.memory_tools import MemoryToolset
 from mycelium.memory_workspace import merge_memory_evidence
-from mycelium.retrieval_context import fit_memory_evidence, render_memory_evidence
+from mycelium.evidence_budget import fit_memory_evidence
+from mycelium.evidence_rendering import render_memory_evidence
 
 
 def recording(memory):

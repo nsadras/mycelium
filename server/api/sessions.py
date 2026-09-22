@@ -10,7 +10,8 @@ from mycelium.budget import count_message_tokens, ContextBudgetError
 from mycelium.memory_tools import MEMORY_TOOL_DEFINITIONS, MemoryToolset
 from mycelium.operations import MemoryEvidence, MemoryWorkspace, RetrievalRequest
 from mycelium.prompting import render_prompt
-from mycelium.retrieval_context import fit_memory_evidence, render_memory_workspace
+from mycelium.evidence_budget import fit_memory_evidence
+from mycelium.evidence_rendering import render_memory_workspace
 from server.runtime import (
     capture_saved_turns,
     append_turn,

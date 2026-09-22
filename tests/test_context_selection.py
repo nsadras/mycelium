@@ -6,7 +6,8 @@ import pytest
 from pydantic import ValidationError
 
 from mycelium.budget import require_request_budget
-from mycelium.context_selection import AssistantContextSelector, compact_evidence
+from mycelium.context_selection import AssistantContextSelector
+from mycelium.memory_inputs import compact_selection_evidence
 from mycelium.operations import EvidenceRecord, EvidenceSource, EvidenceSegment, MemoryEvidence, EvidenceCitation, EvidenceClaim, EvidenceSourceCitation, EvidenceReview, EvidenceSubject
 from mycelium.structured_outputs import complementary_selection_model
 
@@ -99,7 +100,7 @@ def test_compaction_preserves_literal_text_identity_roles_and_exact_citations():
     source = EvidenceSource(sid, '2032-01-01', (EvidenceSourceCitation(cid, (segment,)),),
         (EvidenceSegment(segment, 'cited', 'Ari', 'Exact original words.'),))
     original = MemoryEvidence((record,), (source,), more_available=True)
-    rendered, ids = compact_evidence(original, {'M001': cid})
+    rendered, ids = compact_selection_evidence(original, {'M001': cid})
     data = json.loads(rendered)
     item, = data['records']
     excerpt, = data['sources']

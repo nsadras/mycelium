@@ -14,7 +14,7 @@ from mycelium.context_selection import (
     AssistantContextSelection,
     AssistantContextSelector,
 )
-from mycelium.retrieval_context import render_memory_evidence
+from mycelium.evidence_rendering import render_memory_evidence
 from mycelium.memory_tools import MemoryToolset
 from mycelium.memory_workspace import merge_memory_evidence
 from mycelium.operations import (

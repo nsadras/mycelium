@@ -20,7 +20,8 @@ from benchmarks.suites.daily_driver.run import _run_checkpoint_probes
 from mycelium import Mycelium
 from mycelium.config import Config
 from mycelium.operations import RetrievalResult
-from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
+from mycelium.retrieval_context import RetrievedContextBuilder
+from mycelium.evidence_rendering import render_memory_evidence
 
 
 class ClaimContextBuilder(RetrievedContextBuilder):

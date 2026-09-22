@@ -23,7 +23,7 @@ from mycelium.operations import (
     SourceInput,
 )
 from mycelium.memory_tools import MEMORY_TOOL_DEFINITIONS, MemoryToolset
-from mycelium.retrieval_context import render_memory_workspace
+from mycelium.evidence_rendering import render_memory_workspace
 from mycelium.structured_outputs import GroundedAnswerOutput
 
 

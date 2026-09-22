@@ -287,7 +287,8 @@ async def test_retraction_invalidates_pending_review_and_qualifies_partial_suppo
 
 def test_supporting_detail_and_uncertainty_remain_cited_and_retrievable(tmp_path):
     from mycelium.claim_index import ClaimSearchHit
-    from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
+    from mycelium.retrieval_context import RetrievedContextBuilder
+    from mycelium.evidence_rendering import render_memory_evidence
     artifacts, wiki, service = setup_service(tmp_path)
     segment = add_source(artifacts, "source")
     claim = add_claim(artifacts, "detail", [ClaimProvenance("source", [segment])], with_fact=True)
@@ -302,13 +303,14 @@ def test_supporting_detail_and_uncertainty_remain_cited_and_retrievable(tmp_path
     assert "<details>" in content and "Supporting detail" in content
     assert claim.text in content and "identity uncertain" in content
     builder = RetrievedContextBuilder(wiki, artifacts)
-    evidence = builder._memory_evidence([ClaimSearchHit(claim.claim_id, claim.text, "wiki", "you", "You", "you", "Preferences", 1)])
+    evidence = builder.build_interpretation([ClaimSearchHit(claim.claim_id, claim.text, "wiki", "you", "You", "you", "Preferences", 1)])
     rendered = render_memory_evidence(evidence)
     assert claim.text in rendered and "Identity unresolved" in rendered
 
 
 def test_source_inspection_carries_superseded_status_and_replacement(tmp_path):
-    from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
+    from mycelium.retrieval_context import RetrievedContextBuilder
+    from mycelium.evidence_rendering import render_memory_evidence
     from mycelium.budget import count_tokens
     artifacts, wiki, _ = setup_service(tmp_path)
     segment = add_source(artifacts, "source")

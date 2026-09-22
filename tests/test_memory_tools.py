@@ -13,10 +13,7 @@ from mycelium.operations import (
     MemoryEvidence,
 )
 from mycelium.budget import count_tokens
-from mycelium.retrieval_context import (
-    render_memory_evidence,
-    render_memory_search_result,
-)
+from mycelium.evidence_rendering import render_memory_evidence, render_memory_search_result
 
 
 def _result(context: str, claim_ids: list[str]):

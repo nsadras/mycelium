@@ -1,11 +1,10 @@
-"""Budgeted rendering of selected claims, facts, and source evidence."""
+"""Assemble and refresh evidence from canonical artifacts and exact sources."""
 
 from __future__ import annotations
 
 from collections import defaultdict
 from functools import cached_property
 from dataclasses import replace
-from html import escape
 from typing import Callable, Literal
 
 from mycelium.artifacts import (
@@ -14,6 +13,8 @@ from mycelium.artifacts import (
     SourceSegment,
 )
 from mycelium.budget import count_tokens
+from mycelium.evidence_budget import fit_memory_evidence
+from mycelium.evidence_rendering import render_memory_evidence
 from mycelium.claim_index import ClaimSearchHit
 from mycelium.operations import (
     EvidenceCitation,
@@ -25,326 +26,12 @@ from mycelium.operations import (
     EvidenceSourceCitation,
     EvidenceTime,
     MemoryEvidence,
-    MemoryWorkspace,
     RetrievalError,
     WikiPageReference,
 )
 from mycelium.store import WikiStore
-from mycelium.source_references import segment_references
 from mycelium.temporal import temporal_records
 from mycelium.retrieval_subjects import claim_subjects
-
-
-def fit_memory_evidence(
-    evidence: MemoryEvidence, fits: Callable[[MemoryEvidence], bool]
-) -> MemoryEvidence:
-    """Fit complete records and transcript segments inside the caller's envelope."""
-    if fits(evidence):
-        return evidence
-    # Reserve the omission notice so adding it cannot overflow the budget.
-    selected = MemoryEvidence(more_available=True, build_incomplete=evidence.build_incomplete)
-    if not fits(selected):
-        raise ValueError("Evidence budget is smaller than the empty evidence envelope")
-    for record in evidence.records:
-        trial = replace(selected, records=(*selected.records, record))
-        if fits(trial):
-            selected = trial
-    for source in evidence.sources:
-        trial = replace(selected, sources=(*selected.sources, source))
-        if fits(trial):
-            selected = trial
-            continue
-        accepted = set()
-        partial = None
-        for segment in source.segments:
-            candidate = source_subset(source, accepted | {segment.segment_id})
-            if fits(replace(selected, sources=(*selected.sources, candidate))):
-                accepted.add(segment.segment_id)
-                partial = candidate
-        if partial is not None:
-            selected = replace(selected, sources=(*selected.sources, partial))
-    return selected
-
-
-def source_subset(source: EvidenceSource, segment_ids: set[str]) -> EvidenceSource:
-    """Keep exact segment/citation associations when fitting a source excerpt."""
-    return replace(source,
-        segments=tuple(s for s in source.segments if s.segment_id in segment_ids),
-        citations=tuple(
-            replace(c, segment_ids=tuple(sid for sid in c.segment_ids if sid in segment_ids))
-            for c in source.citations if any(sid in segment_ids for sid in c.segment_ids)
-        ))
-
-
-def render_memory_evidence(evidence: MemoryEvidence) -> str:
-    """Render initial evidence with the shared model-facing representation."""
-    return _render_evidence_envelope("memory-evidence", evidence)
-
-
-def render_memory_workspace(
-    workspace: MemoryWorkspace, *, include_request: bool = True
-) -> str:
-    """Render the one current accumulated evidence workspace for an agent round."""
-    operation_lines: list[str] = []
-    if workspace.operations:
-        operation_lines.append("Completed memory operations:")
-        for operation in workspace.operations:
-            target = operation.query or ", ".join(operation.requested_claim_ids)
-            additions = [
-                *operation.added_record_ids,
-                *operation.added_source_ids,
-            ]
-            detail = f"; target: {_text(target)}" if target else ""
-            added = (
-                "; added: " + ", ".join(f"`{_text(value)}`" for value in additions)
-                if additions
-                else "; added: none"
-            )
-            error = f"; error: {_text(operation.error)}" if operation.error else ""
-            operation_lines.append(
-                f"{operation.sequence}. {_text(operation.tool_name)} "
-                f"({_text(operation.status)}){detail}{added}{error}"
-            )
-        operation_lines.append("")
-    return _render_evidence_envelope(
-        "memory-workspace",
-        workspace.evidence,
-        attributes={
-            "revision": str(workspace.revision),
-            "last_operation_status": workspace.last_operation_status,
-        },
-        preamble=(
-            *(
-                [f"Original request: {_text(workspace.request)}"]
-                if include_request
-                else []
-            ),
-            f"Remaining searches: {workspace.remaining_searches}",
-            f"Remaining evidence tokens: {workspace.remaining_evidence_tokens}",
-            "",
-            *operation_lines,
-        ),
-    )
-
-
-def render_memory_search_result(
-    evidence: MemoryEvidence,
-    *,
-    query: str,
-    remaining_searches: int,
-) -> str:
-    """Render a complete, bounded memory-search result."""
-    return _render_evidence_envelope(
-        "memory-search-results",
-        evidence,
-        preamble=(
-            f"Query: {_text(query)}",
-            f"Remaining searches: {remaining_searches}",
-        ),
-    )
-
-
-def render_memory_source_result(
-    evidence: MemoryEvidence,
-    *,
-    requested_claim_ids: list[str],
-) -> str:
-    """Render complete source excerpts with explicit claim ownership."""
-    requested = ", ".join(f"`{_text(value)}`" for value in requested_claim_ids)
-    return _render_evidence_envelope(
-        "memory-source-results",
-        evidence,
-        preamble=(f"Requested claims: {requested}",),
-    )
-
-
-def render_memory_tool_error(message: str) -> str:
-    """Render a model-visible memory-tool failure without an ambiguous partial result."""
-    return "\n".join(["<memory-tool-error>", _text(message), "</memory-tool-error>"])
-
-
-def _render_evidence_envelope(
-    tag: str,
-    evidence: MemoryEvidence,
-    *,
-    preamble: tuple[str, ...] = (),
-    attributes: dict[str, str] | None = None,
-) -> str:
-    rendered_attributes = "".join(
-        f' {_attribute(key)}="{_attribute(value)}"'
-        for key, value in (attributes or {}).items()
-    )
-    lines = [f"<{tag}{rendered_attributes}>", *preamble]
-    if preamble and (evidence.records or evidence.sources):
-        lines.append("")
-    if evidence.build_incomplete:
-        lines.append("Build Memory is incomplete. Captured conversations or view updates are still pending; this evidence may miss recent information.")
-    lines.extend(_render_records(evidence.records))
-    if evidence.records and evidence.sources:
-        lines.append("")
-    lines.extend(_render_sources(evidence.sources))
-    if not evidence.records and not evidence.sources:
-        lines.append("No memory evidence found.")
-    if evidence.more_available:
-        lines.extend(["", "More evidence available: yes"])
-    lines.append(f"</{tag}>")
-    return "\n".join(lines)
-
-
-def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
-    lines: list[str] = []
-    shown_claims = {r.record_id for r in records if r.record_type == "claim"}
-    for index, record in enumerate(records):
-        if index:
-            lines.append("")
-        lines.extend(
-            [
-                f"## Record `{_text(record.record_id)}`",
-                f"Statement: {_text(record.statement)}",
-                f"Type: {_text(record.record_type)}",
-            ]
-        )
-        if record.subject_name or record.subject_entity_id:
-            subject = _text(record.subject_name or "Unnamed subject")
-            if record.subject_entity_id:
-                subject += f" (`{_text(record.subject_entity_id)}`)"
-            lines.append(f"Subject: {subject}")
-        if record.state:
-            lines.append(f"State: {_text(record.state)}")
-        for subject in record.subjects:
-            aliases = "; aliases: " + ", ".join(_text(a) for a in subject.aliases) if subject.aliases else ""
-            lines.append(f"Identity ({_text(subject.role)}): {_text(subject.name)} (`{_text(subject.entity_id)}`){aliases}")
-        for qualification in record.uncertainty:
-            lines.append(f"Uncertainty: {_text(qualification)}")
-        for revision in record.revisions:
-            lines.append(
-                f"Revision: {_text(revision['relation'])} `{_text(revision['claim_id'])}` "
-                f"({_text(revision['status'])}): {_text(revision['text'])}"
-            )
-        lines.append("Supporting claims:")
-        lines.extend(f"- `{_text(value)}`" for value in record.claim_ids)
-        unseen_claims = [c for c in record.canonical_claims if c.claim_id not in shown_claims]
-        if unseen_claims:
-            lines.append("Canonical assertions:")
-            lines.extend(
-                f"- `{_text(c.claim_id)}`: {_text(c.text)}"
-                for c in unseen_claims
-            )
-            shown_claims.update(c.claim_id for c in unseen_claims)
-        for review in record.reviews:
-            lines.append(
-                f"Review `{_text(review.proposal_id)}`: {_text(review.status)}; "
-                f"relation: {_text(review.relation)}; incoming claims: "
-                + ", ".join(_text(c) for c in review.incoming_claim_ids)
-                + "; target claims: "
-                + ", ".join(_text(c) for c in review.target_claim_ids)
-                + ". This relationship is unresolved; incoming claims do not establish a replacement."
-            )
-        if record.temporal:
-            lines.append("Timing:")
-            for value in record.temporal:
-                interval = _text(value.start) if value.start else _text(value.status)
-                if value.end and value.end != value.start:
-                    interval += f" through {_text(value.end)}"
-                expression = (
-                    f"; source expression: {_text(value.expression)}"
-                    if value.expression
-                    else ""
-                )
-                lines.append(
-                    f"- Claim `{_text(value.claim_id)}`: {_text(value.role)} "
-                    f"{interval}{expression}"
-                    + (f"; applies to: {_text(value.target)}" if value.target else "")
-                    + (
-                        f"; time evidence: `{_text(value.evidence_segment_id)}`"
-                        if value.evidence_segment_id
-                        else ""
-                    )
-                    + (
-                        f"; reference date from: `{_text(value.anchor_segment_id)}`"
-                        if value.anchor_segment_id
-                        and value.anchor_segment_id != value.evidence_segment_id
-                        else ""
-                    )
-                    + (
-                        f"; reference choice: {_text(value.reference_reason)}"
-                        if value.reference_reason
-                        else ""
-                    )
-                    + (
-                        f"; reason: {_text(value.resolution_reason)}"
-                        if value.resolution_reason
-                        else ""
-                    )
-                )
-        if record.citations:
-            lines.append("Evidence references:")
-            for citation in record.citations:
-                segments = segment_references(citation.source_id, citation.segment_ids)
-                source_time = (
-                    f"; conversation time: {_text(citation.source_time)}"
-                    if citation.source_time
-                    else ""
-                )
-                lines.append(
-                    f"- Claim `{_text(citation.claim_id)}` → source "
-                    f"`{_text(citation.source_id)}`{source_time}; cited segments: "
-                    f"{segments or '(none)'}"
-                )
-    return lines
-
-
-def _render_sources(sources: tuple[EvidenceSource, ...]) -> list[str]:
-    lines: list[str] = []
-    for index, source in enumerate(sources):
-        if index:
-            lines.append("")
-        lines.extend(
-            [
-                f"## Source `{_text(source.source_id)}`",
-                f"Conversation time: {_text(source.conversation_time)}",
-                f"Source status: {_text(source.status)}"
-                + (
-                    f" — {_text(source.retraction_reason)}"
-                    if source.retraction_reason
-                    else ""
-                ),
-                "Supports claims:",
-            ]
-        )
-        cited_claims_by_segment: dict[str, list[str]] = defaultdict(list)
-        for citation in source.citations:
-            segments = segment_references(source.source_id, citation.segment_ids)
-            lines.append(
-                f"- `{_text(citation.claim_id)}`: cited segments {segments or '(none)'}"
-            )
-            for segment_id in citation.segment_ids:
-                cited_claims_by_segment[segment_id].append(citation.claim_id)
-        lines.append("<transcript>")
-        for segment in source.segments:
-            claim_ids = cited_claims_by_segment.get(segment.segment_id, [])
-            cited = (
-                ' cited-for="'
-                + " ".join(_attribute(value) for value in claim_ids)
-                + '"'
-                if claim_ids
-                else ""
-            )
-            speaker = f"{_text(segment.speaker)}: " if segment.speaker else ""
-            lines.append(
-                f"[segment `{_text(segment.segment_id)}`{cited}] "
-                f"{speaker}{_text(segment.content)}"
-            )
-        lines.append("</transcript>")
-    return lines
-
-
-def _text(value: object) -> str:
-    return escape(str(value), quote=False)
-
-
-def _attribute(value: object) -> str:
-    return escape(str(value), quote=True)
 
 
 class RetrievedContextBuilder:
@@ -363,9 +50,15 @@ class RetrievedContextBuilder:
             return None
         if claim.status not in {"active", "superseded"}:
             return None
-        return replace(hit, claim_text=claim.text,
+        return replace(
+            hit,
+            claim_text=claim.text,
             memory_tier=self.artifacts.memory_tier(claim.claim_id),
-            owner_entity_id=None, owner_title=None, page_slug=None, section_key=None)
+            owner_entity_id=None,
+            owner_title=None,
+            page_slug=None,
+            section_key=None,
+        )
 
     def _source_uncertainty(self, claims):
         notes = []
@@ -424,25 +117,50 @@ class RetrievedContextBuilder:
         more_available: bool = False,
         record_limit: int | None = None,
     ) -> MemoryEvidence:
-        evidence = replace(self._memory_evidence(hits), more_available=more_available)
-        return self._with_sources(
-            evidence, budget_tokens=budget_tokens, include_context=False, record_limit=record_limit
+        evidence = replace(
+            self.build_interpretation(hits), more_available=more_available
+        )
+        return self.attach_cited_sources(
+            evidence,
+            budget_tokens=budget_tokens,
+            include_context=False,
+            record_limit=record_limit,
         )
 
-    def _with_sources(
-        self, evidence: MemoryEvidence, *, budget_tokens: int, include_context: bool,
+    def attach_cited_sources(
+        self,
+        evidence: MemoryEvidence,
+        *,
+        budget_tokens: int,
+        include_context: bool,
         known_evidence: MemoryEvidence | None = None,
         record_limit: int | None = None,
     ) -> MemoryEvidence:
+        """Fit complete interpretations, then add their exact cited source segments.
+
+        When evidence is already known, only the added workspace size is charged.
+        """
         from mycelium.memory_workspace import merge_memory_evidence
 
-        known_tokens = count_tokens(render_memory_evidence(known_evidence)) if known_evidence is not None else 0
+        known_tokens = (
+            count_tokens(render_memory_evidence(known_evidence))
+            if known_evidence is not None
+            else 0
+        )
 
         def fits(trial):
             if record_limit is not None and len(trial.records) > record_limit:
                 return False
             if known_evidence is not None:
-                return count_tokens(render_memory_evidence(merge_memory_evidence(known_evidence, trial))) - known_tokens <= budget_tokens
+                return (
+                    count_tokens(
+                        render_memory_evidence(
+                            merge_memory_evidence(known_evidence, trial)
+                        )
+                    )
+                    - known_tokens
+                    <= budget_tokens
+                )
             return count_tokens(render_memory_evidence(trial)) <= budget_tokens
 
         # Retain canonical interpretation state before adding original wording.
@@ -460,13 +178,37 @@ class RetrievedContextBuilder:
             fits,
         )
 
+    def build_selected_evidence(
+        self,
+        candidates: MemoryEvidence,
+        selected_record_ids: tuple[str, ...],
+        *,
+        budget_tokens: int,
+        record_limit: int,
+    ) -> MemoryEvidence:
+        """Carry the selected original records into answering with their sources."""
+        records_by_id = {record.record_id: record for record in candidates.records}
+        selected_records = tuple(
+            records_by_id[record_id] for record_id in selected_record_ids
+        )
+        return self.attach_cited_sources(
+            replace(candidates, records=selected_records, sources=()),
+            budget_tokens=budget_tokens,
+            include_context=False,
+            record_limit=record_limit,
+        )
+
     def page_references(
         self, evidence: MemoryEvidence
     ) -> tuple[WikiPageReference, ...]:
         references = []
         entity_ids = dict.fromkeys(
-            entity_id for record in evidence.records
-            for entity_id in (record.subject_entity_id, *(s.entity_id for s in record.subjects))
+            entity_id
+            for record in evidence.records
+            for entity_id in (
+                record.subject_entity_id,
+                *(s.entity_id for s in record.subjects),
+            )
             if entity_id is not None
         )
         for entity_id in entity_ids:
@@ -487,7 +229,10 @@ class RetrievedContextBuilder:
         return tuple(references)
 
     def source_evidence(
-        self, claim_ids: list[str], *, budget_tokens: int,
+        self,
+        claim_ids: list[str],
+        *,
+        budget_tokens: int,
         known_evidence: MemoryEvidence | None = None,
     ) -> MemoryEvidence:
         """Return bounded structured source evidence for exact active claim IDs."""
@@ -499,7 +244,7 @@ class RetrievedContextBuilder:
                 continue
             if claim.status in {"active", "superseded"}:
                 claims[claim_id] = claim
-        records = self._memory_evidence(
+        records = self.build_interpretation(
             [
                 ClaimSearchHit(
                     c.claim_id, c.text, c.status, None, None, None, None, None
@@ -509,27 +254,100 @@ class RetrievedContextBuilder:
         )
         # Carry interpretation status with transcript excerpts, so inspecting an
         # older source cannot silently revive a superseded interpretation.
-        return self._with_sources(
+        return self.attach_cited_sources(
             records,
             budget_tokens=budget_tokens,
             include_context=True,
             known_evidence=known_evidence,
         )
 
-    def _memory_evidence(self, hits: list[ClaimSearchHit], *, fact_ids: set[str] | None = None) -> MemoryEvidence:
+    def refresh_evidence(
+        self, evidence: MemoryEvidence, *, budget_tokens: int
+    ) -> MemoryEvidence:
+        """Rebase a workspace on current canonical state before a tool result."""
+        from mycelium.memory_workspace import merge_memory_evidence
+
+        hits = []
+        claim_ids = dict.fromkeys(
+            [
+                *evidence.claim_ids,
+                *(
+                    citation.claim_id
+                    for source in evidence.sources
+                    for citation in source.citations
+                ),
+            ]
+        )
+        for claim_id in claim_ids:
+            try:
+                claim = self.artifacts.get_claim(claim_id)
+            except FileNotFoundError:
+                continue
+            if claim.status not in {"active", "superseded"}:
+                continue
+            hits.append(
+                ClaimSearchHit(
+                    claim_id, claim.text, claim.status, None, None, None, None, None
+                )
+            )
+        # A refresh updates interpretation and previously inspected excerpts. It
+        # must not discover more source text or consume the exploration allowance.
+        records = self.build_interpretation(
+            hits,
+            fact_ids={r.record_id for r in evidence.records if r.record_type == "fact"},
+        )
+        shown_ids = {r.record_id for r in evidence.records}
+        surviving_views = {
+            r.record_id for r in records.records if r.record_type == "fact"
+        }
+        # When a displayed view loses valid support, carry the remaining claim
+        # states instead. Otherwise its old sources could outlive the correction.
+        shown_ids.update(
+            cid
+            for r in evidence.records
+            if r.record_type == "fact" and r.record_id not in surviving_views
+            for cid in r.claim_ids
+        )
+        records = replace(
+            records,
+            records=tuple(r for r in records.records if r.record_id in shown_ids),
+        )
+
+        return fit_memory_evidence(
+            merge_memory_evidence(
+                records,
+                MemoryEvidence(
+                    sources=self.refresh_sources(evidence.sources),
+                    more_available=evidence.more_available,
+                ),
+            ),
+            lambda trial: count_tokens(render_memory_evidence(trial)) <= budget_tokens,
+        )
+
+    def build_interpretation(
+        self, hits: list[ClaimSearchHit], *, fact_ids: set[str] | None = None
+    ) -> MemoryEvidence:
+        """Read canonical matches and optional supported views, without source excerpts."""
         hits = [
             current for hit in hits if (current := self.current_hit(hit)) is not None
         ]
         claims = {hit.claim_id: self.artifacts.get_claim(hit.claim_id) for hit in hits}
         records = []
         for claim in claims.values():
-            records.append(self._structured_record(
-                record_id=claim.claim_id, record_type="claim", statement=claim.text,
-                subject_entity_id=None, subject_name=None,
-                claim_ids=(claim.claim_id,),
-                state="superseded" if claim.status == "superseded" else self.artifacts.memory_tier(claim.claim_id),
-                claims=[claim],
-            ))
+            records.append(
+                self._structured_record(
+                    record_id=claim.claim_id,
+                    record_type="claim",
+                    statement=claim.text,
+                    subject_entity_id=None,
+                    subject_name=None,
+                    claim_ids=(claim.claim_id,),
+                    state="superseded"
+                    if claim.status == "superseded"
+                    else self.artifacts.memory_tier(claim.claim_id),
+                    claims=[claim],
+                )
+            )
 
         # Views provide optional context. They cannot replace or precede a match.
         facts = {}
@@ -548,12 +366,18 @@ class RetrievedContextBuilder:
                     break
                 members.append(member)
             else:
-                records.append(self._structured_record(
-                    record_id=fact.fact_id, record_type="fact", statement=fact.text,
-                    subject_entity_id=fact.owner_entity_id,
-                    subject_name=self._entity_title(fact.owner_entity_id),
-                    claim_ids=tuple(fact.member_claim_ids), state=fact.state, claims=members,
-                ))
+                records.append(
+                    self._structured_record(
+                        record_id=fact.fact_id,
+                        record_type="fact",
+                        statement=fact.text,
+                        subject_entity_id=fact.owner_entity_id,
+                        subject_name=self._entity_title(fact.owner_entity_id),
+                        claim_ids=tuple(fact.member_claim_ids),
+                        state=fact.state,
+                        claims=members,
+                    )
+                )
         return MemoryEvidence(
             records=tuple(records),
             build_incomplete=self.artifacts.build_incomplete(),
@@ -609,8 +433,16 @@ class RetrievedContextBuilder:
                         source_time=self._source_time(provenance.source_id),
                     )
                 )
-        subjects = claim_subjects(self.artifacts, claim_ids[0]) if record_type == "claim" else ()
-        primary = {s.entity_id: s for s in subjects if s.role in {"subject", "identity_subject"}}
+        subjects = (
+            claim_subjects(self.artifacts, claim_ids[0])
+            if record_type == "claim"
+            else ()
+        )
+        primary = {
+            s.entity_id: s
+            for s in subjects
+            if s.role in {"subject", "identity_subject"}
+        }
         if len(primary) == 1:
             subject = next(iter(primary.values()))
             subject_entity_id, subject_name = subject.entity_id, subject.name
@@ -638,11 +470,16 @@ class RetrievedContextBuilder:
                     for r in self.reviews_by_claim.get(cid, [])
                 }.values()
             ),
-            uncertainty=tuple(dict.fromkeys(
-                f"Identity unresolved; optional review {decision.decision_id}"
-                for decision in self.artifacts.list_entity_resolution_decisions(review_state="review_required")
-                if set(claim_ids) & set(decision.supporting_claim_ids)
-            )) + self._source_uncertainty(claims),
+            uncertainty=tuple(
+                dict.fromkeys(
+                    f"Identity unresolved; optional review {decision.decision_id}"
+                    for decision in self.artifacts.list_entity_resolution_decisions(
+                        review_state="review_required"
+                    )
+                    if set(claim_ids) & set(decision.supporting_claim_ids)
+                )
+            )
+            + self._source_uncertainty(claims),
             revisions=tuple(self._revisions(claims)),
         )
 
@@ -704,7 +541,9 @@ class RetrievedContextBuilder:
                     provenance.segment_ids
                 )
 
-        known_sources = {s.source_id: s for s in known_evidence.sources} if known_evidence else {}
+        known_sources = (
+            {s.source_id: s for s in known_evidence.sources} if known_evidence else {}
+        )
         available: list[EvidenceSource] = []
         for source_id, cited_by_claim in cited_by_source.items():
             try:
@@ -722,7 +561,9 @@ class RetrievedContextBuilder:
                 else cited_ids
             )
             if source_id in known_sources:
-                selected_ids -= {s.segment_id for s in known_sources[source_id].segments}
+                selected_ids -= {
+                    s.segment_id for s in known_sources[source_id].segments
+                }
             if not selected_ids:
                 continue
             available.append(
@@ -757,7 +598,11 @@ class RetrievedContextBuilder:
             accepted_ids: set[str] = set()
             accepted_source = None
             for segment in [*cited_segments, *context_segments]:
-                if segment.relationship == "context" and not accepted_ids and source.source_id not in known_sources:
+                if (
+                    segment.relationship == "context"
+                    and not accepted_ids
+                    and source.source_id not in known_sources
+                ):
                     continue
                 trial_ids = {*accepted_ids, segment.segment_id}
                 trial_source = replace(

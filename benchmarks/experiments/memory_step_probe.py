@@ -20,7 +20,7 @@ from mycelium.operations import (
     MemoryEvidence,
 )
 from mycelium.prompting import render_prompt
-from mycelium.retrieval_context import render_memory_workspace
+from mycelium.evidence_rendering import render_memory_workspace
 from types import SimpleNamespace
 
 

@@ -16,14 +16,8 @@ from mycelium.operations import (
     RetrievalError,
 )
 from mycelium.retrieval import MemoryRetriever
-from mycelium.retrieval_context import (
-    render_memory_search_result,
-    render_memory_source_result,
-    render_memory_tool_error,
-    render_memory_workspace,
-    render_memory_evidence,
-    fit_memory_evidence,
-)
+from mycelium.evidence_rendering import render_memory_search_result, render_memory_source_result, render_memory_tool_error, render_memory_workspace, render_memory_evidence
+from mycelium.evidence_budget import fit_memory_evidence
 
 
 MEMORY_TOOL_NAMES = frozenset({"memory_search", "memory_sources"})

@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 from mycelium.artifacts import ArtifactStore
 from mycelium.budget import count_tokens
 from mycelium.search_query import SearchQueryOutput
 from mycelium.prompting import render_prompt
-from mycelium.claim_index import LanceClaimIndex
+from mycelium.claim_index import LanceClaimIndex, ClaimSearchHit
 from mycelium.context_selection import (
     AssistantContextSelector,
+    AssistantContextSelection,
 )
 from mycelium.ollama import OllamaClient
 from mycelium.operations import (
@@ -19,7 +18,8 @@ from mycelium.operations import (
     RetrievalResult,
     RetrievalError,
 )
-from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
+from mycelium.retrieval_context import RetrievedContextBuilder
+from mycelium.evidence_rendering import render_memory_evidence
 from mycelium.store import WikiStore
 from mycelium.database import UnitOfWork
 from mycelium.lifecycle_transaction import LifecycleTransaction
@@ -70,6 +70,25 @@ class MemoryRetriever:
             search_query = await self._search_query(request.query)
         except Exception as exc:
             raise RetrievalError("query", str(exc)) from exc
+        hits, candidates, selection = await self._select_evidence_from_snapshot(
+            query=request.query, search_query=search_query, budget_tokens=budget_tokens
+        )
+        # No await after validation: rendering sees one event-loop-consistent state.
+        builder = RetrievedContextBuilder(self.context_builder.wiki, self.artifacts)
+        evidence = builder.build_selected_evidence(
+            candidates,
+            selection.selected_ids,
+            budget_tokens=budget_tokens,
+            record_limit=self.initial_result_limit,
+        )
+        return self._selected_retrieval_result(
+            builder, evidence, hits, candidates, selection, search_query
+        )
+
+    async def _select_evidence_from_snapshot(
+        self, *, query: str, search_query: str, budget_tokens: int
+    ) -> tuple[list[ClaimSearchHit], MemoryEvidence, AssistantContextSelection]:
+        """Retry admission once if a concurrent edit changes the model's evidence."""
         for attempt in range(2):
             try:
                 hits = await self.claim_index.search(search_query)
@@ -88,7 +107,7 @@ class MemoryRetriever:
                 ]
                 candidates = builder.build(hits, budget_tokens=budget_tokens)
                 selection = await AssistantContextSelector(self.llm).select_with_trace(
-                    request.query, candidates, limit=self.initial_result_limit
+                    query, candidates, limit=self.initial_result_limit
                 )
                 if selection.error:
                     raise RetrievalError("admission", selection.error)
@@ -98,21 +117,27 @@ class MemoryRetriever:
                     if attempt == 1:
                         raise RetrievalError("concurrent_update", str(exc)) from exc
                     continue
-                break
+                return hits, candidates, selection
             finally:
                 unit.close()
-        # No await after validation: rendering sees one event-loop-consistent state.
-        builder = RetrievedContextBuilder(self.context_builder.wiki, self.artifacts)
+
+    def _selected_retrieval_result(
+        self,
+        builder: RetrievedContextBuilder,
+        evidence: MemoryEvidence,
+        hits: list[ClaimSearchHit],
+        candidates: MemoryEvidence,
+        selection: AssistantContextSelection,
+        search_query: str,
+    ) -> RetrievalResult:
         records_by_id = {record.record_id: record for record in candidates.records}
-        selected_records = tuple(records_by_id[value] for value in selection.selected_ids)
-        # Selection and answering use the exact same complete records. Expanding
-        # the selected claims again could drop the related view used to select them.
-        evidence = builder._with_sources(
-            replace(candidates, records=selected_records, sources=()),
-            budget_tokens=budget_tokens, include_context=False,
-            record_limit=self.initial_result_limit,
+        selected_claim_ids = tuple(
+            dict.fromkeys(
+                claim_id
+                for record_id in selection.selected_ids
+                for claim_id in records_by_id[record_id].claim_ids
+            )
         )
-        selected_claim_ids = tuple(dict.fromkeys(cid for r in selected_records for cid in r.claim_ids))
         rendered = render_memory_evidence(evidence)
         trace = {
             "strategy": "lancedb_hybrid_claims_then_model_admission",
@@ -134,7 +159,9 @@ class MemoryRetriever:
             "selected_claim_ids": list(selected_claim_ids),
             "admitted_claim_ids": list(selected_claim_ids),
             "rendered_claim_ids": [
-                claim_id for claim_id in selected_claim_ids if claim_id in evidence.claim_ids
+                claim_id
+                for claim_id in selected_claim_ids
+                if claim_id in evidence.claim_ids
             ],
             "selection_error": selection.error,
             "supported_aspects": list(selection.supported_aspects),
@@ -194,65 +221,21 @@ class MemoryRetriever:
         )
 
     def source_evidence(
-        self, claim_ids: list[str], *, budget_tokens: int,
+        self,
+        claim_ids: list[str],
+        *,
+        budget_tokens: int,
         known_evidence: MemoryEvidence | None = None,
     ) -> MemoryEvidence:
         return RetrievedContextBuilder(
             self.context_builder.wiki, self.artifacts
-        ).source_evidence(claim_ids, budget_tokens=budget_tokens, known_evidence=known_evidence)
+        ).source_evidence(
+            claim_ids, budget_tokens=budget_tokens, known_evidence=known_evidence
+        )
 
     def refresh_evidence(
         self, evidence: MemoryEvidence, *, budget_tokens: int
     ) -> MemoryEvidence:
-        """Rebase a workspace on current canonical state before a tool result."""
-        from mycelium.memory_workspace import merge_memory_evidence
-
+        """Refresh current interpretations and previously inspected source excerpts."""
         builder = RetrievedContextBuilder(self.context_builder.wiki, self.artifacts)
-        hits = []
-        claim_ids = dict.fromkeys(
-            [
-                *evidence.claim_ids,
-                *(
-                    citation.claim_id
-                    for source in evidence.sources
-                    for citation in source.citations
-                ),
-            ]
-        )
-        for claim_id in claim_ids:
-            try:
-                claim = self.artifacts.get_claim(claim_id)
-            except FileNotFoundError:
-                continue
-            if claim.status not in {"active", "superseded"}:
-                continue
-            from mycelium.claim_index import ClaimSearchHit
-
-            hits.append(
-                ClaimSearchHit(
-                    claim_id, claim.text, claim.status, None, None, None, None, None
-                )
-            )
-        # A refresh updates interpretation and previously inspected excerpts. It
-        # must not discover more source text or consume the exploration allowance.
-        records = builder._memory_evidence(hits, fact_ids={r.record_id for r in evidence.records if r.record_type == "fact"})
-        shown_ids = {r.record_id for r in evidence.records}
-        surviving_views = {r.record_id for r in records.records if r.record_type == "fact"}
-        # When a displayed view loses valid support, carry the remaining claim
-        # states instead. Otherwise its old sources could outlive the correction.
-        shown_ids.update(cid for r in evidence.records
-                         if r.record_type == "fact" and r.record_id not in surviving_views
-                         for cid in r.claim_ids)
-        records = replace(records, records=tuple(r for r in records.records if r.record_id in shown_ids))
-        from mycelium.retrieval_context import fit_memory_evidence
-
-        return fit_memory_evidence(
-            merge_memory_evidence(
-                records,
-                MemoryEvidence(
-                    sources=builder.refresh_sources(evidence.sources),
-                    more_available=evidence.more_available,
-                ),
-            ),
-            lambda trial: count_tokens(render_memory_evidence(trial)) <= budget_tokens,
-        )
+        return builder.refresh_evidence(evidence, budget_tokens=budget_tokens)

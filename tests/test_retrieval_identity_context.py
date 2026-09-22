@@ -3,7 +3,8 @@ from dataclasses import replace
 from mycelium import Mycelium
 from mycelium.artifacts import ClaimEntityReference
 from mycelium.memory_workspace import merge_memory_evidence
-from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
+from mycelium.retrieval_context import RetrievedContextBuilder
+from mycelium.evidence_rendering import render_memory_evidence
 from mycelium.store import WikiStore
 from tests.test_audit_remediation import seed
 

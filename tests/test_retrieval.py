@@ -18,11 +18,8 @@ from mycelium.budget import count_tokens
 from mycelium.operations import RetrievalRequest
 from mycelium.models import WikiPage
 from mycelium.retrieval import MemoryRetriever
-from mycelium.retrieval_context import (
-    RetrievedContextBuilder,
-    render_memory_evidence,
-    render_memory_source_result,
-)
+from mycelium.retrieval_context import RetrievedContextBuilder
+from mycelium.evidence_rendering import render_memory_evidence, render_memory_source_result
 from mycelium.store import WikiStore
 
 
@@ -370,7 +367,7 @@ def test_review_relationship_and_matched_claims_survive_fact_rendering(tmp_path)
         for c in claims
     ]
     builder = RetrievedContextBuilder(wiki, artifacts)
-    evidence = builder._memory_evidence(builder.distinct_hits(hits, limit=3))
+    evidence = builder.build_interpretation(builder.distinct_hits(hits, limit=3))
     assert len(evidence.records) == 4
     summary = evidence.records[3]
     assert {c.claim_id for c in summary.canonical_claims} == {"old", "detail"}

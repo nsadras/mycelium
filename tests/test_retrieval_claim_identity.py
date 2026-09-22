@@ -6,7 +6,8 @@ import pytest
 from mycelium import Mycelium
 from mycelium.artifacts import ClaimEntityReference, ConsolidatedFact
 from mycelium.memory_workspace import merge_memory_evidence
-from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
+from mycelium.retrieval_context import RetrievedContextBuilder
+from mycelium.evidence_rendering import render_memory_evidence
 from mycelium.store import WikiStore
 from tests.test_audit_remediation import seed
 
@@ -109,11 +110,11 @@ def test_shared_assertions_are_rendered_once_without_dropping_unmatched_support(
     for identifier in ("view-1", "view-2"):
         view(artifacts, entity, [claim, second], identifier=identifier)
     builder = RetrievedContextBuilder(WikiStore(tmp_path / "wiki"), artifacts)
-    rendered = render_memory_evidence(builder._memory_evidence([hit]))
+    rendered = render_memory_evidence(builder.build_interpretation([hit]))
     assert rendered.count(claim.text) == 1
     assert rendered.count(second.text) == 1
     # A view shown on its own still carries both underlying assertions.
-    evidence = builder._memory_evidence([hit])
+    evidence = builder.build_interpretation([hit])
     rendered = render_memory_evidence(replace(evidence, records=(evidence.records[-1],)))
     assert claim.text in rendered and second.text in rendered
 

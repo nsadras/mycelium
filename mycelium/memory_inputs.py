@@ -5,16 +5,38 @@ Only declared reference fields are rewritten; human text remains literal.
 """
 
 from copy import deepcopy
+from dataclasses import asdict
+import json
+
+from mycelium.operations import MemoryEvidence
 
 
 PASSAGE_CHARACTERS = 1200
 
 
-SINGLE_IDS = {"id", "owner_id", "subject_id", "memory_id", "source_id",
-              "target_claim_id", "proposal_id", "participant_id", "speaker_subject_id"}
-MULTIPLE_IDS = {"subject_ids", "segment_ids", "new_subject_ids", "memory_ids",
-                "linked_subject_ids", "affected_subject_ids", "incoming_claim_ids",
-                "target_claim_ids", "affected_entity_ids", "participant_ids"}
+SINGLE_IDS = {
+    "id",
+    "owner_id",
+    "subject_id",
+    "memory_id",
+    "source_id",
+    "target_claim_id",
+    "proposal_id",
+    "participant_id",
+    "speaker_subject_id",
+}
+MULTIPLE_IDS = {
+    "subject_ids",
+    "segment_ids",
+    "new_subject_ids",
+    "memory_ids",
+    "linked_subject_ids",
+    "affected_subject_ids",
+    "incoming_claim_ids",
+    "target_claim_ids",
+    "affected_entity_ids",
+    "participant_ids",
+}
 
 
 class RequestIds:
@@ -51,11 +73,20 @@ class RequestIds:
         result = deepcopy(value)
         for subject in result["subjects"]:
             subject["id"] = self.reverse[subject["id"]]
-            subject["participant_ids"] = [self.reverse[pid] for pid in subject["participant_ids"]]
+            subject["participant_ids"] = [
+                self.reverse[pid] for pid in subject["participant_ids"]
+            ]
         for memory in result["memories"]:
-            memory["segment_ids"] = list(dict.fromkeys(
-                sid for reference in memory["segment_ids"] for sid in self.citations[reference]))
-            memory["subject_ids"] = [self.reverse[identifier] for identifier in memory["subject_ids"]]
+            memory["segment_ids"] = list(
+                dict.fromkeys(
+                    sid
+                    for reference in memory["segment_ids"]
+                    for sid in self.citations[reference]
+                )
+            )
+            memory["subject_ids"] = [
+                self.reverse[identifier] for identifier in memory["subject_ids"]
+            ]
         for change in result["changes"]:
             change["earlier_id"] = self.reverse[change["earlier_id"]]
         return result
@@ -88,10 +119,16 @@ def compact_retention(payload):
             if row.get("role") is None:
                 row.pop("role", None)
             context = {k: v for k, v in row.items() if k not in {"id", "text"}}
-            if (passages and row.get("source_id") is not None and index is not None
-                    and previous_index is not None and index == previous_index + 1
-                    and context == previous_context
-                    and len(passages[-1]["text"]) + 1 + len(row["text"]) <= PASSAGE_CHARACTERS):
+            if (
+                passages
+                and row.get("source_id") is not None
+                and index is not None
+                and previous_index is not None
+                and index == previous_index + 1
+                and context == previous_context
+                and len(passages[-1]["text"]) + 1 + len(row["text"])
+                <= PASSAGE_CHARACTERS
+            ):
                 passages[-1]["text"] += " " + row["text"]
                 citations[passages[-1]["id"]].append(row["id"])
             else:
@@ -110,3 +147,51 @@ def compact_retention(payload):
 def compact_presentation(payload):
     ids = RequestIds()
     return ids.encode(payload), ids
+
+
+def compact_selection_evidence(
+    evidence: MemoryEvidence, aliases: dict[str, str]
+) -> tuple[str, dict[str, str]]:
+    """Share evidence once and shorten references without rewriting human text."""
+    ids = RequestIds()
+    ids.forward = {canonical: alias for alias, canonical in aliases.items()}
+    ids.reverse = dict(aliases)
+    single = {
+        "record_id",
+        "claim_id",
+        "source_id",
+        "segment_id",
+        "entity_id",
+        "subject_entity_id",
+        "proposal_id",
+        "evidence_segment_id",
+        "anchor_segment_id",
+    }
+    multiple = {"claim_ids", "segment_ids", "incoming_claim_ids", "target_claim_ids"}
+    direct = {r.record_id for r in evidence.records if r.record_type == "claim"}
+
+    def encode(value):
+        if isinstance(value, (list, tuple)):
+            return [encode(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        result = {}
+        for key, item in value.items():
+            if item is None or item == [] or item == () or key == "revision":
+                continue
+            if key in single:
+                result[key] = ids.reference(item)
+            elif key in multiple:
+                result[key] = [ids.reference(identifier) for identifier in item]
+            elif key == "canonical_claims":
+                # The full assertion is already present in its selectable record.
+                remaining = [c for c in item if c["claim_id"] not in direct]
+                if remaining:
+                    result[key] = encode(remaining)
+            else:
+                result[key] = encode(item)
+        return result
+
+    return json.dumps(
+        encode(asdict(evidence)), ensure_ascii=False, separators=(",", ":")
+    ), ids.reverse

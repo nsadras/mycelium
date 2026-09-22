@@ -3,7 +3,7 @@ from typing import Any, List, TYPE_CHECKING
 
 from mycelium.operations import MemoryEvidence, WikiPageReference
 from mycelium.prompting import render_prompt
-from mycelium.retrieval_context import render_memory_evidence
+from mycelium.evidence_rendering import render_memory_evidence
 
 if TYPE_CHECKING:
     from mycelium.core import Mycelium

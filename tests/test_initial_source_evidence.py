@@ -4,7 +4,8 @@ from mycelium import Mycelium
 from mycelium.artifacts import ClaimProvenance, SourceSegment
 from mycelium.budget import count_tokens
 from mycelium.operations import MemoryEvidence
-from mycelium.retrieval_context import RetrievedContextBuilder, render_memory_evidence
+from mycelium.retrieval_context import RetrievedContextBuilder
+from mycelium.evidence_rendering import render_memory_evidence
 from mycelium.store import WikiStore
 from tests.test_audit_remediation import seed
 

@@ -143,7 +143,7 @@
     font-weight="600"
     font-size="20"
     letter-spacing="0.5"
-  >Self-Consolidating Memory Store for Local LLM Agents</text>
+  >Memory for you and your AI agents</text>
 
   <text
     x="455"
@@ -153,7 +153,7 @@
     font-weight="400"
     font-size="14.5"
     letter-spacing="0.2"
-  >Captures conversations as source-grounded episodic claims, the consolidates them</text>
+  >Turn conversations and meetings into organized, readable pages.</text>
   <text
     x="455"
     y="248"
@@ -162,12 +162,12 @@
     font-weight="400"
     font-size="14.5"
     letter-spacing="0.2"
-  >into an entity-owned Markdown wiki with provenance-aware retrieval.</text>
+  >Bring useful context into future chats, with links back to the source.</text>
 
-  <!-- 5. GLOWING OPT-IN FEATURE BADGES -->
-  <!-- Badge 1: EPISODIC LOGGING -->
+  <!-- 5. FEATURE BADGES -->
+  <!-- Badge 1: HUMAN READABLE -->
   <g transform="translate(455, 290)">
-    <rect width="160" height="30" rx="15" fill="#090e0c" stroke="#10b981" stroke-opacity="0.25" stroke-width="1" />
+    <rect width="180" height="30" rx="15" fill="#090e0c" stroke="#10b981" stroke-opacity="0.25" stroke-width="1" />
     <circle cx="20" cy="15" r="4" fill="#10b981" />
     <text
       x="35"
@@ -177,12 +177,12 @@
       font-weight="700"
       font-size="10.5"
       letter-spacing="1"
-    >EPISODIC LOGGING</text>
+    >HUMAN READABLE</text>
   </g>
 
-  <!-- Badge 2: DREAM CONSOLIDATION -->
-  <g transform="translate(630, 290)">
-    <rect width="185" height="30" rx="15" fill="#090e0c" stroke="#10b981" stroke-opacity="0.25" stroke-width="1" />
+  <!-- Badge 2: AGENT CONTEXT -->
+  <g transform="translate(650, 290)">
+    <rect width="180" height="30" rx="15" fill="#090e0c" stroke="#10b981" stroke-opacity="0.25" stroke-width="1" />
     <circle cx="20" cy="15" r="4" fill="#34d399" />
     <text
       x="35"
@@ -192,12 +192,12 @@
       font-weight="700"
       font-size="10.5"
       letter-spacing="1"
-    >DREAM CONSOLIDATION</text>
+    >AGENT CONTEXT</text>
   </g>
 
-  <!-- Badge 3: GROUNDED RETRIEVAL -->
-  <g transform="translate(830, 290)">
-    <rect width="195" height="30" rx="15" fill="#090e0c" stroke="#10b981" stroke-opacity="0.25" stroke-width="1" />
+  <!-- Badge 3: RUNS LOCALLY -->
+  <g transform="translate(845, 290)">
+    <rect width="180" height="30" rx="15" fill="#090e0c" stroke="#10b981" stroke-opacity="0.25" stroke-width="1" />
     <circle cx="20" cy="15" r="4" fill="#a78bfa" />
     <text
       x="35"
@@ -207,6 +207,6 @@
       font-weight="700"
       font-size="10.5"
       letter-spacing="1"
-    >GROUNDED RETRIEVAL</text>
+    >RUNS LOCALLY</text>
   </g>
 </svg>

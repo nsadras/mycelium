@@ -7,7 +7,7 @@ import pytest
 
 from mycelium import Mycelium
 from mycelium import memory_contract
-from mycelium.artifacts import ClaimEntityReference, ClaimProvenance, ConsolidatedFact, EntityResolutionDecision
+from mycelium.artifacts import ClaimEntityReference, ClaimProvenance, ConsolidatedFact, EntityResolutionDecision, ReconsolidationProposal
 from mycelium.context import render_memory_context
 from mycelium.organization import EntityCurationService, FactCurationService, IdentityReviewService
 from tests.test_claim_lifecycle import setup_service, add_source, add_claim, NOW
@@ -173,3 +173,42 @@ def test_related_update_keeps_complete_shared_support_and_protected_items(tmp_pa
     assert set(refreshed.member_claim_ids) == {seed.claim_id, extra.claim_id, incoming.claim_id}
     assert refreshed.linked_entity_ids == [shared.entity_id]
     assert refreshed.text == " ".join(c.text for c in [seed, extra, incoming])
+
+
+@pytest.mark.parametrize('protection', ['manual', 'pending'])
+@pytest.mark.asyncio
+async def test_repeated_refresh_preserves_protected_items_without_cloning_them(tmp_path, monkeypatch, protection):
+    artifacts, wiki, service, claim, person, fact = views_fixture(tmp_path)
+    fact.linked_entity_ids = ['you']
+    fact.manual_text = protection == 'manual'
+    artifacts.save_consolidated_fact(fact)
+    sid = add_source(artifacts, 'later-source')
+    incoming = add_claim(artifacts, 'later', [ClaimProvenance('later-source', [sid])])
+    if protection == 'pending':
+        artifacts.save_reconsolidation_proposal(ReconsolidationProposal('review',
+            [incoming.claim_id], [claim.claim_id], 'contradicts', 'Unresolved accounts', .8, 'build', NOW))
+    other = artifacts.create_entity('project', 'Independent work')
+    untouched = replace(fact, fact_id='unrelated', member_claim_ids=[incoming.claim_id],
+                        owner_entity_id=other.entity_id, linked_entity_ids=[])
+    artifacts.save_consolidated_fact(untouched)
+    service.materializer.regenerate({other.entity_id})
+    page_before = wiki.get(other.slug).content
+    repeated = {'owner_id': person.entity_id, 'heading': fact.section_key,
+                'memory_ids': [claim.claim_id], 'linked_subject_ids': ['you'], 'state': 'current'}
+    # Owner/link order does not change the pages receiving the paragraph.
+    reordered = {**repeated, 'owner_id': 'you', 'linked_subject_ids': [person.entity_id]}
+    distinct = {**repeated, 'linked_subject_ids': []}
+    another_heading = {**distinct, 'heading': 'Another aspect'}
+    output = {'items': [repeated, reordered, distinct, distinct, another_heading]}
+    present = AsyncMock(return_value=output)
+    monkeypatch.setattr(memory_contract, 'present', present)
+    for index in range(3):
+        await service.views.refresh({claim.claim_id}, context_ids=[], run_id=f'refresh-{index}')
+        assert artifacts.get_consolidated_fact(fact.fact_id) == fact
+        assert artifacts.get_consolidated_fact(untouched.fact_id) == untouched
+        assert wiki.get(other.slug).content == page_before
+        views = artifacts.facts_for_claim(claim.claim_id)
+        assert len(views) == (4 if protection == 'pending' else 3)
+        assert sum(v.linked_entity_ids == ['you'] for v in views) == 1
+        assert {v.section_key for v in views if v.fact_id != 'fact-statement'} == {fact.section_key, 'Another aspect'}
+    assert present.await_count == 3

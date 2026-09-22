@@ -6423,3 +6423,18 @@ remain separate gates.
   evidence budget. Exact native inputs/options/schema and persistence were replayed
   offline. No further native calls, live data rebuild, service operations or edits
   to user-owned guidance/notes. Frontend code is unchanged; UI checks were not rerun.
+## 2026-09-22 — Prevent protected view copies on repeated Builds
+
+- Preserve protected items by exact support IDs, destination IDs and heading at
+  persistence. Skip repeated representations of those items and duplicate items
+  within a response. Different destinations/headings and existing manual splits
+  remain valid; no text matching, schema change, retry or extra model call.
+- Validate in an isolated checkout: 28 focused lifecycle/input/Build tests pass,
+  plus Ruff and whitespace checks. New regressions run three refreshes with manual
+  protection and pending review, preserving content and an unrelated page.
+- Replay the actual sample-7 presentation responses from Builds 2–5 with zero
+  inference calls. A copied final snapshot initialized with one protected copy
+  stays at one through all four responses. Sources, claim text and provenance
+  remain unchanged. Artifacts: `benchmark_runs/view-retrieval-20260922/`.
+- This prevents future accumulation. It does not delete historical/manual copies
+  from existing stores or repair the earlier mis-cited claim. Live data unchanged.

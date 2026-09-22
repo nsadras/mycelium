@@ -9,6 +9,13 @@ from mycelium.page_reviews import reviewed_page_exclusions
 from mycelium.retention import memory_record, now_iso, related_claim_ids, stable_id
 
 
+def _item_key(item):
+    # Exact support and display location, not textual similarity. Sharing the
+    # same evidence on another page or under another heading remains possible.
+    return (frozenset(item["memory_ids"]),
+            frozenset([item["owner_id"], *item["linked_subject_ids"]]), item["heading"])
+
+
 class ViewOrganizer:
     def __init__(self, llm, artifacts, materializer, config, claim_index=None):
         self.llm, self.artifacts, self.materializer = llm, artifacts, materializer
@@ -101,12 +108,17 @@ class ViewOrganizer:
         affected = set(payload["affected_subject_ids"])
         texts = {m["id"]: m["text"] for m in payload["memories"]}
         with self.artifacts.db.transaction():
+            seen = {_item_key(item) for item in payload["existing_items"] if item["protected"]}
             for item in payload["existing_items"]:
                 if not item["protected"]:
                     fact = self.artifacts.get_consolidated_fact(item["id"])
                     affected.update([fact.owner_entity_id, *fact.linked_entity_ids])
                     self.artifacts.delete_consolidated_fact(item["id"])
             for index, item in enumerate(view["items"]):
+                key = _item_key(item)
+                if key in seen:
+                    continue
+                seen.add(key)
                 self.artifacts.save_consolidated_fact(ConsolidatedFact(
                     f"{stable_id('view', run_id)}-{index:04d}",
                     " ".join(texts[mid] for mid in dict.fromkeys(item["memory_ids"])), item["memory_ids"], item["owner_id"],

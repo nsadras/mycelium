@@ -294,6 +294,22 @@ correction applies. Retraction withdraws the selected source without a model cal
 support remain active; claims without support become inactive, and all affected views regenerate. Manual items
 remain inspectable even when their withdrawn support prevents them from appearing in a page.
 
+#### Correction-date review API
+
+Corrections with relative dates show a preview before changing memory. Choose a
+reference date for each event, deadline, or condition: a cited message, a stored
+reference date, this correction's submission, or unresolved. The preview shows
+the resulting dates; saving preserves both the source wording and your choices.
+An edited statement or changed source requires a new preview. A delayed save
+uses the reviewed submission date, even across midnight.
+
+API clients receive `status: "review_required"` and a `draft_id` from
+`POST /api/memory/claims/{claim_id}/correct`. Apply the review by repeating the
+same replacement fields with that `draft_id` and a `time_references` mapping from
+every returned `time_id` to an offered `reference_id`. Preparing a preview leaves
+the original claim active; repeated prepare/apply requests are idempotent.
+Absolute dates and statements without relative dates apply directly.
+
 ## Web sessions and direct library sessions
 
 The web app owns long-lived session transcripts and automatic completed-turn capture in `server/runtime.py`. Ordinary chat content and non-memory tool observations are saved as sources after the reply, without running extraction.
@@ -301,6 +317,18 @@ The web app owns long-lived session transcripts and automatic completed-turn cap
 The direct Python API can call `retrieve_context`, `ingest_source`, and `consolidate` explicitly with typed contracts.
 `Mycelium.session()` is an ergonomic conversational wrapper: it retrieves typed evidence and real wiki page references on entry and ingests recorded messages
 on exit. Consolidation remains an explicit operation.
+
+| Operation | Input | Output |
+| --- | --- | --- |
+| `ingest_source` | `SourceInput` with a transcript, source kind, participants, segments, and idempotency key | `IngestionResult` with `captured` (or `empty`) status and durable source/log/episode/operation IDs; capture does not extract claims |
+| `retrieve_context` | `RetrievalRequest` with a query and context budget | `RetrievalResult` with real wiki page references (`page_references`), typed evidence records and sources, authoritative Markdown/pseudo-XML rendering, and a retrieval trace |
+| `consolidate` | `ConsolidationRequest` with dry-run and deferred-claim policy | `ConsolidationResult` with the build report and processed extraction episode IDs |
+
+Use `Mycelium` as a context manager or call `close()` to release store ownership.
+See [basic_session.py](examples/basic_session.py) for the session helper and
+[langgraph_integration.py](examples/langgraph_integration.py) for an integration sketch;
+the latter requires LangGraph, which is not a project dependency. Both examples
+select their own model names, so align them with your installed models before use.
 
 ## Memory operations
 
@@ -310,7 +338,7 @@ counts, not age or size readiness thresholds. Flush and run-if-ready endpoints h
 
 The UI exposes Build Memory, source/claim inspection, view editing, identity and truth review, and development
 resets. Source and segment timestamps are preserved. Ordinary retained statements keep relative wording and source
-time rather than attaching model-guessed calendar precision. Schema 2 requires fresh stores.
+time rather than attaching model-guessed calendar precision. The current SQLite schema is version 3; incompatible stores require a fresh directory.
 
 Corrections use structured temporal metadata. Relative-date corrections create durable previews and require exact
 reference choices before application. Calendar arithmetic resolves reviewed offsets/periods without interpreting
@@ -415,9 +443,39 @@ they exclude locks and rebuildable indexes. `python -m mycelium.snapshots` expor
 canonical JSONL records for inspection. Benchmarks, lifecycle services, and runtime
 code use repositories rather than artifact-file paths. Engram storage remains separate.
 
+### Fresh stores, publication, and exports
+
+The current store uses SQLite schema 3. Schema 1/2 databases and older JSON stores
+are rejected without migration. Choose a fresh store for the web app:
+
+```bash
+MYCELIUM_STORE=./mycelium_store_fresh ./start.sh
+```
+
+Existing stores and benchmark snapshots retain their original formats. Engram's
+recording database and audio directory are configured separately under `[engram]`;
+changing `MYCELIUM_STORE` does not relocate them or recapture previously finalized
+meetings into the new store.
+
+The memory inspector shows pending Markdown publication and offers **Retry
+publication**. Canonical edits commit atomically; retrying file publication does
+not call the model. Editing generated wiki/log files externally does not update
+canonical memory, and a later publication may replace those files.
+
+Export canonical records into a fresh directory for offline inspection:
+
+```bash
+.venv/bin/python -m mycelium.snapshots mycelium_store memory-export
+```
+
+The export is JSONL by record collection, not another writable backend. Use a
+separate store for each writer process; library clients release their store with
+a `Mycelium` context manager or `close()`.
+
 ## Configuration
 
-Runtime settings live in `mycelium.toml`:
+The server explicitly loads `mycelium.toml`. Library callers pass `config_path`
+or a `Config` object; omitting both uses dataclass defaults. Runtime settings include:
 
 ```toml
 [llm]
@@ -430,6 +488,14 @@ reasoning_enabled = false
 [session]
 context_budget_tokens = 32768
 
+[retrieval]
+embedding_model = "embeddinggemma:latest"
+candidate_limit = 20
+initial_result_limit = 5
+tool_result_limit = 6
+tool_search_limit = 3
+tool_evidence_budget_tokens = 6000
+
 [engram.whisper]
 model = "large-v3"
 device = "auto"
@@ -437,7 +503,11 @@ compute_type = "auto"
 batch_size = 8
 ```
 
-`llm.context_window_tokens` controls token-aware ingestion batching. It is separate from `session.context_budget_tokens`, which limits how much retrieved memory is loaded into chats. Dream projection defaults live in `mycelium/config.py`.
+`llm.context_window_tokens` bounds model requests, including retention batching.
+`session.context_budget_tokens` is the total input allowance shared by the assistant
+system prompt, recent transcript, initial memory, and follow-up evidence; it is
+capped by the model context window. Retrieval tool limits apply per assistant
+response. Defaults and validation live in `mycelium/config.py`.
 
 Explicit constructor/CLI overrides take precedence over a requested TOML file,
 then dataclass defaults. Missing requested files and invalid values fail before
@@ -451,7 +521,8 @@ compare full effective memory and QA settings, including URLs and sampling.
 Engram stores uploaded meeting audio before processing it. The UI then starts an explicit processing workflow:
 
 1. `faster-whisper` produces a timestamped transcript.
-2. WhisperX aligns the transcript and pyannote assigns speaker labels.
+2. Pyannote detects speakers, and WhisperX maps their intervals onto the existing
+   timestamped transcript. There is no second transcription or text-alignment pass.
 3. The user reviews and can edit the transcript and speaker names.
 4. Finalization freezes the transcript, speaker names and meeting metadata, then
    captures it as a durable source/log/episode through the normal memory API.
@@ -477,6 +548,9 @@ the rest of the application:
 uv sync
 ```
 
+WhisperX audio loading invokes the FFmpeg command-line program, which must be
+installed separately and available on `PATH`. See the [WhisperX setup guide](https://github.com/m-bain/whisperX#setup-).
+
 By default, `device = "auto"` and `compute_type = "auto"` select CUDA/`float16` when a CUDA-visible NVIDIA GPU is available, and CPU/`int8` otherwise. The path can be forced in `mycelium.toml`:
 
 ```toml
@@ -485,13 +559,25 @@ device = "cuda"
 compute_type = "float16"
 ```
 
-Diarization requires accepting the terms for `pyannote/speaker-diarization-community-1` and exporting a Hugging Face token:
+Diarization requires accepting the terms for [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+and supplying a Hugging Face token, either in the server's project-root `.env` or in its environment:
 
 ```bash
 export HF_TOKEN=your_hugging_face_token
 ```
 
-Uploaded recordings are copied to `mycelium_store/engram/audio/`. They initially appear as `ready`, move to transcript review after processing, and enter memory only after finalization.
+Uploaded recordings are copied to `mycelium_store/engram/audio/` by default. They
+initially appear as `ready` and move to transcript review after processing.
+Finalization captures a source; Build Memory then extracts searchable statements
+and refreshes views. Transcript, speaker, and meeting-time edits lock when source
+admission begins. A failed finalization retries those frozen inputs.
+
+Audio uploads are bounded twice: the complete multipart request may contain at
+most `engram.max_upload_bytes` plus 64 KiB of metadata, and the audio file must
+fit `engram.max_upload_bytes` (default 1 GiB). Chunked uploads are bounded while
+receiving; rejected partial uploads are cleaned up. **Retry speaker detection**
+reuses the existing transcript during review. **Retry Summary** reuses the
+already captured source.
 
 ### AMI smoke tests
 
@@ -525,29 +611,39 @@ Add `ENGRAM_AMI_WHISPER_DEVICE=cpu ENGRAM_AMI_WHISPER_COMPUTE_TYPE=int8` to forc
 
 ## Remote access and WSL
 
-The frontend derives its backend origin from the hostname used to load the page. For example, loading `http://192.168.x.x:5173` makes API requests to `http://192.168.x.x:8000/api`. Override that behavior with `VITE_API_ORIGIN`:
+The app has no sign-in. Use the host firewall and Tailscale access rules to limit
+access to trusted devices. Keep the backend on loopback and expose the UI only
+on your private network. API and audio requests use the same origin as the UI;
+Vite proxies `/api` to the backend.
+
+Set these variables before running your normal `./start.sh` command:
 
 ```bash
-cd ui
-VITE_API_ORIGIN=http://localhost:8000 npm run dev
+export MYCELIUM_UI_HOST=0.0.0.0
+export MYCELIUM_ALLOWED_HOSTS=localhost,127.0.0.1,my-host,my-host.example.ts.net,192.168.1.20
 ```
+
+Replace the example names and address with your actual LAN and Tailscale hosts.
+Host entries omit schemes and ports. The backend defaults to `127.0.0.1:8000`;
+`MYCELIUM_API_HOST` explicitly overrides that binding. Do not forward the UI or
+API port from the public internet. Browser requests from other origins are
+rejected. Host validation and same-origin checks are not authentication.
+
+A UI built with `cd ui && npm run build` is also served by the backend when
+`ui/dist` exists at backend startup. For HTTPS reverse proxies, preserve the Host
+header and configure trusted forwarded headers so the backend sees the original
+scheme. After you start the services, verify chat, audio playback, and memory
+inspection from each intended LAN/Tailscale device.
 
 Keep Ollama bound to localhost; only the backend needs to communicate with it.
 
-For WSL on Windows, mirrored networking lets other trusted LAN or Tailscale devices reach the WSL development servers. Add the following to `C:\Users\<you>\.wslconfig`:
+For WSL, host networking and firewall settings must also allow access from the
+intended device. Microsoft's [WSL networking guide](https://learn.microsoft.com/en-us/windows/wsl/networking)
+covers NAT and mirrored networking. Configure that layer in addition to the UI
+binding and allowed hosts above.
 
-```ini
-[wsl2]
-networkingMode=mirrored
-```
-
-Restart WSL from PowerShell with `wsl --shutdown`, restart Mycelium, then connect to `http://<windows-lan-or-tailscale-ip>:5173`.
-
-If mirrored networking is unavailable, the repository includes a port-proxy helper. Run it from an Administrator WSL terminal:
-
-```bash
-powershell.exe -ExecutionPolicy Bypass -File "$(wslpath -w scripts/Expose-MyceliumWsl.ps1)" -SetPrivateNetwork
-```
+The frontend uses relative `/api` URLs. It does not read `VITE_API_ORIGIN` or
+construct a separate backend origin from the page hostname.
 
 ## Benchmarks
 
@@ -624,8 +720,9 @@ For full runs, omit sample limits and select each system or MAB dataset explicit
 See the [benchmark guide](benchmarks/README.md) for commands and the curated MAB configuration list.
 The default dream policy is `per-batch`; use `--dream-policy per-case` explicitly when needed.
 
-The Daily Driver fixture is the behavioral protocol for entity, ownership, lifecycle, and wiki-coherence work.
-Validate it before use:
+The Daily Driver fixtures provide diagnostic scenarios for identity, ownership, lifecycle, and wiki coherence.
+Their expected outputs are evaluation inputs; product goals and the bounded milestone plan govern implementation.
+Validate a fixture before use:
 
 ```bash
 uv run python -m benchmarks daily-driver \
@@ -669,7 +766,36 @@ npm run build
 
 The UI renders Markdown, GitHub-flavored tables and lists, and KaTeX notation.
 
+### Chat-to-memory smoke test
+
+With the models configured in `mycelium.toml` available in your running Ollama instance:
+
+```bash
+MYCELIUM_RUN_CHAT_REPLAY=1 .venv/bin/pytest -q -s tests/test_chat_memory_replay.py
+```
+
+This opt-in integration test starts a fresh temporary store, captures the saved fried-rice and alignment
+conversations verbatim, runs Build Memory, checks that the single You page owns facts from both conversations,
+and asks the original cooking question in an empty third chat. It checks actual retrieved source citations, not
+answer keywords. Model calls and embeddings are real; the third chat has memory tools but no web tools.
+It may take several minutes and model outputs can vary. The normal test suite skips it.
+
+The printed temporary directory contains the store, build report, rendered pages, and third-chat response for
+inspection (including on failure, up to the stage reached). Your live store is untouched. The fixture at
+`tests/fixtures/chat_memory_replay.json` contains personal conversation text saved with permission; review it
+before publishing or sharing the repository.
+
+Focused structural tests cover capture/build recovery, shared evidence, manual view edits, correction-date review,
+and source retraction:
+
+```bash
+.venv/bin/pytest -q tests/test_capture_build.py tests/test_memory_build.py tests/test_view_lifecycle.py tests/test_claim_lifecycle.py tests/test_correction_review.py
+```
+
+These checks establish lifecycle mechanics. Configured-model runs and source review establish whether the
+resulting memory is useful; ordinary omissions do not require a perfect benchmark score before moving on.
+
 Current implementation notes:
 
-- The backend allows broad CORS access for local development and should be tightened before deployment.
+- The backend validates allowed hosts and rejects cross-origin browser requests. These checks are not authentication; see [remote access](#remote-access-and-wsl).
 - The combined `start.sh` launcher is intended for development; the backend can also be started independently with `uv run python -m server.main`.

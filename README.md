@@ -4,359 +4,222 @@
 
 # Mycelium
 
-Mycelium is an inspectable memory system for local AI agents. It keeps the original conversation as a durable record, turns useful information into an organized Markdown wiki, and brings the relevant parts back when they are needed later.
+**Persistent memory for people and AI agents.**
 
-It is designed for users who want a local assistant that can build context over time with inspectable evidence and an organized wiki. You can chat with it through the included web app, inspect the complete evidence-to-claim pipeline, review proposed memory updates, or add the Python library to another agent.
+Mycelium turns conversations and meeting transcripts into memory you can browse,
+review, and bring into future conversations. It includes a local chat assistant,
+an organized Markdown wiki, and a Python library for adding memory to your own agents.
 
-## Why use it?
+The same memory serves two purposes: readable pages help you follow people,
+projects, preferences, and decisions over time; relevant statements and source
+passages give an agent context for its next response. You can inspect where a
+memory came from and correct it as your understanding changes.
 
-Most chat assistants either forget everything between sessions or require the entire conversation history to be sent again. Mycelium takes a different approach:
+## What you can do
 
-- **Memory persists across conversations.** Projects, preferences, decisions, research, and prior discussions can carry into a new session.
-- **Everything stays inspectable.** Raw logs and wiki views are Markdown; canonical sources, claims, decisions, and chat state are stored in SQLite and available through the inspector or JSON export.
-- **Local models do the work.** Chat, retrieval, and memory consolidation run through Ollama on your machine.
-- **You stay in control.** The UI shows the memories used for a response and requires review before contradictions or replacements change canonical claims.
+- **Carry context across conversations.** Bring past preferences, decisions, and
+  ongoing work into a new chat without manually assembling the conversation history.
+- **Browse an organized view of your memory.** Build linked pages about the
+  subjects discussed in your conversations. Related information can appear on
+  more than one page, and retained details remain searchable even without a page.
+- **Inspect the assistant's context.** See the memory evidence supplied to a
+  response and follow retained statements back to the original conversation.
+- **Keep memory useful as things change.** Correct statements, adjust their
+  organization, merge duplicate subjects, and review proposed updates when newer
+  information appears to change or conflict with earlier memory.
+- **Bring meetings into the same memory.** Upload audio, review the transcript and
+  speaker names, then build that discussion into your wiki and future chat context.
+- **Run locally.** The supplied configuration uses Ollama for chat
+  and memory processing, local models for speech, and storage on your machine.
+  The Python API lets other agents use the same memory without the web app.
 
-## Features
+### What to expect
 
-- Multi-session chat with a local Ollama model
-- Hybrid automatic retrieval plus assistant-directed follow-up memory search
-- Durable source capture, with extracted statements searchable even when they have no wiki page
-- Plain-text episodic logs and an Obsidian-compatible Markdown wiki
-- Evidence-triggered, claim-level reconsolidation with human review
-- Deterministic, read-only wiki projections with exact source provenance
-- Meeting ingestion pipeline - upload meeting audio to have it transcribed, diarized, and consolidated into the memory system
-- A Python API for adding Mycelium memory to other agents and frameworks
+Mycelium is an early-stage project intended for personal use. Memory is selective:
+it can omit useful details, confuse identities, or choose awkward organization.
+Retrieval and answers can also miss or misinterpret relevant context. Original
+sources and review tools help you check and correct the result.
 
-## Storage and fresh stores
+Builds and audio processing take time, especially for longer conversations.
+Speed and memory use depend on your hardware, models, and context settings.
 
-Canonical memory and chat state live in `memory.sqlite3`. Markdown under `wiki/`
-and `logs/` is a generated, inspectable view; edit memory through the application,
-not by modifying these files. LanceDB under `indexes/` is rebuildable.
-
-This version requires a **fresh SQLite schema 3 store**. Schema 1/2 stores, older JSON
-stores, and existing benchmark runs are not migrated or modified. The new schema
-preserves separate event, deadline, and condition times with their cited evidence;
-imprecise dates remain explicitly unresolved. For the web app, select a new directory before
-running your normal launch command:
-
-```bash
-MYCELIUM_STORE=./mycelium_store_v2 ./start.sh
-```
-
-One process owns each writable store. A second server, worker, or library process
-using that directory fails clearly; separate benchmark stores can run independently.
-Library owners should use `Mycelium` as a context manager or call `close()`.
-
-The memory inspector shows pending Markdown publication and offers **Retry
-publication**. Canonical edits commit atomically; retrying publication requires no
-model call. Invalid build plans are recorded as failed without partial canonical
-updates, and a later build can recompute them.
-
-Export canonical records into a fresh directory for offline inspection:
-
-```bash
-.venv/bin/python -m mycelium.snapshots mycelium_store_v2 memory-export
-```
-
-The export is JSONL by record collection, not another writable backend. Existing
-Engram meeting storage remains separate; old meetings are not automatically imported
-into a fresh memory store.
-
-### Reviewing correction dates
-
-Corrections with relative dates show a preview before changing memory. Choose a
-reference date for each event, deadline, or condition: a cited message, a stored
-reference date, this correction's submission, or unresolved. The preview shows
-the resulting dates; saving preserves both the source wording and your choices.
-An edited statement or changed source requires a new preview. A delayed save
-uses the reviewed submission date, even across midnight.
-
-API clients receive `status: "review_required"` and a `draft_id` from
-`POST /api/memory/claims/{claim_id}/correct`. Apply the review by repeating the
-same replacement fields with that `draft_id` and a `time_references` mapping from
-every returned `time_id` to an offered `reference_id`. Preparing a preview leaves
-the original claim active; repeated prepare/apply requests are idempotent.
-Absolute dates and statements without relative dates apply directly.
-
-## Quick start
+## Install and run
 
 ### Requirements
 
-- Python 3.11 or newer
-- [uv](https://docs.astral.sh/uv/)
-- Node.js and npm
-- [Ollama](https://ollama.com/) running locally
+- Python 3.11 or newer and [uv](https://docs.astral.sh/uv/getting-started/installation/)
+- Node.js 24 and npm
+- [Ollama](https://ollama.com/) installed and running
+- For meeting audio: FFmpeg on your `PATH` and access to the speaker-detection
+  model described [below](#meeting-audio)
 
-Clone and install dependencies:
+Use a Bash shell for the commands below; on Windows, use WSL.
+
+### 1. Install the application
 
 ```bash
 git clone https://github.com/nsadras/mycelium.git
 cd mycelium
 uv sync
 cd ui
-npm install
+npm ci
 cd ..
 ```
 
-Mycelium is currently configured to use `gemma4:12b` for language tasks and
-`embeddinggemma` for memory retrieval. Download both models with Ollama, or
-change them in `mycelium.toml`:
+`uv sync` installs all Python dependencies, including the meeting features.
+Speech models download when first used; FFmpeg is a separate system dependency.
+
+### 2. Download the configured models
+
+The supplied [mycelium.toml](mycelium.toml) uses
+[Gemma 4 12B](https://ollama.com/library/gemma4:12b) for language tasks and
+[EmbeddingGemma](https://ollama.com/library/embeddinggemma) for memory search:
 
 ```bash
 ollama pull gemma4:12b
 ollama pull embeddinggemma
 ```
 
-With Ollama running, start the backend and frontend together:
+You can change the models and context settings in `mycelium.toml` to suit your
+machine. Model choice affects memory quality as well as speed.
+
+### 3. Start Mycelium
+
+With Ollama running, launch the app from the project root:
 
 ```bash
 ./start.sh
 ```
 
-Open [http://localhost:5173](http://localhost:5173) to use the app. The FastAPI backend is available at [http://localhost:8000](http://localhost:8000).
+Open [localhost:5173](http://localhost:5173). The launcher starts the web UI and
+backend together; stop them with Ctrl+C in that terminal.
 
-
-## Using the app
-
-The UI is organized around five main areas:
-
-| Area | What it is for |
-| --- | --- |
-| **Chat** | Create, rename, resume, and continue conversations. Each answer can show which memory pages were loaded and which tools were called. |
-| **Memory** | Inspect sources, segments, claims, Dream audits, and pending reconciliation proposals. |
-| **Wiki** | Browse and curate entity-owned views deterministically generated from canonical claims. |
-| **Logs** | Inspect the original episodic records that serve as source evidence for the wiki. |
-| **Engram** | Upload meeting audio, review the transcript and speakers, then save the finished meeting into memory. |
-
-A typical workflow is simple:
-
-1. Start a chat and use the assistant normally.
-2. Completed turns are saved automatically as sources, without extraction or embedding calls.
-3. Click **Build Memory** to extract statements from pending sources and organize the wiki.
-4. Start another chat to retrieve built memories and inspect their exact cited sources.
-5. Open **Memory** to inspect processing status and review proposed changes.
-
-Capture alone does not make information searchable across sessions. Current-chat context works normally;
-unbuilt sources remain browsable and await Build Memory. There is no Flush control or scheduled build.
-
-### How memory works
-
-Build Memory uses a stable snapshot of captured sources. A retention pass keeps useful statements with exact
-source citations and subjects; a presentation pass turns them into readable, cited wiki items. The normal small
-Build uses two model calls. Large sources use bounded batches; failed requests can require retries.
-New arrivals remain pending for the next Build. Successful retention survives a failed view update, and retrying
-resumes unfinished work. Retrieval reports when a Build is incomplete. Saved transcripts remain available even
-when some details are not selected as memories.
-
-The wiki distinguishes people, organizations, ongoing projects, recurring series, individual events, artifacts,
-places, and abstract topics. A meeting, tool, or deliverable can remain part of its larger context without creating
-an unnecessary standalone page. Responsibilities shared between a person and a project appear on both pages while
-remaining one source-backed memory.
-
-Every wiki fact links back to its source. When new information conflicts with existing memory, Mycelium creates a
-review proposal instead of silently overwriting either version. The Memory and Wiki views let you inspect evidence,
-correct organization, merge duplicate subjects, and approve or reject proposed changes.
-
-For the detailed lifecycle, entity model, retrieval design, and validation rules, see [DESIGN.md](DESIGN.md).
-
-### Web search
-
-To let the chat assistant use Ollama's web search and fetch tools, add an Ollama API key to a `.env` file in the project root:
+The default memory directory is `./mycelium_store`. If an older installation
+reports a legacy or unsupported store, choose a fresh directory:
 
 ```bash
-OLLAMA_API_KEY=your_api_key_here
+MYCELIUM_STORE=./mycelium_store_fresh ./start.sh
 ```
 
-Tool calls and the result seen by the model are visible in the chat and retained as source observations for later consolidation.
+Older stores are not migrated automatically. Keep the old directory if you need
+its contents; see [storage and exports](DESIGN.md#storage-layout) for details.
 
-### Meeting memory with Engram
+## Use the app
 
-Engram's transcription and speaker-detection dependencies are included in the
-standard `uv sync` installation. No separate installation flag is needed.
+1. **Chat normally.** Completed turns are saved automatically.
+2. **Click Build Memory.** Mycelium selects useful statements from pending
+   conversations and organizes them into wiki pages.
+3. **Browse and review.** Open **Wiki** for the organized pages, **Memory** for
+   source evidence and proposed changes, or **Logs** for captured conversations.
+4. **Start another chat.** The assistant retrieves built memories relevant to the
+   conversation and can search further or inspect their source passages.
 
-For speaker diarization, accept the terms for `pyannote/speaker-diarization-community-1` on Hugging Face and provide a token:
+**Build controls recall across sessions.** Saving a conversation keeps its source;
+Build Memory makes selected information searchable. Your current chat also uses
+its recent conversation context. Build status shows unfinished work; a later
+Build resumes it.
 
-```bash
-export HF_TOKEN=your_hugging_face_token
+Use the application's review and editing controls to change memory. The Markdown
+wiki is also readable outside the app, but its files are generated views and
+external edits are not imported. Corrections involving relative dates show the
+interpreted dates for review before saving.
+
+### Meeting audio
+
+The **Engram** area handles uploaded recordings. For speaker detection, accept the
+conditions for [pyannote's speaker-diarization-community-1 model](https://huggingface.co/pyannote/speaker-diarization-community-1)
+and set a Hugging Face token in the project-root `.env` file before starting the app:
+
+```dotenv
+HF_TOKEN=your_hugging_face_token
 ```
 
-Upload a recording from the **Engram** tab, click **Process**, review the generated
-transcript and speaker labels, then finalize it. Finalization saves the transcript
-as a memory source before generating the optional meeting summary. Transcript,
-speaker and meeting-time edits lock when saving begins; a failed finalization
-retries those same inputs.
+Install FFmpeg through your system package manager if needed; `ffmpeg -version`
+should work in the shell that launches Mycelium.
 
-Diarization and summary warnings have separate, persistent histories. Successful
-retries mark warnings resolved. Speaker detection can retry without transcribing
-again. Restart recovery preserves an already transcribed meeting for review.
+1. Upload a recording in **Engram** and click **Process**.
+2. Review the transcript and assign speaker names. Correct mistakes before saving.
+3. Click **Finalize** to save the reviewed transcript as a memory source and
+   generate a meeting summary.
+4. Click **Build Memory** to make the meeting's retained information searchable
+   and organize it into the wiki.
 
-Deleting a recording cancels queued work and waits for an active audio operation
-to release the file before removal. Source saving that has already started
-finishes its durable bookkeeping first. Deletion removes the Engram recording
-and transcript; already admitted memory remains available in the memory inspector.
+Transcript and speaker edits lock when finalization starts. Speaker detection and
+summaries can fail independently; the UI shows warnings and retry controls.
+Deleting an Engram recording does not withdraw memory already saved from it—use
+source retraction in **Memory** for that.
 
-GPU acceleration is detected automatically when available. See [DESIGN.md](DESIGN.md#engram-meeting-pipeline) for model, device, and testing options.
+See [meeting processing configuration](DESIGN.md#engram-meeting-pipeline) for
+CPU/GPU settings, model options, and recovery details.
 
-## Use Mycelium as a library
+### Optional web search
 
-The web app is optional. The Python API exposes the same three-stage lifecycle used by the server:
+To enable the assistant's Ollama web search and fetch tools, add an API key to
+`.env` before starting the app:
 
-| Operation | Input | Output |
-| --- | --- | --- |
-| `ingest_source` | `SourceInput` with a transcript, source kind, participants, segments, and idempotency key | `IngestionResult` with `captured` (or `empty`) status and durable source/log/episode/operation IDs; capture does not extract claims |
-| `retrieve_context` | `RetrievalRequest` with a query and context budget | `RetrievalResult` with real wiki page references (`page_references`), typed evidence records and sources, authoritative Markdown/pseudo-XML rendering, and a retrieval trace |
-| `consolidate` | `ConsolidationRequest` with dry-run and deferred-claim policy | `ConsolidationResult` with the build report and processed extraction episode IDs |
+```dotenv
+OLLAMA_API_KEY=your_ollama_api_key
+```
 
-For an ordinary agent turn, retrieve memory before generation and ingest the completed exchange afterward:
+Web searches and page fetches contact external services. Their tool calls and
+results are visible in chat.
+
+## Use with your own agent
+
+The Python library exposes capture, Build Memory, and retrieval independently.
+This example saves a preference, builds memory, and retrieves context for a later
+question:
 
 ```python
 import asyncio
 
-import mycelium
+from mycelium import Mycelium, RetrievalRequest, SourceInput
 
 
 async def main():
-    memory = mycelium.Mycelium(
-        store_path="./agent_memory",
-        ollama_model="gemma4:12b",
-    )
+    with Mycelium("./agent_memory", config_path="mycelium.toml") as memory:
+        await memory.ingest_source(SourceInput(
+            transcript="USER: I prefer written project updates before meetings.",
+            session_id="preferences",
+            idempotency_key="preferences:1",
+        ))
 
-    question = "What did we decide about the project architecture?"
-    retrieval = await memory.retrieve_context(
-        mycelium.RetrievalRequest(query=question)
-    )
+        build = await memory.consolidate()
+        print(build.report)
 
-    # Supply retrieval.rendered_context as runtime evidence alongside the
-    # question. Keep behavioral instructions in the model's system prompt.
-    answer = "We chose a plain-text wiki backed by source logs."
-
-    await memory.ingest_source(mycelium.SourceInput(
-        transcript=f"USER: {question}\nASSISTANT: {answer}",
-        session_id="architecture-chat",
-        idempotency_key="architecture-chat:1",
-    ))
-    consolidation = await memory.consolidate(
-        mycelium.ConsolidationRequest()
-    )
-    print(consolidation.report)
+        context = await memory.retrieve_context(RetrievalRequest(
+            query="How do I prefer to receive project updates?",
+        ))
+        print(context.rendered_context)
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
 ```
 
-`Mycelium.session()` remains an ergonomic wrapper around retrieval and ingestion for conversational agents. Web and
-library integrations use the same budgeted memory-context renderer. Call `consolidate()` explicitly to build captured
-sources into searchable memories and wiki pages. See
-[`examples/basic_session.py`](examples/basic_session.py) for a runnable example and
-[`examples/langgraph_integration.py`](examples/langgraph_integration.py) for a LangGraph integration pattern.
+Run it from the project root with the configured Ollama models available. In an
+agent loop, retrieve context before generating a response and capture the completed
+exchange afterward. Supply `rendered_context` alongside the user request as
+evidence; run `consolidate()` when you want to build the newly captured sources.
 
-## Configuration
+A store has one writer process at a time. Give a separate agent process its own
+store, as in this example. API contracts and the session helper are described in
+[DESIGN.md](DESIGN.md#web-sessions-and-direct-library-sessions).
 
-The server explicitly loads `mycelium.toml`. Library callers select it with
-`config_path=...`, or supply a `Config` object with `config=...`; omitting both
-uses dataclass defaults. Constructor overrides take precedence and are validated
-before creating the store. A requested file must exist.
+## Settings and access
 
-```toml
-[llm]
-model = "gemma4:12b"
-url = "http://localhost:11434"
-context_window_tokens = 65536
-reasoning_enabled = false
+Edit [mycelium.toml](mycelium.toml) for language, embedding, and speech models,
+context limits, and meeting storage. The app reads it on startup. `MYCELIUM_STORE`
+selects the main memory directory; Engram's recording storage is configured
+separately under `[engram]`.
 
-[session]
-context_budget_tokens = 32768
+The app has no sign-in. Use it on your own machine or a trusted private network.
+See [private Wi-Fi, Tailscale, and WSL setup](DESIGN.md#remote-access-and-wsl) for
+access from another device.
 
-[retrieval]
-embedding_model = "embeddinggemma:latest"
-candidate_limit = 20
-initial_result_limit = 5
-tool_result_limit = 6
-tool_search_limit = 3
-tool_evidence_budget_tokens = 6000
-```
-
-The server's default memory store is `./mycelium_store`; `MYCELIUM_STORE` selects
-another location. Library callers supply `store_path`. Canonical records live in
-SQLite, with derived Markdown files for inspecting the wiki outside the app.
-Every saved chat message carries its own
-timestamp, allowing one conversation to span multiple days without losing temporal context.
-`session.context_budget_tokens` is the total input budget shared by the assistant system prompt, recent transcript,
-initial memory, and follow-up memory evidence; it is capped by `llm.context_window_tokens`. Retrieval tool limits are
-per assistant response. During a response, the runtime accumulates initial retrieval and follow-up tool discoveries in
-one read-only evidence workspace. Initial retrieval includes exact cited source lines within the budget; the model
-can search further or inspect the surrounding conversation. The
-runtime handles merging, deduplication, and replacement of older workspace snapshots. The final workspace is persisted
-with the assistant message and is available from the chat's collapsed **Evidence workspace** inspector.
-
-Architecture, storage contracts, retrieval details, migrations, development checks, and benchmark workflows are
-documented in [DESIGN.md](DESIGN.md). The Daily Driver fixture has its own
+For architecture, storage formats, development checks, and benchmarks, see
+[DESIGN.md](DESIGN.md). Evaluation commands are in the
 [benchmark guide](benchmarks/README.md).
-
-## Replay the chat-to-memory smoke test
-
-With the models configured in `mycelium.toml` available in your running Ollama instance:
-
-```bash
-MYCELIUM_RUN_CHAT_REPLAY=1 .venv/bin/pytest -q -s tests/test_chat_memory_replay.py
-```
-
-This opt-in integration test starts a fresh temporary store, captures the saved fried-rice and alignment
-conversations verbatim, runs Build Memory, checks that the single You page owns facts from both conversations,
-and asks the original cooking question in an empty third chat. It checks actual retrieved source citations, not
-answer keywords. Model calls and embeddings are real; the third chat has memory tools but no web tools.
-It may take several minutes and model outputs can vary. The normal test suite skips it.
-
-The printed temporary directory contains the store, build report, rendered pages, and third-chat response for
-inspection (including on failure, up to the stage reached). Your live store is untouched. The fixture at
-`tests/fixtures/chat_memory_replay.json` contains personal conversation text saved with permission; review it
-before publishing or sharing the repository.
-
-Focused structural tests cover capture/build recovery, shared evidence, manual view edits, correction-date review,
-and source retraction:
-
-```bash
-.venv/bin/pytest -q tests/test_capture_build.py tests/test_memory_build.py tests/test_view_lifecycle.py tests/test_claim_lifecycle.py tests/test_correction_review.py
-```
-
-These checks establish lifecycle mechanics. Configured-model runs and source review establish whether the
-resulting memory is useful; ordinary omissions do not require a perfect benchmark score before moving on.
 
 ## License
 
-Mycelium is available under the MIT License. See [LICENSE](LICENSE).
-
-## Private Wi-Fi and Tailscale access
-
-The app has no sign-in. Use the host firewall and Tailscale access rules to limit
-access to trusted devices. Keep the backend on loopback and expose the UI only
-on your private network. API and audio requests use the same origin as the UI;
-Vite proxies `/api` to the backend.
-
-Set these variables before running your normal `./start.sh` command:
-
-```bash
-export MYCELIUM_UI_HOST=0.0.0.0
-export MYCELIUM_ALLOWED_HOSTS=localhost,127.0.0.1,my-host,my-host.example.ts.net,192.168.1.20
-```
-
-Replace the example names and address with your actual LAN and Tailscale hosts.
-Host entries omit schemes and ports. The backend defaults to `127.0.0.1:8000`;
-`MYCELIUM_API_HOST` explicitly overrides that binding. Do not forward the UI or
-API port from the public internet. Browser requests from other origins are
-rejected. Host validation and same-origin checks are not authentication.
-
-A UI built with `cd ui && npm run build` is also served by the backend when
-`ui/dist` exists at backend startup. For HTTPS reverse proxies, preserve the Host
-header and configure trusted forwarded headers so the backend sees the original
-scheme. After you start the services, verify chat, audio playback, and memory
-inspection from each intended LAN/Tailscale device.
-
-Audio uploads are bounded twice: the whole multipart request may contain at most
-`engram.max_upload_bytes` plus 64 KiB of metadata, and the audio file itself must
-fit `engram.max_upload_bytes` (default 1 GiB). Chunked uploads are bounded while
-receiving; partial multipart files are closed on rejection. A diarization warning
-can be retried with **Retry speaker detection** during review, without rerunning
-transcription.
+[MIT](LICENSE).

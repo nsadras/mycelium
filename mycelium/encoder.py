@@ -220,7 +220,7 @@ class Encoder:
         self.artifacts.db.publish()
         return result
 
-    def _sync_ingestion_operation(
+    def sync_ingestion_status(
         self,
         episode: EpisodeManifest,
         *,

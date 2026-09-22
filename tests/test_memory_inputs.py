@@ -128,13 +128,13 @@ async def test_resumed_batches_keep_prior_identity_and_adjacent_context(tmp_path
             segments=tuple(SourceSegment(str(i), i, text, speaker="Kai") for i, text in enumerate(lines))))
         source = memory.artifacts.get_source(capture.source_ids[0])
         retainer = memory.consolidator.retainer
-        payload = await retainer.input(source, source.segments[:1], "first", prior_ids=[])
+        payload = await retainer.prepare_retention_input(source, source.segments[:1], "first", prior_claim_ids=[])
         person = payload["new_subject_ids"][0]
         retained = {"subjects": [{"id": person, "title": "Sana", "entity_type": "person", "participant_ids": []}],
                     "memories": [{"id": "m1", "text": lines[0], "subject_ids": [person],
                                   "segment_ids": [source.segments[0].segment_id]}], "changes": []}
         with memory.db.transaction():
-            first_ids = retainer.persist(source, "first", payload, retained)
+            first_ids = retainer.save_retained_memories(source, "first", payload, retained)
             entity = memory.artifacts.get_entity(person)
             entity.aliases = ["Sana Patel"]
             memory.artifacts.save_entity(entity)

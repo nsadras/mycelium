@@ -63,7 +63,7 @@ async def test_manual_edit_during_model_refresh_is_preserved(tmp_path, monkeypat
 
     monkeypatch.setattr(memory_contract, 'present', present)
     with pytest.raises(ValueError, match='Memory changed'):
-        await service.views.refresh({claim.claim_id}, context_ids=[], run_id='refresh')
+        await service.views.refresh_views({claim.claim_id}, context_ids=[], run_id='refresh')
     assert artifacts.get_consolidated_fact(fact.fact_id).section_key == 'User selected heading'
     assert 'User selected heading' in wiki.get(person.slug).content
 
@@ -127,7 +127,7 @@ def test_related_context_cannot_rewrite_or_reuse_unrelated_seed_items(tmp_path):
     for ref in artifacts.list_entity_references(claim_id=incoming.claim_id):
         ref.entity_id = project.entity_id
         artifacts.save_entity_reference(ref)
-    payload = service.views.input({incoming.claim_id}, [seed.claim_id], ())
+    payload = service.views.prepare_presentation_input({incoming.claim_id}, [seed.claim_id], ())
     assert payload['existing_items'] == []
     assert {m['id'] for m in payload['context_memories']} == {seed.claim_id}
     assert payload['affected_subject_ids'] == [project.entity_id]
@@ -135,7 +135,7 @@ def test_related_context_cannot_rewrite_or_reuse_unrelated_seed_items(tmp_path):
                      'memory_ids': [seed.claim_id], 'linked_subject_ids': [], 'state': 'current'}]}
     with pytest.raises(ValueError):
         memory_contract.presentation_model(payload).model_validate(bad)
-    service.views.persist(payload, {'items': []}, {incoming.claim_id}, 'independent-build')
+    service.views.save_view_items(payload, {'items': []}, {incoming.claim_id}, 'independent-build')
     assert artifacts.list_consolidated_facts() == before
     assert wiki.get(person.slug).content == page_before
     assert artifacts.get_claim(seed.claim_id) == seed
@@ -160,14 +160,14 @@ def test_related_update_keeps_complete_shared_support_and_protected_items(tmp_pa
     manual = artifacts.get_consolidated_fact('fact-statement')
     manual.manual_text = True
     artifacts.save_consolidated_fact(manual)
-    payload = service.views.input({incoming.claim_id}, [seed.claim_id], ())
+    payload = service.views.prepare_presentation_input({incoming.claim_id}, [seed.claim_id], ())
     assert {m['id'] for m in payload['memories']} == {seed.claim_id, extra.claim_id, incoming.claim_id}
     assert shared.entity_id in payload['affected_subject_ids']
     assert next(i for i in payload['existing_items'] if i['id'] == manual.fact_id)['protected']
     view = {'items': [{'owner_id': person.entity_id, 'heading': 'Working agreements',
         'memory_ids': [seed.claim_id, extra.claim_id, incoming.claim_id],
         'linked_subject_ids': [shared.entity_id], 'state': 'current'}]}
-    service.views.persist(payload, view, {incoming.claim_id}, 'follow-on-build')
+    service.views.save_view_items(payload, view, {incoming.claim_id}, 'follow-on-build')
     assert artifacts.get_consolidated_fact(manual.fact_id) == manual
     refreshed, = [f for f in artifacts.list_consolidated_facts() if f.fact_id != manual.fact_id]
     assert set(refreshed.member_claim_ids) == {seed.claim_id, extra.claim_id, incoming.claim_id}
@@ -203,7 +203,7 @@ async def test_repeated_refresh_preserves_protected_items_without_cloning_them(t
     present = AsyncMock(return_value=output)
     monkeypatch.setattr(memory_contract, 'present', present)
     for index in range(3):
-        await service.views.refresh({claim.claim_id}, context_ids=[], run_id=f'refresh-{index}')
+        await service.views.refresh_views({claim.claim_id}, context_ids=[], run_id=f'refresh-{index}')
         assert artifacts.get_consolidated_fact(fact.fact_id) == fact
         assert artifacts.get_consolidated_fact(untouched.fact_id) == untouched
         assert wiki.get(other.slug).content == page_before

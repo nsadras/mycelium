@@ -32,7 +32,7 @@ def test_passage_round_trip_and_duplicate_citations():
     assert row['text'] == ' '.join(s['text'] for s in data['segments'])
     assert 'index' not in row and 'source_id' not in row
     assert ids.citations[row['id']] == [s['id'] for s in data['segments']]
-    result = ids.retention({'subjects': [], 'memories': [{'id': 'm1', 'text': 'Literal r0.',
+    result = ids.decode_retention_result({'subjects': [], 'memories': [{'id': 'm1', 'text': 'Literal r0.',
         'segment_ids': [row['id'], row['id']], 'subject_ids': []}], 'changes': []})
     assert result['memories'][0]['segment_ids'] == [s['id'] for s in data['segments']]
     assert result['memories'][0]['text'] == 'Literal r0.'

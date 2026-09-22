@@ -89,7 +89,8 @@ class MemoryRetriever:
         self, *, query: str, search_query: str, budget_tokens: int
     ) -> tuple[list[ClaimSearchHit], MemoryEvidence, AssistantContextSelection]:
         """Retry admission once if a concurrent edit changes the model's evidence."""
-        for attempt in range(2):
+        retry_available = True
+        while True:
             try:
                 hits = await self.claim_index.search(search_query)
             except Exception as exc:
@@ -114,8 +115,9 @@ class MemoryRetriever:
                 try:
                     unit.validate_reads()
                 except ValueError as exc:
-                    if attempt == 1:
+                    if not retry_available:
                         raise RetrievalError("concurrent_update", str(exc)) from exc
+                    retry_available = False
                     continue
                 return hits, candidates, selection
             finally:

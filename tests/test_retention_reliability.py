@@ -106,10 +106,10 @@ async def test_competing_completion_survives_failure_and_next_build(tmp_path, mo
                 "subject_ids": [], "segment_ids": [payload["segments"][0]["id"]]}], "changes": []}
             try:
                 with artifacts.db.transaction():
-                    episode.claim_ids = retainer.persist(source, batch.batch_id, payload, result)
+                    episode.claim_ids = retainer.save_retained_memories(source, batch.batch_id, payload, result)
                     batch.status, batch.response = "complete", result
                     batch.attempt_count += 1
-                    retainer._finish(source, episode, encoder)
+                    retainer.finalize_episode(source, episode, encoder)
                 if unit:
                     unit.commit()
             finally:

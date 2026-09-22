@@ -34,10 +34,13 @@ mycelium/
 │   ├── operations.py   # Typed lifecycle inputs and outputs
 │   ├── retrieval.py    # Read-only memory retrieval orchestration
 │   ├── claim_index.py  # Rebuildable LanceDB hybrid claim index
-│   ├── retrieval_context.py # Budgeted claim/fact/source context rendering
+│   ├── retrieval_context.py # Canonical evidence construction and refresh
+│   ├── evidence_budget.py # Pure fitting of complete records and source segments
+│   ├── evidence_rendering.py # Shared evidence/workspace/tool text rendering
 │   ├── encoder.py      # Durable capture and source segmentation
 │   ├── retention.py    # Bounded source-to-evidence retention and recovery
 │   ├── memory_contract.py # Two flat structured model contracts
+│   ├── memory_inputs.py # Typed payloads, cited claim context, and request-local IDs
 │   ├── views.py        # Cited view refresh with concurrent-edit protection
 │   ├── dream.py        # Build orchestration, checkpoints, and status
 │   ├── reconsolidation.py # Evidence-triggered proposal analysis and review
@@ -58,6 +61,44 @@ mycelium/
 ├── start.sh            # Backend/frontend development launcher
 └── pyproject.toml      # Python package and uv configuration
 ```
+
+## Reading and changing the pipeline
+
+Start with `core.py` for composition and `pipeline.py` for the public lifecycle.
+The orchestration methods name the stages and keep data writes and recovery visible:
+
+| Concern | Entry point | Responsibility |
+| --- | --- | --- |
+| Build coordination | `ConsolidationProcess.run` in `dream.py` | Find pending episodes, group conversation context, retain sources, refresh views, and finalize the audit. |
+| Retention and recovery | `Retainer.retain_sources` in `retention.py` | Plan bounded batches; prepare retention input; save retained memories and per-source checkpoints. |
+| Page organization | `ViewOrganizer.refresh_views` in `views.py` | Prepare writable memories and context, request view items, validate the read snapshot, and save items. |
+| Initial retrieval | `MemoryRetriever.retrieve` in `retrieval.py` | Prepare the search query, select evidence against a snapshot, and construct the result. |
+| Canonical evidence | `RetrievedContextBuilder` in `retrieval_context.py` | Read current claims, views, identities, and cited sources; refresh previously displayed evidence. |
+| Representation | `memory_inputs.py`, `evidence_budget.py`, `evidence_rendering.py` | Compact model references, fit complete evidence, and render shared text. |
+
+`RetentionInput`, `RetentionResult`, `PresentationInput`, and `PresentationResult`
+describe existing dictionaries for readers and type checkers. They add no fields
+to model requests. The dynamic schemas in `memory_contract.py` remain responsible
+for validating decisions against the exact IDs supplied in each request.
+
+### Ownership and consistency
+
+- Capture stores source text and episode manifests. Build owns extraction and view creation.
+- Retention reads through a `UnitOfWork` snapshot while the model runs, then
+  validates those reads inside the transaction that saves claims and checkpoints.
+  Failed attempts merge into current checkpoint state; they cannot fail a newer completion.
+- View refresh reuses a lifecycle service's snapshot when one already exists.
+  Otherwise it owns one. Its commit preserves protected items and user edits.
+- Retrieval validates its snapshot after model selection. It permits one repeat
+  when a concurrent edit invalidates that snapshot; result construction contains
+  no further await. Later source reads refresh current evidence independently.
+- SQLite holds canonical records. Wiki materialization and the search index are
+  derived views; rendering and budget helpers do not persist artifacts.
+
+The model client and curation services already have separate named operations.
+Keep changes close to those operations; file size alone is not a reason to add
+another service layer. For a behavior-preserving refactor, compare frozen model
+requests and stored records in addition to running the regression suite.
 
 ## Memory lifecycle
 

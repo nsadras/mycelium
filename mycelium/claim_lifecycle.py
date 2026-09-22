@@ -360,15 +360,15 @@ class ClaimLifecycleService:
         affected_entity_ids = self.artifacts.entities_for_claims({claim_id})
         context_ids = {claim_id} | {cid for fact in self.artifacts.facts_for_claim(claim_id) for cid in fact.member_claim_ids}
         retainer = Retainer(self.views.llm, self.artifacts, self.views.config)
-        payload = await retainer.input(source, source.segments, f"correction-{short_id}", prior_ids=sorted(context_ids))
+        payload = await retainer.prepare_retention_input(source, source.segments, f"correction-{short_id}", prior_claim_ids=sorted(context_ids))
         retained = await memory_contract.retain(self.views.llm, payload)
         # Validate against the original evidence before this transaction replaces
         # it. The model may correctly propose the very replacement being reviewed.
-        retainer.persist(source, f"correction-{short_id}", payload, retained, replacement=replacement)
+        retainer.save_retained_memories(source, f"correction-{short_id}", payload, retained, replacement=replacement)
         target.status = "superseded"
         self.artifacts.save_claim(target)
         reconsider = self._invalidate_reviews({claim_id}, affected_entity_ids)
-        pages = await self.views.refresh(
+        pages = await self.views.refresh_views(
             {claim_id, replacement_id, *reconsider}, context_ids=context_ids,
             entity_ids=affected_entity_ids, run_id=f"correction-{short_id}",
         )

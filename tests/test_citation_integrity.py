@@ -36,8 +36,8 @@ def damaged_claim(tmp_path, damage):
 ])
 def test_partial_citations_cannot_be_silently_formatted_as_complete(tmp_path, damage):
     artifacts, item, placement, source = damaged_claim(tmp_path, damage)
-    from mycelium.retention import memory_record
-    for read in [lambda: cited_source_segments(artifacts, item), lambda: memory_record(artifacts, item)]:
+    from mycelium.memory_inputs import serialize_claim_context
+    for read in [lambda: cited_source_segments(artifacts, item), lambda: serialize_claim_context(artifacts, item)]:
         with pytest.raises(ValueError, match=item.claim_id):
             read()
 

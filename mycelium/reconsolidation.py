@@ -190,7 +190,7 @@ class ReconsolidationReviewService:
 
     async def _rebuild(self, proposal: ReconsolidationProposal):
         ids = set(proposal.incoming_claim_ids + proposal.target_claim_ids)
-        return await self.views.refresh(ids, context_ids=[],
+        return await self.views.refresh_views(ids, context_ids=[],
             entity_ids=set(proposal.affected_entity_ids), run_id=f"review-{proposal.proposal_id}")
 
     def _invalidate_overlapping_reviews(self, applied, targets):

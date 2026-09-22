@@ -7,8 +7,47 @@ Only declared reference fields are rewritten; human text remains literal.
 from copy import deepcopy
 from dataclasses import asdict
 import json
+from typing import Any, Literal, NotRequired, TypedDict
 
 from mycelium.operations import MemoryEvidence
+from mycelium.artifacts import ArtifactStore, MemoryClaim
+from mycelium.artifact_integrity import cited_source_segments
+from mycelium import identity_context
+
+
+# These describe existing dictionaries for readers and type checkers. The dynamic
+# schemas in memory_contract validate model decisions against each request's IDs.
+class RetentionInput(TypedDict):
+    source_type: str
+    occurred_at: str | None
+    participants: list[dict[str, Any]]
+    metadata: dict[str, Any]
+    segments: list[dict[str, Any]]
+    context_segments: list[dict[str, Any]]
+    prior_memories: list[dict[str, Any]]
+    existing_subjects: list[dict[str, Any]]
+    new_subject_ids: list[str]
+
+
+class RetentionResult(TypedDict):
+    subjects: list[dict[str, Any]]
+    memories: list[dict[str, Any]]
+    changes: list[dict[str, Any]]
+    _rejections: NotRequired[list[dict[str, Any]]]
+
+
+class PresentationInput(TypedDict):
+    subjects: list[dict[str, Any]]
+    affected_subject_ids: list[str]
+    memories: list[dict[str, Any]]
+    context_memories: list[dict[str, Any]]
+    existing_items: list[dict[str, Any]]
+    pending_changes: list[dict[str, Any]]
+    page_exclusions: list[dict[str, str]]
+
+
+class PresentationResult(TypedDict):
+    items: list[dict[str, Any]]
 
 
 PASSAGE_CHARACTERS = 1200
@@ -40,19 +79,19 @@ MULTIPLE_IDS = {
 
 
 class RequestIds:
-    def __init__(self):
-        self.forward = {}
-        self.reverse = {}
-        self.citations = {}
+    def __init__(self) -> None:
+        self.forward: dict[str, str] = {}
+        self.reverse: dict[str, str] = {}
+        self.citations: dict[str, list[str]] = {}
 
-    def reference(self, identifier):
+    def reference(self, identifier: str) -> str:
         if identifier not in self.forward:
             local = f"r{len(self.forward)}"
             self.forward[identifier] = local
             self.reverse[local] = identifier
         return self.forward[identifier]
 
-    def encode(self, value):
+    def encode(self, value: Any) -> Any:
         if isinstance(value, list):
             return [self.encode(item) for item in value]
         if not isinstance(value, dict):
@@ -69,7 +108,7 @@ class RequestIds:
                 result[key] = self.encode(item)
         return result
 
-    def retention(self, value):
+    def decode_retention_result(self, value: RetentionResult) -> RetentionResult:
         result = deepcopy(value)
         for subject in result["subjects"]:
             subject["id"] = self.reverse[subject["id"]]
@@ -91,7 +130,9 @@ class RequestIds:
             change["earlier_id"] = self.reverse[change["earlier_id"]]
         return result
 
-    def presentation(self, value):
+    def decode_presentation_result(
+        self, value: PresentationResult
+    ) -> PresentationResult:
         result = deepcopy(value)
         for item in result["items"]:
             item["owner_id"] = self.reverse[item["owner_id"]]
@@ -100,11 +141,12 @@ class RequestIds:
         return result
 
 
-def compact_retention(payload):
+def compact_retention(payload: RetentionInput) -> tuple[RetentionInput, RequestIds]:
     data = deepcopy(payload)
     citations = {}
+    field: Literal["segments", "context_segments"]
     for field in ("segments", "context_segments"):
-        passages = []
+        passages: list[dict[str, Any]] = []
         previous_index, previous_context = None, None
         for row in data.get(field, []):
             # An index gap means omitted evidence; never join across it. Source
@@ -144,7 +186,9 @@ def compact_retention(payload):
     return request, ids
 
 
-def compact_presentation(payload):
+def compact_presentation(
+    payload: PresentationInput,
+) -> tuple[PresentationInput, RequestIds]:
     ids = RequestIds()
     return ids.encode(payload), ids
 
@@ -195,3 +239,34 @@ def compact_selection_evidence(
     return json.dumps(
         encode(asdict(evidence)), ensure_ascii=False, separators=(",", ":")
     ), ids.reverse
+
+
+def serialize_claim_context(
+    artifacts: ArtifactStore, claim: MemoryClaim
+) -> dict[str, Any]:
+    """Include cited attribution and bound speaker identity alongside a retained claim."""
+    refs = artifacts.list_entity_references(claim_id=claim.claim_id, status="active")
+    provenance = []
+    for _, source, segments in cited_source_segments(artifacts, claim):
+        for segment in segments:
+            row = {
+                "speaker": segment.speaker,
+                "role": segment.role,
+                "source_type": source.source_type,
+                "source_time": segment.timestamp or source.occurred_at,
+            }
+            bound = identity_context.binding(
+                artifacts, identity_context.participant_id(source, segment)
+            )
+            if bound:
+                row["speaker_subject_id"] = bound["entity_id"]
+            if row not in provenance:
+                provenance.append(row)
+    return {
+        "id": claim.claim_id,
+        "text": claim.text,
+        "subject_ids": sorted({r.entity_id for r in refs if r.entity_id}),
+        "provenance": provenance,
+        "revisions": claim.links,
+        "temporal": claim.facets.get("temporal", []),
+    }

@@ -1,5 +1,26 @@
 # Development Log
 
+## 2026-09-21 — Clarify Build Memory and retrieval without changing decisions
+
+- Name Build's pending-work, retention, view-refresh, completion, and audit steps.
+  Add typed retention/presentation payloads, descriptive stage methods, named
+  durable-record fields, and a public ingestion-status handoff.
+- Separate canonical evidence construction from pure budgeting and rendering.
+  Share selection compaction with other model-input transformations; update
+  internal callers and remove dependence on evidence-builder private methods.
+- Preserve prompts, response schemas, request options, ordering, IDs, stored
+  formats, model-call counts, and checkpoint/concurrent-edit behavior. The new
+  payload types describe existing dictionaries; they add no model schema fields.
+- Validation against `0ec1795`: seven recorded retrieval/QA cases, repeated source
+  reads, inputs from four frozen stores, and an initial/failed/resumed/no-op Build
+  sequence. Exact request and stored-output comparisons use fixed clocks and IDs;
+  all inference is recorded or scripted. Artifacts are under
+  `benchmark_runs/maintainability-20260922/`.
+- Final checks: 641 Python tests passed, one skipped, four native integration
+  tests deselected; targeted Mypy checks on six modules and Ruff passed.
+- Keep the model client and curation service boundaries intact after review.
+  See the [code map and ownership rules](DESIGN.md#reading-and-changing-the-pipeline).
+
 ## 2026-09-21 — Ship retrieval safeguards; reject unsuccessful selection experiment
 
 - Direct claim evidence now carries existing assigned identities, aliases and

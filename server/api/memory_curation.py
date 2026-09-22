@@ -301,7 +301,7 @@ async def review_identity_decision(
             claim_texts=req.claim_texts,
         )
         try:
-            pages = await mem.consolidator.views.refresh(
+            pages = await mem.consolidator.views.refresh_views(
                 set(previous.supporting_claim_ids) | set(record.supporting_claim_ids),
                 context_ids=[], entity_ids={eid for eid in (previous.entity_id, record.entity_id) if eid},
                 run_id=f"identity-review-{decision_id}-{record.reviewed_at}")

@@ -153,10 +153,10 @@ async def test_context_citations_preserve_original_source_and_speaker(tmp_path, 
             'segment_id': '', 'index': 0, 'role': 'user', 'speaker': 'You', 'content': 'I accept that.'},)))
         source = memory.artifacts.get_source(second.source_ids[0])
         retainer = Retainer(memory.llm, memory.artifacts, memory.config)
-        payload = await retainer.input(source, source.segments, 'b', prior_ids=[])
+        payload = await retainer.prepare_retention_input(source, source.segments, 'b', prior_claim_ids=[])
         value = lifecycle_response('', json.dumps(payload), memory_contract.retention_model(payload), debug_label='memory-retention')
         value['memories'][0]['segment_ids'].append(payload['context_segments'][0]['id'])
         with memory.db.transaction():
-            ids = retainer.persist(source, 'b', payload, value)
+            ids = retainer.save_retained_memories(source, 'b', payload, value)
         claim = memory.artifacts.get_claim(ids[0])
         assert {(p.source_id, p.speaker) for p in claim.provenance} == {(first.source_ids[0], 'Assistant'), (second.source_ids[0], 'You')}

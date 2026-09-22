@@ -263,11 +263,11 @@ async def test_shared_evidence_keeps_distinct_items_and_owners(tmp_path, monkeyp
         a, b = facts
         b.manual_text = True
         memory.artifacts.save_consolidated_fact(b)
-        payload = memory.consolidator.views.input({claim.claim_id}, [], {a.owner_entity_id})
+        payload = memory.consolidator.views.prepare_presentation_input({claim.claim_id}, [], {a.owner_entity_id})
         view = {"items": [{"owner_id": a.owner_entity_id, "heading": "Records",
                             "memory_ids": [claim.claim_id], "linked_subject_ids": [], "state": "current"}]}
         contract.presentation_model(payload).model_validate(view)
-        memory.consolidator.views.persist(payload, view, {claim.claim_id}, "refresh")
+        memory.consolidator.views.save_view_items(payload, view, {claim.claim_id}, "refresh")
         assert memory.artifacts.get_consolidated_fact(b.fact_id) == b
         assert len(memory.artifacts.list_consolidated_facts()) == 2
         assert len(memory.artifacts.list_claims()) == 1

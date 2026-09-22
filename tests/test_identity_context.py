@@ -29,12 +29,12 @@ async def test_source_bindings_survive_restart_and_do_not_merge_named_speakers(t
                       SourceSegment("b", 1, "I am testing it.", speaker="Sam", participant_id="speaker-1"))))
         source = memory.artifacts.get_source(captured.source_ids[0])
         retainer = memory.consolidator.retainer
-        payload = await retainer.input(source, source.segments[:1], "first", prior_ids=[])
+        payload = await retainer.prepare_retention_input(source, source.segments[:1], "first", prior_claim_ids=[])
         first, second = payload["participants"]
         assert first["id"] != second["id"]
         assert first["subject_id"] is None and second["subject_id"] is None
         with memory.db.transaction():
-            ids = retainer.persist(source, "first", payload, retained(payload))
+            ids = retainer.save_retained_memories(source, "first", payload, retained(payload))
         original = memory.artifacts.get_entity(identity_context.binding(memory.artifacts, first["id"])["entity_id"])
         episode = memory.artifacts.get_episode(captured.episode_ids[0])
         episode.claim_ids = ids
@@ -44,7 +44,7 @@ async def test_source_bindings_survive_restart_and_do_not_merge_named_speakers(t
         memory.artifacts.save_episode(episode)
     with Mycelium(tmp_path) as memory:
         source = memory.artifacts.get_source(captured.source_ids[0])
-        payload = await memory.consolidator.retainer.input(source, source.segments[1:], "second", prior_ids=[])
+        payload = await memory.consolidator.retainer.prepare_retention_input(source, source.segments[1:], "second", prior_claim_ids=[])
         assert payload["participants"][0]["subject_id"] == original.entity_id
         assert payload["participants"][1]["subject_id"] is None
         # The identity and distinguishing evidence arrive even with no retrieved/recent claims.
@@ -60,11 +60,11 @@ async def test_source_bindings_survive_restart_and_do_not_merge_named_speakers(t
         assert memory.artifacts.get_entity(target.entity_id).title == "Samuel Porter"
         # A later batch may reference the corrected identity directly, without
         # redeclaring its binding. Keep the same review scope and decision ID.
-        payload = await memory.consolidator.retainer.input(source, source.segments[1:], "second", prior_ids=[])
+        payload = await memory.consolidator.retainer.prepare_retention_input(source, source.segments[1:], "second", prior_claim_ids=[])
         output = {"subjects": [], "memories": [{"id": "m", "text": "Samuel Porter prepared the plan being tested.",
             "subject_ids": [target.entity_id], "segment_ids": [source.segments[1].segment_id]}], "changes": []}
         with memory.db.transaction():
-            later = memory.consolidator.retainer.persist(source, "second", payload, output)
+            later = memory.consolidator.retainer.save_retained_memories(source, "second", payload, output)
         ref, = memory.artifacts.list_entity_references(claim_id=later[0], status="active")
         assert ref.identity_decision_id == reviewed.decision_id
         assert set(memory.artifacts.get_entity_resolution_decision(reviewed.decision_id).supporting_claim_ids) == set(ids + later)
@@ -95,7 +95,7 @@ async def test_unreferenced_people_reach_views_without_becoming_implicit_claim_s
                 "I reviewed the project Morgan built.", speaker="Sam", participant_id="speaker-0"),)))
         source = memory.artifacts.get_source(captured.source_ids[0])
         retainer = memory.consolidator.retainer
-        payload = await retainer.input(source, source.segments, "batch", prior_ids=[])
+        payload = await retainer.prepare_retention_input(source, source.segments, "batch", prior_claim_ids=[])
         unrelated = memory.artifacts.create_entity("person", "Previously known person")
         payload["existing_subjects"].append({"id": unrelated.entity_id, "title": unrelated.title, "entity_type": "person"})
         speaker, builder, project = payload["new_subject_ids"][:3]
@@ -107,15 +107,15 @@ async def test_unreferenced_people_reach_views_without_becoming_implicit_claim_s
             "memories": [{"id": "m", "text": "Sam reviewed Morgan's project.", "subject_ids": [project],
                           "segment_ids": [source.segments[0].segment_id]}], "changes": []}
         with memory.db.transaction():
-            cids = retainer.persist(source, "batch", payload, result)
-        view = memory.consolidator.views.input(cids, [], ())
+            cids = retainer.save_retained_memories(source, "batch", payload, result)
+        view = memory.consolidator.views.prepare_presentation_input(cids, [], ())
         assert set(view["affected_subject_ids"]) == {speaker, builder, project}
         assert not memory.artifacts.list_entity_resolution_decisions(entity_id=unrelated.entity_id)
         assert view["memories"][0]["subject_ids"] == [project]
         assert view["memories"][0]["provenance"][0]["speaker_subject_id"] == speaker
         assert len(memory.artifacts.list_entity_references(claim_id=cids[0])) == 1
         # Optional choices do not create pages or require the model to use them.
-        memory.consolidator.views.persist(view, {"items": []}, cids, "optional")
+        memory.consolidator.views.save_view_items(view, {"items": []}, cids, "optional")
         assert not memory.artifacts.list_consolidated_facts()
 
 
@@ -177,7 +177,7 @@ async def test_accepted_correction_updates_wording_refs_and_resumable_views(tmp_
     monkeypatch.setattr(memory_contract, "present", present)
     # A resumed Build need only supply the pending replacement; its exact link
     # finds old view items even when embedding retrieval returns no context.
-    await service.views.refresh({replacement.claim_id}, context_ids=[], run_id="retry")
+    await service.views.refresh_views({replacement.claim_id}, context_ids=[], run_id="retry")
     assert corrected in wiki.get(target.slug).content
     assert all(fact.member_claim_ids != [original.claim_id] for fact in artifacts.list_consolidated_facts())
 

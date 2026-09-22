@@ -1,12 +1,16 @@
 """Flat source retention and cited view contracts with exact request-local IDs."""
 
 import json
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator, model_validator
 
 from mycelium.ontology import ENTITY_TYPES
-from mycelium.memory_inputs import compact_presentation, compact_retention
+from mycelium.memory_inputs import (
+    PresentationInput, PresentationResult, RetentionInput, RetentionResult,
+    compact_presentation, compact_retention,
+)
+from mycelium.ollama import OllamaClient
 from mycelium.telemetry import trace_operation
 
 
@@ -216,7 +220,7 @@ def presentation_model(payload):
     return ScopedPresentation
 
 
-async def retain(llm, payload):
+async def retain(llm: OllamaClient, payload: RetentionInput) -> RetentionResult:
     from mycelium.memory_admission import retention
     request, ids = compact_retention(payload)
     model = retention_model(request)
@@ -226,15 +230,15 @@ async def retain(llm, payload):
             num_predict=8192, debug_label="memory-retention", dump_success=True,
         )
     accepted, rejected = retention(request, result)
-    result = retention_model(payload).model_validate(ids.retention(accepted)).model_dump()
+    result = retention_model(payload).model_validate(ids.decode_retention_result(accepted)).model_dump()
     if rejected:
         # Diagnostic metadata is produced locally, outside the model's schema.
         result["_rejections"] = [{**row, "request_ids": ids.reverse,
                                   "request_citations": ids.citations} for row in rejected]
-    return result
+    return cast(RetentionResult, result)
 
 
-async def present(llm, payload):
+async def present(llm: OllamaClient, payload: PresentationInput) -> PresentationResult:
     request, ids = compact_presentation(payload)
     model = presentation_model(request)
     with trace_operation("memory-presentation", request_ids=ids.reverse):
@@ -242,5 +246,5 @@ async def present(llm, payload):
             PRESENT, json.dumps(request, ensure_ascii=False), model,
             num_predict=8192, debug_label="memory-presentation", dump_success=True,
         )
-    result = ids.presentation(model.model_validate(result).model_dump())
-    return presentation_model(payload).model_validate(result).model_dump()
+    result = ids.decode_presentation_result(cast(PresentationResult, model.model_validate(result).model_dump()))
+    return cast(PresentationResult, presentation_model(payload).model_validate(result).model_dump())

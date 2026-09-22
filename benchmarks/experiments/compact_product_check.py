@@ -106,16 +106,16 @@ async def exercise(memory, root, inputs, rows, *, resume=False):
         second = await memory.ingest_source(SourceInput(**inputs[1]))
         write(root / "capture-2.json", asdict(second))
         before_facts = [asdict(f) for f in memory.artifacts.list_consolidated_facts()]
-        persist = memory.consolidator.views.persist
+        persist = memory.consolidator.views.save_view_items
 
         def fail_publication(*args, **kwargs):
             raise OSError("Injected view publication failure for recovery check")
 
-        memory.consolidator.views.persist = fail_publication
+        memory.consolidator.views.save_view_items = fail_publication
         try:
             result = await build("build-2-injected-failure")
         finally:
-            memory.consolidator.views.persist = persist
+            memory.consolidator.views.save_view_items = persist
         assert result.report.failures, "Fault injection was not exercised"
         assert [asdict(f) for f in memory.artifacts.list_consolidated_facts()] == before_facts
         episode = memory.artifacts.get_episode(second.episode_ids[0])

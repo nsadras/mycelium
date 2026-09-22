@@ -9,6 +9,7 @@ from typing import Callable, Literal
 
 from mycelium.artifacts import (
     ArtifactStore,
+    ConsolidatedFact,
     MemoryClaim,
     SourceSegment,
 )
@@ -350,7 +351,7 @@ class RetrievedContextBuilder:
             )
 
         # Views provide optional context. They cannot replace or precede a match.
-        facts = {}
+        facts: dict[str, ConsolidatedFact] = {}
         for claim in claims.values():
             for fact in self._facts_for_claim(claim.claim_id):
                 if fact_ids is None or fact.fact_id in fact_ids:
@@ -586,30 +587,32 @@ class RetrievedContextBuilder:
             return complete
 
         sources: list[EvidenceSource] = []
-        for source in available:
+        for source_evidence in available:
             cited_by_claim = {
                 citation.claim_id: set(citation.segment_ids)
-                for citation in source.citations
+                for citation in source_evidence.citations
             }
-            cited_segments = [s for s in source.segments if s.relationship == "cited"]
+            cited_segments = [
+                s for s in source_evidence.segments if s.relationship == "cited"
+            ]
             context_segments = [
-                s for s in source.segments if s.relationship == "context"
+                s for s in source_evidence.segments if s.relationship == "context"
             ]
             accepted_ids: set[str] = set()
             accepted_source = None
-            for segment in [*cited_segments, *context_segments]:
+            for evidence_segment in [*cited_segments, *context_segments]:
                 if (
-                    segment.relationship == "context"
+                    evidence_segment.relationship == "context"
                     and not accepted_ids
-                    and source.source_id not in known_sources
+                    and source_evidence.source_id not in known_sources
                 ):
                     continue
-                trial_ids = {*accepted_ids, segment.segment_id}
+                trial_ids = {*accepted_ids, evidence_segment.segment_id}
                 trial_source = replace(
-                    source,
+                    source_evidence,
                     citations=self._source_citations(cited_by_claim, trial_ids),
                     segments=tuple(
-                        s for s in source.segments if s.segment_id in trial_ids
+                        s for s in source_evidence.segments if s.segment_id in trial_ids
                     ),
                 )
                 # Reserve the omission notice while admitting complete segments.
@@ -618,7 +621,7 @@ class RetrievedContextBuilder:
                 )
                 if not fits(trial):
                     continue
-                accepted_ids.add(segment.segment_id)
+                accepted_ids.add(evidence_segment.segment_id)
                 accepted_source = trial_source
             if accepted_source is not None:
                 sources.append(accepted_source)

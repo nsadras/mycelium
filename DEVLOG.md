@@ -6423,6 +6423,35 @@ remain separate gates.
   evidence budget. Exact native inputs/options/schema and persistence were replayed
   offline. No further native calls, live data rebuild, service operations or edits
   to user-owned guidance/notes. Frontend code is unchanged; UI checks were not rerun.
+## 2026-09-22 — Compact retrieval accepted after seven paired app checks
+
+- Follow the [bounded plan](planning/view_retrieval_plan_2026_09_22.md). Validate
+  one candidate in an isolated checkout before promotion. Keep canonical claims
+  independently selectable, share views/sources once with reversible local IDs,
+  preserve selected records through answering, and count actual search records.
+  One fitted selection replaces recursive chunk/merge calls. No model stage,
+  semantic retry, output-schema field, index change or retention tuning added.
+- Seven pairs cover two frozen five-session LoCoMo stores, a new neutral project
+  fixture, and the prior workshop regression. Same ordered initial hits, configured
+  Gemma/decoding, ordinary app prompt/tools, alternating arm order. All 28 calls
+  complete first attempt; 139.52 seconds overall, no failed/cancelled requests.
+- Native selection input: 144,114 → 58,370 tokens (59.5% lower); seven calls per
+  arm. Excluding reported model loading, total generation time falls 61.09 →
+  39.77 seconds. Both recover the workshop money/expenses/keyholders and separate
+  project builders/help/dates. One candidate answer omits a supplied confidence
+  detail; both remain uncertain about John's pets despite an available source
+  line attached to a bad retained claim. Record these limits; no tuning sweep.
+- All selected records survive into final workspaces and canonical stores remain
+  unchanged. No model tool calls; a separate recording replay verifies source
+  advancement, zero lost excerpts, cumulative budgets and explicit no-progress
+  results. More canonical interpretation leaves fewer initial excerpts at small
+  allowances; full counts and limitations are in the [result](planning/view_retrieval_result_2026_09_22.md).
+- 641 Python tests pass, one skipped, four native integration tests deselected;
+  Ruff and whitespace pass. Preserve user-owned guidance/notes and live data.
+  Device checks remain with the user. Stop with useful, cheaper retrieval;
+  retention/view perfection, alias indexing and autonomous exploration are not
+  claimed as solved. Artifacts: `benchmark_runs/view-retrieval-20260922/`.
+
 ## 2026-09-22 — Prevent protected view copies on repeated Builds
 
 - Preserve protected items by exact support IDs, destination IDs and heading at

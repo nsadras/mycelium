@@ -82,15 +82,15 @@ and current message. A local LanceDB projection performs hybrid vector and full-
 and short-term claims. EmbeddingGemma supplies normalized semantic embeddings through Ollama. The index is derived
 state: it is synchronized from canonical SQLite claim records and can be deleted and rebuilt without losing memory.
 
-Hybrid similarity only proposes candidates. A structured model decision orders complementary claim IDs and reports
-supported aspects and remaining gaps using canonical text, timing, consolidated representations, and exact cited
-source excerpts. Selection and answering use the same evidence representation and budget rules, so a detail
-preserved only in the source can make its claim useful to the request.
-When complete candidates exceed the input budget, selection runs in bounded
-chunks and then compares the surviving complete records together. That final
-decision supplies the global order and gap report. If the survivors cannot fit
-one comparison, admission returns an explicit budget error; failed chunks never
-publish a partial selection. Single-batch requests retain one selection call.
+Hybrid similarity only proposes candidates. Canonical claims remain independently selectable; related views
+are optional records sharing their supporting claims. One structured model decision orders complementary record
+IDs and reports supported aspects and remaining gaps. Selection receives shared records and exact cited sources
+once, as compact JSON with reversible request-local references. Human text, identity roles, times, reviews and
+citation links retain their meaning. Answering receives the selected original records and their cited sources,
+so a detail preserved only in a source can make its record useful to the request.
+Complete records are fitted in candidate order, with canonical matches before optional views. Sources fit as
+whole transcript segments. Omitted evidence is marked; candidates outside the request budget cannot be selected.
+An empty fitting set returns an explicit budget error. There is no chunk-selection/merge cascade.
 Admission reads a canonical snapshot and reselects once if consulted state changes during inference; a repeated
 conflict or broken citation produces a typed error. Admitted order forms a small initial evidence result. The stable system prompt contains only the
 assistant's behavior contract; the current request carries runtime-supplied evidence as a separate structured
@@ -113,13 +113,15 @@ chronological message history. This prevents duplicate evidence from accumulatin
 across a multi-step traversal. The final workspace is stored on the assistant transcript entry and can be inspected in
 the chat UI.
 
-Included canonical claims are represented through their consolidated facts; claims without a fact are represented
-directly. Initial evidence and tool results share one schema containing explicit subjects, statements, claim IDs,
+Canonical claims are represented directly, including when a larger related view does not fit. Views can also be
+selected as complete records. Initial evidence and tool results share one schema containing explicit subjects, statements, claim IDs,
 normalized timing, and source citations. Initial retrieval and follow-up search include the exact cited lines that
 fit after their complete interpretation records. The assistant can use `memory_sources` with supporting claim IDs
 to expand the bounded structural conversation neighborhood. The transcript remains
 chronological, with cited lines marked in place. Retrieval traces preserve candidate rank, hybrid score, admission
-decision, selected claim IDs, and the claims that fit in the final budget.
+decision, selected record and claim IDs, and the claims that fit in the final budget. Search result limits count
+actual records. Refresh preserves selected view membership; if a view loses valid support, the surviving canonical
+claim states replace it so old source wording cannot silently revive a superseded interpretation.
 
 Direct claim records include their existing active entity bindings, canonical names, aliases and exact roles,
 even before a wiki page exists. Multiple bindings remain distinct; a context participant is not made an owner.
@@ -211,7 +213,9 @@ flowchart TD
 - A view item owns its heading and destinations; a claim has no exclusive page or item membership. Different
   items can cite the same evidence. A linked destination intentionally displays that item's complete text.
   Generated text joins selected statements in the model's order, deduplicating exact repeated IDs within the
-  item. Human text edits remain protected. This preserves qualifications at the cost of sometimes longer
+  item. Human text edits remain protected. Persistence skips new duplicates at the same exact support IDs,
+  destination IDs and heading, including repeated representations of a protected item. Distinct destinations
+  or headings and existing manual splits remain valid. This preserves qualifications at the cost of sometimes longer
   or repetitive pages; selection can still omit useful context or choose an imperfect heading/destination.
   Presentation can return no item for retained evidence; that evidence remains searchable as `deferred`.
 - Refresh authorizes existing items through incoming subjects, exact changed claims, and support/endpoint

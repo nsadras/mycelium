@@ -144,7 +144,7 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
     llm = AsyncMock()
     llm.context_window_tokens = 32768
     llm.call_structured.return_value = {
-        "selected_ids": ["M001"],
+        "selected_ids": ["M001", "M002"],
         "supported_aspects": ["practice time"],
         "remaining_gaps": [],
     }
@@ -155,7 +155,8 @@ async def test_retrieval_selects_claims_then_renders_facts_with_exact_evidence(
     result = await retriever.retrieve(RetrievalRequest("When does Mira practice?"))
 
     assert "Mira practices the cello each Saturday." in result.rendered_context
-    record = result.evidence.records[0]
+    assert result.evidence.records[0].record_type == "claim"
+    record = result.evidence.records[1]
     assert record.record_type == "fact"
     assert record.subject_entity_id == entity.entity_id
     assert record.subject_name == "Mira"
@@ -280,7 +281,7 @@ def test_retrieval_page_references_only_describe_real_pages(compact_claim):
     builder.artifacts.save_consolidated_fact(ConsolidatedFact("view", hit.claim_text, [hit.claim_id], entity.entity_id,
         "Interests", "current", [], "model", .8, "Cited view", "2026-09-01", "2026-09-01"))
     evidence = builder.build([hit, hit], budget_tokens=2000)
-    assert len(evidence.records) == 1
+    assert [r.record_id for r in evidence.records] == [hit.claim_id, "view"]
     assert builder.page_references(evidence) == ()
     builder.wiki.save(
         WikiPage(
@@ -369,12 +370,12 @@ def test_review_relationship_and_matched_claims_survive_fact_rendering(tmp_path)
         for c in claims
     ]
     builder = RetrievedContextBuilder(wiki, artifacts)
-    evidence = builder._memory_evidence(builder.distinct_hits(hits, limit=2))
-    assert len(evidence.records) == 2
-    summary = evidence.records[0]
+    evidence = builder._memory_evidence(builder.distinct_hits(hits, limit=3))
+    assert len(evidence.records) == 4
+    summary = evidence.records[3]
     assert {c.claim_id for c in summary.canonical_claims} == {"old", "detail"}
     assert summary.reviews[0].incoming_claim_ids == ("new",)
-    assert evidence.records[1].reviews[0].target_claim_ids == ("old",)
+    assert evidence.records[2].reviews[0].target_claim_ids == ("old",)
     rendered = render_memory_evidence(evidence)
     assert "Saturday mornings" in rendered
     assert "unresolved" in rendered

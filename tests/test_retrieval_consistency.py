@@ -14,6 +14,7 @@ from mycelium.context_selection import (
     AssistantContextSelection,
     AssistantContextSelector,
 )
+from mycelium.retrieval_context import render_memory_evidence
 from mycelium.memory_tools import MemoryToolset
 from mycelium.memory_workspace import merge_memory_evidence
 from mycelium.operations import (
@@ -54,13 +55,13 @@ async def test_owner_move_reselects_using_canonical_metadata(
         memory.retriever.claim_index.search = AsyncMock(return_value=[stale_hit])
         seen = []
 
-        async def select(self, query, candidates):
-            seen.append(candidates[0].content)
+        async def select(self, query, candidates, **kwargs):
+            seen.append(render_memory_evidence(candidates))
             if len(seen) == 1:
                 place(artifacts, claim, second, with_view=with_view)
             elif change_again:
                 place(artifacts, claim, first, with_view=with_view)
-            return AssistantContextSelection((candidates[0].candidate_id,), {})
+            return AssistantContextSelection(tuple(r.record_id for r in candidates.records), {})
 
         monkeypatch.setattr(AssistantContextSelector, "select_with_trace", select)
         if change_again:
@@ -84,8 +85,8 @@ async def test_consolidation_during_selection_refreshes_admission_and_fact(
         memory.retriever.claim_index.search = AsyncMock(return_value=[hit])
         seen = []
 
-        async def select(self, query, candidates):
-            seen.append(candidates[0].content)
+        async def select(self, query, candidates, **kwargs):
+            seen.append(render_memory_evidence(candidates))
             if len(seen) == 1:
                 artifacts.save_consolidated_fact(
                     ConsolidatedFact(
@@ -103,12 +104,12 @@ async def test_consolidation_during_selection_refreshes_admission_and_fact(
                         "2026-01-01",
                     )
                 )
-            return AssistantContextSelection((candidates[0].candidate_id,), {})
+            return AssistantContextSelection(tuple(r.record_id for r in candidates.records), {})
 
         monkeypatch.setattr(AssistantContextSelector, "select_with_trace", select)
         result = await memory.retrieve_context(RetrievalRequest("Preferences?"))
         assert len(seen) == 2 and "A consolidated preference" in seen[1]
-        assert result.evidence.records[0].record_id == "f1"
+        assert [r.record_id for r in result.evidence.records] == ["c1", "f1"]
 
 
 @pytest.mark.asyncio
@@ -133,8 +134,8 @@ async def test_source_retraction_during_selection_reselects_with_warning(
         memory.retriever.claim_index.search = AsyncMock(return_value=[hit])
         seen = []
 
-        async def select(self, query, candidates):
-            seen.append(candidates[0].content)
+        async def select(self, query, candidates, **kwargs):
+            seen.append(render_memory_evidence(candidates))
             if len(seen) == 1:
                 artifacts.save_source(
                     replace(
@@ -144,7 +145,7 @@ async def test_source_retraction_during_selection_reselects_with_warning(
                         retraction_reason="Wrong import",
                     )
                 )
-            return AssistantContextSelection((candidates[0].candidate_id,), {})
+            return AssistantContextSelection(tuple(r.record_id for r in candidates.records), {})
 
         monkeypatch.setattr(AssistantContextSelector, "select_with_trace", select)
         result = await memory.retrieve_context(RetrievalRequest("Preferences?"))
@@ -162,12 +163,12 @@ async def test_missing_provenance_during_selection_is_typed_failure(
         artifacts, _, hit = seed(tmp_path)
         memory.retriever.claim_index.search = AsyncMock(return_value=[hit])
 
-        async def select(self, query, candidates):
+        async def select(self, query, candidates, **kwargs):
             if missing == "source":
                 artifacts.db.delete("sources", "s1")
             else:
                 artifacts.save_source(replace(artifacts.get_source("s1"), segments=[]))
-            return AssistantContextSelection((candidates[0].candidate_id,), {})
+            return AssistantContextSelection(tuple(r.record_id for r in candidates.records), {})
 
         monkeypatch.setattr(AssistantContextSelector, "select_with_trace", select)
         with pytest.raises(RetrievalError, match="evidence_integrity.*missing"):

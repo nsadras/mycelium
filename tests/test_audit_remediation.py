@@ -75,10 +75,10 @@ async def test_retrieval_reselects_after_retraction(tmp_path,monkeypatch):
     with Mycelium(tmp_path,memory_profile='none') as memory:
         artifacts,claim,hit = seed(tmp_path)
         memory.retriever.claim_index.search = AsyncMock(side_effect=[[hit],[]])
-        async def select(self,query,candidates):
-            if candidates:
+        async def select(self,query,candidates,**kwargs):
+            if candidates.records:
                 artifacts.save_claim(replace(claim,status='retracted'))
-            return AssistantContextSelection(tuple(c.candidate_id for c in candidates),{})
+            return AssistantContextSelection(tuple(c.record_id for c in candidates.records if c.record_type == "claim"),{})
         monkeypatch.setattr(AssistantContextSelector,'select_with_trace',select)
         result = await memory.retrieve_context(RetrievalRequest('Preferences?'))
         assert result.evidence.records == ()

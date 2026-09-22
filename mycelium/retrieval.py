@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from mycelium.artifacts import ArtifactStore
 from mycelium.budget import count_tokens
 from mycelium.search_query import SearchQueryOutput
 from mycelium.prompting import render_prompt
 from mycelium.claim_index import LanceClaimIndex
 from mycelium.context_selection import (
-    AssistantContextCandidate,
     AssistantContextSelector,
 )
 from mycelium.ollama import OllamaClient
@@ -85,19 +86,9 @@ class MemoryRetriever:
                     for hit in hits
                     if (current := builder.current_hit(hit)) is not None
                 ]
-                candidates = [
-                    AssistantContextCandidate(
-                        candidate_id=f"claim:{hit.claim_id}",
-                        kind=f"{hit.memory_tier}_claim",
-                        title="Retained memory",
-                        content=render_memory_evidence(
-                            builder.build([hit], budget_tokens=budget_tokens)
-                        ),
-                    )
-                    for hit in hits
-                ]
+                candidates = builder.build(hits, budget_tokens=budget_tokens)
                 selection = await AssistantContextSelector(self.llm).select_with_trace(
-                    request.query, candidates
+                    request.query, candidates, limit=self.initial_result_limit
                 )
                 if selection.error:
                     raise RetrievalError("admission", selection.error)
@@ -112,16 +103,16 @@ class MemoryRetriever:
                 unit.close()
         # No await after validation: rendering sees one event-loop-consistent state.
         builder = RetrievedContextBuilder(self.context_builder.wiki, self.artifacts)
-        hits_by_id = {hit.claim_id: hit for hit in hits}
-        admitted_hits = [
-            hits_by_id[value.removeprefix("claim:")] for value in selection.selected_ids
-        ]
-        selected_hits = builder.distinct_hits(admitted_hits, self.initial_result_limit)
-        evidence = builder.build(
-            selected_hits,
-            budget_tokens=budget_tokens,
-            more_available=len(admitted_hits) > len(selected_hits),
+        records_by_id = {record.record_id: record for record in candidates.records}
+        selected_records = tuple(records_by_id[value] for value in selection.selected_ids)
+        # Selection and answering use the exact same complete records. Expanding
+        # the selected claims again could drop the related view used to select them.
+        evidence = builder._with_sources(
+            replace(candidates, records=selected_records, sources=()),
+            budget_tokens=budget_tokens, include_context=False,
+            record_limit=self.initial_result_limit,
         )
+        selected_claim_ids = tuple(dict.fromkeys(cid for r in selected_records for cid in r.claim_ids))
         rendered = render_memory_evidence(evidence)
         trace = {
             "strategy": "lancedb_hybrid_claims_then_model_admission",
@@ -135,16 +126,15 @@ class MemoryRetriever:
                     "memory_tier": hit.memory_tier,
                     "owner_entity_id": hit.owner_entity_id,
                     "score": hit.score,
-                    "decision": selection.decisions.get(f"claim:{hit.claim_id}"),
+                    "decision": selection.decisions.get(hit.claim_id),
                 }
                 for rank, hit in enumerate(hits, start=1)
             ],
-            "selected_claim_ids": [hit.claim_id for hit in selected_hits],
-            "admitted_claim_ids": [hit.claim_id for hit in admitted_hits],
+            "selected_record_ids": list(selection.selected_ids),
+            "selected_claim_ids": list(selected_claim_ids),
+            "admitted_claim_ids": list(selected_claim_ids),
             "rendered_claim_ids": [
-                hit.claim_id
-                for hit in selected_hits
-                if hit.claim_id in evidence.claim_ids
+                claim_id for claim_id in selected_claim_ids if claim_id in evidence.claim_ids
             ],
             "selection_error": selection.error,
             "supported_aspects": list(selection.supported_aspects),
@@ -185,6 +175,7 @@ class MemoryRetriever:
             selected_hits,
             budget_tokens=budget_tokens,
             more_available=len(available_hits) > len(selected_hits),
+            record_limit=limit,
         )
         return RetrievalResult(
             builder.page_references(evidence),
@@ -244,7 +235,15 @@ class MemoryRetriever:
             )
         # A refresh updates interpretation and previously inspected excerpts. It
         # must not discover more source text or consume the exploration allowance.
-        records = builder._memory_evidence(hits)
+        records = builder._memory_evidence(hits, fact_ids={r.record_id for r in evidence.records if r.record_type == "fact"})
+        shown_ids = {r.record_id for r in evidence.records}
+        surviving_views = {r.record_id for r in records.records if r.record_type == "fact"}
+        # When a displayed view loses valid support, carry the remaining claim
+        # states instead. Otherwise its old sources could outlive the correction.
+        shown_ids.update(cid for r in evidence.records
+                         if r.record_type == "fact" and r.record_id not in surviving_views
+                         for cid in r.claim_ids)
+        records = replace(records, records=tuple(r for r in records.records if r.record_id in shown_ids))
         from mycelium.retrieval_context import fit_memory_evidence
 
         return fit_memory_evidence(

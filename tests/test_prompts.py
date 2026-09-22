@@ -50,6 +50,7 @@ def test_every_prompt_is_an_external_strict_jinja_template() -> None:
         "incoming_alias": "N001",
         "incoming_claim": "incoming claim",
         "candidates": "candidates",
+        "limit": 5,
         "owner": "owner",
         "groups": "groups",
         "group": "group",

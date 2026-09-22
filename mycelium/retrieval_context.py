@@ -193,6 +193,7 @@ def _render_evidence_envelope(
 
 def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
     lines: list[str] = []
+    shown_claims = {r.record_id for r in records if r.record_type == "claim"}
     for index, record in enumerate(records):
         if index:
             lines.append("")
@@ -222,12 +223,14 @@ def _render_records(records: tuple[EvidenceRecord, ...]) -> list[str]:
             )
         lines.append("Supporting claims:")
         lines.extend(f"- `{_text(value)}`" for value in record.claim_ids)
-        if record.canonical_claims:
-            lines.append("Matched canonical assertions:")
+        unseen_claims = [c for c in record.canonical_claims if c.claim_id not in shown_claims]
+        if unseen_claims:
+            lines.append("Canonical assertions:")
             lines.extend(
                 f"- `{_text(c.claim_id)}`: {_text(c.text)}"
-                for c in record.canonical_claims
+                for c in unseen_claims
             )
+            shown_claims.update(c.claim_id for c in unseen_claims)
         for review in record.reviews:
             lines.append(
                 f"Review `{_text(review.proposal_id)}`: {_text(review.status)}; "
@@ -407,16 +410,10 @@ class RetrievedContextBuilder:
     def distinct_hits(self, hits, limit):
         selected, seen = [], set()
         for hit in hits:
-            ids = {f.fact_id for f in self._facts_for_claim(hit.claim_id)} or {
-                hit.claim_id
-            }
-            if ids <= seen:
-                selected.append(hit)
-                continue
-            if len(seen) >= limit:
+            if hit.claim_id in seen or len(selected) >= limit:
                 continue
             selected.append(hit)
-            seen.update(ids)
+            seen.add(hit.claim_id)
         return selected
 
     def build(
@@ -425,21 +422,25 @@ class RetrievedContextBuilder:
         *,
         budget_tokens: int,
         more_available: bool = False,
+        record_limit: int | None = None,
     ) -> MemoryEvidence:
         evidence = replace(self._memory_evidence(hits), more_available=more_available)
         return self._with_sources(
-            evidence, budget_tokens=budget_tokens, include_context=False
+            evidence, budget_tokens=budget_tokens, include_context=False, record_limit=record_limit
         )
 
     def _with_sources(
         self, evidence: MemoryEvidence, *, budget_tokens: int, include_context: bool,
         known_evidence: MemoryEvidence | None = None,
+        record_limit: int | None = None,
     ) -> MemoryEvidence:
         from mycelium.memory_workspace import merge_memory_evidence
 
         known_tokens = count_tokens(render_memory_evidence(known_evidence)) if known_evidence is not None else 0
 
         def fits(trial):
+            if record_limit is not None and len(trial.records) > record_limit:
+                return False
             if known_evidence is not None:
                 return count_tokens(render_memory_evidence(merge_memory_evidence(known_evidence, trial))) - known_tokens <= budget_tokens
             return count_tokens(render_memory_evidence(trial)) <= budget_tokens
@@ -515,82 +516,44 @@ class RetrievedContextBuilder:
             known_evidence=known_evidence,
         )
 
-    def _memory_evidence(self, hits: list[ClaimSearchHit]) -> MemoryEvidence:
+    def _memory_evidence(self, hits: list[ClaimSearchHit], *, fact_ids: set[str] | None = None) -> MemoryEvidence:
         hits = [
             current for hit in hits if (current := self.current_hit(hit)) is not None
         ]
-        matched_ids = {hit.claim_id for hit in hits}
-        facts_by_claim = {
-            hit.claim_id: self._facts_for_claim(hit.claim_id) for hit in hits
-        }
-        wanted = matched_ids | {
-            cid
-            for hit in hits
-            for f in facts_by_claim.get(hit.claim_id, [])
-            for cid in f.member_claim_ids
-        }
-        claims = {}
-        for cid in wanted:
-            try:
-                claims[cid] = self.artifacts.get_claim(cid)
-            except FileNotFoundError:
-                continue
+        claims = {hit.claim_id: self.artifacts.get_claim(hit.claim_id) for hit in hits}
+        records = []
+        for claim in claims.values():
+            records.append(self._structured_record(
+                record_id=claim.claim_id, record_type="claim", statement=claim.text,
+                subject_entity_id=None, subject_name=None,
+                claim_ids=(claim.claim_id,),
+                state="superseded" if claim.status == "superseded" else self.artifacts.memory_tier(claim.claim_id),
+                claims=[claim],
+            ))
 
-        records: list[EvidenceRecord] = []
-        seen_record_ids: set[str] = set()
-        for hit in hits:
-            claim = claims.get(hit.claim_id)
-            if claim is None or claim.status not in {"active", "superseded"}:
-                continue
-            facts = [
-                f
-                for f in facts_by_claim.get(hit.claim_id, [])
-                if all(
-                    cid in claims and claims[cid].status == "active"
-                    for cid in f.member_claim_ids
-                )
-            ]
-            if facts:
-                for fact in sorted(facts, key=lambda item: item.fact_id):
-                    if fact.fact_id in seen_record_ids:
-                        continue
-                    members = [
-                        claims[claim_id]
-                        for claim_id in fact.member_claim_ids
-                        if claim_id in claims
-                    ]
-                    records.append(
-                        self._structured_record(
-                            record_id=fact.fact_id,
-                            record_type="fact",
-                            statement=fact.text,
-                            subject_entity_id=fact.owner_entity_id,
-                            subject_name=self._entity_title(fact.owner_entity_id),
-                            claim_ids=tuple(fact.member_claim_ids),
-                            state=fact.state,
-                            claims=members,
-                            matched_claim_ids=matched_ids,
-                        )
-                    )
-                    seen_record_ids.add(fact.fact_id)
-                continue
-            if claim.claim_id in seen_record_ids:
-                continue
-            records.append(
-                self._structured_record(
-                    record_id=claim.claim_id,
-                    record_type="claim",
-                    statement=claim.text,
-                    subject_entity_id=hit.owner_entity_id,
-                    subject_name=hit.owner_title,
-                    claim_ids=(claim.claim_id,),
-                    state="superseded"
-                    if claim.status == "superseded"
-                    else self.artifacts.memory_tier(claim.claim_id),
-                    claims=[claim],
-                )
-            )
-            seen_record_ids.add(claim.claim_id)
+        # Views provide optional context. They cannot replace or precede a match.
+        facts = {}
+        for claim in claims.values():
+            for fact in self._facts_for_claim(claim.claim_id):
+                if fact_ids is None or fact.fact_id in fact_ids:
+                    facts.setdefault(fact.fact_id, fact)
+        for fact in facts.values():
+            members = []
+            for cid in fact.member_claim_ids:
+                try:
+                    member = self.artifacts.get_claim(cid)
+                except FileNotFoundError:
+                    break
+                if member.status != "active":
+                    break
+                members.append(member)
+            else:
+                records.append(self._structured_record(
+                    record_id=fact.fact_id, record_type="fact", statement=fact.text,
+                    subject_entity_id=fact.owner_entity_id,
+                    subject_name=self._entity_title(fact.owner_entity_id),
+                    claim_ids=tuple(fact.member_claim_ids), state=fact.state, claims=members,
+                ))
         return MemoryEvidence(
             records=tuple(records),
             build_incomplete=self.artifacts.build_incomplete(),
@@ -607,7 +570,6 @@ class RetrievedContextBuilder:
         claim_ids: tuple[str, ...],
         state: str | None,
         claims: list[MemoryClaim],
-        matched_claim_ids: set[str] | None = None,
     ) -> EvidenceRecord:
         temporal: list[EvidenceTime] = []
         citations: list[EvidenceCitation] = []
@@ -667,7 +629,7 @@ class RetrievedContextBuilder:
             canonical_claims=tuple(
                 EvidenceClaim(c.claim_id, c.text)
                 for c in claims
-                if matched_claim_ids is None or c.claim_id in matched_claim_ids
+                if record_type == "fact"
             ),
             reviews=tuple(
                 {
